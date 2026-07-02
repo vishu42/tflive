@@ -4,7 +4,10 @@ go 1.24.0
 
 toolchain go1.24.1
 
-require github.com/jackc/pgx/v5 v5.7.6
+require (
+	github.com/jackc/pgx/v5 v5.7.6
+	go.temporal.io/sdk v1.45.0
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -23,7 +26,6 @@ require (
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/stretchr/testify v1.10.0 // indirect
 	go.temporal.io/api v1.62.12 // indirect
-	go.temporal.io/sdk v1.45.0 // indirect
 	golang.org/x/crypto v0.47.0 // indirect
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
