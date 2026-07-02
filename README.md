@@ -28,61 +28,72 @@ This document captures the current system design and product requirements.
 
 ## Architecture
 
-The MVP uses Temporal OSS as the durable workflow engine, Postgres as the product database, S3-compatible object storage for logs/artifacts, and Vault or another secret store for execution credentials.
+The MVP uses Temporal OSS as the durable workflow engine, Postgres as the application product database, S3-compatible object storage for logs/artifacts, and Vault or another secret store for execution credentials. Temporal also has its own persistence database for workflow history, timers, task queues, signals, and retry state.
+
+The architecture also defines a pluggable `EventBus` interface for system events, live log fanout, and future pub/sub needs. The MVP can start with a no-op, in-memory, or simple local implementation, then swap in Redis, NATS JetStream, Kafka, or another broker without changing API or workflow semantics.
 
 The API does not call workers directly. The API creates product records in Postgres, starts or signals Temporal workflows, and serves UI state/log endpoints. Worker pods poll Temporal task queues and run Terraform activities.
 
 ```text
- +------------+        +-------------+        +-------------+
- |            |        |             |        |             |
- |    UI      +------->+ API Server  +------->+  Temporal   |
- |            |        |             |        |   Server    |
- +-----+------+        +------+------+        +------+------+ 
-       ^                      |                      ^
-       | state/log APIs       |                      |
-       |                      v                      |
-       |              +-------+------+               |
-       |              |              |               |
-       +--------------+  Postgres    |<--------------+
-                      | metadata     | status/activity updates
-                      +-------+------+
-                              ^
-                              |
-                              |
-                      +-------+--------+
-                      | Worker Pods    |
-                      | terraform-runs |
-                      +-------+--------+
-                              |
-                +-------------+-------------+
-                |                           |
-                v                           v
-        +-------+------+            +-------+-------+
-        | LocalProcess |            | GitHub App    |
-        | Terraform    |            | installation  |
-        | Runner       |            | tokens        |
-        +-------+------+            +---------------+
-                |
-        +-------+------------------------------------+
-        |                                            |
-        v                                            v
- +------+-------+                            +-------+-------+
- | Log Sink     +--------------------------->+ Object Storage|
- | stream/store |      redacted logs         | logs/artifacts|
- +------+-------+                            +---------------+
-        |
-        v
- +------+-------+
- | API live log |
- | stream       |
- +--------------+
+ +------------+        +-------------+        +----------------+
+ |            |        |             |        |                |
+ |    UI      +------->+ API Server  +------->+ Temporal       |
+ |            |        |             |        | Server         |
+ +-----+------+        +------+------+        +-------+--------+
+       ^                      |                       ^
+       | state/log APIs       |                       |
+       |                      v                       |
+       |              +-------+------+                |
+       |              | App Postgres |                |
+       +--------------+ metadata     |                |
+                      +--------------+                |
+                                                      |
+                                      +---------------+---------------+
+                                      |                               |
+                                      v                               v
+                              +-------+--------+              +-------+-------+
+                              | Temporal Task  |              | Worker Pods   |
+                              | Queue          |              | terraform-runs|
+                              +-------+--------+              +-------+-------+
+                                      ^                               |
+                                      | workers poll Temporal         |
+                                      | server APIs                   |
+                                      +-------------------------------+
+                                                      |
+                                                      v
+                                            +---------+---------+
+                                            | LocalProcess      |
+                                            | Terraform Runner  |
+                                            +---------+---------+
+                                                      |
+                   +----------------+-----------------+------------------+
+                   |                |                                    |
+                   v                v                                    v
+          +--------+------+  +------+-------+                    +-------+-------+
+          | GitHub App    |  | Vault/Secret |                    | Log Sink      |
+          | installation  |  | Store        |                    | stream/store  |
+          | tokens        |  +--------------+                    +-------+-------+
+          +---------------+                                             |
+                                               +------------------------+----------------+
+                                               |                                         |
+                                               v                                         v
+                                      +--------+-------+                         +-------+--------+
+                                      | Object Storage |                         | EventBus      |
+                                      | logs/artifacts |                         | Interface     |
+                                      +----------------+                         +-------+--------+
+                                                                                         |
+                                                                                         v
+                                                                                +--------+-------+
+                                                                                | API live log  |
+                                                                                | stream/events |
+                                                                                +----------------+
 
- Worker runtime also fetches execution credentials from:
+ Temporal Server persists workflow and queue state to:
 
- +---------------+
- | Vault/Secret  |
- | Store         |
- +---------------+
+ +----------------------+
+ | Temporal Persistence |
+ | DB                   |
+ +----------------------+
 ```
 
 ## Core Boundaries
@@ -170,6 +181,124 @@ Each Terraform activity:
 - Cleans up the temporary working directory.
 
 The runner should be implemented behind an interface so a future `KubernetesJobRunner` or sandboxed runner can be added without changing workflow semantics.
+
+### Runner Security
+
+The MVP local process runner is optimized for fast feedback, but it should be treated as trusted-template execution. Terraform providers, provisioners, external data sources, and local-exec style behavior may execute code inside the worker pod with access to the run's injected credentials.
+
+MVP worker deployments should use the following guardrails:
+
+- Run worker containers as non-root.
+- Avoid host mounts and shared writable volumes.
+- Use fresh per-run working directories with cleanup after every run.
+- Apply CPU, memory, ephemeral storage, and wall-clock limits.
+- Inject only the credential sets required for the target stack or template run.
+- Prefer short-lived credentials wherever supported.
+- Avoid persisting secret values to Postgres, object storage, Temporal payloads, or logs.
+- Redact known secret values before logs are streamed or persisted.
+- Restrict worker network egress where practical.
+- Separate workers by task queue or deployment if future tenants, templates, or credential sets require stronger trust boundaries.
+
+Stronger isolation, such as a Kubernetes Job per run, sandboxed containers, remote runners, or per-tenant runner pools, remains a deferred design topic. The `LocalProcessRunner` interface keeps that migration path open without changing workflow semantics.
+
+## Go Package Layout
+
+The Go implementation should keep product concepts, application use cases, adapters, and execution orchestration separated by package boundaries.
+
+```text
+cmd/
+  megagega-api/
+  megagega-worker/
+
+internal/
+  domain/
+  app/
+  api/
+  auth/
+  postgres/
+  temporal/
+  workflowtypes/
+  workflows/
+  activities/
+  runner/
+  terraform/
+  githubapp/
+  secrets/
+  artifacts/
+  events/
+  logsink/
+  locks/
+  config/
+```
+
+Package ownership:
+
+- `cmd/megagega-api`: API server boot, config loading, dependency wiring, and HTTP server startup.
+- `cmd/megagega-worker`: worker boot, config loading, Temporal worker registration, and activity dependency wiring.
+- `internal/domain`: core product model, including IDs, statuses, operation types, validation helpers, and entities such as `Tenant`, `Template`, `Stack`, `StackTemplate`, `TemplateRun`, `StackRun`, and `CredentialSet`. If this package starts accumulating unrelated helpers, split it by product area rather than turning it into a generic shared bucket.
+- `internal/app`: application use cases such as creating stacks, registering templates, adding templates to stacks, starting runs, approving runs, canceling runs, listing runs, and fetching log metadata. This package owns use-case interfaces for persistence, workflow dispatch, events, locks, artifacts, and secrets; concrete adapters implement those interfaces outside `app`.
+- `internal/api`: HTTP handlers, request and response DTOs, routing, SSE endpoints, API validation, and mapping API input into app commands.
+- `internal/auth`: mock identity for MVP, tenant/user context extraction, and the future authentication boundary.
+- `internal/postgres`: Postgres repositories, transactions, SQL queries, persistence models, and migration helper code.
+- `internal/temporal`: Temporal client adapter that implements `app` workflow-dispatch interfaces and is wired in `cmd`. API and app code should depend on interfaces, not on this adapter package directly.
+- `internal/workflowtypes`: shared Temporal workflow and activity payload structs, signal names, query names, and constants that must be importable by deterministic workflow code without pulling in side-effecting activity implementations.
+- `internal/workflows`: deterministic Temporal workflow definitions such as `TemplateRunWorkflow`, `TemplateSyncWorkflow`, and future `StackRunWorkflow`.
+- `internal/activities`: Temporal activities that perform side effects such as cloning repositories, parsing templates, acquiring locks, running Terraform, persisting logs, and writing activity events.
+- `internal/runner`: Terraform runner interface and runner implementations, including the MVP `LocalProcessRunner`.
+- `internal/terraform`: Terraform-specific helpers for HCL variable parsing, tfvars rendering, backend metadata extraction, plan summary parsing, and workspace command modeling.
+- `internal/githubapp`: GitHub App integration, installation token generation, repository clone helpers, and ref-to-commit resolution.
+- `internal/secrets`: secret store boundary, credential set resolution, and Vault or local development adapters.
+- `internal/artifacts`: object storage adapter, redacted log artifact writes, plan summary artifacts, and artifact key generation.
+- `internal/events`: pluggable `EventBus` interface, event types, and no-op or in-memory implementations.
+- `internal/logsink`: log redaction, phase log writers, live log publication, and log metadata creation.
+- `internal/locks`: product-level `StackTemplate` lease lock, including acquire, refresh, release, fencing token checks, and stale lock handling.
+- `internal/config`: environment and config structs, default values, and config validation.
+
+Temporal workflows should stay thin and deterministic. Workflows decide sequence; activities perform side effects through interfaces.
+
+Workflow code may import `domain`, `workflowtypes`, and Temporal SDK packages, but it should not import concrete adapters such as `postgres`, `githubapp`, `secrets`, `artifacts`, or `logsink`.
+
+Package dataflow:
+
+```text
+                        shared product types
+                      +----------------------+
+                      | internal/domain      |
+                      +----------+-----------+
+                                 ^
+                                 |
+cmd/megagega-api                 |                   cmd/megagega-worker
+  config + wiring                |                     config + wiring
+        |                        |                           |
+        v                        |                           v
++----------------+        +------+-------+          +--------------------+
+| internal/api   +------->+ internal/app |          | internal/workflows |
+| HTTP/SSE DTOs  |        | use cases    |          | deterministic      |
++-------+--------+        +------+-------+          +---------+----------+
+        |                        ^                            |
+        |                        | app-owned interfaces       |
+        |                        |                            v
+        |              +---------+----------+       +--------------------+
+        |              | concrete adapters  |       | internal/activities|
+        |              +---------+----------+       | side effects       |
+        |                        |                  +---------+----------+
+        |                        |                            |
+        |                        v                            v
+        |              postgres, temporal,          runner, terraform,
+        |              events, artifacts,           githubapp, secrets,
+        |              secrets, locks               artifacts, events,
+        |                                             logsink, locks,
+        |                                             postgres
+        |
+        v
+internal/auth
+tenant/user context
+
+Temporal payloads and signals shared by workflows, activities, and the
+Temporal client adapter live in:
+
+  internal/workflowtypes
+```
 
 ## Template Model
 
@@ -328,6 +457,17 @@ backend owned by user/template
 workspace owned by platform
 ```
 
+MVP templates should use workspace-compatible remote backends. Backend state locking is required where the selected backend supports it, because the platform lock prevents concurrent Megagega runs but does not replace Terraform's backend-level state lock.
+
+Unsupported or risky backend configurations should fail validation or receive an explicit warning before execution. Examples include:
+
+- local backends
+- backends that do not support workspaces
+- remote backends without state locking when locking is available
+- backend configuration that changes unexpectedly between runs
+
+Each run should record backend identity metadata, such as backend type and a normalized backend configuration hash when it can be safely derived without storing secrets. If backend identity changes between runs for the same `StackTemplate`, the system should emit an activity event and surface a warning in the UI.
+
 ## Inputs And Secrets
 
 Template input schema is not declared in `template.yaml`.
@@ -396,6 +536,8 @@ GitHubIntegration
 
 During template registration or execution, the worker generates a short-lived GitHub App installation token and clones the repository over HTTPS.
 
+Selected refs are resolved to immutable commit SHAs during template sync and every run. A `TemplateRun` stores both the user-selected ref and the resolved commit SHA. For apply operations, the post-approval apply uses the same resolved commit SHA that produced the displayed plan unless the user starts a new run.
+
 ## TemplateRun Workflow
 
 `TemplateRunWorkflow` is the main execution workflow.
@@ -454,7 +596,26 @@ failed
 lock_released
 ```
 
+Canceled runs transition to:
+
+```text
+cancel_requested
+canceling
+canceled
+lock_released
+```
+
 The workflow should acquire a product-level lock before running Terraform so only one active run can target a `StackTemplate` at a time.
+
+Cancellation is cooperative and must leave the product lock, run status, and logs in a consistent state:
+
+- The API records the cancel request actor and timestamp, then sends a cancellation signal to Temporal.
+- If the run is queued or waiting for approval, the workflow can mark it canceled without starting more Terraform work.
+- If a Terraform subprocess is active, the worker first sends a graceful interrupt, waits for a bounded shutdown period, then terminates the process if needed.
+- Long-running activities heartbeat cancellation progress so Temporal can observe worker liveness.
+- Partial logs are flushed to object storage before the run reaches `canceled`.
+- The product-level lock is released only during cancellation finalization.
+- Canceling an apply or destroy does not imply infrastructure rollback; the next run should use Terraform state and backend locking to determine the current infrastructure state.
 
 ## Approval
 
@@ -470,7 +631,9 @@ MVP approval is intentionally simple.
 
 Apply may re-run planning after approval. MVP does not persist binary `tfplan` files for exact approved-plan apply.
 
-The UI should communicate that approval is based on the displayed plan, but apply will re-evaluate before execution.
+The UI should communicate that approval is based on the displayed plan, but apply will re-evaluate before execution. The re-evaluation must use the same resolved commit SHA as the approved plan.
+
+The system should persist a redacted plan summary, preferably generated from Terraform JSON output, as a run artifact. This is not an exact binary `tfplan` approval artifact, but it gives the UI and audit trail a structured summary of the approved intent.
 
 ## Logs
 
@@ -563,7 +726,7 @@ Postgres stores product metadata and queryable state:
 - activity events
 - log metadata
 
-Run records should capture the selected template ref, operation type, trigger source, trigger actor, workspace name, lifecycle status, started/completed timestamps, and error summary.
+Run records should capture the selected template ref, resolved commit SHA, operation type, trigger source, trigger actor, workspace name, backend identity metadata, lifecycle status, started/completed timestamps, and error summary.
 
 Object storage stores:
 
@@ -653,6 +816,64 @@ Future versions should add:
 MVP requires templates to bring their own Terraform backend.
 
 Future versions may support managed backend profiles for S3, GCS, AzureRM, or Terraform Cloud.
+
+### Log Retention And Access Rules
+
+The MVP persists redacted logs and log metadata, but detailed retention and access policy design is deferred.
+
+Future design should answer:
+
+- how long run logs are retained
+- how object storage log encryption is configured
+- how tenant isolation is enforced for log reads
+- how max log size and truncation are handled
+- how redaction failures are handled
+- whether discovered-after-the-fact secrets require log rewriting or deletion
+
+### Variable Input Limits
+
+The MVP infers Terraform variables and supports non-sensitive UI-entered values, but advanced variable editing rules are deferred.
+
+Future design should answer:
+
+- how complex types such as `object`, `map`, `list`, `set`, and `tuple` are edited
+- whether unsupported complex values require raw JSON input
+- how nullable values are represented
+- how Terraform validation metadata is surfaced
+- how sensitive variables are displayed as unsupported in the UI
+
+### Observability
+
+The MVP identifies useful scaling metrics, but a full observability contract is deferred.
+
+Future design should answer:
+
+- which structured log fields are required across API, worker, and workflow code
+- which run and phase duration metrics are emitted
+- how cancellation, failure, and approval wait time are measured
+- whether traces connect API requests, Temporal workflows, activities, and log streams
+
+### StackTemplate Lifecycle States
+
+`StackTemplate` has a lifecycle state, but the full lifecycle state machine is deferred.
+
+Future design should answer:
+
+- which states exist for active, destroying, destroyed, failed, and orphaned templates
+- whether destroyed templates retain workspace names and history
+- how deletion differs from infrastructure destroy
+- how lifecycle state affects allowed plan, apply, and destroy operations
+
+### Drift And Refresh Behavior
+
+The MVP supports user-triggered plan, apply, and destroy. Dedicated drift detection and refresh behavior are deferred.
+
+Future design should answer:
+
+- whether normal plan runs are enough for MVP drift visibility
+- whether latest plan status should be stored on `StackTemplate`
+- whether scheduled drift checks are needed
+- how drift findings appear in activity history and the UI
 
 ## MVP Summary
 
