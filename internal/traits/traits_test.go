@@ -148,7 +148,6 @@ func TestTemplateRunWorkflowInputUsesTraitTypes(t *testing.T) {
 		StackTemplateID: StackTemplateID("stack_template_123"),
 		Operation:       OperationApply,
 		SelectedRef:     "main",
-		ResolvedCommit:  "abc123",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 	}
 

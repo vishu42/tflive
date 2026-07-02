@@ -155,6 +155,7 @@ type Tenant struct {
 }
 
 // Template is a GitHub-sourced Terraform template.
+// Template contains github ref of the template
 type Template struct {
 	ID                   TemplateID
 	TenantID             TenantID
@@ -170,6 +171,7 @@ type Template struct {
 }
 
 // TemplateVariable is inferred from Terraform root module variables.
+// TemplateVariable is the template variable inferred from root terraform module variables
 type TemplateVariable struct {
 	TemplateID     TemplateID
 	Name           string
@@ -182,6 +184,7 @@ type TemplateVariable struct {
 }
 
 // Stack is a logical infrastructure composition.
+// stack is logical infrastructure composition
 type Stack struct {
 	ID                   StackID
 	TenantID             TenantID
@@ -192,6 +195,7 @@ type Stack struct {
 }
 
 // StackTemplate is one template installed into one stack.
+// stacktemplate is one template installed into one stack
 type StackTemplate struct {
 	ID               StackTemplateID
 	StackID          StackID
@@ -206,6 +210,7 @@ type StackTemplate struct {
 }
 
 // TemplateRun is one Terraform operation against a StackTemplate.
+// TemplateRun is one terraform operation against a StackTemplate
 type TemplateRun struct {
 	ID                TemplateRunID
 	TenantID          TenantID
@@ -223,6 +228,26 @@ type TemplateRun struct {
 	ErrorSummary      string
 }
 
+// TemplateRunApproval records who approved a waiting run.
+// TemplateRunApproval records who approved a waiting run.
+type TemplateRunApproval struct {
+	RunID      TemplateRunID
+	TenantID   TenantID
+	ApprovedBy UserID
+	ApprovedAt time.Time
+}
+
+// TemplateRunCancellation records who requested a run cancellation.
+// TemplateRunCancellation records who requested a run cancellation.
+type TemplateRunCancellation struct {
+	RunID       TemplateRunID
+	TenantID    TenantID
+	RequestedBy UserID
+	Reason      string
+	RequestedAt time.Time
+}
+
+// StackRun represents a coordinated multi-template operation.
 // StackRun represents a coordinated multi-template operation.
 type StackRun struct {
 	ID        StackRunID
@@ -257,7 +282,6 @@ type TemplateRunWorkflowInput struct {
 	StackTemplateID StackTemplateID
 	Operation       OperationType
 	SelectedRef     string
-	ResolvedCommit  string
 	WorkspaceName   string
 }
 
