@@ -35,7 +35,7 @@ func Dial(ctx context.Context, cfg Config) (client.Client, error) {
 		namespace = defaultNamespace
 	}
 
-	temporalClient, err := client.Dial(client.Options{
+	temporalClient, err := client.DialContext(ctx, client.Options{
 		HostPort:  address,
 		Namespace: namespace,
 	})
