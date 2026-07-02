@@ -2,7 +2,9 @@ package temporal
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/vishu42/megagega/internal/app"
@@ -112,6 +114,64 @@ func TestCancelTemplateRunSignalsWorkflow(t *testing.T) {
 	}
 }
 
+func TestStartTemplateRunWrapsClientError(t *testing.T) {
+	t.Parallel()
+
+	clientErr := errors.New("temporal unavailable")
+	dispatcher := newDispatcher(&recordingWorkflowClient{executeErr: clientErr}, "terraform-runs")
+
+	err := dispatcher.StartTemplateRun(context.Background(), traits.TemplateRunWorkflowInput{
+		RunID:    traits.TemplateRunID("run_123"),
+		TenantID: traits.TenantID("tenant_123"),
+	})
+	if !errors.Is(err, clientErr) {
+		t.Fatalf("error = %v, want wrapped client error", err)
+	}
+	if !strings.Contains(err.Error(), "start template run workflow") {
+		t.Fatalf("error = %q, want start context", err.Error())
+	}
+}
+
+func TestApproveTemplateRunWrapsClientError(t *testing.T) {
+	t.Parallel()
+
+	clientErr := errors.New("temporal unavailable")
+	dispatcher := newDispatcher(&recordingWorkflowClient{signalErr: clientErr}, "terraform-runs")
+
+	err := dispatcher.ApproveTemplateRun(
+		context.Background(),
+		traits.TenantID("tenant_123"),
+		traits.TemplateRunID("run_123"),
+		traits.ApprovalSignal{ApprovedBy: traits.UserID("user_123")},
+	)
+	if !errors.Is(err, clientErr) {
+		t.Fatalf("error = %v, want wrapped client error", err)
+	}
+	if !strings.Contains(err.Error(), "signal template run approval") {
+		t.Fatalf("error = %q, want approval context", err.Error())
+	}
+}
+
+func TestCancelTemplateRunWrapsClientError(t *testing.T) {
+	t.Parallel()
+
+	clientErr := errors.New("temporal unavailable")
+	dispatcher := newDispatcher(&recordingWorkflowClient{signalErr: clientErr}, "terraform-runs")
+
+	err := dispatcher.CancelTemplateRun(
+		context.Background(),
+		traits.TenantID("tenant_123"),
+		traits.TemplateRunID("run_123"),
+		traits.CancelSignal{RequestedBy: traits.UserID("user_456")},
+	)
+	if !errors.Is(err, clientErr) {
+		t.Fatalf("error = %v, want wrapped client error", err)
+	}
+	if !strings.Contains(err.Error(), "signal template run cancellation") {
+		t.Fatalf("error = %q, want cancellation context", err.Error())
+	}
+}
+
 func TestTemplateRunWorkflowID(t *testing.T) {
 	t.Parallel()
 
@@ -125,10 +185,12 @@ type recordingWorkflowClient struct {
 	executeOptions   client.StartWorkflowOptions
 	executeWorkflow  interface{}
 	executeArgs      []interface{}
+	executeErr       error
 	signalWorkflowID string
 	signalRunID      string
 	signalName       string
 	signalArg        interface{}
+	signalErr        error
 }
 
 func (workflowClient *recordingWorkflowClient) ExecuteWorkflow(
@@ -140,7 +202,7 @@ func (workflowClient *recordingWorkflowClient) ExecuteWorkflow(
 	workflowClient.executeOptions = options
 	workflowClient.executeWorkflow = workflow
 	workflowClient.executeArgs = args
-	return nil, nil
+	return nil, workflowClient.executeErr
 }
 
 func (workflowClient *recordingWorkflowClient) SignalWorkflow(
@@ -154,5 +216,5 @@ func (workflowClient *recordingWorkflowClient) SignalWorkflow(
 	workflowClient.signalRunID = runID
 	workflowClient.signalName = signalName
 	workflowClient.signalArg = arg
-	return nil
+	return workflowClient.signalErr
 }

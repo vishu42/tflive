@@ -35,7 +35,7 @@ func (dispatcher *Dispatcher) StartTemplateRun(ctx context.Context, input traits
 		TaskQueue: dispatcher.taskQueue,
 	}, traits.TemplateRunWorkflowName, input)
 	if err != nil {
-		return err
+		return fmt.Errorf("start template run workflow: %w", err)
 	}
 
 	return nil
@@ -47,13 +47,17 @@ func (dispatcher *Dispatcher) ApproveTemplateRun(
 	runID traits.TemplateRunID,
 	signal traits.ApprovalSignal,
 ) error {
-	return dispatcher.client.SignalWorkflow(
+	if err := dispatcher.client.SignalWorkflow(
 		ctx,
 		templateRunWorkflowID(tenantID, runID),
 		"",
 		traits.ApprovalSignalName,
 		signal,
-	)
+	); err != nil {
+		return fmt.Errorf("signal template run approval: %w", err)
+	}
+
+	return nil
 }
 
 func (dispatcher *Dispatcher) CancelTemplateRun(
@@ -62,13 +66,17 @@ func (dispatcher *Dispatcher) CancelTemplateRun(
 	runID traits.TemplateRunID,
 	signal traits.CancelSignal,
 ) error {
-	return dispatcher.client.SignalWorkflow(
+	if err := dispatcher.client.SignalWorkflow(
 		ctx,
 		templateRunWorkflowID(tenantID, runID),
 		"",
 		traits.CancelSignalName,
 		signal,
-	)
+	); err != nil {
+		return fmt.Errorf("signal template run cancellation: %w", err)
+	}
+
+	return nil
 }
 
 func templateRunWorkflowID(tenantID traits.TenantID, runID traits.TemplateRunID) string {
