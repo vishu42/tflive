@@ -10,6 +10,7 @@ import (
 
 type workflowClient interface {
 	ExecuteWorkflow(context.Context, client.StartWorkflowOptions, interface{}, ...interface{}) (client.WorkflowRun, error)
+	SignalWorkflow(context.Context, string, string, string, interface{}) error
 }
 
 type Dispatcher struct {
@@ -38,6 +39,36 @@ func (dispatcher *Dispatcher) StartTemplateRun(ctx context.Context, input traits
 	}
 
 	return nil
+}
+
+func (dispatcher *Dispatcher) ApproveTemplateRun(
+	ctx context.Context,
+	tenantID traits.TenantID,
+	runID traits.TemplateRunID,
+	signal traits.ApprovalSignal,
+) error {
+	return dispatcher.client.SignalWorkflow(
+		ctx,
+		templateRunWorkflowID(tenantID, runID),
+		"",
+		traits.ApprovalSignalName,
+		signal,
+	)
+}
+
+func (dispatcher *Dispatcher) CancelTemplateRun(
+	ctx context.Context,
+	tenantID traits.TenantID,
+	runID traits.TemplateRunID,
+	signal traits.CancelSignal,
+) error {
+	return dispatcher.client.SignalWorkflow(
+		ctx,
+		templateRunWorkflowID(tenantID, runID),
+		"",
+		traits.CancelSignalName,
+		signal,
+	)
 }
 
 func templateRunWorkflowID(tenantID traits.TenantID, runID traits.TemplateRunID) string {
