@@ -211,13 +211,12 @@ cmd/
   megagega-worker/
 
 internal/
-  domain/
+  traits/
   app/
   api/
   auth/
   postgres/
   temporal/
-  workflowtypes/
   workflows/
   activities/
   runner/
@@ -235,13 +234,12 @@ Package ownership:
 
 - `cmd/megagega-api`: API server boot, config loading, dependency wiring, and HTTP server startup.
 - `cmd/megagega-worker`: worker boot, config loading, Temporal worker registration, and activity dependency wiring.
-- `internal/domain`: core product model, including IDs, statuses, operation types, validation helpers, and entities such as `Tenant`, `Template`, `Stack`, `StackTemplate`, `TemplateRun`, `StackRun`, and `CredentialSet`. If this package starts accumulating unrelated helpers, split it by product area rather than turning it into a generic shared bucket.
+- `internal/traits`: shared product and workflow traits, including IDs, statuses, operation types, validation helpers, entities such as `Tenant`, `Template`, `Stack`, `StackTemplate`, `TemplateRun`, `StackRun`, and `CredentialSet`, plus Temporal workflow payloads, signal names, query names, and constants. Keep this package focused on stable cross-boundary data contracts; concrete behavior and side effects belong in the packages that own them.
 - `internal/app`: application use cases such as creating stacks, registering templates, adding templates to stacks, starting runs, approving runs, canceling runs, listing runs, and fetching log metadata. This package owns use-case interfaces for persistence, workflow dispatch, events, locks, artifacts, and secrets; concrete adapters implement those interfaces outside `app`.
 - `internal/api`: HTTP handlers, request and response DTOs, routing, SSE endpoints, API validation, and mapping API input into app commands.
 - `internal/auth`: mock identity for MVP, tenant/user context extraction, and the future authentication boundary.
 - `internal/postgres`: Postgres repositories, transactions, SQL queries, persistence models, and migration helper code.
 - `internal/temporal`: Temporal client adapter that implements `app` workflow-dispatch interfaces and is wired in `cmd`. API and app code should depend on interfaces, not on this adapter package directly.
-- `internal/workflowtypes`: shared Temporal workflow and activity payload structs, signal names, query names, and constants that must be importable by deterministic workflow code without pulling in side-effecting activity implementations.
 - `internal/workflows`: deterministic Temporal workflow definitions such as `TemplateRunWorkflow`, `TemplateSyncWorkflow`, and future `StackRunWorkflow`.
 - `internal/activities`: Temporal activities that perform side effects such as cloning repositories, parsing templates, acquiring locks, running Terraform, persisting logs, and writing activity events.
 - `internal/runner`: Terraform runner interface and runner implementations, including the MVP `LocalProcessRunner`.
@@ -256,14 +254,14 @@ Package ownership:
 
 Temporal workflows should stay thin and deterministic. Workflows decide sequence; activities perform side effects through interfaces.
 
-Workflow code may import `domain`, `workflowtypes`, and Temporal SDK packages, but it should not import concrete adapters such as `postgres`, `githubapp`, `secrets`, `artifacts`, or `logsink`.
+Workflow code may import `traits` and Temporal SDK packages, but it should not import concrete adapters such as `postgres`, `githubapp`, `secrets`, `artifacts`, or `logsink`.
 
 Package dataflow:
 
 ```text
-                        shared product types
+                   shared product and workflow traits
                       +----------------------+
-                      | internal/domain      |
+                      | internal/traits      |
                       +----------+-----------+
                                  ^
                                  |
@@ -293,11 +291,6 @@ cmd/megagega-api                 |                   cmd/megagega-worker
         v
 internal/auth
 tenant/user context
-
-Temporal payloads and signals shared by workflows, activities, and the
-Temporal client adapter live in:
-
-  internal/workflowtypes
 ```
 
 ## Template Model
