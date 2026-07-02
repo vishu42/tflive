@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +19,8 @@ var (
 	_ app.StackTemplateRepository = (*Store)(nil)
 	_ app.TemplateRunRepository   = (*Store)(nil)
 )
+
+var testSchemaCounter uint64
 
 func TestMigrateAppliesSchema(t *testing.T) {
 	t.Parallel()
@@ -234,8 +237,25 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 		t.Fatalf("read inserted template run: %v", err)
 	}
 
-	if got != run {
+	if got.ID != run.ID ||
+		got.TenantID != run.TenantID ||
+		got.StackTemplateID != run.StackTemplateID ||
+		got.Operation != run.Operation ||
+		got.SelectedRef != run.SelectedRef ||
+		got.ResolvedCommitSHA != run.ResolvedCommitSHA ||
+		got.WorkspaceName != run.WorkspaceName ||
+		got.BackendType != run.BackendType ||
+		got.BackendConfigHash != run.BackendConfigHash ||
+		got.Status != run.Status ||
+		got.TriggerActor != run.TriggerActor ||
+		got.ErrorSummary != run.ErrorSummary {
 		t.Fatalf("inserted run = %#v, want %#v", got, run)
+	}
+	if !got.StartedAt.Equal(run.StartedAt) {
+		t.Fatalf("StartedAt = %v, want %v", got.StartedAt, run.StartedAt)
+	}
+	if !got.CompletedAt.Equal(run.CompletedAt) {
+		t.Fatalf("CompletedAt = %v, want %v", got.CompletedAt, run.CompletedAt)
 	}
 }
 
@@ -476,7 +496,7 @@ func openTestPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	}
 	t.Cleanup(admin.Close)
 
-	schema := fmt.Sprintf("megagega_test_%d", time.Now().UnixNano())
+	schema := fmt.Sprintf("megagega_test_%d_%d", time.Now().UnixNano(), atomic.AddUint64(&testSchemaCounter, 1))
 	quotedSchema := pgx.Identifier{schema}.Sanitize()
 	if _, err := admin.Exec(ctx, "create schema "+quotedSchema); err != nil {
 		t.Fatalf("create test schema: %v", err)
