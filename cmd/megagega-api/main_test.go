@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vishu42/megagega/internal/app"
 	"github.com/vishu42/megagega/internal/config"
@@ -179,6 +182,34 @@ func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
 	if !temporalClient.closed {
 		t.Fatal("temporal client was not closed")
 	}
+}
+
+func TestListenAndServeLogsAfterStarting(t *testing.T) {
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(previousOutput)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- listenAndServe(ctx, "127.0.0.1:0", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	}()
+
+	for range 100 {
+		if strings.Contains(logs.String(), "api listening on") {
+			cancel()
+			if err := <-errCh; err != nil {
+				t.Fatalf("listenAndServe returned error: %v", err)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("log output = %q, want api listening line", logs.String())
 }
 
 func apiTestEnv(key string) string {

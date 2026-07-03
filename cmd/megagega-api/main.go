@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -131,8 +132,13 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 }
 
 func listenAndServe(ctx context.Context, address string, handler http.Handler) error {
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return err
+	}
+	log.Printf("api listening on %s", listener.Addr().String())
+
 	server := &http.Server{
-		Addr:    address,
 		Handler: handler,
 	}
 
@@ -143,7 +149,7 @@ func listenAndServe(ctx context.Context, address string, handler http.Handler) e
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	err := server.ListenAndServe()
+	err = server.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
