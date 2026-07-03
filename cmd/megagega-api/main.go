@@ -10,7 +10,28 @@ import (
 	"github.com/vishu42/megagega/internal/app"
 	"github.com/vishu42/megagega/internal/config"
 	"github.com/vishu42/megagega/internal/postgres"
+	"github.com/vishu42/megagega/internal/temporal"
+	"go.temporal.io/sdk/client"
 )
+
+type postgresPool interface {
+	Ping(context.Context) error
+	Close()
+}
+
+type appRepositories interface {
+	app.StackTemplateRepository
+	app.TemplateRunRepository
+}
+
+type apiDependencies struct {
+	newPostgresPool func(context.Context, string) (postgresPool, error)
+	migratePostgres func(context.Context, postgresPool) error
+	newStore        func(postgresPool) (appRepositories, error)
+	dialTemporal    func(context.Context, temporal.Config) (client.Client, error)
+	newDispatcher   func(client.Client, string) app.WorkflowDispatcher
+	newService      func(app.Service) (*app.Service, error)
+}
 
 func main() {
 	if err := run(context.Background(), os.Getenv); err != nil {
@@ -18,13 +39,46 @@ func main() {
 	}
 }
 
+func defaultAPIDependencies() apiDependencies {
+	return apiDependencies{
+		newPostgresPool: func(ctx context.Context, databaseURL string) (postgresPool, error) {
+			return pgxpool.New(ctx, databaseURL)
+		},
+		migratePostgres: func(ctx context.Context, pool postgresPool) error {
+			pgxPool, ok := pool.(*pgxpool.Pool)
+			if !ok {
+				return fmt.Errorf("unexpected postgres pool type %T", pool)
+			}
+			return postgres.Migrate(ctx, pgxPool)
+		},
+		newStore: func(pool postgresPool) (appRepositories, error) {
+			pgxPool, ok := pool.(*pgxpool.Pool)
+			if !ok {
+				return nil, fmt.Errorf("unexpected postgres pool type %T", pool)
+			}
+			return postgres.NewStore(pgxPool), nil
+		},
+		dialTemporal: temporal.Dial,
+		newDispatcher: func(temporalClient client.Client, taskQueue string) app.WorkflowDispatcher {
+			return temporal.NewDispatcher(temporalClient, taskQueue)
+		},
+		newService: func(service app.Service) (*app.Service, error) {
+			return app.NewService(service), nil
+		},
+	}
+}
+
 func run(ctx context.Context, getenv func(string) string) error {
+	return runWithDependencies(ctx, getenv, defaultAPIDependencies())
+}
+
+func runWithDependencies(ctx context.Context, getenv func(string) string, deps apiDependencies) error {
 	cfg, err := config.LoadAPIConfig(getenv)
 	if err != nil {
 		return fmt.Errorf("load api config: %w", err)
 	}
 
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	pool, err := deps.newPostgresPool(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return fmt.Errorf("create postgres pool: %w", err)
 	}
@@ -34,15 +88,33 @@ func run(ctx context.Context, getenv func(string) string) error {
 		return fmt.Errorf("ping postgres: %w", err)
 	}
 
-	if err := postgres.Migrate(ctx, pool); err != nil {
+	if err := deps.migratePostgres(ctx, pool); err != nil {
 		return fmt.Errorf("migrate postgres: %w", err)
 	}
 
-	store := postgres.NewStore(pool)
-	_ = app.NewService(app.Service{
+	store, err := deps.newStore(pool)
+	if err != nil {
+		return fmt.Errorf("wire service: %w", err)
+	}
+
+	temporalClient, err := deps.dialTemporal(ctx, temporal.Config{
+		Address:   cfg.TemporalAddress,
+		Namespace: cfg.TemporalNamespace,
+	})
+	if err != nil {
+		return fmt.Errorf("dial temporal: %w", err)
+	}
+	defer temporalClient.Close()
+
+	dispatcher := deps.newDispatcher(temporalClient, cfg.TemporalTaskQueue)
+	_, err = deps.newService(app.Service{
 		StackTemplates: store,
 		TemplateRuns:   store,
+		Workflows:      dispatcher,
 	})
+	if err != nil {
+		return fmt.Errorf("wire service: %w", err)
+	}
 
 	return nil
 }
