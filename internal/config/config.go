@@ -6,12 +6,16 @@ import (
 	"strings"
 )
 
-const DefaultTemporalTaskQueue = "terraform-runs"
+const (
+	DefaultHTTPAddress       = ":8081"
+	DefaultTemporalTaskQueue = "terraform-runs"
+)
 
 var ErrInvalidConfig = errors.New("invalid config")
 
 type APIConfig struct {
 	DatabaseURL       string
+	HTTPAddress       string
 	TemporalAddress   string
 	TemporalNamespace string
 	TemporalTaskQueue string
@@ -27,9 +31,13 @@ type WorkerConfig struct {
 func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
 	cfg := APIConfig{
 		DatabaseURL:       strings.TrimSpace(getenv("DATABASE_URL")),
+		HTTPAddress:       strings.TrimSpace(getenv("HTTP_ADDRESS")),
 		TemporalAddress:   strings.TrimSpace(getenv("TEMPORAL_ADDRESS")),
 		TemporalNamespace: strings.TrimSpace(getenv("TEMPORAL_NAMESPACE")),
 		TemporalTaskQueue: strings.TrimSpace(getenv("TEMPORAL_TASK_QUEUE")),
+	}
+	if cfg.HTTPAddress == "" {
+		cfg.HTTPAddress = DefaultHTTPAddress
 	}
 	if cfg.TemporalTaskQueue == "" {
 		cfg.TemporalTaskQueue = DefaultTemporalTaskQueue

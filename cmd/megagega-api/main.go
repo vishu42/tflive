@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vishu42/megagega/internal/api"
 	"github.com/vishu42/megagega/internal/app"
 	"github.com/vishu42/megagega/internal/config"
 	"github.com/vishu42/megagega/internal/postgres"
@@ -31,6 +35,7 @@ type apiDependencies struct {
 	dialTemporal    func(context.Context, temporal.Config) (client.Client, error)
 	newDispatcher   func(client.Client, string) app.WorkflowDispatcher
 	newService      func(app.Service) (*app.Service, error)
+	listenAndServe  func(context.Context, string, http.Handler) error
 }
 
 func main() {
@@ -65,6 +70,7 @@ func defaultAPIDependencies() apiDependencies {
 		newService: func(service app.Service) (*app.Service, error) {
 			return app.NewService(service), nil
 		},
+		listenAndServe: listenAndServe,
 	}
 }
 
@@ -107,7 +113,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 	defer temporalClient.Close()
 
 	dispatcher := deps.newDispatcher(temporalClient, cfg.TemporalTaskQueue)
-	_, err = deps.newService(app.Service{
+	service, err := deps.newService(app.Service{
 		StackTemplates: store,
 		TemplateRuns:   store,
 		Workflows:      dispatcher,
@@ -116,5 +122,30 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire service: %w", err)
 	}
 
+	handler := api.NewServer(service)
+	if err := deps.listenAndServe(ctx, cfg.HTTPAddress, handler); err != nil {
+		return fmt.Errorf("listen and serve api: %w", err)
+	}
+
 	return nil
+}
+
+func listenAndServe(ctx context.Context, address string, handler http.Handler) error {
+	server := &http.Server{
+		Addr:    address,
+		Handler: handler,
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+
+	err := server.ListenAndServe()
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
 }

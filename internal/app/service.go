@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -66,6 +68,9 @@ func NewService(service Service) *Service {
 		clock = systemClock{}
 	}
 	service.Clock = clock
+	if service.RunIDs == nil {
+		service.RunIDs = randomTemplateRunIDGenerator{}
+	}
 
 	return &service
 }
@@ -280,4 +285,14 @@ type systemClock struct{}
 
 func (systemClock) Now() time.Time {
 	return time.Now().UTC()
+}
+
+type randomTemplateRunIDGenerator struct{}
+
+func (randomTemplateRunIDGenerator) NewTemplateRunID() traits.TemplateRunID {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return traits.TemplateRunID(fmt.Sprintf("run_%d", time.Now().UTC().UnixNano()))
+	}
+	return traits.TemplateRunID("run_" + hex.EncodeToString(bytes[:]))
 }

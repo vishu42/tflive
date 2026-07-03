@@ -154,6 +154,43 @@ func TestStartTemplateRunRejectsInactiveStackTemplate(t *testing.T) {
 	}
 }
 
+func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
+	t.Parallel()
+
+	stackTemplates := &recordingStackTemplateRepository{
+		stackTemplate: traits.StackTemplate{
+			ID:            traits.StackTemplateID("stack_template_123"),
+			SelectedRef:   "main",
+			WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+			Lifecycle:     traits.StackTemplateActive,
+		},
+	}
+	runs := &recordingTemplateRunRepository{}
+	service := NewService(Service{
+		StackTemplates: stackTemplates,
+		TemplateRuns:   runs,
+		Workflows:      &recordingWorkflowDispatcher{},
+		Clock:          fixedClock{now: time.Now()},
+	})
+
+	run, err := service.StartTemplateRun(context.Background(), StartTemplateRunCommand{
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		TriggerActor:    traits.UserID("user_123"),
+	})
+	if err != nil {
+		t.Fatalf("StartTemplateRun returned error: %v", err)
+	}
+
+	if run.ID == "" {
+		t.Fatal("run.ID is empty")
+	}
+	if runs.created.ID != run.ID {
+		t.Fatalf("created run ID = %q, want %q", runs.created.ID, run.ID)
+	}
+}
+
 func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 	t.Parallel()
 

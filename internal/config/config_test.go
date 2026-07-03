@@ -12,6 +12,8 @@ func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 		switch key {
 		case "DATABASE_URL":
 			return " postgres://user:pass@localhost:5432/db?sslmode=disable "
+		case "HTTP_ADDRESS":
+			return " :9090 "
 		case "TEMPORAL_ADDRESS":
 			return " localhost:7233 "
 		case "TEMPORAL_NAMESPACE":
@@ -28,6 +30,9 @@ func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 
 	if cfg.DatabaseURL != "postgres://user:pass@localhost:5432/db?sslmode=disable" {
 		t.Fatalf("DatabaseURL = %q", cfg.DatabaseURL)
+	}
+	if cfg.HTTPAddress != ":9090" {
+		t.Fatalf("HTTPAddress = %q", cfg.HTTPAddress)
 	}
 	if cfg.TemporalAddress != "localhost:7233" {
 		t.Fatalf("TemporalAddress = %q", cfg.TemporalAddress)
@@ -59,6 +64,9 @@ func TestLoadAPIConfigDefaultsTemporalTaskQueue(t *testing.T) {
 
 	if cfg.TemporalTaskQueue != DefaultTemporalTaskQueue {
 		t.Fatalf("TemporalTaskQueue = %q, want %q", cfg.TemporalTaskQueue, DefaultTemporalTaskQueue)
+	}
+	if cfg.HTTPAddress != DefaultHTTPAddress {
+		t.Fatalf("HTTPAddress = %q, want %q", cfg.HTTPAddress, DefaultHTTPAddress)
 	}
 	if cfg.TemporalNamespace != "" {
 		t.Fatalf("TemporalNamespace = %q, want empty", cfg.TemporalNamespace)

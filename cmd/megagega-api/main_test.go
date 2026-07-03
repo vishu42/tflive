@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -76,6 +77,12 @@ func TestRunWiresTemporalDispatcher(t *testing.T) {
 	}
 	if deps.service.TemplateRuns != deps.store {
 		t.Fatal("service TemplateRuns is not the store")
+	}
+	if deps.serverAddress != ":9090" {
+		t.Fatalf("server address = %q, want :9090", deps.serverAddress)
+	}
+	if deps.serverHandler == nil {
+		t.Fatal("server handler was not provided")
 	}
 	if !deps.temporalClient.closed {
 		t.Fatal("temporal client was not closed")
@@ -178,6 +185,8 @@ func apiTestEnv(key string) string {
 	switch key {
 	case "DATABASE_URL":
 		return "postgres://user:pass@localhost:5432/db?sslmode=disable"
+	case "HTTP_ADDRESS":
+		return ":9090"
 	case "TEMPORAL_ADDRESS":
 		return "localhost:7233"
 	case "TEMPORAL_NAMESPACE":
@@ -198,9 +207,12 @@ type recordingAPIDependencies struct {
 	temporalConfig      temporal.Config
 	dispatcherTaskQueue string
 	service             app.Service
+	serverAddress       string
+	serverHandler       http.Handler
 	migrated            bool
 	dialErr             error
 	serviceErr          error
+	serverErr           error
 }
 
 func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
@@ -250,6 +262,11 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 				return nil, deps.serviceErr
 			}
 			return app.NewService(service), nil
+		},
+		listenAndServe: func(_ context.Context, address string, handler http.Handler) error {
+			deps.serverAddress = address
+			deps.serverHandler = handler
+			return deps.serverErr
 		},
 	}
 	return deps
