@@ -273,6 +273,8 @@ const (
 
 	ApprovalSignalName = "approval"
 	CancelSignalName   = "cancel"
+
+	RecordTemplateRunStatusActivityName = "RecordTemplateRunStatus"
 )
 
 // TemplateRunWorkflowInput starts one Terraform operation for one StackTemplate.
@@ -283,6 +285,15 @@ type TemplateRunWorkflowInput struct {
 	Operation       OperationType
 	SelectedRef     string
 	WorkspaceName   string
+}
+
+// TemplateRunStatusActivityInput asks the worker to persist one run status transition.
+type TemplateRunStatusActivityInput struct {
+	RunID           TemplateRunID
+	TenantID        TenantID
+	StackTemplateID StackTemplateID
+	Operation       OperationType
+	Status          TemplateRunStatus
 }
 
 // TemplateSyncWorkflowInput starts template metadata sync for a GitHub template.
