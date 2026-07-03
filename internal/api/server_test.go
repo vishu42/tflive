@@ -16,7 +16,7 @@ import (
 func TestHealthzReturnsOK(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(&recordingService{})
+	server := NewServer(app.NewService(app.Service{}))
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 
@@ -34,20 +34,18 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 	t.Parallel()
 
 	startedAt := time.Date(2026, 7, 3, 11, 30, 0, 0, time.UTC)
-	service := &recordingService{
-		startRun: traits.TemplateRun{
-			ID:              traits.TemplateRunID("run_123"),
-			TenantID:        traits.TenantID("tenant_123"),
-			StackTemplateID: traits.StackTemplateID("stack_template_123"),
-			Operation:       traits.OperationPlan,
-			SelectedRef:     "main",
-			WorkspaceName:   "smoke-workspace",
-			Status:          traits.TemplateRunQueued,
-			TriggerActor:    traits.UserID("user_123"),
-			StartedAt:       startedAt,
-		},
+	deps := newAPITestDependencies()
+	deps.stackTemplates.stackTemplate = traits.StackTemplate{
+		ID:            traits.StackTemplateID("stack_template_123"),
+		StackID:       traits.StackID("stack_123"),
+		TemplateID:    traits.TemplateID("template_123"),
+		SelectedRef:   "main",
+		WorkspaceName: "smoke-workspace",
+		Lifecycle:     traits.StackTemplateActive,
 	}
-	server := NewServer(service)
+	deps.runID = traits.TemplateRunID("run_123")
+	deps.now = startedAt
+	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -60,38 +58,38 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body.String())
 	}
-	if service.startCommand.TenantID != traits.TenantID("tenant_123") {
-		t.Fatalf("tenant id = %q", service.startCommand.TenantID)
+	if deps.stackTemplates.gotTenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant id = %q", deps.stackTemplates.gotTenantID)
 	}
-	if service.startCommand.StackTemplateID != traits.StackTemplateID("stack_template_123") {
-		t.Fatalf("stack template id = %q", service.startCommand.StackTemplateID)
+	if deps.stackTemplates.gotID != traits.StackTemplateID("stack_template_123") {
+		t.Fatalf("stack template id = %q", deps.stackTemplates.gotID)
 	}
-	if service.startCommand.Operation != traits.OperationPlan {
-		t.Fatalf("operation = %q", service.startCommand.Operation)
+	if deps.templateRuns.created.Operation != traits.OperationPlan {
+		t.Fatalf("operation = %q", deps.templateRuns.created.Operation)
 	}
-	if service.startCommand.TriggerActor != traits.UserID("user_123") {
-		t.Fatalf("trigger actor = %q", service.startCommand.TriggerActor)
+	if deps.templateRuns.created.TriggerActor != traits.UserID("user_123") {
+		t.Fatalf("trigger actor = %q", deps.templateRuns.created.TriggerActor)
 	}
 
-	var body map[string]any
+	var body traits.TemplateRun
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body["id"] != "run_123" {
-		t.Fatalf("id = %v, want run_123", body["id"])
+	if body.ID != traits.TemplateRunID("run_123") {
+		t.Fatalf("id = %q, want run_123", body.ID)
 	}
-	if body["status"] != "queued" {
-		t.Fatalf("status = %v, want queued", body["status"])
+	if body.Status != traits.TemplateRunQueued {
+		t.Fatalf("status = %q, want queued", body.Status)
 	}
-	if body["started_at"] != startedAt.Format(time.RFC3339Nano) {
-		t.Fatalf("started_at = %v", body["started_at"])
+	if !body.StartedAt.Equal(startedAt) {
+		t.Fatalf("started_at = %v, want %v", body.StartedAt, startedAt)
 	}
 }
 
 func TestStartTemplateRunRejectsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(&recordingService{})
+	server := NewServer(newAPITestDependencies().service())
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -109,8 +107,7 @@ func TestStartTemplateRunRejectsInvalidJSON(t *testing.T) {
 func TestStartTemplateRunMapsInvalidCommandToBadRequest(t *testing.T) {
 	t.Parallel()
 
-	service := &recordingService{startErr: app.ErrInvalidCommand}
-	server := NewServer(service)
+	server := NewServer(newAPITestDependencies().service())
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -128,8 +125,8 @@ func TestStartTemplateRunMapsInvalidCommandToBadRequest(t *testing.T) {
 func TestApproveRunCallsService(t *testing.T) {
 	t.Parallel()
 
-	service := &recordingService{}
-	server := NewServer(service)
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -142,22 +139,25 @@ func TestApproveRunCallsService(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNoContent, response.Body.String())
 	}
-	if service.approveCommand.TenantID != traits.TenantID("tenant_123") {
-		t.Fatalf("tenant id = %q", service.approveCommand.TenantID)
+	if deps.templateRuns.approval.TenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant id = %q", deps.templateRuns.approval.TenantID)
 	}
-	if service.approveCommand.RunID != traits.TemplateRunID("run_123") {
-		t.Fatalf("run id = %q", service.approveCommand.RunID)
+	if deps.templateRuns.approval.RunID != traits.TemplateRunID("run_123") {
+		t.Fatalf("run id = %q", deps.templateRuns.approval.RunID)
 	}
-	if service.approveCommand.ApprovedBy != traits.UserID("user_123") {
-		t.Fatalf("approved by = %q", service.approveCommand.ApprovedBy)
+	if deps.templateRuns.approval.ApprovedBy != traits.UserID("user_123") {
+		t.Fatalf("approved by = %q", deps.templateRuns.approval.ApprovedBy)
+	}
+	if deps.workflows.approvalRunID != traits.TemplateRunID("run_123") {
+		t.Fatalf("workflow run id = %q", deps.workflows.approvalRunID)
 	}
 }
 
 func TestCancelRunCallsService(t *testing.T) {
 	t.Parallel()
 
-	service := &recordingService{}
-	server := NewServer(service)
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -170,17 +170,20 @@ func TestCancelRunCallsService(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNoContent, response.Body.String())
 	}
-	if service.cancelCommand.TenantID != traits.TenantID("tenant_123") {
-		t.Fatalf("tenant id = %q", service.cancelCommand.TenantID)
+	if deps.templateRuns.cancellation.TenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant id = %q", deps.templateRuns.cancellation.TenantID)
 	}
-	if service.cancelCommand.RunID != traits.TemplateRunID("run_123") {
-		t.Fatalf("run id = %q", service.cancelCommand.RunID)
+	if deps.templateRuns.cancellation.RunID != traits.TemplateRunID("run_123") {
+		t.Fatalf("run id = %q", deps.templateRuns.cancellation.RunID)
 	}
-	if service.cancelCommand.RequestedBy != traits.UserID("user_123") {
-		t.Fatalf("requested by = %q", service.cancelCommand.RequestedBy)
+	if deps.templateRuns.cancellation.RequestedBy != traits.UserID("user_123") {
+		t.Fatalf("requested by = %q", deps.templateRuns.cancellation.RequestedBy)
 	}
-	if service.cancelCommand.Reason != "testing" {
-		t.Fatalf("reason = %q", service.cancelCommand.Reason)
+	if deps.templateRuns.cancellation.Reason != "testing" {
+		t.Fatalf("reason = %q", deps.templateRuns.cancellation.Reason)
+	}
+	if deps.workflows.cancelRunID != traits.TemplateRunID("run_123") {
+		t.Fatalf("workflow run id = %q", deps.workflows.cancelRunID)
 	}
 }
 
@@ -191,15 +194,15 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 		name       string
 		path       string
 		body       string
-		service    *recordingService
+		configure  func(*apiTestDependencies)
 		statusCode int
 	}{
 		{
 			name: "approval",
 			path: "/v1/tenants/tenant_123/template-runs/run_123/approval",
 			body: `{"approved_by":"user_123"}`,
-			service: &recordingService{
-				approveErr: app.ErrRunNotApprovable,
+			configure: func(deps *apiTestDependencies) {
+				deps.templateRuns.approvalErr = app.ErrRunNotApprovable
 			},
 			statusCode: http.StatusConflict,
 		},
@@ -207,8 +210,8 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 			name: "cancellation",
 			path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation",
 			body: `{"requested_by":"user_123"}`,
-			service: &recordingService{
-				cancelErr: app.ErrRunNotCancelable,
+			configure: func(deps *apiTestDependencies) {
+				deps.templateRuns.cancellationErr = app.ErrRunNotCancelable
 			},
 			statusCode: http.StatusConflict,
 		},
@@ -218,7 +221,9 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			server := NewServer(tt.service)
+			deps := newAPITestDependencies()
+			tt.configure(deps)
+			server := NewServer(deps.service())
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
 
@@ -234,7 +239,7 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 func TestUnknownRouteReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(&recordingService{})
+	server := NewServer(newAPITestDependencies().service())
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/nope", nil)
 
@@ -245,36 +250,105 @@ func TestUnknownRouteReturnsNotFound(t *testing.T) {
 	}
 }
 
-type recordingService struct {
-	startCommand   app.StartTemplateRunCommand
-	startRun       traits.TemplateRun
-	startErr       error
-	approveCommand app.ApproveRunCommand
-	approveErr     error
-	cancelCommand  app.CancelRunCommand
-	cancelErr      error
+type apiTestDependencies struct {
+	stackTemplates recordingStackTemplateRepository
+	templateRuns   recordingTemplateRunRepository
+	workflows      recordingWorkflowDispatcher
+	runID          traits.TemplateRunID
+	now            time.Time
 }
 
-func (service *recordingService) StartTemplateRun(_ context.Context, command app.StartTemplateRunCommand) (traits.TemplateRun, error) {
-	service.startCommand = command
-	if service.startErr != nil {
-		return traits.TemplateRun{}, service.startErr
+func newAPITestDependencies() *apiTestDependencies {
+	return &apiTestDependencies{
+		runID: traits.TemplateRunID("run_123"),
+		now:   time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC),
 	}
-	return service.startRun, nil
 }
 
-func (service *recordingService) ApproveRun(_ context.Context, command app.ApproveRunCommand) error {
-	service.approveCommand = command
-	if service.approveErr != nil {
-		return service.approveErr
-	}
+func (deps *apiTestDependencies) service() *app.Service {
+	return app.NewService(app.Service{
+		StackTemplates: &deps.stackTemplates,
+		TemplateRuns:   &deps.templateRuns,
+		Workflows:      &deps.workflows,
+		RunIDs:         fixedTemplateRunIDGenerator{runID: deps.runID},
+		Clock:          fixedClock{now: deps.now},
+	})
+}
+
+type recordingStackTemplateRepository struct {
+	stackTemplate traits.StackTemplate
+	gotTenantID   traits.TenantID
+	gotID         traits.StackTemplateID
+}
+
+func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error) {
+	repository.gotTenantID = tenantID
+	repository.gotID = id
+	return repository.stackTemplate, nil
+}
+
+type recordingTemplateRunRepository struct {
+	created         traits.TemplateRun
+	approval        traits.TemplateRunApproval
+	cancellation    traits.TemplateRunCancellation
+	approvalErr     error
+	cancellationErr error
+}
+
+func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run traits.TemplateRun) error {
+	repository.created = run
 	return nil
 }
 
-func (service *recordingService) CancelRun(_ context.Context, command app.CancelRunCommand) error {
-	service.cancelCommand = command
-	if service.cancelErr != nil {
-		return service.cancelErr
+func (repository *recordingTemplateRunRepository) ApproveTemplateRun(_ context.Context, approval traits.TemplateRunApproval) error {
+	if repository.approvalErr != nil {
+		return repository.approvalErr
 	}
+	repository.approval = approval
 	return nil
+}
+
+func (repository *recordingTemplateRunRepository) RequestTemplateRunCancellation(_ context.Context, cancellation traits.TemplateRunCancellation) error {
+	if repository.cancellationErr != nil {
+		return repository.cancellationErr
+	}
+	repository.cancellation = cancellation
+	return nil
+}
+
+type recordingWorkflowDispatcher struct {
+	input         traits.TemplateRunWorkflowInput
+	approvalRunID traits.TemplateRunID
+	cancelRunID   traits.TemplateRunID
+}
+
+func (dispatcher *recordingWorkflowDispatcher) StartTemplateRun(_ context.Context, input traits.TemplateRunWorkflowInput) error {
+	dispatcher.input = input
+	return nil
+}
+
+func (dispatcher *recordingWorkflowDispatcher) ApproveTemplateRun(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, _ traits.ApprovalSignal) error {
+	dispatcher.approvalRunID = runID
+	return nil
+}
+
+func (dispatcher *recordingWorkflowDispatcher) CancelTemplateRun(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, _ traits.CancelSignal) error {
+	dispatcher.cancelRunID = runID
+	return nil
+}
+
+type fixedTemplateRunIDGenerator struct {
+	runID traits.TemplateRunID
+}
+
+func (generator fixedTemplateRunIDGenerator) NewTemplateRunID() traits.TemplateRunID {
+	return generator.runID
+}
+
+type fixedClock struct {
+	now time.Time
+}
+
+func (clock fixedClock) Now() time.Time {
+	return clock.now
 }

@@ -212,20 +212,20 @@ type StackTemplate struct {
 // TemplateRun is one Terraform operation against a StackTemplate.
 // TemplateRun is one terraform operation against a StackTemplate
 type TemplateRun struct {
-	ID                TemplateRunID
-	TenantID          TenantID
-	StackTemplateID   StackTemplateID
-	Operation         OperationType
-	SelectedRef       string
-	ResolvedCommitSHA string
-	WorkspaceName     string
-	BackendType       string
-	BackendConfigHash string
-	Status            TemplateRunStatus
-	TriggerActor      UserID
-	StartedAt         time.Time
-	CompletedAt       time.Time
-	ErrorSummary      string
+	ID                TemplateRunID     `json:"id"`
+	TenantID          TenantID          `json:"tenant_id"`
+	StackTemplateID   StackTemplateID   `json:"stack_template_id"`
+	Operation         OperationType     `json:"operation"`
+	SelectedRef       string            `json:"selected_ref"`
+	ResolvedCommitSHA string            `json:"resolved_commit_sha"`
+	WorkspaceName     string            `json:"workspace_name"`
+	BackendType       string            `json:"backend_type"`
+	BackendConfigHash string            `json:"backend_config_hash"`
+	Status            TemplateRunStatus `json:"status"`
+	TriggerActor      UserID            `json:"trigger_actor"`
+	StartedAt         time.Time         `json:"started_at"`
+	CompletedAt       time.Time         `json:"completed_at,omitempty"`
+	ErrorSummary      string            `json:"error_summary"`
 }
 
 // TemplateRunApproval records who approved a waiting run.
