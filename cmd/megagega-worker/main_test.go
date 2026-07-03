@@ -27,6 +27,20 @@ func TestRunRequiresTemporalAddress(t *testing.T) {
 	}
 }
 
+func TestRunRequiresDatabaseURL(t *testing.T) {
+	t.Parallel()
+
+	err := run(context.Background(), func(key string) string {
+		if key == "TEMPORAL_ADDRESS" {
+			return "localhost:7233"
+		}
+		return ""
+	})
+	if !errors.Is(err, config.ErrInvalidConfig) {
+		t.Fatalf("error = %v, want ErrInvalidConfig", err)
+	}
+}
+
 func TestRunWiresTemporalWorker(t *testing.T) {
 	t.Parallel()
 
@@ -35,6 +49,15 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 		t.Fatalf("runWithDependencies returned error: %v", err)
 	}
 
+	if deps.pool.databaseURL != "postgres://user:pass@localhost:5432/db?sslmode=disable" {
+		t.Fatalf("databaseURL = %q", deps.pool.databaseURL)
+	}
+	if !deps.pool.pinged {
+		t.Fatal("postgres pool was not pinged")
+	}
+	if !deps.migrated {
+		t.Fatal("postgres migrations did not run")
+	}
 	if deps.temporalConfig.Address != "localhost:7233" {
 		t.Fatalf("temporal address = %q, want localhost:7233", deps.temporalConfig.Address)
 	}
@@ -50,17 +73,20 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if deps.worker.registeredWorkflowOptions.Name != traits.TemplateRunWorkflowName {
 		t.Fatalf("workflow registration name = %q, want %q", deps.worker.registeredWorkflowOptions.Name, traits.TemplateRunWorkflowName)
 	}
-	if deps.worker.registeredActivity != reflect.ValueOf(recordTemplateRunStatusActivity).Pointer() {
-		t.Fatal("RecordTemplateRunStatus activity was not registered")
-	}
 	if deps.worker.registeredActivityOptions.Name != traits.RecordTemplateRunStatusActivityName {
 		t.Fatalf("activity registration name = %q, want %q", deps.worker.registeredActivityOptions.Name, traits.RecordTemplateRunStatusActivityName)
+	}
+	if !deps.activityStoreIsWired {
+		t.Fatal("activity was not wired with the Postgres store")
 	}
 	if !deps.worker.ran {
 		t.Fatal("worker was not run")
 	}
 	if !deps.temporalClient.closed {
 		t.Fatal("temporal client was not closed")
+	}
+	if !deps.pool.closed {
+		t.Fatal("postgres pool was not closed")
 	}
 }
 
@@ -69,10 +95,14 @@ func TestRunUsesDefaultTemporalTaskQueue(t *testing.T) {
 
 	deps := newRecordingWorkerDependencies(t)
 	err := runWithDependencies(context.Background(), func(key string) string {
-		if key == "TEMPORAL_ADDRESS" {
+		switch key {
+		case "DATABASE_URL":
+			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
+		case "TEMPORAL_ADDRESS":
 			return "localhost:7233"
+		default:
+			return ""
 		}
-		return ""
 	}, deps.workerDependencies)
 	if err != nil {
 		t.Fatalf("runWithDependencies returned error: %v", err)
@@ -116,6 +146,8 @@ func TestRunWrapsWorkerRunFailure(t *testing.T) {
 
 func workerTestEnv(key string) string {
 	switch key {
+	case "DATABASE_URL":
+		return "postgres://user:pass@localhost:5432/db?sslmode=disable"
 	case "TEMPORAL_ADDRESS":
 		return "localhost:7233"
 	case "TEMPORAL_NAMESPACE":
@@ -129,11 +161,15 @@ func workerTestEnv(key string) string {
 
 type recordingWorkerDependencies struct {
 	workerDependencies
-	temporalClient  *recordingWorkerTemporalClient
-	worker          *recordingTemporalWorker
-	temporalConfig  temporal.Config
-	workerTaskQueue string
-	dialErr         error
+	temporalClient       *recordingWorkerTemporalClient
+	worker               *recordingTemporalWorker
+	pool                 *recordingWorkerPostgresPool
+	store                *recordingWorkerStore
+	temporalConfig       temporal.Config
+	workerTaskQueue      string
+	migrated             bool
+	activityStoreIsWired bool
+	dialErr              error
 }
 
 func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
@@ -142,8 +178,27 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 	deps := &recordingWorkerDependencies{
 		temporalClient: &recordingWorkerTemporalClient{},
 		worker:         &recordingTemporalWorker{},
+		pool:           &recordingWorkerPostgresPool{},
+		store:          &recordingWorkerStore{},
 	}
 	deps.workerDependencies = workerDependencies{
+		newPostgresPool: func(_ context.Context, databaseURL string) (postgresPool, error) {
+			deps.pool.databaseURL = databaseURL
+			return deps.pool, nil
+		},
+		migratePostgres: func(_ context.Context, pool postgresPool) error {
+			if pool != deps.pool {
+				t.Fatalf("migratePostgres pool = %p, want %p", pool, deps.pool)
+			}
+			deps.migrated = true
+			return nil
+		},
+		newStore: func(pool postgresPool) (statusRecorder, error) {
+			if pool != deps.pool {
+				t.Fatalf("newStore pool = %p, want %p", pool, deps.pool)
+			}
+			return deps.store, nil
+		},
 		dialTemporal: func(_ context.Context, cfg temporal.Config) (client.Client, error) {
 			deps.temporalConfig = cfg
 			if deps.dialErr != nil {
@@ -166,13 +221,22 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 				Name: traits.TemplateRunWorkflowName,
 			})
 		},
-		registerActivities: func(worker temporalWorker) {
+		registerActivities: func(worker temporalWorker, recorder statusRecorder) {
 			if worker != deps.worker {
 				t.Fatalf("registerActivities worker = %p, want %p", worker, deps.worker)
 			}
-			worker.RegisterActivityWithOptions(recordTemplateRunStatusActivity, activity.RegisterOptions{
-				Name: traits.RecordTemplateRunStatusActivityName,
-			})
+			if recorder != deps.store {
+				t.Fatalf("activity recorder = %p, want store %p", recorder, deps.store)
+			}
+			deps.activityStoreIsWired = true
+			worker.RegisterActivityWithOptions(
+				func(context.Context, traits.TemplateRunStatusActivityInput) error {
+					return nil
+				},
+				activity.RegisterOptions{
+					Name: traits.RecordTemplateRunStatusActivityName,
+				},
+			)
 		},
 		interruptCh: func() <-chan interface{} {
 			ch := make(chan interface{})
@@ -181,6 +245,27 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 		},
 	}
 	return deps
+}
+
+type recordingWorkerPostgresPool struct {
+	databaseURL string
+	pinged      bool
+	closed      bool
+}
+
+func (pool *recordingWorkerPostgresPool) Ping(context.Context) error {
+	pool.pinged = true
+	return nil
+}
+
+func (pool *recordingWorkerPostgresPool) Close() {
+	pool.closed = true
+}
+
+type recordingWorkerStore struct{}
+
+func (store *recordingWorkerStore) RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error {
+	return nil
 }
 
 type recordingWorkerTemporalClient struct {

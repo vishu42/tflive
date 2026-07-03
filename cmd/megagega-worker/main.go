@@ -6,8 +6,10 @@ import (
 	"log"
 	"os"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/megagega/internal/activities"
 	"github.com/vishu42/megagega/internal/config"
+	"github.com/vishu42/megagega/internal/postgres"
 	"github.com/vishu42/megagega/internal/temporal"
 	"github.com/vishu42/megagega/internal/traits"
 	"github.com/vishu42/megagega/internal/workflows"
@@ -23,15 +25,25 @@ type temporalWorker interface {
 	Run(<-chan interface{}) error
 }
 
+type postgresPool interface {
+	Ping(context.Context) error
+	Close()
+}
+
+type statusRecorder interface {
+	RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error
+}
+
 type workerDependencies struct {
+	newPostgresPool    func(context.Context, string) (postgresPool, error)
+	migratePostgres    func(context.Context, postgresPool) error
+	newStore           func(postgresPool) (statusRecorder, error)
 	dialTemporal       func(context.Context, temporal.Config) (client.Client, error)
 	newWorker          func(client.Client, string) temporalWorker
 	registerWorkflow   func(temporalWorker)
-	registerActivities func(temporalWorker)
+	registerActivities func(temporalWorker, statusRecorder)
 	interruptCh        func() <-chan interface{}
 }
-
-var recordTemplateRunStatusActivity = activities.RecordTemplateRunStatus
 
 func main() {
 	if err := run(context.Background(), os.Getenv); err != nil {
@@ -41,6 +53,23 @@ func main() {
 
 func defaultWorkerDependencies() workerDependencies {
 	return workerDependencies{
+		newPostgresPool: func(ctx context.Context, databaseURL string) (postgresPool, error) {
+			return pgxpool.New(ctx, databaseURL)
+		},
+		migratePostgres: func(ctx context.Context, pool postgresPool) error {
+			pgxPool, ok := pool.(*pgxpool.Pool)
+			if !ok {
+				return fmt.Errorf("unexpected postgres pool type %T", pool)
+			}
+			return postgres.Migrate(ctx, pgxPool)
+		},
+		newStore: func(pool postgresPool) (statusRecorder, error) {
+			pgxPool, ok := pool.(*pgxpool.Pool)
+			if !ok {
+				return nil, fmt.Errorf("unexpected postgres pool type %T", pool)
+			}
+			return postgres.NewStore(pgxPool), nil
+		},
 		dialTemporal: temporal.Dial,
 		newWorker: func(temporalClient client.Client, taskQueue string) temporalWorker {
 			return temporalworker.New(temporalClient, taskQueue, temporalworker.Options{})
@@ -50,8 +79,9 @@ func defaultWorkerDependencies() workerDependencies {
 				Name: traits.TemplateRunWorkflowName,
 			})
 		},
-		registerActivities: func(worker temporalWorker) {
-			worker.RegisterActivityWithOptions(recordTemplateRunStatusActivity, activity.RegisterOptions{
+		registerActivities: func(worker temporalWorker, recorder statusRecorder) {
+			templateRunActivities := activities.NewTemplateRunActivities(recorder)
+			worker.RegisterActivityWithOptions(templateRunActivities.RecordTemplateRunStatus, activity.RegisterOptions{
 				Name: traits.RecordTemplateRunStatusActivityName,
 			})
 		},
@@ -69,6 +99,25 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 		return fmt.Errorf("load worker config: %w", err)
 	}
 
+	pool, err := deps.newPostgresPool(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("create postgres pool: %w", err)
+	}
+	defer pool.Close()
+
+	if err := pool.Ping(ctx); err != nil {
+		return fmt.Errorf("ping postgres: %w", err)
+	}
+
+	if err := deps.migratePostgres(ctx, pool); err != nil {
+		return fmt.Errorf("migrate postgres: %w", err)
+	}
+
+	store, err := deps.newStore(pool)
+	if err != nil {
+		return fmt.Errorf("wire activities: %w", err)
+	}
+
 	temporalClient, err := deps.dialTemporal(ctx, temporal.Config{
 		Address:   cfg.TemporalAddress,
 		Namespace: cfg.TemporalNamespace,
@@ -80,7 +129,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 
 	worker := deps.newWorker(temporalClient, cfg.TemporalTaskQueue)
 	deps.registerWorkflow(worker)
-	deps.registerActivities(worker)
+	deps.registerActivities(worker, store)
 
 	if err := worker.Run(deps.interruptCh()); err != nil {
 		return fmt.Errorf("run worker: %w", err)

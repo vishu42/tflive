@@ -18,6 +18,7 @@ type APIConfig struct {
 }
 
 type WorkerConfig struct {
+	DatabaseURL       string
 	TemporalAddress   string
 	TemporalNamespace string
 	TemporalTaskQueue string
@@ -46,6 +47,7 @@ func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
 
 func LoadWorkerConfig(getenv func(string) string) (WorkerConfig, error) {
 	cfg := WorkerConfig{
+		DatabaseURL:       strings.TrimSpace(getenv("DATABASE_URL")),
 		TemporalAddress:   strings.TrimSpace(getenv("TEMPORAL_ADDRESS")),
 		TemporalNamespace: strings.TrimSpace(getenv("TEMPORAL_NAMESPACE")),
 		TemporalTaskQueue: strings.TrimSpace(getenv("TEMPORAL_TASK_QUEUE")),
@@ -56,6 +58,9 @@ func LoadWorkerConfig(getenv func(string) string) (WorkerConfig, error) {
 
 	if cfg.TemporalAddress == "" {
 		return WorkerConfig{}, fmt.Errorf("%w: TEMPORAL_ADDRESS is required", ErrInvalidConfig)
+	}
+	if cfg.DatabaseURL == "" {
+		return WorkerConfig{}, fmt.Errorf("%w: DATABASE_URL is required", ErrInvalidConfig)
 	}
 
 	return cfg, nil

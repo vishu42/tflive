@@ -187,6 +187,55 @@ func (store *Store) RequestTemplateRunCancellation(ctx context.Context, cancella
 	return nil
 }
 
+func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.TemplateRunStatusActivityInput) error {
+	var updatedRunID traits.TemplateRunID
+	var err error
+
+	if input.Status.Terminal() {
+		err = store.pool.QueryRow(ctx, `
+			update template_runs
+			set
+				status = $1,
+				completed_at = coalesce(completed_at, now())
+			where tenant_id = $2
+				and id = $3
+				and stack_template_id = $4
+				and operation = $5
+			returning id
+		`,
+			input.Status,
+			input.TenantID,
+			input.RunID,
+			input.StackTemplateID,
+			input.Operation,
+		).Scan(&updatedRunID)
+	} else {
+		err = store.pool.QueryRow(ctx, `
+			update template_runs
+			set status = $1
+			where tenant_id = $2
+				and id = $3
+				and stack_template_id = $4
+				and operation = $5
+			returning id
+		`,
+			input.Status,
+			input.TenantID,
+			input.RunID,
+			input.StackTemplateID,
+			input.Operation,
+		).Scan(&updatedRunID)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("record template run status: %w", err)
+	}
+
+	return nil
+}
+
 func nullTime(value time.Time) any {
 	if value.IsZero() {
 		return nil

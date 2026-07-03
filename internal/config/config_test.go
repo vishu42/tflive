@@ -98,6 +98,8 @@ func TestLoadWorkerConfigReadsWorkerSettings(t *testing.T) {
 
 	cfg, err := LoadWorkerConfig(func(key string) string {
 		switch key {
+		case "DATABASE_URL":
+			return " postgres://user:pass@localhost:5432/db?sslmode=disable "
 		case "TEMPORAL_ADDRESS":
 			return " localhost:7233 "
 		case "TEMPORAL_NAMESPACE":
@@ -112,6 +114,9 @@ func TestLoadWorkerConfigReadsWorkerSettings(t *testing.T) {
 		t.Fatalf("LoadWorkerConfig returned error: %v", err)
 	}
 
+	if cfg.DatabaseURL != "postgres://user:pass@localhost:5432/db?sslmode=disable" {
+		t.Fatalf("DatabaseURL = %q", cfg.DatabaseURL)
+	}
 	if cfg.TemporalAddress != "localhost:7233" {
 		t.Fatalf("TemporalAddress = %q", cfg.TemporalAddress)
 	}
@@ -127,10 +132,14 @@ func TestLoadWorkerConfigDefaultsTemporalTaskQueue(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := LoadWorkerConfig(func(key string) string {
-		if key == "TEMPORAL_ADDRESS" {
+		switch key {
+		case "DATABASE_URL":
+			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
+		case "TEMPORAL_ADDRESS":
 			return "localhost:7233"
+		default:
+			return ""
 		}
-		return ""
 	})
 	if err != nil {
 		t.Fatalf("LoadWorkerConfig returned error: %v", err)
@@ -148,6 +157,20 @@ func TestLoadWorkerConfigRequiresTemporalAddress(t *testing.T) {
 	t.Parallel()
 
 	_, err := LoadWorkerConfig(func(string) string {
+		return ""
+	})
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("error = %v, want ErrInvalidConfig", err)
+	}
+}
+
+func TestLoadWorkerConfigRequiresDatabaseURL(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadWorkerConfig(func(key string) string {
+		if key == "TEMPORAL_ADDRESS" {
+			return "localhost:7233"
+		}
 		return ""
 	})
 	if !errors.Is(err, ErrInvalidConfig) {

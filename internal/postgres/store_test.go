@@ -18,6 +18,9 @@ import (
 var (
 	_ app.StackTemplateRepository = (*Store)(nil)
 	_ app.TemplateRunRepository   = (*Store)(nil)
+	_ interface {
+		RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error
+	} = (*Store)(nil)
 )
 
 var testSchemaCounter uint64
@@ -424,6 +427,134 @@ func TestRequestTemplateRunCancellationRejectsTerminalRun(t *testing.T) {
 	})
 	if !errors.Is(err, app.ErrRunNotCancelable) {
 		t.Fatalf("error = %v, want ErrRunNotCancelable", err)
+	}
+}
+
+func TestRecordTemplateRunStatusUpdatesTenantScopedRun(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_123"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          traits.TemplateRunQueued,
+		TriggerActor:    traits.UserID("user_123"),
+	})
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_456"),
+		TenantID:        traits.TenantID("tenant_456"),
+		StackTemplateID: traits.StackTemplateID("stack_template_456"),
+		Operation:       traits.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_other_prod_vpc_f47ac",
+		Status:          traits.TemplateRunQueued,
+		TriggerActor:    traits.UserID("user_456"),
+	})
+
+	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
+		RunID:           traits.TemplateRunID("run_123"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		Status:          traits.TemplateRunPlanned,
+	})
+	if err != nil {
+		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+	}
+
+	var status traits.TemplateRunStatus
+	if err := pool.QueryRow(ctx, "select status from template_runs where id = $1", "run_123").Scan(&status); err != nil {
+		t.Fatalf("read updated run status: %v", err)
+	}
+	if status != traits.TemplateRunPlanned {
+		t.Fatalf("status = %q, want %q", status, traits.TemplateRunPlanned)
+	}
+
+	if err := pool.QueryRow(ctx, "select status from template_runs where id = $1", "run_456").Scan(&status); err != nil {
+		t.Fatalf("read other tenant run status: %v", err)
+	}
+	if status != traits.TemplateRunQueued {
+		t.Fatalf("other tenant status = %q, want %q", status, traits.TemplateRunQueued)
+	}
+}
+
+func TestRecordTemplateRunStatusSetsCompletedAtForTerminalStatus(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_123"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          traits.TemplateRunLockReleased,
+		TriggerActor:    traits.UserID("user_123"),
+	})
+
+	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
+		RunID:           traits.TemplateRunID("run_123"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		Status:          traits.TemplateRunCompleted,
+	})
+	if err != nil {
+		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+	}
+
+	var status traits.TemplateRunStatus
+	var completedAt time.Time
+	if err := pool.QueryRow(ctx, `
+		select status, completed_at
+		from template_runs
+		where id = $1
+	`, "run_123").Scan(&status, &completedAt); err != nil {
+		t.Fatalf("read terminal run status: %v", err)
+	}
+	if status != traits.TemplateRunCompleted {
+		t.Fatalf("status = %q, want %q", status, traits.TemplateRunCompleted)
+	}
+	if completedAt.IsZero() {
+		t.Fatal("completed_at was not set")
+	}
+}
+
+func TestRecordTemplateRunStatusReturnsNotFoundForOtherTenant(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_123"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          traits.TemplateRunQueued,
+		TriggerActor:    traits.UserID("user_123"),
+	})
+
+	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
+		RunID:           traits.TemplateRunID("run_123"),
+		TenantID:        traits.TenantID("tenant_456"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		Status:          traits.TemplateRunPlanned,
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("error = %v, want ErrNotFound", err)
 	}
 }
 
