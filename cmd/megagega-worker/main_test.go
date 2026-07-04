@@ -79,6 +79,9 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if !deps.worker.registeredActivities[traits.PrepareWorkspaceActivityName] {
 		t.Fatalf("activity %q was not registered", traits.PrepareWorkspaceActivityName)
 	}
+	if !deps.worker.registeredActivities[traits.RunTerraformActivityName] {
+		t.Fatalf("activity %q was not registered", traits.RunTerraformActivityName)
+	}
 	if !deps.activityStoreIsWired {
 		t.Fatal("activity was not wired with the Postgres store")
 	}
@@ -115,6 +118,25 @@ func TestRunUsesDefaultTemporalTaskQueue(t *testing.T) {
 	}
 	if deps.workerTaskQueue != config.DefaultTemporalTaskQueue {
 		t.Fatalf("worker task queue = %q, want %q", deps.workerTaskQueue, config.DefaultTemporalTaskQueue)
+	}
+}
+
+func TestDefaultWorkerDependenciesRegisterTerraformActivities(t *testing.T) {
+	t.Parallel()
+
+	worker := &recordingTemporalWorker{}
+	deps := defaultWorkerDependencies()
+
+	deps.registerActivities(worker, &recordingWorkerStore{}, t.TempDir())
+
+	if !worker.registeredActivities[traits.PrepareWorkspaceActivityName] {
+		t.Fatalf("activity %q was not registered", traits.PrepareWorkspaceActivityName)
+	}
+	if !worker.registeredActivities[traits.RunTerraformActivityName] {
+		t.Fatalf("activity %q was not registered", traits.RunTerraformActivityName)
+	}
+	if !worker.registeredActivities[traits.RecordTemplateRunStatusActivityName] {
+		t.Fatalf("activity %q was not registered", traits.RecordTemplateRunStatusActivityName)
 	}
 }
 
@@ -245,6 +267,14 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 				},
 				activity.RegisterOptions{
 					Name: traits.PrepareWorkspaceActivityName,
+				},
+			)
+			worker.RegisterActivityWithOptions(
+				func(context.Context, traits.RunTerraformActivityInput) error {
+					return nil
+				},
+				activity.RegisterOptions{
+					Name: traits.RunTerraformActivityName,
 				},
 			)
 			worker.RegisterActivityWithOptions(

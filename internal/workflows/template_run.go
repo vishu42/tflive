@@ -41,46 +41,64 @@ func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowI
 }
 
 type templateRunWorkflow struct {
-	ctx   workflow.Context
-	input traits.TemplateRunWorkflowInput
+	ctx           workflow.Context
+	input         traits.TemplateRunWorkflowInput
+	workspacePath string
 }
 
-func (run templateRunWorkflow) prepareWorkspace() error {
+func (run *templateRunWorkflow) prepareWorkspace() error {
 	if err := run.recordStatus(traits.TemplateRunLocked); err != nil {
 		return err
 	}
 	if err := run.prepareLocalWorkspace(); err != nil {
 		return err
 	}
-	return run.recordStatuses(
-		traits.TemplateRunWorkspacePrepared,
-		traits.TemplateRunSourceFetched,
-		traits.TemplateRunInit,
-		traits.TemplateRunWorkspaceSelected,
-	)
+	if err := run.recordStatuses(traits.TemplateRunWorkspacePrepared, traits.TemplateRunSourceFetched); err != nil {
+		return err
+	}
+	if err := run.runTerraform(traits.TerraformCommandInit); err != nil {
+		return err
+	}
+	if err := run.recordStatus(traits.TemplateRunInit); err != nil {
+		return err
+	}
+	if err := run.runTerraform(traits.TerraformCommandSelectWorkspace); err != nil {
+		return err
+	}
+	return run.recordStatus(traits.TemplateRunWorkspaceSelected)
 }
 
-func (run templateRunWorkflow) prepareLocalWorkspace() error {
+func (run *templateRunWorkflow) prepareLocalWorkspace() error {
 	input := traits.PrepareWorkspaceActivityInput{
 		RunID:    run.input.RunID,
 		TenantID: run.input.TenantID,
 	}
 	var output traits.PrepareWorkspaceActivityOutput
-	return workflow.ExecuteActivity(
+	if err := workflow.ExecuteActivity(
 		run.ctx,
 		traits.PrepareWorkspaceActivityName,
 		input,
-	).Get(run.ctx, &output)
+	).Get(run.ctx, &output); err != nil {
+		return err
+	}
+	run.workspacePath = output.WorkspacePath
+	return nil
 }
 
-func (run templateRunWorkflow) planOnly() error {
+func (run *templateRunWorkflow) planOnly() error {
+	if err := run.runTerraform(traits.TerraformCommandPlan); err != nil {
+		return err
+	}
 	if err := run.recordStatus(traits.TemplateRunPlanned); err != nil {
 		return err
 	}
 	return run.complete()
 }
 
-func (run templateRunWorkflow) apply() error {
+func (run *templateRunWorkflow) apply() error {
+	if err := run.runTerraform(traits.TerraformCommandPlan); err != nil {
+		return err
+	}
 	if err := run.recordStatuses(traits.TemplateRunPlanned, traits.TemplateRunWaitingApproval); err != nil {
 		return err
 	}
@@ -93,24 +111,26 @@ func (run templateRunWorkflow) apply() error {
 		return run.cancel()
 	}
 
-	if err := run.recordStatuses(
-		traits.TemplateRunApproved,
-		traits.TemplateRunApplyStarted,
-		traits.TemplateRunApplied,
-	); err != nil {
+	if err := run.recordStatuses(traits.TemplateRunApproved, traits.TemplateRunApplyStarted); err != nil {
+		return err
+	}
+	if err := run.runTerraform(traits.TerraformCommandApply); err != nil {
+		return err
+	}
+	if err := run.recordStatus(traits.TemplateRunApplied); err != nil {
 		return err
 	}
 	return run.complete()
 }
 
-func (run templateRunWorkflow) destroy() error {
+func (run *templateRunWorkflow) destroy() error {
 	if err := run.recordStatuses(traits.TemplateRunDestroyStarted, traits.TemplateRunDestroyed); err != nil {
 		return err
 	}
 	return run.complete()
 }
 
-func (run templateRunWorkflow) waitForApproval() (bool, error) {
+func (run *templateRunWorkflow) waitForApproval() (bool, error) {
 	approvalCh := workflow.GetSignalChannel(run.ctx, traits.ApprovalSignalName)
 	cancelCh := workflow.GetSignalChannel(run.ctx, traits.CancelSignalName)
 	selector := workflow.NewSelector(run.ctx)
@@ -131,7 +151,7 @@ func (run templateRunWorkflow) waitForApproval() (bool, error) {
 	return approved, nil
 }
 
-func (run templateRunWorkflow) cancel() error {
+func (run *templateRunWorkflow) cancel() error {
 	return run.recordStatuses(
 		traits.TemplateRunCancelRequested,
 		traits.TemplateRunCanceling,
@@ -140,11 +160,26 @@ func (run templateRunWorkflow) cancel() error {
 	)
 }
 
-func (run templateRunWorkflow) complete() error {
+func (run *templateRunWorkflow) complete() error {
 	return run.recordStatuses(traits.TemplateRunLockReleased, traits.TemplateRunCompleted)
 }
 
-func (run templateRunWorkflow) recordStatuses(statuses ...traits.TemplateRunStatus) error {
+func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType) error {
+	input := traits.RunTerraformActivityInput{
+		RunID:         run.input.RunID,
+		TenantID:      run.input.TenantID,
+		WorkspacePath: run.workspacePath,
+		WorkspaceName: run.input.WorkspaceName,
+		Command:       command,
+	}
+	return workflow.ExecuteActivity(
+		run.ctx,
+		traits.RunTerraformActivityName,
+		input,
+	).Get(run.ctx, nil)
+}
+
+func (run *templateRunWorkflow) recordStatuses(statuses ...traits.TemplateRunStatus) error {
 	for _, status := range statuses {
 		if err := run.recordStatus(status); err != nil {
 			return err
@@ -153,7 +188,7 @@ func (run templateRunWorkflow) recordStatuses(statuses ...traits.TemplateRunStat
 	return nil
 }
 
-func (run templateRunWorkflow) recordStatus(status traits.TemplateRunStatus) error {
+func (run *templateRunWorkflow) recordStatus(status traits.TemplateRunStatus) error {
 	input := traits.TemplateRunStatusActivityInput{
 		RunID:           run.input.RunID,
 		TenantID:        run.input.TenantID,

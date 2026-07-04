@@ -115,6 +115,49 @@ func TestPrepareWorkspaceRejectsUnsafePathComponents(t *testing.T) {
 	}
 }
 
+func TestRunTerraformDelegatesToRunner(t *testing.T) {
+	t.Parallel()
+
+	runner := &recordingTerraformRunner{}
+	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, t.TempDir(), runner)
+	input := traits.RunTerraformActivityInput{
+		RunID:         traits.TemplateRunID("run_123"),
+		TenantID:      traits.TenantID("tenant_123"),
+		WorkspacePath: "/tmp/megagega/runs/tenant_123/run_123",
+		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+		Command:       traits.TerraformCommandPlan,
+	}
+
+	if err := activities.RunTerraform(context.Background(), input); err != nil {
+		t.Fatalf("RunTerraform returned error: %v", err)
+	}
+
+	if !reflect.DeepEqual(runner.input, input) {
+		t.Fatalf("runner input = %#v, want %#v", runner.input, input)
+	}
+}
+
+func TestRunTerraformWrapsRunnerError(t *testing.T) {
+	t.Parallel()
+
+	runnerErr := errors.New("terraform failed")
+	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, t.TempDir(), &recordingTerraformRunner{err: runnerErr})
+
+	err := activities.RunTerraform(context.Background(), traits.RunTerraformActivityInput{
+		RunID:         traits.TemplateRunID("run_123"),
+		TenantID:      traits.TenantID("tenant_123"),
+		WorkspacePath: "/tmp/megagega/runs/tenant_123/run_123",
+		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+		Command:       traits.TerraformCommandApply,
+	})
+	if !errors.Is(err, runnerErr) {
+		t.Fatalf("error = %v, want runnerErr", err)
+	}
+	if !strings.Contains(err.Error(), "run terraform") {
+		t.Fatalf("error = %q, want run terraform context", err.Error())
+	}
+}
+
 type recordingStatusRecorder struct {
 	input traits.TemplateRunStatusActivityInput
 	err   error
@@ -123,4 +166,14 @@ type recordingStatusRecorder struct {
 func (recorder *recordingStatusRecorder) RecordTemplateRunStatus(_ context.Context, input traits.TemplateRunStatusActivityInput) error {
 	recorder.input = input
 	return recorder.err
+}
+
+type recordingTerraformRunner struct {
+	input traits.RunTerraformActivityInput
+	err   error
+}
+
+func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input traits.RunTerraformActivityInput) error {
+	runner.input = input
+	return runner.err
 }

@@ -34,6 +34,16 @@ const (
 	OperationDestroy OperationType = "destroy"
 )
 
+// TerraformCommandType identifies one Terraform subprocess command run by a worker.
+type TerraformCommandType string
+
+const (
+	TerraformCommandInit            TerraformCommandType = "init"
+	TerraformCommandSelectWorkspace TerraformCommandType = "select_workspace"
+	TerraformCommandPlan            TerraformCommandType = "plan"
+	TerraformCommandApply           TerraformCommandType = "apply"
+)
+
 // Valid reports whether the operation is one of the supported operation types.
 func (operation OperationType) Valid() bool {
 	switch operation {
@@ -276,6 +286,7 @@ const (
 
 	RecordTemplateRunStatusActivityName = "RecordTemplateRunStatus"
 	PrepareWorkspaceActivityName        = "PrepareWorkspace"
+	RunTerraformActivityName            = "RunTerraform"
 )
 
 // TemplateRunWorkflowInput starts one Terraform operation for one StackTemplate.
@@ -306,6 +317,15 @@ type PrepareWorkspaceActivityInput struct {
 // PrepareWorkspaceActivityOutput identifies the prepared local run workspace.
 type PrepareWorkspaceActivityOutput struct {
 	WorkspacePath string
+}
+
+// RunTerraformActivityInput asks the worker to run one Terraform subprocess command.
+type RunTerraformActivityInput struct {
+	RunID         TemplateRunID
+	TenantID      TenantID
+	WorkspacePath string
+	WorkspaceName string
+	Command       TerraformCommandType
 }
 
 // TemplateSyncWorkflowInput starts template metadata sync for a GitHub template.

@@ -84,6 +84,9 @@ func defaultWorkerDependencies() workerDependencies {
 			worker.RegisterActivityWithOptions(templateRunActivities.PrepareWorkspace, activity.RegisterOptions{
 				Name: traits.PrepareWorkspaceActivityName,
 			})
+			worker.RegisterActivityWithOptions(templateRunActivities.RunTerraform, activity.RegisterOptions{
+				Name: traits.RunTerraformActivityName,
+			})
 			worker.RegisterActivityWithOptions(templateRunActivities.RecordTemplateRunStatus, activity.RegisterOptions{
 				Name: traits.RecordTemplateRunStatusActivityName,
 			})
