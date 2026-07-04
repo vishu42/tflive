@@ -35,14 +35,22 @@ type statusRecorder interface {
 }
 
 type workerDependencies struct {
-	newPostgresPool    func(context.Context, string) (postgresPool, error)
-	migratePostgres    func(context.Context, postgresPool) error
-	newStore           func(postgresPool) (statusRecorder, error)
-	dialTemporal       func(context.Context, temporal.Config) (client.Client, error)
-	newWorker          func(client.Client, string) temporalWorker
-	registerWorkflow   func(temporalWorker)
+	// newPostgresPool opens the database connection pool used by the worker.
+	newPostgresPool func(context.Context, string) (postgresPool, error)
+	// migratePostgres applies the schema migrations required before activities can record state.
+	migratePostgres func(context.Context, postgresPool) error
+	// newStore builds the persistence adapter shared by worker activities.
+	newStore func(postgresPool) (statusRecorder, error)
+	// dialTemporal connects to the Temporal namespace where the worker polls for tasks.
+	dialTemporal func(context.Context, temporal.Config) (client.Client, error)
+	// newWorker creates the Temporal worker bound to the configured task queue.
+	newWorker func(client.Client, string) temporalWorker
+	// registerWorkflow attaches the workflow implementations this process can execute.
+	registerWorkflow func(temporalWorker)
+	// registerActivities attaches activity handlers and their shared dependencies to the worker.
 	registerActivities func(temporalWorker, statusRecorder, string)
-	interruptCh        func() <-chan interface{}
+	// interruptCh provides the shutdown signal consumed by the Temporal worker run loop.
+	interruptCh func() <-chan interface{}
 }
 
 func main() {
