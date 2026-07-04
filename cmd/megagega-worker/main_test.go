@@ -76,8 +76,14 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if deps.worker.registeredActivityOptions.Name != traits.RecordTemplateRunStatusActivityName {
 		t.Fatalf("activity registration name = %q, want %q", deps.worker.registeredActivityOptions.Name, traits.RecordTemplateRunStatusActivityName)
 	}
+	if !deps.worker.registeredActivities[traits.PrepareWorkspaceActivityName] {
+		t.Fatalf("activity %q was not registered", traits.PrepareWorkspaceActivityName)
+	}
 	if !deps.activityStoreIsWired {
 		t.Fatal("activity was not wired with the Postgres store")
+	}
+	if deps.activityRunRoot != "/tmp/megagega-worker-test" {
+		t.Fatalf("activity run root = %q, want /tmp/megagega-worker-test", deps.activityRunRoot)
 	}
 	if !deps.worker.ran {
 		t.Fatal("worker was not run")
@@ -154,6 +160,8 @@ func workerTestEnv(key string) string {
 		return "megagega"
 	case "TEMPORAL_TASK_QUEUE":
 		return "terraform-runs-dev"
+	case "WORKER_RUN_ROOT":
+		return "/tmp/megagega-worker-test"
 	default:
 		return ""
 	}
@@ -169,6 +177,7 @@ type recordingWorkerDependencies struct {
 	workerTaskQueue      string
 	migrated             bool
 	activityStoreIsWired bool
+	activityRunRoot      string
 	dialErr              error
 }
 
@@ -221,7 +230,7 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 				Name: traits.TemplateRunWorkflowName,
 			})
 		},
-		registerActivities: func(worker temporalWorker, recorder statusRecorder) {
+		registerActivities: func(worker temporalWorker, recorder statusRecorder, runRoot string) {
 			if worker != deps.worker {
 				t.Fatalf("registerActivities worker = %p, want %p", worker, deps.worker)
 			}
@@ -229,6 +238,15 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 				t.Fatalf("activity recorder = %p, want store %p", recorder, deps.store)
 			}
 			deps.activityStoreIsWired = true
+			deps.activityRunRoot = runRoot
+			worker.RegisterActivityWithOptions(
+				func(context.Context, traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+					return traits.PrepareWorkspaceActivityOutput{}, nil
+				},
+				activity.RegisterOptions{
+					Name: traits.PrepareWorkspaceActivityName,
+				},
+			)
 			worker.RegisterActivityWithOptions(
 				func(context.Context, traits.TemplateRunStatusActivityInput) error {
 					return nil
@@ -282,6 +300,7 @@ type recordingTemporalWorker struct {
 	registeredWorkflowOptions workflow.RegisterOptions
 	registeredActivity        uintptr
 	registeredActivityOptions activity.RegisterOptions
+	registeredActivities      map[string]bool
 	ran                       bool
 	runErr                    error
 }
@@ -292,8 +311,12 @@ func (worker *recordingTemporalWorker) RegisterWorkflowWithOptions(workflowFn in
 }
 
 func (worker *recordingTemporalWorker) RegisterActivityWithOptions(activityFn interface{}, options activity.RegisterOptions) {
+	if worker.registeredActivities == nil {
+		worker.registeredActivities = make(map[string]bool)
+	}
 	worker.registeredActivity = reflect.ValueOf(activityFn).Pointer()
 	worker.registeredActivityOptions = options
+	worker.registeredActivities[options.Name] = true
 }
 
 func (worker *recordingTemporalWorker) Run(<-chan interface{}) error {

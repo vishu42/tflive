@@ -114,6 +114,8 @@ func TestLoadWorkerConfigReadsWorkerSettings(t *testing.T) {
 			return " megagega "
 		case "TEMPORAL_TASK_QUEUE":
 			return " terraform-runs-dev "
+		case "WORKER_RUN_ROOT":
+			return " /var/lib/megagega/runs "
 		default:
 			return ""
 		}
@@ -133,6 +135,9 @@ func TestLoadWorkerConfigReadsWorkerSettings(t *testing.T) {
 	}
 	if cfg.TemporalTaskQueue != "terraform-runs-dev" {
 		t.Fatalf("TemporalTaskQueue = %q, want terraform-runs-dev", cfg.TemporalTaskQueue)
+	}
+	if cfg.WorkerRunRoot != "/var/lib/megagega/runs" {
+		t.Fatalf("WorkerRunRoot = %q, want /var/lib/megagega/runs", cfg.WorkerRunRoot)
 	}
 }
 
@@ -158,6 +163,9 @@ func TestLoadWorkerConfigDefaultsTemporalTaskQueue(t *testing.T) {
 	}
 	if cfg.TemporalNamespace != "" {
 		t.Fatalf("TemporalNamespace = %q, want empty", cfg.TemporalNamespace)
+	}
+	if cfg.WorkerRunRoot != DefaultWorkerRunRoot {
+		t.Fatalf("WorkerRunRoot = %q, want %q", cfg.WorkerRunRoot, DefaultWorkerRunRoot)
 	}
 }
 

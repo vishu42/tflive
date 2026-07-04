@@ -9,6 +9,7 @@ import (
 const (
 	DefaultHTTPAddress       = ":8081"
 	DefaultTemporalTaskQueue = "terraform-runs"
+	DefaultWorkerRunRoot     = "/tmp/megagega/runs"
 )
 
 var ErrInvalidConfig = errors.New("invalid config")
@@ -26,6 +27,7 @@ type WorkerConfig struct {
 	TemporalAddress   string
 	TemporalNamespace string
 	TemporalTaskQueue string
+	WorkerRunRoot     string
 }
 
 func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
@@ -59,9 +61,13 @@ func LoadWorkerConfig(getenv func(string) string) (WorkerConfig, error) {
 		TemporalAddress:   strings.TrimSpace(getenv("TEMPORAL_ADDRESS")),
 		TemporalNamespace: strings.TrimSpace(getenv("TEMPORAL_NAMESPACE")),
 		TemporalTaskQueue: strings.TrimSpace(getenv("TEMPORAL_TASK_QUEUE")),
+		WorkerRunRoot:     strings.TrimSpace(getenv("WORKER_RUN_ROOT")),
 	}
 	if cfg.TemporalTaskQueue == "" {
 		cfg.TemporalTaskQueue = DefaultTemporalTaskQueue
+	}
+	if cfg.WorkerRunRoot == "" {
+		cfg.WorkerRunRoot = DefaultWorkerRunRoot
 	}
 
 	if cfg.TemporalAddress == "" {

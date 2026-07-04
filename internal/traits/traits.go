@@ -275,6 +275,7 @@ const (
 	CancelSignalName   = "cancel"
 
 	RecordTemplateRunStatusActivityName = "RecordTemplateRunStatus"
+	PrepareWorkspaceActivityName        = "PrepareWorkspace"
 )
 
 // TemplateRunWorkflowInput starts one Terraform operation for one StackTemplate.
@@ -294,6 +295,17 @@ type TemplateRunStatusActivityInput struct {
 	StackTemplateID StackTemplateID
 	Operation       OperationType
 	Status          TemplateRunStatus
+}
+
+// PrepareWorkspaceActivityInput asks the worker to create a local run workspace.
+type PrepareWorkspaceActivityInput struct {
+	RunID    TemplateRunID
+	TenantID TenantID
+}
+
+// PrepareWorkspaceActivityOutput identifies the prepared local run workspace.
+type PrepareWorkspaceActivityOutput struct {
+	WorkspacePath string
 }
 
 // TemplateSyncWorkflowInput starts template metadata sync for a GitHub template.

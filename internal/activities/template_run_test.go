@@ -3,6 +3,8 @@ package activities
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,7 +16,7 @@ func TestRecordTemplateRunStatusDelegatesToRecorder(t *testing.T) {
 	t.Parallel()
 
 	recorder := &recordingStatusRecorder{}
-	activities := NewTemplateRunActivities(recorder)
+	activities := NewTemplateRunActivities(recorder, t.TempDir())
 	input := traits.TemplateRunStatusActivityInput{
 		RunID:           traits.TemplateRunID("run_123"),
 		TenantID:        traits.TenantID("tenant_123"),
@@ -36,7 +38,7 @@ func TestRecordTemplateRunStatusWrapsRecorderError(t *testing.T) {
 	t.Parallel()
 
 	recorderErr := errors.New("database unavailable")
-	activities := NewTemplateRunActivities(&recordingStatusRecorder{err: recorderErr})
+	activities := NewTemplateRunActivities(&recordingStatusRecorder{err: recorderErr}, t.TempDir())
 
 	err := activities.RecordTemplateRunStatus(context.Background(), traits.TemplateRunStatusActivityInput{
 		RunID:    traits.TemplateRunID("run_123"),
@@ -48,6 +50,68 @@ func TestRecordTemplateRunStatusWrapsRecorderError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "record template run status") {
 		t.Fatalf("error = %q, want status context", err.Error())
+	}
+}
+
+func TestPrepareWorkspaceCreatesRunDirectory(t *testing.T) {
+	t.Parallel()
+
+	runRoot := t.TempDir()
+	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, runRoot)
+	input := traits.PrepareWorkspaceActivityInput{
+		RunID:    traits.TemplateRunID("run_123"),
+		TenantID: traits.TenantID("tenant_123"),
+	}
+
+	output, err := activities.PrepareWorkspace(context.Background(), input)
+	if err != nil {
+		t.Fatalf("PrepareWorkspace returned error: %v", err)
+	}
+
+	wantPath := filepath.Join(runRoot, "tenant_123", "run_123")
+	if output.WorkspacePath != wantPath {
+		t.Fatalf("WorkspacePath = %q, want %q", output.WorkspacePath, wantPath)
+	}
+	info, err := os.Stat(wantPath)
+	if err != nil {
+		t.Fatalf("stat workspace path: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("workspace path %q is not a directory", wantPath)
+	}
+}
+
+func TestPrepareWorkspaceRejectsEmptyRoot(t *testing.T) {
+	t.Parallel()
+
+	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, "")
+
+	_, err := activities.PrepareWorkspace(context.Background(), traits.PrepareWorkspaceActivityInput{
+		RunID:    traits.TemplateRunID("run_123"),
+		TenantID: traits.TenantID("tenant_123"),
+	})
+	if err == nil {
+		t.Fatal("PrepareWorkspace returned nil error, want error")
+	}
+	if !strings.Contains(err.Error(), "run root") {
+		t.Fatalf("error = %q, want run root context", err.Error())
+	}
+}
+
+func TestPrepareWorkspaceRejectsUnsafePathComponents(t *testing.T) {
+	t.Parallel()
+
+	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, t.TempDir())
+
+	_, err := activities.PrepareWorkspace(context.Background(), traits.PrepareWorkspaceActivityInput{
+		RunID:    traits.TemplateRunID("run_123"),
+		TenantID: traits.TenantID("../tenant_123"),
+	})
+	if err == nil {
+		t.Fatal("PrepareWorkspace returned nil error, want error")
+	}
+	if !strings.Contains(err.Error(), "safe path") {
+		t.Fatalf("error = %q, want safe path context", err.Error())
 	}
 }
 

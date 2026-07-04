@@ -16,28 +16,40 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
 	input := templateRunWorkflowInput(traits.OperationPlan)
-	var statuses []traits.TemplateRunStatus
+	var events []string
+	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+			if activityInput.RunID != input.RunID {
+				t.Fatalf("prepare workspace RunID = %q, want %q", activityInput.RunID, input.RunID)
+			}
+			if activityInput.TenantID != input.TenantID {
+				t.Fatalf("prepare workspace TenantID = %q, want %q", activityInput.TenantID, input.TenantID)
+			}
+			events = append(events, "prepare_workspace")
+			return traits.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/megagega/runs/tenant_123/run_123"}, nil
+		})
 	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
-			statuses = append(statuses, activityInput.Status)
+			events = append(events, string(activityInput.Status))
 			return nil
 		})
 
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 
 	assertWorkflowCompleted(t, env)
-	want := []traits.TemplateRunStatus{
-		traits.TemplateRunLocked,
-		traits.TemplateRunWorkspacePrepared,
-		traits.TemplateRunSourceFetched,
-		traits.TemplateRunInit,
-		traits.TemplateRunWorkspaceSelected,
-		traits.TemplateRunPlanned,
-		traits.TemplateRunLockReleased,
-		traits.TemplateRunCompleted,
+	want := []string{
+		string(traits.TemplateRunLocked),
+		"prepare_workspace",
+		string(traits.TemplateRunWorkspacePrepared),
+		string(traits.TemplateRunSourceFetched),
+		string(traits.TemplateRunInit),
+		string(traits.TemplateRunWorkspaceSelected),
+		string(traits.TemplateRunPlanned),
+		string(traits.TemplateRunLockReleased),
+		string(traits.TemplateRunCompleted),
 	}
-	if !reflect.DeepEqual(statuses, want) {
-		t.Fatalf("statuses = %#v, want %#v", statuses, want)
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
 	}
 }
 
@@ -47,6 +59,7 @@ func TestTemplateRunWorkflowWaitsForApplyApproval(t *testing.T) {
 	env := newTemplateRunWorkflowTestEnvironment(t)
 	input := templateRunWorkflowInput(traits.OperationApply)
 	var statuses []traits.TemplateRunStatus
+	mockPrepareWorkspace(t, env)
 	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
 			statuses = append(statuses, activityInput.Status)
@@ -86,6 +99,7 @@ func TestTemplateRunWorkflowCancelsApplyWhileWaitingApproval(t *testing.T) {
 	env := newTemplateRunWorkflowTestEnvironment(t)
 	input := templateRunWorkflowInput(traits.OperationApply)
 	var statuses []traits.TemplateRunStatus
+	mockPrepareWorkspace(t, env)
 	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
 			statuses = append(statuses, activityInput.Status)
@@ -125,6 +139,7 @@ func TestTemplateRunWorkflowRecordsDestroyStatuses(t *testing.T) {
 	env := newTemplateRunWorkflowTestEnvironment(t)
 	input := templateRunWorkflowInput(traits.OperationDestroy)
 	var statuses []traits.TemplateRunStatus
+	mockPrepareWorkspace(t, env)
 	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
 			statuses = append(statuses, activityInput.Status)
@@ -162,7 +177,20 @@ func newTemplateRunWorkflowTestEnvironment(t *testing.T) *testsuite.TestWorkflow
 		},
 		activity.RegisterOptions{Name: traits.RecordTemplateRunStatusActivityName},
 	)
+	env.RegisterActivityWithOptions(
+		func(context.Context, traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+			return traits.PrepareWorkspaceActivityOutput{}, nil
+		},
+		activity.RegisterOptions{Name: traits.PrepareWorkspaceActivityName},
+	)
 	return env
+}
+
+func mockPrepareWorkspace(t *testing.T, env *testsuite.TestWorkflowEnvironment) {
+	t.Helper()
+
+	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(traits.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/megagega/runs/tenant_123/run_123"}, nil)
 }
 
 func templateRunWorkflowInput(operation traits.OperationType) traits.TemplateRunWorkflowInput {

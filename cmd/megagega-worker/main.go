@@ -41,7 +41,7 @@ type workerDependencies struct {
 	dialTemporal       func(context.Context, temporal.Config) (client.Client, error)
 	newWorker          func(client.Client, string) temporalWorker
 	registerWorkflow   func(temporalWorker)
-	registerActivities func(temporalWorker, statusRecorder)
+	registerActivities func(temporalWorker, statusRecorder, string)
 	interruptCh        func() <-chan interface{}
 }
 
@@ -79,8 +79,11 @@ func defaultWorkerDependencies() workerDependencies {
 				Name: traits.TemplateRunWorkflowName,
 			})
 		},
-		registerActivities: func(worker temporalWorker, recorder statusRecorder) {
-			templateRunActivities := activities.NewTemplateRunActivities(recorder)
+		registerActivities: func(worker temporalWorker, recorder statusRecorder, runRoot string) {
+			templateRunActivities := activities.NewTemplateRunActivities(recorder, runRoot)
+			worker.RegisterActivityWithOptions(templateRunActivities.PrepareWorkspace, activity.RegisterOptions{
+				Name: traits.PrepareWorkspaceActivityName,
+			})
 			worker.RegisterActivityWithOptions(templateRunActivities.RecordTemplateRunStatus, activity.RegisterOptions{
 				Name: traits.RecordTemplateRunStatusActivityName,
 			})
@@ -129,7 +132,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 
 	worker := deps.newWorker(temporalClient, cfg.TemporalTaskQueue)
 	deps.registerWorkflow(worker)
-	deps.registerActivities(worker, store)
+	deps.registerActivities(worker, store, cfg.WorkerRunRoot)
 
 	if err := worker.Run(deps.interruptCh()); err != nil {
 		return fmt.Errorf("run worker: %w", err)

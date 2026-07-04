@@ -46,14 +46,31 @@ type templateRunWorkflow struct {
 }
 
 func (run templateRunWorkflow) prepareWorkspace() error {
-	statuses := []traits.TemplateRunStatus{
-		traits.TemplateRunLocked,
+	if err := run.recordStatus(traits.TemplateRunLocked); err != nil {
+		return err
+	}
+	if err := run.prepareLocalWorkspace(); err != nil {
+		return err
+	}
+	return run.recordStatuses(
 		traits.TemplateRunWorkspacePrepared,
 		traits.TemplateRunSourceFetched,
 		traits.TemplateRunInit,
 		traits.TemplateRunWorkspaceSelected,
+	)
+}
+
+func (run templateRunWorkflow) prepareLocalWorkspace() error {
+	input := traits.PrepareWorkspaceActivityInput{
+		RunID:    run.input.RunID,
+		TenantID: run.input.TenantID,
 	}
-	return run.recordStatuses(statuses...)
+	var output traits.PrepareWorkspaceActivityOutput
+	return workflow.ExecuteActivity(
+		run.ctx,
+		traits.PrepareWorkspaceActivityName,
+		input,
+	).Get(run.ctx, &output)
 }
 
 func (run templateRunWorkflow) planOnly() error {
