@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,24 +15,47 @@ type TerraformCommand struct {
 	WorkspacePath string
 	WorkspaceName string
 	Command       traits.TerraformCommandType
+	Stdout        io.Writer
+	Stderr        io.Writer
 }
 
+// CommandExecutor is the subprocess boundary used by LocalProcessRunner.
+//
+// Implementations receive the fully resolved working directory, output streams,
+// executable name, and CLI arguments. The production executor starts a real
+// process with os/exec, while tests can provide a recorder or fake executor to
+// verify command construction without invoking Terraform.
 type CommandExecutor interface {
-	Run(ctx context.Context, dir string, name string, args ...string) error
+	Run(ctx context.Context, dir string, stdout io.Writer, stderr io.Writer, name string, args ...string) error
 }
 
 type LocalProcessRunner struct {
 	executor CommandExecutor
 }
 
+// NewLocalProcessRunner returns a runner that executes Terraform with os/exec.
+//
+// Commands run in the requested workspace directory, inherit the process
+// context for cancellation, and write to the command's configured output
+// writers or to the process stdout/stderr when no writers are configured.
 func NewLocalProcessRunner() *LocalProcessRunner {
 	return NewLocalProcessRunnerWithExecutor(osExecCommandExecutor{})
 }
 
+// NewLocalProcessRunnerWithExecutor returns a runner backed by executor.
+//
+// Tests and alternate adapters can provide a custom executor to observe command
+// construction or to avoid spawning real Terraform subprocesses.
 func NewLocalProcessRunnerWithExecutor(executor CommandExecutor) *LocalProcessRunner {
 	return &LocalProcessRunner{executor: executor}
 }
 
+// Run validates input and executes the requested Terraform command.
+//
+// The runner owns the concrete Terraform CLI arguments for each supported
+// command type. Workspace selection is special-cased so a missing workspace is
+// created with `terraform workspace new` after `terraform workspace select`
+// fails.
 func (runner *LocalProcessRunner) Run(ctx context.Context, input TerraformCommand) error {
 	if strings.TrimSpace(input.WorkspacePath) == "" {
 		return fmt.Errorf("workspace path is required")
@@ -42,22 +66,30 @@ func (runner *LocalProcessRunner) Run(ctx context.Context, input TerraformComman
 
 	switch input.Command {
 	case traits.TerraformCommandInit:
-		return runner.run(ctx, input.WorkspacePath, "terraform init", "init", "-input=false", "-no-color")
+		return runner.run(ctx, input, "terraform init", "init", "-input=false", "-no-color")
 	case traits.TerraformCommandSelectWorkspace:
 		return runner.selectWorkspace(ctx, input)
 	case traits.TerraformCommandPlan:
-		return runner.run(ctx, input.WorkspacePath, "terraform plan", "plan", "-input=false", "-no-color")
+		return runner.run(ctx, input, "terraform plan", "plan", "-input=false", "-no-color")
 	case traits.TerraformCommandApply:
-		return runner.run(ctx, input.WorkspacePath, "terraform apply", "apply", "-input=false", "-auto-approve", "-no-color")
+		return runner.run(ctx, input, "terraform apply", "apply", "-input=false", "-auto-approve", "-no-color")
 	default:
 		return fmt.Errorf("unsupported terraform command %q", input.Command)
 	}
 }
 
+// selectWorkspace selects the requested Terraform workspace or creates it.
+//
+// Terraform exits non-zero when the workspace does not exist, so this method
+// treats a select failure as the signal to run `terraform workspace new`. If the
+// creation also fails, the returned error includes context for both attempts.
 func (runner *LocalProcessRunner) selectWorkspace(ctx context.Context, input TerraformCommand) error {
+	stdout, stderr := outputWriters(input)
 	err := runner.executor.Run(
 		ctx,
 		input.WorkspacePath,
+		stdout,
+		stderr,
 		"terraform",
 		"workspace",
 		"select",
@@ -71,6 +103,8 @@ func (runner *LocalProcessRunner) selectWorkspace(ctx context.Context, input Ter
 	if err := runner.executor.Run(
 		ctx,
 		input.WorkspacePath,
+		stdout,
+		stderr,
 		"terraform",
 		"workspace",
 		"new",
@@ -82,19 +116,46 @@ func (runner *LocalProcessRunner) selectWorkspace(ctx context.Context, input Ter
 	return nil
 }
 
-func (runner *LocalProcessRunner) run(ctx context.Context, dir string, label string, args ...string) error {
-	if err := runner.executor.Run(ctx, dir, "terraform", args...); err != nil {
+// run executes a non-workspace Terraform command with shared error wrapping.
+//
+// The label is used only for human-readable error context; args are the exact
+// Terraform CLI arguments passed to the command executor.
+func (runner *LocalProcessRunner) run(ctx context.Context, input TerraformCommand, label string, args ...string) error {
+	stdout, stderr := outputWriters(input)
+	if err := runner.executor.Run(ctx, input.WorkspacePath, stdout, stderr, "terraform", args...); err != nil {
 		return fmt.Errorf("%s: %w", label, err)
 	}
 	return nil
 }
 
+// outputWriters returns the command-specific output writers with process defaults.
+//
+// Callers can pass writers to capture Terraform output in logs. When either
+// writer is nil, the runner preserves the CLI-like default of writing to the
+// current process stdout or stderr.
+func outputWriters(input TerraformCommand) (io.Writer, io.Writer) {
+	stdout := input.Stdout
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+	stderr := input.Stderr
+	if stderr == nil {
+		stderr = os.Stderr
+	}
+	return stdout, stderr
+}
+
 type osExecCommandExecutor struct{}
 
-func (osExecCommandExecutor) Run(ctx context.Context, dir string, name string, args ...string) error {
+// Run starts one subprocess in dir and connects its output streams.
+//
+// The context is passed to exec.CommandContext so cancellation or deadline
+// expiry can terminate the Terraform process. The command name and args are
+// intentionally supplied by LocalProcessRunner so this adapter stays generic.
+func (osExecCommandExecutor) Run(ctx context.Context, dir string, stdout io.Writer, stderr io.Writer, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	return cmd.Run()
 }

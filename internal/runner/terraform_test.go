@@ -1,8 +1,10 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -145,6 +147,36 @@ func TestLocalProcessRunnerWrapsCommandErrors(t *testing.T) {
 	}
 }
 
+func TestLocalProcessRunnerPassesOutputWritersToExecutor(t *testing.T) {
+	t.Parallel()
+
+	executor := &recordingTerraformCommandExecutor{
+		stdout: "terraform stdout\n",
+		stderr: "terraform stderr\n",
+	}
+	runner := NewLocalProcessRunnerWithExecutor(executor)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := runner.Run(context.Background(), TerraformCommand{
+		WorkspacePath: "/tmp/megagega/runs/tenant_123/run_123",
+		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+		Command:       traits.TerraformCommandPlan,
+		Stdout:        &stdout,
+		Stderr:        &stderr,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if stdout.String() != "terraform stdout\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if stderr.String() != "terraform stderr\n" {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
 func TestLocalProcessRunnerRequiresWorkspacePath(t *testing.T) {
 	t.Parallel()
 
@@ -165,14 +197,26 @@ func TestLocalProcessRunnerRequiresWorkspacePath(t *testing.T) {
 type recordingTerraformCommandExecutor struct {
 	commands []recordedTerraformCommand
 	errs     []error
+	stdout   string
+	stderr   string
 }
 
-func (executor *recordingTerraformCommandExecutor) Run(_ context.Context, dir string, name string, args ...string) error {
+func (executor *recordingTerraformCommandExecutor) Run(_ context.Context, dir string, stdout io.Writer, stderr io.Writer, name string, args ...string) error {
 	executor.commands = append(executor.commands, recordedTerraformCommand{
 		dir:  dir,
 		name: name,
 		args: append([]string(nil), args...),
 	})
+	if executor.stdout != "" {
+		if _, err := io.WriteString(stdout, executor.stdout); err != nil {
+			return err
+		}
+	}
+	if executor.stderr != "" {
+		if _, err := io.WriteString(stderr, executor.stderr); err != nil {
+			return err
+		}
+	}
 	if len(executor.errs) == 0 {
 		return nil
 	}

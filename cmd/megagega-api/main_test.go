@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -185,9 +186,9 @@ func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
 }
 
 func TestListenAndServeLogsAfterStarting(t *testing.T) {
-	var logs bytes.Buffer
+	logs := newStartupLogBuffer()
 	previousOutput := log.Writer()
-	log.SetOutput(&logs)
+	log.SetOutput(logs)
 	defer log.SetOutput(previousOutput)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -198,18 +199,50 @@ func TestListenAndServeLogsAfterStarting(t *testing.T) {
 		errCh <- listenAndServe(ctx, "127.0.0.1:0", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	}()
 
-	for range 100 {
-		if strings.Contains(logs.String(), "api listening on") {
-			cancel()
-			if err := <-errCh; err != nil {
-				t.Fatalf("listenAndServe returned error: %v", err)
-			}
-			return
+	select {
+	case <-logs.started:
+		cancel()
+		if err := <-errCh; err != nil {
+			t.Fatalf("listenAndServe returned error: %v", err)
 		}
-		time.Sleep(10 * time.Millisecond)
+	case err := <-errCh:
+		if errors.Is(err, os.ErrPermission) {
+			t.Skipf("local tcp listen is not permitted: %v", err)
+		}
+		t.Fatalf("listenAndServe returned before logging: %v", err)
+	case <-time.After(time.Second):
+		t.Fatalf("log output = %q, want api listening line", logs.String())
 	}
+}
 
-	t.Fatalf("log output = %q, want api listening line", logs.String())
+type startupLogBuffer struct {
+	mu      sync.Mutex
+	logs    bytes.Buffer
+	once    sync.Once
+	started chan struct{}
+}
+
+func newStartupLogBuffer() *startupLogBuffer {
+	return &startupLogBuffer{started: make(chan struct{})}
+}
+
+func (buffer *startupLogBuffer) Write(p []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+
+	n, err := buffer.logs.Write(p)
+	if strings.Contains(string(p), "api listening on") {
+		buffer.once.Do(func() {
+			close(buffer.started)
+		})
+	}
+	return n, err
+}
+
+func (buffer *startupLogBuffer) String() string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.logs.String()
 }
 
 func apiTestEnv(key string) string {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/vishu42/megagega/internal/logsink"
 	"github.com/vishu42/megagega/internal/runner"
 	"github.com/vishu42/megagega/internal/traits"
 )
@@ -86,9 +87,29 @@ type localTerraformRunner struct {
 }
 
 func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input traits.RunTerraformActivityInput) error {
-	return localRunner.runner.Run(ctx, runner.TerraformCommand{
+	phase, err := logsink.PhaseForTerraformCommand(input.Command)
+	if err != nil {
+		return err
+	}
+
+	writer, err := logsink.NewFileSink(input.WorkspacePath).OpenPhase(phase)
+	if err != nil {
+		return fmt.Errorf("open terraform log: %w", err)
+	}
+
+	runErr := localRunner.runner.Run(ctx, runner.TerraformCommand{
 		WorkspacePath: input.WorkspacePath,
 		WorkspaceName: input.WorkspaceName,
 		Command:       input.Command,
+		Stdout:        writer,
+		Stderr:        writer,
 	})
+	closeErr := writer.Close()
+	if runErr != nil {
+		return runErr
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close terraform log: %w", closeErr)
+	}
+	return nil
 }

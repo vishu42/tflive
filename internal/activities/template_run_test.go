@@ -3,12 +3,14 @@ package activities
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/vishu42/megagega/internal/runner"
 	"github.com/vishu42/megagega/internal/traits"
 )
 
@@ -137,6 +139,38 @@ func TestRunTerraformDelegatesToRunner(t *testing.T) {
 	}
 }
 
+func TestLocalTerraformRunnerWritesCommandLogFile(t *testing.T) {
+	t.Parallel()
+
+	workspacePath := t.TempDir()
+	executor := &recordingCommandExecutor{
+		stdout: "plan stdout\n",
+		stderr: "plan stderr\n",
+	}
+	terraformRunner := localTerraformRunner{
+		runner: runner.NewLocalProcessRunnerWithExecutor(executor),
+	}
+
+	err := terraformRunner.RunTerraform(context.Background(), traits.RunTerraformActivityInput{
+		RunID:         traits.TemplateRunID("run_123"),
+		TenantID:      traits.TenantID("tenant_123"),
+		WorkspacePath: workspacePath,
+		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+		Command:       traits.TerraformCommandPlan,
+	})
+	if err != nil {
+		t.Fatalf("RunTerraform returned error: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(workspacePath, "logs", "plan.log"))
+	if err != nil {
+		t.Fatalf("read plan log: %v", err)
+	}
+	if string(got) != "plan stdout\nplan stderr\n" {
+		t.Fatalf("plan log = %q", string(got))
+	}
+}
+
 func TestRunTerraformWrapsRunnerError(t *testing.T) {
 	t.Parallel()
 
@@ -176,4 +210,19 @@ type recordingTerraformRunner struct {
 func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input traits.RunTerraformActivityInput) error {
 	runner.input = input
 	return runner.err
+}
+
+type recordingCommandExecutor struct {
+	stdout string
+	stderr string
+}
+
+func (executor *recordingCommandExecutor) Run(_ context.Context, _ string, stdout io.Writer, stderr io.Writer, _ string, _ ...string) error {
+	if _, err := io.WriteString(stdout, executor.stdout); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(stderr, executor.stderr); err != nil {
+		return err
+	}
+	return nil
 }
