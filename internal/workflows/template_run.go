@@ -68,6 +68,12 @@ func (run *templateRunWorkflow) prepareWorkspace() error {
 	return run.recordStatus(traits.TemplateRunWorkspaceSelected)
 }
 
+// prepareLocalWorkspace schedules the worker-side activity that creates the
+// per-run filesystem workspace and returns its absolute path. Workflows cannot
+// create directories directly because Temporal workflows must stay deterministic,
+// so the side effect lives in PrepareWorkspace. The returned path is stored on
+// the workflow helper and reused by later RunTerraform activities as their
+// working directory.
 func (run *templateRunWorkflow) prepareLocalWorkspace() error {
 	input := traits.PrepareWorkspaceActivityInput{
 		RunID:    run.input.RunID,

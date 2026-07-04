@@ -29,11 +29,19 @@ func newDispatcher(temporalClient workflowClient, taskQueue string) *Dispatcher 
 	}
 }
 
+// StartTemplateRun dispatches one TemplateRunWorkflow execution to Temporal.
+// The workflow ID is derived from tenant ID and run ID so repeated callers target
+// the same logical run, and the configured task queue determines which workers
+// can pick up the workflow and its activities.
 func (dispatcher *Dispatcher) StartTemplateRun(ctx context.Context, input traits.TemplateRunWorkflowInput) error {
-	_, err := dispatcher.client.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:        templateRunWorkflowID(input.TenantID, input.RunID),
-		TaskQueue: dispatcher.taskQueue,
-	}, traits.TemplateRunWorkflowName, input)
+	_, err := dispatcher.client.ExecuteWorkflow(
+		ctx,
+		client.StartWorkflowOptions{
+			ID:        templateRunWorkflowID(input.TenantID, input.RunID),
+			TaskQueue: dispatcher.taskQueue,
+		},
+		traits.TemplateRunWorkflowName,
+		input)
 	if err != nil {
 		return fmt.Errorf("start template run workflow: %w", err)
 	}
