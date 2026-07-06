@@ -487,7 +487,7 @@ func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.Tenant
 	`, tenantID, id)
 	stackTemplate, scanErr := scanStackTemplate(row)
 	if errors.Is(scanErr, pgx.ErrNoRows) {
-		return traits.StackTemplate{}, ErrNotFound
+		return traits.StackTemplate{}, app.ErrNotFound
 	}
 	if scanErr != nil {
 		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", scanErr)

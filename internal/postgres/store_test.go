@@ -532,8 +532,8 @@ func TestGetStackTemplateReturnsNotFoundForOtherTenant(t *testing.T) {
 	}
 
 	_, err = store.GetStackTemplate(ctx, traits.TenantID("tenant_456"), traits.StackTemplateID("stack_template_123"))
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("error = %v, want ErrNotFound", err)
+	if !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("error = %v, want app.ErrNotFound", err)
 	}
 }
 

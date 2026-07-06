@@ -1,12 +1,15 @@
 package workflows
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/vishu42/megagega/internal/traits"
 	"go.temporal.io/sdk/workflow"
 )
+
+var errTemplateRunCanceled = errors.New("template run canceled")
 
 func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowInput) error {
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -18,11 +21,21 @@ func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowI
 		input: input,
 	}
 
+	if err := run.execute(); err != nil {
+		if errors.Is(err, errTemplateRunCanceled) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (run *templateRunWorkflow) execute() error {
 	if err := run.prepareWorkspace(); err != nil {
 		return err
 	}
 
-	switch input.Operation {
+	switch run.input.Operation {
 	case traits.OperationPlan:
 		return run.planOnly()
 	case traits.OperationApply:
@@ -36,7 +49,7 @@ func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowI
 		if releaseErr := run.recordStatus(traits.TemplateRunLockReleased); releaseErr != nil {
 			return releaseErr
 		}
-		return fmt.Errorf("unsupported template run operation %q", input.Operation)
+		return fmt.Errorf("unsupported template run operation %q", run.input.Operation)
 	}
 }
 
@@ -161,8 +174,8 @@ func (run *templateRunWorkflow) cancel() error {
 	return run.recordStatuses(
 		traits.TemplateRunCancelRequested,
 		traits.TemplateRunCanceling,
-		traits.TemplateRunCanceled,
 		traits.TemplateRunLockReleased,
+		traits.TemplateRunCanceled,
 	)
 }
 
@@ -178,11 +191,38 @@ func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType
 		WorkspaceName: run.input.WorkspaceName,
 		Command:       command,
 	}
-	return workflow.ExecuteActivity(
-		run.ctx,
+
+	activityCtx, cancelActivity := workflow.WithCancel(run.ctx)
+	defer cancelActivity()
+
+	future := workflow.ExecuteActivity(
+		activityCtx,
 		traits.RunTerraformActivityName,
 		input,
-	).Get(run.ctx, nil)
+	)
+	cancelCh := workflow.GetSignalChannel(run.ctx, traits.CancelSignalName)
+	selector := workflow.NewSelector(run.ctx)
+
+	var activityErr error
+	var canceled bool
+	selector.AddFuture(future, func(f workflow.Future) {
+		activityErr = f.Get(run.ctx, nil)
+	})
+	selector.AddReceive(cancelCh, func(channel workflow.ReceiveChannel, _ bool) {
+		var signal traits.CancelSignal
+		channel.Receive(run.ctx, &signal)
+		cancelActivity()
+		canceled = true
+	})
+	selector.Select(run.ctx)
+
+	if canceled {
+		if err := run.cancel(); err != nil {
+			return err
+		}
+		return errTemplateRunCanceled
+	}
+	return activityErr
 }
 
 func (run *templateRunWorkflow) recordStatuses(statuses ...traits.TemplateRunStatus) error {

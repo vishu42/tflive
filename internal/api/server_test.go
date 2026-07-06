@@ -122,6 +122,26 @@ func TestStartTemplateRunMapsInvalidCommandToBadRequest(t *testing.T) {
 	}
 }
 
+func TestStartTemplateRunMapsMissingStackTemplateToNotFound(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stackTemplates.getErr = app.ErrNotFound
+	server := NewServer(deps.service())
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/stack-templates/missing_stack_template/runs",
+		strings.NewReader(`{"operation":"plan","trigger_actor":"user_123"}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body.String())
+	}
+}
+
 func TestRegisterTemplateCallsService(t *testing.T) {
 	t.Parallel()
 
@@ -855,11 +875,15 @@ type recordingStackTemplateRepository struct {
 	stackTemplate traits.StackTemplate
 	gotTenantID   traits.TenantID
 	gotID         traits.StackTemplateID
+	getErr        error
 }
 
 func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error) {
 	repository.gotTenantID = tenantID
 	repository.gotID = id
+	if repository.getErr != nil {
+		return traits.StackTemplate{}, repository.getErr
+	}
 	return repository.stackTemplate, nil
 }
 

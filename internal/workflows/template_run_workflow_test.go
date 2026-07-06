@@ -136,14 +136,14 @@ func TestTemplateRunWorkflowCancelsApplyWhileWaitingApproval(t *testing.T) {
 	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
 			statuses = append(statuses, activityInput.Status)
+			if activityInput.Status == traits.TemplateRunWaitingApproval {
+				env.SignalWorkflow(traits.CancelSignalName, traits.CancelSignal{
+					RequestedBy: traits.UserID("user_456"),
+					Reason:      "superseded",
+				})
+			}
 			return nil
 		})
-	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow(traits.CancelSignalName, traits.CancelSignal{
-			RequestedBy: traits.UserID("user_456"),
-			Reason:      "superseded",
-		})
-	}, 0)
 
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 
@@ -158,8 +158,8 @@ func TestTemplateRunWorkflowCancelsApplyWhileWaitingApproval(t *testing.T) {
 		traits.TemplateRunWaitingApproval,
 		traits.TemplateRunCancelRequested,
 		traits.TemplateRunCanceling,
-		traits.TemplateRunCanceled,
 		traits.TemplateRunLockReleased,
+		traits.TemplateRunCanceled,
 	}
 	if !reflect.DeepEqual(statuses, want) {
 		t.Fatalf("statuses = %#v, want %#v", statuses, want)
@@ -171,6 +171,43 @@ func TestTemplateRunWorkflowCancelsApplyWhileWaitingApproval(t *testing.T) {
 	}
 	if !reflect.DeepEqual(commands, wantCommands) {
 		t.Fatalf("commands = %#v, want %#v", commands, wantCommands)
+	}
+}
+
+func TestTemplateRunWorkflowCancelsPlanWhenSignalArrivesDuringTerraform(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	input := templateRunWorkflowInput(traits.OperationPlan)
+	var statuses []traits.TemplateRunStatus
+	var commands []traits.TerraformCommandType
+	mockPrepareWorkspace(t, env)
+	mockRunTerraform(t, env, &commands)
+	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
+			statuses = append(statuses, activityInput.Status)
+			return nil
+		})
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(traits.CancelSignalName, traits.CancelSignal{
+			RequestedBy: traits.UserID("user_456"),
+			Reason:      "stop retries",
+		})
+	}, 0)
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+	assertWorkflowCompleted(t, env)
+	if len(statuses) == 0 || statuses[len(statuses)-1] != traits.TemplateRunCanceled {
+		t.Fatalf("final status = %#v, want canceled", statuses)
+	}
+	for _, status := range statuses {
+		if status == traits.TemplateRunPlanned || status == traits.TemplateRunCompleted {
+			t.Fatalf("statuses = %#v, canceled plan should not become planned or completed", statuses)
+		}
+	}
+	if len(commands) > 1 {
+		t.Fatalf("commands = %#v, cancel should stop before later terraform phases", commands)
 	}
 }
 
