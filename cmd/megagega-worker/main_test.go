@@ -155,6 +155,38 @@ func TestDefaultWorkerDependenciesRegisterTerraformActivities(t *testing.T) {
 	}
 }
 
+func TestDefaultWorkerDependenciesRegisterTemplateSyncWorkflow(t *testing.T) {
+	t.Parallel()
+
+	worker := &recordingTemporalWorker{}
+	deps := defaultWorkerDependencies()
+
+	deps.registerWorkflow(worker)
+
+	if !worker.registeredWorkflows[traits.TemplateRunWorkflowName] {
+		t.Fatalf("workflow %q was not registered", traits.TemplateRunWorkflowName)
+	}
+	if !worker.registeredWorkflows[traits.TemplateSyncWorkflowName] {
+		t.Fatalf("workflow %q was not registered", traits.TemplateSyncWorkflowName)
+	}
+}
+
+func TestDefaultWorkerDependenciesRegisterTemplateSyncActivities(t *testing.T) {
+	t.Parallel()
+
+	worker := &recordingTemporalWorker{}
+	deps := defaultWorkerDependencies()
+
+	deps.registerActivities(worker, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{})
+
+	if !worker.registeredActivities[traits.RecordTemplateRegistrationStatusActivityName] {
+		t.Fatalf("activity %q was not registered", traits.RecordTemplateRegistrationStatusActivityName)
+	}
+	if !worker.registeredActivities[traits.SyncTemplateActivityName] {
+		t.Fatalf("activity %q was not registered", traits.SyncTemplateActivityName)
+	}
+}
+
 func TestRunWrapsTemporalDialFailure(t *testing.T) {
 	t.Parallel()
 
@@ -247,7 +279,7 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			deps.migrated = true
 			return nil
 		},
-		newStore: func(pool postgresPool) (statusRecorder, error) {
+		newStore: func(pool postgresPool) (workerStore, error) {
 			if pool != deps.pool {
 				t.Fatalf("newStore pool = %p, want %p", pool, deps.pool)
 			}
@@ -275,7 +307,7 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 				Name: traits.TemplateRunWorkflowName,
 			})
 		},
-		registerActivities: func(worker temporalWorker, recorder statusRecorder, runRoot string, logStore activities.TemplateRunLogStore) {
+		registerActivities: func(worker temporalWorker, recorder workerStore, runRoot string, logStore activities.TemplateRunLogStore) {
 			if worker != deps.worker {
 				t.Fatalf("registerActivities worker = %p, want %p", worker, deps.worker)
 			}
@@ -345,6 +377,14 @@ func (store *recordingWorkerStore) RecordTemplateRunStatus(context.Context, trai
 	return nil
 }
 
+func (store *recordingWorkerStore) RecordTemplateRegistrationStatus(context.Context, traits.TemplateRegistrationStatusActivityInput) error {
+	return nil
+}
+
+func (store *recordingWorkerStore) UpsertTemplateWithVariables(context.Context, traits.Template, []traits.TemplateVariable) (traits.Template, error) {
+	return traits.Template{}, nil
+}
+
 func (store *recordingWorkerStore) RecordTemplateRunLog(context.Context, traits.TemplateRunLog) error {
 	return nil
 }
@@ -367,6 +407,7 @@ func (temporalClient *recordingWorkerTemporalClient) Close() {
 type recordingTemporalWorker struct {
 	registeredWorkflow        uintptr
 	registeredWorkflowOptions workflow.RegisterOptions
+	registeredWorkflows       map[string]bool
 	registeredActivity        uintptr
 	registeredActivityOptions activity.RegisterOptions
 	registeredActivities      map[string]bool
@@ -375,8 +416,12 @@ type recordingTemporalWorker struct {
 }
 
 func (worker *recordingTemporalWorker) RegisterWorkflowWithOptions(workflowFn interface{}, options workflow.RegisterOptions) {
+	if worker.registeredWorkflows == nil {
+		worker.registeredWorkflows = make(map[string]bool)
+	}
 	worker.registeredWorkflow = reflect.ValueOf(workflowFn).Pointer()
 	worker.registeredWorkflowOptions = options
+	worker.registeredWorkflows[options.Name] = true
 }
 
 func (worker *recordingTemporalWorker) RegisterActivityWithOptions(activityFn interface{}, options activity.RegisterOptions) {

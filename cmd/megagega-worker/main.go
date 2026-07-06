@@ -31,9 +31,10 @@ type postgresPool interface {
 	Close()
 }
 
-type statusRecorder interface {
-	RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error
-	RecordTemplateRunLog(context.Context, traits.TemplateRunLog) error
+type workerStore interface {
+	activities.StatusRecorder
+	activities.TemplateSyncStore
+	artifacts.LogMetadataRecorder
 }
 
 type workerDependencies struct {
@@ -42,7 +43,7 @@ type workerDependencies struct {
 	// migratePostgres applies the schema migrations required before activities can record state.
 	migratePostgres func(context.Context, postgresPool) error
 	// newStore builds the persistence adapter shared by worker activities.
-	newStore func(postgresPool) (statusRecorder, error)
+	newStore func(postgresPool) (workerStore, error)
 	// dialTemporal connects to the Temporal namespace where the worker polls for tasks.
 	dialTemporal func(context.Context, temporal.Config) (client.Client, error)
 	// newWorker creates the Temporal worker bound to the configured task queue.
@@ -50,7 +51,7 @@ type workerDependencies struct {
 	// registerWorkflow attaches the workflow implementations this process can execute.
 	registerWorkflow func(temporalWorker)
 	// registerActivities attaches activity handlers and their shared dependencies to the worker.
-	registerActivities func(temporalWorker, statusRecorder, string, activities.TemplateRunLogStore)
+	registerActivities func(temporalWorker, workerStore, string, activities.TemplateRunLogStore)
 	// newLogStore builds the artifact-backed log store used by Terraform activities.
 	newLogStore func(config.ArtifactStoreConfig, artifacts.LogMetadataRecorder) (activities.TemplateRunLogStore, error)
 	// interruptCh provides the shutdown signal consumed by the Temporal worker run loop.
@@ -75,7 +76,7 @@ func defaultWorkerDependencies() workerDependencies {
 			}
 			return postgres.Migrate(ctx, pgxPool)
 		},
-		newStore: func(pool postgresPool) (statusRecorder, error) {
+		newStore: func(pool postgresPool) (workerStore, error) {
 			pgxPool, ok := pool.(*pgxpool.Pool)
 			if !ok {
 				return nil, fmt.Errorf("unexpected postgres pool type %T", pool)
@@ -90,9 +91,12 @@ func defaultWorkerDependencies() workerDependencies {
 			worker.RegisterWorkflowWithOptions(workflows.TemplateRunWorkflow, workflow.RegisterOptions{
 				Name: traits.TemplateRunWorkflowName,
 			})
+			worker.RegisterWorkflowWithOptions(workflows.TemplateSyncWorkflow, workflow.RegisterOptions{
+				Name: traits.TemplateSyncWorkflowName,
+			})
 		},
-		registerActivities: func(worker temporalWorker, recorder statusRecorder, runRoot string, logStore activities.TemplateRunLogStore) {
-			templateRunActivities := activities.NewTemplateRunActivitiesWithLogStore(recorder, runRoot, logStore)
+		registerActivities: func(worker temporalWorker, store workerStore, runRoot string, logStore activities.TemplateRunLogStore) {
+			templateRunActivities := activities.NewTemplateRunActivitiesWithLogStore(store, runRoot, logStore)
 			worker.RegisterActivityWithOptions(templateRunActivities.PrepareWorkspace, activity.RegisterOptions{
 				Name: traits.PrepareWorkspaceActivityName,
 			})
@@ -101,6 +105,14 @@ func defaultWorkerDependencies() workerDependencies {
 			})
 			worker.RegisterActivityWithOptions(templateRunActivities.RecordTemplateRunStatus, activity.RegisterOptions{
 				Name: traits.RecordTemplateRunStatusActivityName,
+			})
+
+			templateSyncActivities := activities.NewTemplateSyncActivities(store)
+			worker.RegisterActivityWithOptions(templateSyncActivities.RecordTemplateRegistrationStatus, activity.RegisterOptions{
+				Name: traits.RecordTemplateRegistrationStatusActivityName,
+			})
+			worker.RegisterActivityWithOptions(templateSyncActivities.SyncTemplate, activity.RegisterOptions{
+				Name: traits.SyncTemplateActivityName,
 			})
 		},
 		newLogStore: func(cfg config.ArtifactStoreConfig, recorder artifacts.LogMetadataRecorder) (activities.TemplateRunLogStore, error) {
