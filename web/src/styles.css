@@ -25,6 +25,10 @@ select {
   font: inherit;
 }
 
+button svg {
+  flex: 0 0 auto;
+}
+
 .app-shell {
   min-height: 100vh;
   padding: 24px;
@@ -45,7 +49,7 @@ select {
 
 .eyebrow {
   margin: 0 0 4px;
-  color: #776148;
+  color: #7a5d3c;
   font-size: 0.78rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -76,6 +80,7 @@ input,
 textarea,
 select {
   min-height: 38px;
+  min-width: 0;
   border: 1px solid #c8cfc4;
   border-radius: 6px;
   padding: 8px 10px;
@@ -83,12 +88,198 @@ select {
   background: #ffffff;
 }
 
-.empty-panel {
+.workflow-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.85fr) minmax(320px, 1.15fr);
+  gap: 16px;
+}
+
+.panel {
+  min-width: 0;
   border: 1px solid #d2d7cc;
   border-radius: 8px;
-  padding: 24px;
+  padding: 18px;
   background: #ffffff;
+  box-shadow: 0 1px 2px rgb(31 41 51 / 0.05);
+}
+
+.panel.wide {
+  grid-column: 1 / -1;
+}
+
+.panel h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  color: #1f2933;
+  font-size: 1rem;
+  letter-spacing: 0;
+}
+
+.form-grid,
+.variable-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.primary-button,
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.primary-button {
+  border: 1px solid #2f6f5e;
+  color: #ffffff;
+  background: #2f6f5e;
+}
+
+.secondary-button {
+  border: 1px solid #c0c8bc;
+  color: #293541;
+  background: #f8faf7;
+}
+
+.panel > .secondary-button {
+  margin-top: 14px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.button-row,
+.phase-row,
+.run-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.run-tabs button,
+.phase-row button {
+  min-height: 32px;
+  border: 1px solid #c8cfc4;
+  border-radius: 6px;
+  padding: 6px 10px;
   color: #536064;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.run-tabs button.active,
+.phase-row button.active {
+  border-color: #315b9a;
+  color: #24467c;
+  background: #eef4ff;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  border-top: 1px solid #e5e8e1;
+  padding-top: 12px;
+  color: #66705f;
+  font-size: 0.88rem;
+}
+
+.status-row strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  color: #202833;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.alert,
+.error-text {
+  color: #991b1b;
+}
+
+.alert {
+  border: 1px solid #f3b7a8;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: #fff4ef;
+}
+
+.error-text {
+  margin: 10px 0 0;
+  font-size: 0.9rem;
+}
+
+.muted {
+  margin: 0;
+  color: #66705f;
+}
+
+.log-panel pre {
+  min-height: 260px;
+  max-height: 460px;
+  overflow: auto;
+  border-radius: 8px;
+  margin: 0;
+  padding: 14px;
+  color: #edf2e8;
+  background: #1e2624;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.id-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 0;
+}
+
+.id-grid dt {
+  color: #66705f;
+}
+
+.id-grid dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 920px) {
+  .workflow-grid,
+  .form-grid,
+  .variable-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
