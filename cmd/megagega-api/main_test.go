@@ -76,14 +76,23 @@ func TestRunWiresTemporalDispatcher(t *testing.T) {
 	if deps.service.Workflows != deps.dispatcher {
 		t.Fatal("service Workflows is not the dispatcher")
 	}
+	if deps.service.Stacks != deps.store {
+		t.Fatal("service Stacks is not the store")
+	}
 	if deps.service.StackTemplates != deps.store {
 		t.Fatal("service StackTemplates is not the store")
+	}
+	if deps.service.StackTemplateInstaller != deps.store {
+		t.Fatal("service StackTemplateInstaller is not the store")
 	}
 	if deps.service.TemplateRuns != deps.store {
 		t.Fatal("service TemplateRuns is not the store")
 	}
 	if deps.service.TemplateRegistrations != deps.store {
 		t.Fatal("service TemplateRegistrations is not the store")
+	}
+	if deps.service.TemplateMetadata != deps.store {
+		t.Fatal("service TemplateMetadata is not the store")
 	}
 	if deps.service.Templates != deps.store {
 		t.Fatal("service Templates is not the store")
@@ -392,8 +401,28 @@ func (temporalClient *recordingTemporalClient) Close() {
 
 type recordingStore struct{}
 
+func (recordingStore) CreateStack(context.Context, traits.Stack) error {
+	return nil
+}
+
+func (recordingStore) GetStack(context.Context, traits.TenantID, traits.StackID) (traits.Stack, error) {
+	return traits.Stack{}, nil
+}
+
+func (recordingStore) GetStackWithTemplates(context.Context, traits.TenantID, traits.StackID) (app.StackView, error) {
+	return app.StackView{}, nil
+}
+
 func (recordingStore) GetStackTemplate(context.Context, traits.TenantID, traits.StackTemplateID) (traits.StackTemplate, error) {
 	return traits.StackTemplate{}, nil
+}
+
+func (recordingStore) CreateStackTemplate(context.Context, traits.StackTemplate) error {
+	return nil
+}
+
+func (recordingStore) GetTemplate(context.Context, traits.TenantID, traits.TemplateID) (traits.Template, error) {
+	return traits.Template{}, nil
 }
 
 func (recordingStore) CreateTemplateRun(context.Context, traits.TemplateRun) error {

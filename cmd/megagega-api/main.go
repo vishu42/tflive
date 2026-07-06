@@ -26,9 +26,12 @@ type postgresPool interface {
 }
 
 type appRepositories interface {
+	app.StackRepository
 	app.StackTemplateRepository
+	app.StackTemplateInstaller
 	app.TemplateRunRepository
 	app.TemplateRegistrationRepository
+	app.TemplateMetadataRepository
 	app.TemplateRepository
 	app.TemplateRunLogRepository
 }
@@ -131,9 +134,12 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire log reader: %w", err)
 	}
 	service, err := deps.newService(app.Service{
+		Stacks:                 store,
 		StackTemplates:         store,
+		StackTemplateInstaller: store,
 		TemplateRuns:           store,
 		TemplateRegistrations:  store,
+		TemplateMetadata:       store,
 		Templates:              store,
 		TemplateRunLogs:        logReader,
 		TemplateRunLogMetadata: store,
