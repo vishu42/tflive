@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,7 +17,10 @@ import (
 )
 
 var (
+	_ app.StackRepository                = (*Store)(nil)
 	_ app.StackTemplateRepository        = (*Store)(nil)
+	_ app.StackTemplateInstaller         = (*Store)(nil)
+	_ app.TemplateMetadataRepository     = (*Store)(nil)
 	_ app.TemplateRunRepository          = (*Store)(nil)
 	_ app.TemplateRegistrationRepository = (*Store)(nil)
 	_ app.TemplateRepository             = (*Store)(nil)
@@ -39,6 +43,7 @@ func TestMigrateAppliesSchema(t *testing.T) {
 
 	for _, table := range []string{
 		"schema_migrations",
+		"stacks",
 		"stack_templates",
 		"template_runs",
 		"template_run_approvals",
@@ -259,6 +264,164 @@ func TestGetTemplateVariablesReturnsNotFoundForOtherTenant(t *testing.T) {
 	_, err = store.GetTemplateVariables(ctx, traits.TenantID("tenant_456"), traits.TemplateID("template_123"))
 	if !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("error = %v, want app.ErrNotFound", err)
+	}
+}
+
+func TestCreateAndGetStack(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	createdAt := time.Date(2026, 7, 6, 13, 30, 0, 123456000, time.UTC)
+
+	stack := traits.Stack{
+		ID:                   traits.StackID("stack_123"),
+		TenantID:             traits.TenantID("tenant_123"),
+		Name:                 "Acme Prod",
+		Slug:                 "acme-prod",
+		Tags:                 map[string]string{"env": "prod"},
+		DefaultCredentialIDs: []traits.CredentialSetID{traits.CredentialSetID("credential_123")},
+		CreatedBy:            traits.UserID("user_123"),
+		CreatedAt:            createdAt,
+	}
+
+	if err := store.CreateStack(ctx, stack); err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+
+	got, err := store.GetStack(ctx, traits.TenantID("tenant_123"), traits.StackID("stack_123"))
+	if err != nil {
+		t.Fatalf("GetStack returned error: %v", err)
+	}
+
+	if got.ID != stack.ID || got.TenantID != stack.TenantID || got.Name != stack.Name || got.Slug != stack.Slug || got.CreatedBy != stack.CreatedBy {
+		t.Fatalf("stack = %#v, want %#v", got, stack)
+	}
+	if got.Tags["env"] != "prod" {
+		t.Fatalf("tags = %#v", got.Tags)
+	}
+	if len(got.DefaultCredentialIDs) != 1 || got.DefaultCredentialIDs[0] != traits.CredentialSetID("credential_123") {
+		t.Fatalf("default credential IDs = %#v", got.DefaultCredentialIDs)
+	}
+	if !got.CreatedAt.Equal(createdAt) {
+		t.Fatalf("created at = %v, want %v", got.CreatedAt, createdAt)
+	}
+}
+
+func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+
+	first := traits.Stack{
+		ID:        traits.StackID("stack_123"),
+		TenantID:  traits.TenantID("tenant_123"),
+		Name:      "Acme Prod",
+		Slug:      "acme-prod",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateStack(ctx, first); err != nil {
+		t.Fatalf("CreateStack first returned error: %v", err)
+	}
+
+	second := first
+	second.ID = traits.StackID("stack_456")
+	err := store.CreateStack(ctx, second)
+	if !errors.Is(err, app.ErrDuplicateStackSlug) {
+		t.Fatalf("error = %v, want app.ErrDuplicateStackSlug", err)
+	}
+}
+
+func TestGetTemplateReturnsTenantScopedTemplate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	createdAt := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	template := traits.Template{
+		ID:                traits.TemplateID("template_123"),
+		TenantID:          traits.TenantID("tenant_123"),
+		RepoOwner:         "acme",
+		RepoName:          "infra-templates",
+		SourceRef:         "main",
+		ResolvedCommitSHA: "abc123",
+		RootPath:          ".",
+		Name:              "vpc",
+		Tags:              []string{"network"},
+		Status:            traits.TemplateActive,
+		CreatedAt:         createdAt,
+	}
+	if _, err := store.UpsertTemplateWithVariables(ctx, template, nil); err != nil {
+		t.Fatalf("UpsertTemplateWithVariables returned error: %v", err)
+	}
+
+	got, err := store.GetTemplate(ctx, traits.TenantID("tenant_123"), traits.TemplateID("template_123"))
+	if err != nil {
+		t.Fatalf("GetTemplate returned error: %v", err)
+	}
+	if got.ID != traits.TemplateID("template_123") || got.Status != traits.TemplateActive || got.Tags[0] != "network" {
+		t.Fatalf("template = %#v", got)
+	}
+
+	_, err = store.GetTemplate(ctx, traits.TenantID("tenant_456"), traits.TemplateID("template_123"))
+	if !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("other tenant error = %v, want app.ErrNotFound", err)
+	}
+}
+
+func TestCreateStackTemplateAndGetStackWithTemplates(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+
+	stack := traits.Stack{
+		ID:        traits.StackID("stack_123"),
+		TenantID:  traits.TenantID("tenant_123"),
+		Name:      "Acme Prod",
+		Slug:      "acme-prod",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateStack(ctx, stack); err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+
+	stackTemplate := traits.StackTemplate{
+		ID:            traits.StackTemplateID("stack_template_123"),
+		TenantID:      traits.TenantID("tenant_123"),
+		StackID:       traits.StackID("stack_123"),
+		TemplateID:    traits.TemplateID("template_123"),
+		SelectedRef:   "main",
+		WorkspaceName: "meg_acme_prod_late_123",
+		ConfigJSON:    json.RawMessage(`{"region":"us-east-1"}`),
+		Lifecycle:     traits.StackTemplateActive,
+	}
+	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
+		t.Fatalf("CreateStackTemplate returned error: %v", err)
+	}
+
+	view, err := store.GetStackWithTemplates(ctx, traits.TenantID("tenant_123"), traits.StackID("stack_123"))
+	if err != nil {
+		t.Fatalf("GetStackWithTemplates returned error: %v", err)
+	}
+	if view.Stack.ID != traits.StackID("stack_123") {
+		t.Fatalf("view stack ID = %q, want stack_123", view.Stack.ID)
+	}
+	if len(view.Templates) != 1 {
+		t.Fatalf("len(view.Templates) = %d, want 1", len(view.Templates))
+	}
+	if view.Templates[0].TenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("template tenant ID = %q, want tenant_123", view.Templates[0].TenantID)
+	}
+	if string(view.Templates[0].ConfigJSON) != `{"region": "us-east-1"}` {
+		t.Fatalf("template config = %s", view.Templates[0].ConfigJSON)
 	}
 }
 

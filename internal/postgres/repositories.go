@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vishu42/megagega/internal/app"
 	"github.com/vishu42/megagega/internal/traits"
 )
@@ -272,14 +273,205 @@ func (store *Store) GetTemplateVariables(ctx context.Context, tenantID traits.Te
 	return variables, nil
 }
 
-func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error) {
-	var stackTemplate traits.StackTemplate
-	var configJSON []byte
-	var lastAppliedAt sql.NullTime
+func (store *Store) CreateStack(ctx context.Context, stack traits.Stack) error {
+	tagsJSON, err := json.Marshal(stack.Tags)
+	if err != nil {
+		return fmt.Errorf("marshal stack tags: %w", err)
+	}
+	if tagsJSON == nil {
+		tagsJSON = []byte("{}")
+	}
 
+	credentialIDsJSON, err := json.Marshal(stack.DefaultCredentialIDs)
+	if err != nil {
+		return fmt.Errorf("marshal default credential IDs: %w", err)
+	}
+	if credentialIDsJSON == nil {
+		credentialIDsJSON = []byte("[]")
+	}
+
+	_, err = store.pool.Exec(ctx, `
+		insert into stacks (
+			id,
+			tenant_id,
+			name,
+			slug,
+			tags_json,
+			default_credential_ids_json,
+			created_by,
+			created_at
+		) values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8)
+	`,
+		stack.ID,
+		stack.TenantID,
+		stack.Name,
+		stack.Slug,
+		tagsJSON,
+		credentialIDsJSON,
+		stack.CreatedBy,
+		stack.CreatedAt,
+	)
+	if duplicateConstraint(err, "stacks_tenant_id_slug_idx") {
+		return app.ErrDuplicateStackSlug
+	}
+	if err != nil {
+		return fmt.Errorf("create stack: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) GetStack(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error) {
+	stack, err := store.getStack(ctx, tenantID, stackID)
+	if err != nil {
+		return traits.Stack{}, err
+	}
+	return stack, nil
+}
+
+func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (app.StackView, error) {
+	stack, err := store.getStack(ctx, tenantID, stackID)
+	if err != nil {
+		return app.StackView{}, err
+	}
+
+	rows, err := store.pool.Query(ctx, `
+		select
+			id,
+			tenant_id,
+			stack_id,
+			template_id,
+			selected_ref,
+			workspace_name,
+			config_json,
+			last_applied_run_id,
+			last_applied_ref,
+			last_applied_at,
+			lifecycle
+		from stack_templates
+		where tenant_id = $1
+			and stack_id = $2
+		order by id
+	`, tenantID, stackID)
+	if err != nil {
+		return app.StackView{}, fmt.Errorf("get stack templates: %w", err)
+	}
+	defer rows.Close()
+
+	var templates []traits.StackTemplate
+	for rows.Next() {
+		stackTemplate, err := scanStackTemplate(rows)
+		if err != nil {
+			return app.StackView{}, err
+		}
+		templates = append(templates, stackTemplate)
+	}
+	if err := rows.Err(); err != nil {
+		return app.StackView{}, fmt.Errorf("iterate stack templates: %w", err)
+	}
+
+	return app.StackView{Stack: stack, Templates: templates}, nil
+}
+
+func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate traits.StackTemplate) error {
+	configJSON := stackTemplate.ConfigJSON
+	if len(configJSON) == 0 {
+		configJSON = json.RawMessage(`{}`)
+	}
+
+	result, err := store.pool.Exec(ctx, `
+		insert into stack_templates (
+			id,
+			tenant_id,
+			stack_id,
+			template_id,
+			selected_ref,
+			workspace_name,
+			config_json,
+			last_applied_run_id,
+			last_applied_ref,
+			last_applied_at,
+			lifecycle
+		)
+		select $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11
+		where exists (
+			select 1
+			from stacks
+			where tenant_id = $2
+				and id = $3
+		)
+	`,
+		stackTemplate.ID,
+		stackTemplate.TenantID,
+		stackTemplate.StackID,
+		stackTemplate.TemplateID,
+		stackTemplate.SelectedRef,
+		stackTemplate.WorkspaceName,
+		configJSON,
+		stackTemplate.LastAppliedRunID,
+		stackTemplate.LastAppliedRef,
+		nullTime(stackTemplate.LastAppliedAt),
+		stackTemplate.Lifecycle,
+	)
+	if err != nil {
+		return fmt.Errorf("create stack template: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return app.ErrNotFound
+	}
+	return nil
+}
+
+func (store *Store) GetTemplate(ctx context.Context, tenantID traits.TenantID, templateID traits.TemplateID) (traits.Template, error) {
+	var template traits.Template
+	var tagsJSON []byte
 	err := store.pool.QueryRow(ctx, `
 		select
 			id,
+			tenant_id,
+			repo_owner,
+			repo_name,
+			source_ref,
+			resolved_commit_sha,
+			root_path,
+			name,
+			description,
+			tags_json,
+			status,
+			created_at
+		from templates
+		where tenant_id = $1
+			and id = $2
+	`, tenantID, templateID).Scan(
+		&template.ID,
+		&template.TenantID,
+		&template.RepoOwner,
+		&template.RepoName,
+		&template.SourceRef,
+		&template.ResolvedCommitSHA,
+		&template.RootPath,
+		&template.Name,
+		&template.Description,
+		&tagsJSON,
+		&template.Status,
+		&template.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return traits.Template{}, app.ErrNotFound
+	}
+	if err != nil {
+		return traits.Template{}, fmt.Errorf("get template: %w", err)
+	}
+	if err := json.Unmarshal(tagsJSON, &template.Tags); err != nil {
+		return traits.Template{}, fmt.Errorf("unmarshal template tags: %w", err)
+	}
+	return template, nil
+}
+
+func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error) {
+	row := store.pool.QueryRow(ctx, `
+		select
+			id,
+			tenant_id,
 			stack_id,
 			template_id,
 			selected_ref,
@@ -292,30 +484,14 @@ func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.Tenant
 		from stack_templates
 		where tenant_id = $1
 			and id = $2
-	`, tenantID, id).Scan(
-		&stackTemplate.ID,
-		&stackTemplate.StackID,
-		&stackTemplate.TemplateID,
-		&stackTemplate.SelectedRef,
-		&stackTemplate.WorkspaceName,
-		&configJSON,
-		&stackTemplate.LastAppliedRunID,
-		&stackTemplate.LastAppliedRef,
-		&lastAppliedAt,
-		&stackTemplate.Lifecycle,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	`, tenantID, id)
+	stackTemplate, scanErr := scanStackTemplate(row)
+	if errors.Is(scanErr, pgx.ErrNoRows) {
 		return traits.StackTemplate{}, ErrNotFound
 	}
-	if err != nil {
-		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
+	if scanErr != nil {
+		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", scanErr)
 	}
-
-	stackTemplate.ConfigJSON = configJSON
-	if lastAppliedAt.Valid {
-		stackTemplate.LastAppliedAt = lastAppliedAt.Time
-	}
-
 	return stackTemplate, nil
 }
 
@@ -668,6 +844,85 @@ func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.Te
 	}
 
 	return nil
+}
+
+type stackTemplateScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, error) {
+	var stackTemplate traits.StackTemplate
+	var configJSON []byte
+	var lastAppliedAt sql.NullTime
+
+	if err := scanner.Scan(
+		&stackTemplate.ID,
+		&stackTemplate.TenantID,
+		&stackTemplate.StackID,
+		&stackTemplate.TemplateID,
+		&stackTemplate.SelectedRef,
+		&stackTemplate.WorkspaceName,
+		&configJSON,
+		&stackTemplate.LastAppliedRunID,
+		&stackTemplate.LastAppliedRef,
+		&lastAppliedAt,
+		&stackTemplate.Lifecycle,
+	); err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("scan stack template: %w", err)
+	}
+	stackTemplate.ConfigJSON = configJSON
+	if lastAppliedAt.Valid {
+		stackTemplate.LastAppliedAt = lastAppliedAt.Time
+	}
+	return stackTemplate, nil
+}
+
+func (store *Store) getStack(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error) {
+	var stack traits.Stack
+	var tagsJSON []byte
+	var credentialIDsJSON []byte
+
+	err := store.pool.QueryRow(ctx, `
+		select
+			id,
+			tenant_id,
+			name,
+			slug,
+			tags_json,
+			default_credential_ids_json,
+			created_by,
+			created_at
+		from stacks
+		where tenant_id = $1
+			and id = $2
+	`, tenantID, stackID).Scan(
+		&stack.ID,
+		&stack.TenantID,
+		&stack.Name,
+		&stack.Slug,
+		&tagsJSON,
+		&credentialIDsJSON,
+		&stack.CreatedBy,
+		&stack.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return traits.Stack{}, app.ErrNotFound
+	}
+	if err != nil {
+		return traits.Stack{}, fmt.Errorf("get stack: %w", err)
+	}
+	if err := json.Unmarshal(tagsJSON, &stack.Tags); err != nil {
+		return traits.Stack{}, fmt.Errorf("unmarshal stack tags: %w", err)
+	}
+	if err := json.Unmarshal(credentialIDsJSON, &stack.DefaultCredentialIDs); err != nil {
+		return traits.Stack{}, fmt.Errorf("unmarshal stack credential IDs: %w", err)
+	}
+	return stack, nil
+}
+
+func duplicateConstraint(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
 }
 
 func insertTemplate(ctx context.Context, tx pgx.Tx, template traits.Template, tagsJSON []byte) (traits.Template, bool, error) {
