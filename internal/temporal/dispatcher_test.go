@@ -49,6 +49,41 @@ func TestStartTemplateRunExecutesWorkflow(t *testing.T) {
 	}
 }
 
+func TestStartTemplateSyncExecutesWorkflow(t *testing.T) {
+	t.Parallel()
+
+	workflowClient := &recordingWorkflowClient{}
+	dispatcher := newDispatcher(workflowClient, "terraform-runs")
+	input := traits.TemplateSyncWorkflowInput{
+		RegistrationID: traits.TemplateRegistrationID("template_registration_123"),
+		TenantID:       traits.TenantID("tenant_123"),
+		RepoOwner:      "acme",
+		RepoName:       "infra-templates",
+		SourceRef:      "v0.0.1",
+		RootPath:       "modules/vpc",
+	}
+
+	if err := dispatcher.StartTemplateSync(context.Background(), input); err != nil {
+		t.Fatalf("StartTemplateSync returned error: %v", err)
+	}
+
+	if workflowClient.executeOptions.ID != "template-sync/tenant_123/template_registration_123" {
+		t.Fatalf("workflow ID = %q", workflowClient.executeOptions.ID)
+	}
+	if workflowClient.executeOptions.TaskQueue != "terraform-runs" {
+		t.Fatalf("task queue = %q", workflowClient.executeOptions.TaskQueue)
+	}
+	if workflowClient.executeWorkflow != traits.TemplateSyncWorkflowName {
+		t.Fatalf("workflow name = %#v", workflowClient.executeWorkflow)
+	}
+	if len(workflowClient.executeArgs) != 1 {
+		t.Fatalf("workflow arg count = %d, want 1", len(workflowClient.executeArgs))
+	}
+	if !reflect.DeepEqual(workflowClient.executeArgs[0], input) {
+		t.Fatalf("workflow input = %#v, want %#v", workflowClient.executeArgs[0], input)
+	}
+}
+
 func TestApproveTemplateRunSignalsWorkflow(t *testing.T) {
 	t.Parallel()
 
@@ -132,6 +167,24 @@ func TestStartTemplateRunWrapsClientError(t *testing.T) {
 	}
 }
 
+func TestStartTemplateSyncWrapsClientError(t *testing.T) {
+	t.Parallel()
+
+	clientErr := errors.New("temporal unavailable")
+	dispatcher := newDispatcher(&recordingWorkflowClient{executeErr: clientErr}, "terraform-runs")
+
+	err := dispatcher.StartTemplateSync(context.Background(), traits.TemplateSyncWorkflowInput{
+		RegistrationID: traits.TemplateRegistrationID("template_registration_123"),
+		TenantID:       traits.TenantID("tenant_123"),
+	})
+	if !errors.Is(err, clientErr) {
+		t.Fatalf("error = %v, want wrapped client error", err)
+	}
+	if !strings.Contains(err.Error(), "start template sync workflow") {
+		t.Fatalf("error = %q, want start context", err.Error())
+	}
+}
+
 func TestApproveTemplateRunWrapsClientError(t *testing.T) {
 	t.Parallel()
 
@@ -177,6 +230,15 @@ func TestTemplateRunWorkflowID(t *testing.T) {
 
 	got := templateRunWorkflowID(traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"))
 	if got != "template-run/tenant_123/run_123" {
+		t.Fatalf("workflow ID = %q", got)
+	}
+}
+
+func TestTemplateSyncWorkflowID(t *testing.T) {
+	t.Parallel()
+
+	got := templateSyncWorkflowID(traits.TenantID("tenant_123"), traits.TemplateRegistrationID("template_registration_123"))
+	if got != "template-sync/tenant_123/template_registration_123" {
 		t.Fatalf("workflow ID = %q", got)
 	}
 }
