@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/vishu42/megagega/internal/app"
 	"github.com/vishu42/megagega/internal/traits"
@@ -31,6 +32,14 @@ func NewServer(service *app.Service) *Server {
 	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-registrations/{registration_id}", server.handleGetTemplateRegistration)
 	// Lists variables inferred from an immutable registered template.
 	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/templates/{template_id}/variables", server.handleGetTemplateVariables)
+
+	// Stack routes.
+	// Creates a logical infrastructure stack.
+	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/stacks", server.handleCreateStack)
+	// Reads one stack with installed templates.
+	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/stacks/{stack_id}", server.handleGetStack)
+	// Installs a registered template into a stack.
+	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/stacks/{stack_id}/templates", server.handleAddTemplateToStack)
 
 	// Template run routes.
 	// Starts a Terraform operation for an installed stack template.
@@ -105,6 +114,80 @@ func (server *Server) handleGetTemplateVariables(response http.ResponseWriter, r
 	}
 
 	writeJSON(response, http.StatusOK, variables)
+}
+
+func (server *Server) handleCreateStack(response http.ResponseWriter, request *http.Request) {
+	var body createStackRequest
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	credentialIDs := make([]traits.CredentialSetID, 0, len(body.DefaultCredentialIDs))
+	for _, id := range body.DefaultCredentialIDs {
+		credentialIDs = append(credentialIDs, traits.CredentialSetID(id))
+	}
+
+	stack, err := server.service.CreateStack(request.Context(), app.CreateStackCommand{
+		TenantID:             traits.TenantID(request.PathValue("tenant_id")),
+		Name:                 body.Name,
+		Slug:                 body.Slug,
+		Tags:                 body.Tags,
+		DefaultCredentialIDs: credentialIDs,
+		Actor:                traits.UserID(body.Actor),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusCreated, newStackResponse(stack))
+}
+
+func (server *Server) handleGetStack(response http.ResponseWriter, request *http.Request) {
+	view, err := server.service.GetStack(request.Context(), app.GetStackCommand{
+		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+		StackID:  traits.StackID(request.PathValue("stack_id")),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusOK, newStackViewResponse(view))
+}
+
+func (server *Server) handleAddTemplateToStack(response http.ResponseWriter, request *http.Request) {
+	var body addTemplateToStackRequest
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	config := body.Config
+	if config == nil {
+		config = map[string]any{}
+	}
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", "config must be a JSON object")
+		return
+	}
+
+	stackTemplate, err := server.service.AddTemplateToStack(request.Context(), app.AddTemplateToStackCommand{
+		TenantID:    traits.TenantID(request.PathValue("tenant_id")),
+		StackID:     traits.StackID(request.PathValue("stack_id")),
+		TemplateID:  traits.TemplateID(body.TemplateID),
+		SelectedRef: body.SelectedRef,
+		ConfigJSON:  configJSON,
+		Actor:       traits.UserID(body.Actor),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusCreated, newStackTemplateResponse(stackTemplate))
 }
 
 func (server *Server) handleStartTemplateRun(response http.ResponseWriter, request *http.Request) {
@@ -219,6 +302,21 @@ type registerTemplateRequest struct {
 	RequestedBy string `json:"requested_by"`
 }
 
+type createStackRequest struct {
+	Name                 string            `json:"name"`
+	Slug                 string            `json:"slug"`
+	Tags                 map[string]string `json:"tags"`
+	DefaultCredentialIDs []string          `json:"default_credential_ids"`
+	Actor                string            `json:"actor"`
+}
+
+type addTemplateToStackRequest struct {
+	TemplateID  string         `json:"template_id"`
+	SelectedRef string         `json:"selected_ref"`
+	Config      map[string]any `json:"config"`
+	Actor       string         `json:"actor"`
+}
+
 type startTemplateRunRequest struct {
 	Operation    string `json:"operation"`
 	TriggerActor string `json:"trigger_actor"`
@@ -233,9 +331,98 @@ type cancelRunRequest struct {
 	Reason      string `json:"reason"`
 }
 
+type stackViewResponse struct {
+	Stack     stackResponse           `json:"stack"`
+	Templates []stackTemplateResponse `json:"templates"`
+}
+
+type stackResponse struct {
+	ID                   string            `json:"id"`
+	TenantID             string            `json:"tenant_id"`
+	Name                 string            `json:"name"`
+	Slug                 string            `json:"slug"`
+	Tags                 map[string]string `json:"tags"`
+	DefaultCredentialIDs []string          `json:"default_credential_ids"`
+	CreatedBy            string            `json:"created_by"`
+	CreatedAt            string            `json:"created_at"`
+}
+
+type stackTemplateResponse struct {
+	ID               string         `json:"id"`
+	StackID          string         `json:"stack_id"`
+	TemplateID       string         `json:"template_id"`
+	SelectedRef      string         `json:"selected_ref"`
+	WorkspaceName    string         `json:"workspace_name"`
+	Config           map[string]any `json:"config"`
+	LastAppliedRunID string         `json:"last_applied_run_id"`
+	LastAppliedRef   string         `json:"last_applied_ref"`
+	LastAppliedAt    string         `json:"last_applied_at,omitempty"`
+	Lifecycle        string         `json:"lifecycle"`
+}
+
 type errorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
+}
+
+func newStackViewResponse(view app.StackView) stackViewResponse {
+	templates := make([]stackTemplateResponse, 0, len(view.Templates))
+	for _, stackTemplate := range view.Templates {
+		templates = append(templates, newStackTemplateResponse(stackTemplate))
+	}
+	return stackViewResponse{
+		Stack:     newStackResponse(view.Stack),
+		Templates: templates,
+	}
+}
+
+func newStackResponse(stack traits.Stack) stackResponse {
+	credentialIDs := make([]string, 0, len(stack.DefaultCredentialIDs))
+	for _, id := range stack.DefaultCredentialIDs {
+		credentialIDs = append(credentialIDs, string(id))
+	}
+
+	tags := stack.Tags
+	if tags == nil {
+		tags = map[string]string{}
+	}
+
+	return stackResponse{
+		ID:                   string(stack.ID),
+		TenantID:             string(stack.TenantID),
+		Name:                 stack.Name,
+		Slug:                 stack.Slug,
+		Tags:                 tags,
+		DefaultCredentialIDs: credentialIDs,
+		CreatedBy:            string(stack.CreatedBy),
+		CreatedAt:            stack.CreatedAt.Format(time.RFC3339Nano),
+	}
+}
+
+func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateResponse {
+	var config map[string]any
+	if len(stackTemplate.ConfigJSON) > 0 {
+		_ = json.Unmarshal(stackTemplate.ConfigJSON, &config)
+	}
+	if config == nil {
+		config = map[string]any{}
+	}
+
+	response := stackTemplateResponse{
+		ID:               string(stackTemplate.ID),
+		StackID:          string(stackTemplate.StackID),
+		TemplateID:       string(stackTemplate.TemplateID),
+		SelectedRef:      stackTemplate.SelectedRef,
+		WorkspaceName:    stackTemplate.WorkspaceName,
+		Config:           config,
+		LastAppliedRunID: string(stackTemplate.LastAppliedRunID),
+		LastAppliedRef:   stackTemplate.LastAppliedRef,
+		Lifecycle:        string(stackTemplate.Lifecycle),
+	}
+	if !stackTemplate.LastAppliedAt.IsZero() {
+		response.LastAppliedAt = stackTemplate.LastAppliedAt.Format(time.RFC3339Nano)
+	}
+	return response
 }
 
 func writeAppError(response http.ResponseWriter, err error) {
@@ -246,7 +433,10 @@ func writeAppError(response http.ResponseWriter, err error) {
 		writeError(response, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, app.ErrStackTemplateNotRunnable),
 		errors.Is(err, app.ErrRunNotApprovable),
-		errors.Is(err, app.ErrRunNotCancelable):
+		errors.Is(err, app.ErrRunNotCancelable),
+		errors.Is(err, app.ErrDuplicateStackSlug),
+		errors.Is(err, app.ErrTemplateNotInstallable),
+		errors.Is(err, app.ErrStackTemplateConfigInvalid):
 		writeError(response, http.StatusConflict, "conflict", err.Error())
 	default:
 		writeError(response, http.StatusInternalServerError, "internal_error", "internal server error")
