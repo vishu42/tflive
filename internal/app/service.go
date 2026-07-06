@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/vishu42/megagega/internal/traits"
@@ -14,6 +15,7 @@ import (
 
 var (
 	ErrInvalidCommand           = errors.New("invalid command")
+	ErrNotFound                 = errors.New("not found")
 	ErrStackTemplateNotRunnable = errors.New("stack template is not runnable")
 	ErrRunNotApprovable         = errors.New("run is not approvable")
 	ErrRunNotCancelable         = errors.New("run is not cancelable")
@@ -27,10 +29,22 @@ type StackTemplateRepository interface {
 // TemplateRunRepository persists TemplateRun records and run decisions.
 type TemplateRunRepository interface {
 	CreateTemplateRun(ctx context.Context, run traits.TemplateRun) error
+	GetTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID) (traits.TemplateRun, error)
 	// ApproveTemplateRun records approval only when the tenant-owned run is waiting for approval.
 	ApproveTemplateRun(ctx context.Context, approval traits.TemplateRunApproval) error
 	// RequestTemplateRunCancellation records cancellation only when the tenant-owned run can still stop.
 	RequestTemplateRunCancellation(ctx context.Context, cancellation traits.TemplateRunCancellation) error
+}
+
+// TemplateRunLogReader reads persisted log bodies for tenant-owned TemplateRuns.
+type TemplateRunLogReader interface {
+	ReadTemplateRunLog(ctx context.Context, log traits.TemplateRunLog) ([]byte, error)
+}
+
+// TemplateRunLogRepository reads persisted log metadata for tenant-owned TemplateRuns.
+type TemplateRunLogRepository interface {
+	GetTemplateRunLog(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, phase string) (traits.TemplateRunLog, error)
+	ListTemplateRunLogs(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID) ([]traits.TemplateRunLog, error)
 }
 
 // WorkflowDispatcher starts workflows and sends workflow signals.
@@ -52,11 +66,13 @@ type Clock interface {
 
 // Service owns app use cases and the dependencies wired by cmd packages.
 type Service struct {
-	StackTemplates StackTemplateRepository
-	TemplateRuns   TemplateRunRepository
-	Workflows      WorkflowDispatcher
-	RunIDs         TemplateRunIDGenerator
-	Clock          Clock
+	StackTemplates         StackTemplateRepository
+	TemplateRuns           TemplateRunRepository
+	TemplateRunLogs        TemplateRunLogReader
+	TemplateRunLogMetadata TemplateRunLogRepository
+	Workflows              WorkflowDispatcher
+	RunIDs                 TemplateRunIDGenerator
+	Clock                  Clock
 }
 
 // NewService creates a Service from app-owned dependencies.
@@ -131,6 +147,25 @@ type CancelRunCommand struct {
 	RunID       traits.TemplateRunID
 	RequestedBy traits.UserID
 	Reason      string
+}
+
+// GetTemplateRunCommand asks the app to read one tenant-owned run.
+type GetTemplateRunCommand struct {
+	TenantID traits.TenantID
+	RunID    traits.TemplateRunID
+}
+
+// GetTemplateRunLogCommand asks the app to read one tenant-owned run phase log.
+type GetTemplateRunLogCommand struct {
+	TenantID traits.TenantID
+	RunID    traits.TemplateRunID
+	Phase    string
+}
+
+// ListTemplateRunLogsCommand asks the app to list tenant-owned run log metadata.
+type ListTemplateRunLogsCommand struct {
+	TenantID traits.TenantID
+	RunID    traits.TemplateRunID
 }
 
 // StartTemplateRun creates a queued run and dispatches its workflow.
@@ -240,6 +275,75 @@ func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand)
 	return nil
 }
 
+// GetTemplateRun returns one tenant-owned run.
+func (service *Service) GetTemplateRun(ctx context.Context, command GetTemplateRunCommand) (traits.TemplateRun, error) {
+	if err := validateGetTemplateRunCommand(command); err != nil {
+		return traits.TemplateRun{}, err
+	}
+
+	run, err := service.TemplateRuns.GetTemplateRun(ctx, command.TenantID, command.RunID)
+	if err != nil {
+		return traits.TemplateRun{}, fmt.Errorf("get template run: %w", err)
+	}
+
+	return run, nil
+}
+
+// GetTemplateRunLog returns one phase log after checking that the run belongs to the tenant.
+func (service *Service) GetTemplateRunLog(ctx context.Context, command GetTemplateRunLogCommand) ([]byte, error) {
+	if err := validateGetTemplateRunLogCommand(command); err != nil {
+		return nil, err
+	}
+
+	if _, err := service.GetTemplateRun(ctx, GetTemplateRunCommand{
+		TenantID: command.TenantID,
+		RunID:    command.RunID,
+	}); err != nil {
+		return nil, err
+	}
+	log, err := service.TemplateRunLogMetadata.GetTemplateRunLog(ctx, command.TenantID, command.RunID, command.Phase)
+	if err != nil {
+		return nil, fmt.Errorf("get template run log metadata: %w", err)
+	}
+
+	content, err := service.TemplateRunLogs.ReadTemplateRunLog(ctx, log)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("read template run log: %w", ErrNotFound)
+		}
+		return nil, fmt.Errorf("read template run log: %w", err)
+	}
+
+	return content, nil
+}
+
+// ListTemplateRunLogs returns persisted log metadata after checking that the run belongs to the tenant.
+func (service *Service) ListTemplateRunLogs(ctx context.Context, command ListTemplateRunLogsCommand) ([]traits.TemplateRunLog, error) {
+	if err := validateGetTemplateRunCommand(GetTemplateRunCommand{
+		TenantID: command.TenantID,
+		RunID:    command.RunID,
+	}); err != nil {
+		return nil, err
+	}
+
+	if _, err := service.GetTemplateRun(ctx, GetTemplateRunCommand{
+		TenantID: command.TenantID,
+		RunID:    command.RunID,
+	}); err != nil {
+		return nil, err
+	}
+
+	logs, err := service.TemplateRunLogMetadata.ListTemplateRunLogs(ctx, command.TenantID, command.RunID)
+	if err != nil {
+		return nil, fmt.Errorf("list template run logs: %w", err)
+	}
+	if logs == nil {
+		return []traits.TemplateRunLog{}, nil
+	}
+
+	return logs, nil
+}
+
 func validateStartTemplateRunCommand(command StartTemplateRunCommand) error {
 	switch {
 	case command.TenantID == "":
@@ -278,6 +382,39 @@ func validateCancelRunCommand(command CancelRunCommand) error {
 		return fmt.Errorf("%w: requested by is required", ErrInvalidCommand)
 	default:
 		return nil
+	}
+}
+
+func validateGetTemplateRunCommand(command GetTemplateRunCommand) error {
+	switch {
+	case command.TenantID == "":
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	case command.RunID == "":
+		return fmt.Errorf("%w: run id is required", ErrInvalidCommand)
+	default:
+		return nil
+	}
+}
+
+func validateGetTemplateRunLogCommand(command GetTemplateRunLogCommand) error {
+	if err := validateGetTemplateRunCommand(GetTemplateRunCommand{
+		TenantID: command.TenantID,
+		RunID:    command.RunID,
+	}); err != nil {
+		return err
+	}
+	if !validLogPhase(command.Phase) {
+		return fmt.Errorf("%w: log phase is unsupported", ErrInvalidCommand)
+	}
+	return nil
+}
+
+func validLogPhase(phase string) bool {
+	switch phase {
+	case "clone", "init", "workspace", "plan", "apply", "destroy":
+		return true
+	default:
+		return false
 	}
 }
 

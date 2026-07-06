@@ -171,6 +171,75 @@ func TestLocalTerraformRunnerWritesCommandLogFile(t *testing.T) {
 	}
 }
 
+func TestLocalTerraformRunnerUploadsCommandLogFile(t *testing.T) {
+	t.Parallel()
+
+	workspacePath := t.TempDir()
+	executor := &recordingCommandExecutor{
+		stdout: "plan stdout\n",
+		stderr: "plan stderr\n",
+	}
+	logStore := &recordingTemplateRunLogStore{}
+	terraformRunner := localTerraformRunner{
+		runner:   runner.NewLocalProcessRunnerWithExecutor(executor),
+		logStore: logStore,
+	}
+
+	err := terraformRunner.RunTerraform(context.Background(), traits.RunTerraformActivityInput{
+		RunID:         traits.TemplateRunID("run_123"),
+		TenantID:      traits.TenantID("tenant_123"),
+		WorkspacePath: workspacePath,
+		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+		Command:       traits.TerraformCommandPlan,
+	})
+	if err != nil {
+		t.Fatalf("RunTerraform returned error: %v", err)
+	}
+
+	if logStore.tenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenantID = %q, want tenant_123", logStore.tenantID)
+	}
+	if logStore.runID != traits.TemplateRunID("run_123") {
+		t.Fatalf("runID = %q, want run_123", logStore.runID)
+	}
+	if logStore.phase != "plan" {
+		t.Fatalf("phase = %q, want plan", logStore.phase)
+	}
+	if logStore.content != "plan stdout\nplan stderr\n" {
+		t.Fatalf("uploaded content = %q", logStore.content)
+	}
+}
+
+func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
+	t.Parallel()
+
+	runnerErr := errors.New("terraform failed")
+	workspacePath := t.TempDir()
+	executor := &recordingCommandExecutor{
+		stdout: "plan stdout before failure\n",
+		err:    runnerErr,
+	}
+	logStore := &recordingTemplateRunLogStore{}
+	terraformRunner := localTerraformRunner{
+		runner:   runner.NewLocalProcessRunnerWithExecutor(executor),
+		logStore: logStore,
+	}
+
+	err := terraformRunner.RunTerraform(context.Background(), traits.RunTerraformActivityInput{
+		RunID:         traits.TemplateRunID("run_123"),
+		TenantID:      traits.TenantID("tenant_123"),
+		WorkspacePath: workspacePath,
+		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+		Command:       traits.TerraformCommandPlan,
+	})
+	if !errors.Is(err, runnerErr) {
+		t.Fatalf("error = %v, want runnerErr", err)
+	}
+	if logStore.content != "plan stdout before failure\n" {
+		t.Fatalf("uploaded content = %q", logStore.content)
+	}
+}
+
 func TestRunTerraformWrapsRunnerError(t *testing.T) {
 	t.Parallel()
 
@@ -212,9 +281,30 @@ func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input tr
 	return runner.err
 }
 
+type recordingTemplateRunLogStore struct {
+	tenantID traits.TenantID
+	runID    traits.TemplateRunID
+	phase    string
+	content  string
+	err      error
+}
+
+func (store *recordingTemplateRunLogStore) PutTemplateRunLog(_ context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, phase string, body io.Reader) error {
+	store.tenantID = tenantID
+	store.runID = runID
+	store.phase = phase
+	content, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+	store.content = string(content)
+	return store.err
+}
+
 type recordingCommandExecutor struct {
 	stdout string
 	stderr string
+	err    error
 }
 
 func (executor *recordingCommandExecutor) Run(_ context.Context, _ string, stdout io.Writer, stderr io.Writer, _ string, _ ...string) error {
@@ -224,5 +314,5 @@ func (executor *recordingCommandExecutor) Run(_ context.Context, _ string, stdou
 	if _, err := io.WriteString(stderr, executor.stderr); err != nil {
 		return err
 	}
-	return nil
+	return executor.err
 }

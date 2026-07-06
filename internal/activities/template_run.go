@@ -3,6 +3,7 @@ package activities
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,10 @@ type TerraformRunner interface {
 	RunTerraform(context.Context, traits.RunTerraformActivityInput) error
 }
 
+type TemplateRunLogStore interface {
+	PutTemplateRunLog(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, phase string, body io.Reader) error
+}
+
 // TemplateRunActivities groups the activity handlers registered by the worker.
 //
 // Temporal invokes methods on this value when TemplateRunWorkflow schedules the
@@ -49,7 +54,14 @@ type TemplateRunActivities struct {
 // constructor small while still allowing activity tests to avoid invoking the
 // Terraform binary.
 func NewTemplateRunActivities(recorder StatusRecorder, runRoot string, terraformRunners ...TerraformRunner) *TemplateRunActivities {
-	terraformRunner := TerraformRunner(localTerraformRunner{runner: runner.NewLocalProcessRunner()})
+	return NewTemplateRunActivitiesWithLogStore(recorder, runRoot, nil, terraformRunners...)
+}
+
+func NewTemplateRunActivitiesWithLogStore(recorder StatusRecorder, runRoot string, logStore TemplateRunLogStore, terraformRunners ...TerraformRunner) *TemplateRunActivities {
+	terraformRunner := TerraformRunner(localTerraformRunner{
+		runner:   runner.NewLocalProcessRunner(),
+		logStore: logStore,
+	})
 	if len(terraformRunners) > 0 {
 		terraformRunner = terraformRunners[0]
 	}
@@ -83,14 +95,11 @@ func (activities *TemplateRunActivities) RecordTemplateRunStatus(ctx context.Con
 // traversal. The resulting path is returned to the workflow and then passed back
 // into RunTerraform activity calls.
 func (activities *TemplateRunActivities) PrepareWorkspace(ctx context.Context, input traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
-	if strings.TrimSpace(activities.runRoot) == "" {
-		return traits.PrepareWorkspaceActivityOutput{}, fmt.Errorf("run root is required")
-	}
-	if !safePathComponent(string(input.TenantID)) || !safePathComponent(string(input.RunID)) {
-		return traits.PrepareWorkspaceActivityOutput{}, fmt.Errorf("tenant ID and run ID must be safe path components")
+	workspacePath, err := logsink.RunWorkspacePath(activities.runRoot, input.TenantID, input.RunID)
+	if err != nil {
+		return traits.PrepareWorkspaceActivityOutput{}, err
 	}
 
-	workspacePath := filepath.Join(activities.runRoot, string(input.TenantID), string(input.RunID))
 	if err := os.MkdirAll(workspacePath, 0o700); err != nil {
 		return traits.PrepareWorkspaceActivityOutput{}, fmt.Errorf("prepare workspace directory: %w", err)
 	}
@@ -134,7 +143,8 @@ func safePathComponent(component string) bool {
 // before delegating to runner.LocalProcessRunner.
 type localTerraformRunner struct {
 	// runner owns Terraform CLI argument construction and subprocess execution.
-	runner *runner.LocalProcessRunner
+	runner   *runner.LocalProcessRunner
+	logStore TemplateRunLogStore
 }
 
 // RunTerraform writes command output to the workspace log file and runs Terraform.
@@ -163,11 +173,25 @@ func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input 
 		Stderr:        writer,
 	})
 	closeErr := writer.Close()
-	if runErr != nil {
-		return runErr
-	}
 	if closeErr != nil {
 		return fmt.Errorf("close terraform log: %w", closeErr)
+	}
+	if localRunner.logStore != nil {
+		file, err := os.Open(filepath.Join(input.WorkspacePath, "logs", phase+".log"))
+		if err != nil {
+			return fmt.Errorf("open terraform log for upload: %w", err)
+		}
+		uploadErr := localRunner.logStore.PutTemplateRunLog(ctx, input.TenantID, input.RunID, phase, file)
+		closeErr := file.Close()
+		if uploadErr != nil {
+			return fmt.Errorf("upload terraform log: %w", uploadErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close terraform log after upload: %w", closeErr)
+		}
+	}
+	if runErr != nil {
+		return runErr
 	}
 	return nil
 }

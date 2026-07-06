@@ -238,6 +238,17 @@ type TemplateRun struct {
 	ErrorSummary      string            `json:"error_summary"`
 }
 
+// TemplateRunLog records the object-store location for one run phase log.
+type TemplateRunLog struct {
+	TenantID    TenantID      `json:"tenant_id"`
+	RunID       TemplateRunID `json:"run_id"`
+	Phase       string        `json:"phase"`
+	ObjectKey   string        `json:"object_key"`
+	ContentType string        `json:"content_type"`
+	SizeBytes   int64         `json:"size_bytes"`
+	UploadedAt  time.Time     `json:"uploaded_at"`
+}
+
 // TemplateRunApproval records who approved a waiting run.
 // TemplateRunApproval records who approved a waiting run.
 type TemplateRunApproval struct {

@@ -1,6 +1,8 @@
 package logsink
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,5 +83,95 @@ func TestPhaseForTerraformCommand(t *testing.T) {
 		if got != tt.want {
 			t.Fatalf("PhaseForTerraformCommand(%q) = %q, want %q", tt.command, got, tt.want)
 		}
+	}
+}
+
+func TestLocalReaderReadsTenantRunPhaseLog(t *testing.T) {
+	t.Parallel()
+
+	runRoot := t.TempDir()
+	logPath := filepath.Join(runRoot, "tenant_123", "run_123", "logs")
+	if err := os.MkdirAll(logPath, 0o700); err != nil {
+		t.Fatalf("create log directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(logPath, "plan.log"), []byte("plan output\n"), 0o600); err != nil {
+		t.Fatalf("write phase log: %v", err)
+	}
+
+	content, err := NewLocalReader(runRoot).ReadTemplateRunLog(
+		context.Background(),
+		traits.TenantID("tenant_123"),
+		traits.TemplateRunID("run_123"),
+		"plan",
+	)
+	if err != nil {
+		t.Fatalf("ReadTemplateRunLog returned error: %v", err)
+	}
+	if string(content) != "plan output\n" {
+		t.Fatalf("content = %q, want plan output", string(content))
+	}
+}
+
+func TestRunWorkspacePathMatchesWorkspaceLayout(t *testing.T) {
+	t.Parallel()
+
+	runRoot := t.TempDir()
+
+	path, err := RunWorkspacePath(runRoot, traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"))
+	if err != nil {
+		t.Fatalf("RunWorkspacePath returned error: %v", err)
+	}
+
+	want := filepath.Join(runRoot, "tenant_123", "run_123")
+	if path != want {
+		t.Fatalf("path = %q, want %q", path, want)
+	}
+}
+
+func TestRunWorkspacePathRejectsUnsafePathComponents(t *testing.T) {
+	t.Parallel()
+
+	_, err := RunWorkspacePath(t.TempDir(), traits.TenantID("tenant_123"), traits.TemplateRunID("../run"))
+	if err == nil {
+		t.Fatal("RunWorkspacePath returned nil error for unsafe run ID")
+	}
+	if !strings.Contains(err.Error(), "safe path") {
+		t.Fatalf("error = %q, want safe path context", err.Error())
+	}
+}
+
+func TestLocalReaderRejectsUnsafePathComponents(t *testing.T) {
+	t.Parallel()
+
+	reader := NewLocalReader(t.TempDir())
+
+	_, err := reader.ReadTemplateRunLog(context.Background(), traits.TenantID("../tenant"), traits.TemplateRunID("run_123"), "plan")
+	if err == nil {
+		t.Fatal("ReadTemplateRunLog returned nil error for unsafe tenant")
+	}
+	if !strings.Contains(err.Error(), "safe path") {
+		t.Fatalf("error = %q, want safe path context", err.Error())
+	}
+
+	_, err = reader.ReadTemplateRunLog(context.Background(), traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"), "../plan")
+	if err == nil {
+		t.Fatal("ReadTemplateRunLog returned nil error for unsafe phase")
+	}
+	if !strings.Contains(err.Error(), "safe path") {
+		t.Fatalf("error = %q, want safe path context", err.Error())
+	}
+}
+
+func TestLocalReaderReturnsNotExistForMissingLog(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewLocalReader(t.TempDir()).ReadTemplateRunLog(
+		context.Background(),
+		traits.TenantID("tenant_123"),
+		traits.TemplateRunID("run_123"),
+		"plan",
+	)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("error = %v, want os.ErrNotExist", err)
 	}
 }

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -358,6 +359,258 @@ func TestCancelRunDoesNotSignalWhenRunIsNotCancelable(t *testing.T) {
 	}
 }
 
+func TestGetTemplateRunReturnsTenantScopedRun(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{
+		run: traits.TemplateRun{
+			ID:              traits.TemplateRunID("run_123"),
+			TenantID:        traits.TenantID("tenant_123"),
+			StackTemplateID: traits.StackTemplateID("stack_template_123"),
+			Operation:       traits.OperationPlan,
+			Status:          traits.TemplateRunCompleted,
+		},
+	}
+	service := NewService(Service{TemplateRuns: runs})
+
+	run, err := service.GetTemplateRun(context.Background(), GetTemplateRunCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
+	})
+	if err != nil {
+		t.Fatalf("GetTemplateRun returned error: %v", err)
+	}
+
+	if run.ID != traits.TemplateRunID("run_123") {
+		t.Fatalf("run ID = %q, want run_123", run.ID)
+	}
+	if runs.gotGetTenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant lookup = %q, want tenant_123", runs.gotGetTenantID)
+	}
+	if runs.gotGetRunID != traits.TemplateRunID("run_123") {
+		t.Fatalf("run lookup = %q, want run_123", runs.gotGetRunID)
+	}
+}
+
+func TestGetTemplateRunRejectsMissingRunID(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{TemplateRuns: &recordingTemplateRunRepository{}})
+
+	_, err := service.GetTemplateRun(context.Background(), GetTemplateRunCommand{
+		TenantID: traits.TenantID("tenant_123"),
+	})
+	if !errors.Is(err, ErrInvalidCommand) {
+		t.Fatalf("error = %v, want ErrInvalidCommand", err)
+	}
+}
+
+func TestGetTemplateRunLogChecksRunOwnershipBeforeReadingLog(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{
+		run: traits.TemplateRun{
+			ID:       traits.TemplateRunID("run_123"),
+			TenantID: traits.TenantID("tenant_123"),
+		},
+	}
+	logs := &recordingTemplateRunLogReader{content: []byte("plan output\n")}
+	metadata := &recordingTemplateRunLogRepository{
+		log: traits.TemplateRunLog{
+			TenantID:  traits.TenantID("tenant_123"),
+			RunID:     traits.TemplateRunID("run_123"),
+			Phase:     "plan",
+			ObjectKey: "tenants/tenant_123/runs/run_123/logs/plan.log",
+		},
+	}
+	service := NewService(Service{
+		TemplateRuns:           runs,
+		TemplateRunLogs:        logs,
+		TemplateRunLogMetadata: metadata,
+	})
+
+	content, err := service.GetTemplateRunLog(context.Background(), GetTemplateRunLogCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
+		Phase:    "plan",
+	})
+	if err != nil {
+		t.Fatalf("GetTemplateRunLog returned error: %v", err)
+	}
+
+	if string(content) != "plan output\n" {
+		t.Fatalf("content = %q, want plan output", string(content))
+	}
+	if runs.gotGetRunID != traits.TemplateRunID("run_123") {
+		t.Fatalf("run lookup = %q, want run_123", runs.gotGetRunID)
+	}
+	if logs.gotTenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("log tenant = %q, want tenant_123", logs.gotTenantID)
+	}
+	if logs.gotRunID != traits.TemplateRunID("run_123") {
+		t.Fatalf("log run = %q, want run_123", logs.gotRunID)
+	}
+	if logs.gotPhase != "plan" {
+		t.Fatalf("log phase = %q, want plan", logs.gotPhase)
+	}
+	if logs.gotObjectKey != "tenants/tenant_123/runs/run_123/logs/plan.log" {
+		t.Fatalf("log object key = %q, want metadata object key", logs.gotObjectKey)
+	}
+	if metadata.gotGetPhase != "plan" {
+		t.Fatalf("metadata phase = %q, want plan", metadata.gotGetPhase)
+	}
+}
+
+func TestGetTemplateRunLogDoesNotReadLogWhenRunIsMissing(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{getErr: ErrNotFound}
+	logs := &recordingTemplateRunLogReader{content: []byte("plan output\n")}
+	service := NewService(Service{
+		TemplateRuns:           runs,
+		TemplateRunLogs:        logs,
+		TemplateRunLogMetadata: &recordingTemplateRunLogRepository{},
+	})
+
+	_, err := service.GetTemplateRunLog(context.Background(), GetTemplateRunLogCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
+		Phase:    "plan",
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("error = %v, want ErrNotFound", err)
+	}
+	if logs.gotRunID != "" {
+		t.Fatalf("log reader run ID = %q, want no log read", logs.gotRunID)
+	}
+}
+
+func TestGetTemplateRunLogDoesNotReadObjectWhenMetadataIsMissing(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{
+		run: traits.TemplateRun{
+			ID:       traits.TemplateRunID("run_123"),
+			TenantID: traits.TenantID("tenant_123"),
+		},
+	}
+	logs := &recordingTemplateRunLogReader{content: []byte("plan output\n")}
+	metadata := &recordingTemplateRunLogRepository{getErr: ErrNotFound}
+	service := NewService(Service{
+		TemplateRuns:           runs,
+		TemplateRunLogs:        logs,
+		TemplateRunLogMetadata: metadata,
+	})
+
+	_, err := service.GetTemplateRunLog(context.Background(), GetTemplateRunLogCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
+		Phase:    "plan",
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("error = %v, want ErrNotFound", err)
+	}
+	if logs.gotRunID != "" {
+		t.Fatalf("log reader run ID = %q, want no object read", logs.gotRunID)
+	}
+}
+
+func TestGetTemplateRunLogMapsMissingLogToNotFound(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{
+		run: traits.TemplateRun{
+			ID:       traits.TemplateRunID("run_123"),
+			TenantID: traits.TenantID("tenant_123"),
+		},
+	}
+	logs := &recordingTemplateRunLogReader{err: os.ErrNotExist}
+	metadata := &recordingTemplateRunLogRepository{
+		log: traits.TemplateRunLog{
+			TenantID:  traits.TenantID("tenant_123"),
+			RunID:     traits.TemplateRunID("run_123"),
+			Phase:     "plan",
+			ObjectKey: "tenants/tenant_123/runs/run_123/logs/plan.log",
+		},
+	}
+	service := NewService(Service{
+		TemplateRuns:           runs,
+		TemplateRunLogs:        logs,
+		TemplateRunLogMetadata: metadata,
+	})
+
+	_, err := service.GetTemplateRunLog(context.Background(), GetTemplateRunLogCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
+		Phase:    "plan",
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestGetTemplateRunLogRejectsUnsafePhase(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{
+		TemplateRuns:           &recordingTemplateRunRepository{},
+		TemplateRunLogs:        &recordingTemplateRunLogReader{},
+		TemplateRunLogMetadata: &recordingTemplateRunLogRepository{},
+	})
+
+	_, err := service.GetTemplateRunLog(context.Background(), GetTemplateRunLogCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
+		Phase:    "../plan",
+	})
+	if !errors.Is(err, ErrInvalidCommand) {
+		t.Fatalf("error = %v, want ErrInvalidCommand", err)
+	}
+}
+
+func TestListTemplateRunLogsChecksRunOwnershipBeforeListingMetadata(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{
+		run: traits.TemplateRun{
+			ID:       traits.TemplateRunID("run_123"),
+			TenantID: traits.TenantID("tenant_123"),
+		},
+	}
+	metadata := &recordingTemplateRunLogRepository{
+		logs: []traits.TemplateRunLog{
+			{
+				TenantID:    traits.TenantID("tenant_123"),
+				RunID:       traits.TemplateRunID("run_123"),
+				Phase:       "init",
+				ObjectKey:   "tenants/tenant_123/runs/run_123/logs/init.log",
+				ContentType: "text/plain; charset=utf-8",
+				SizeBytes:   12,
+				UploadedAt:  time.Date(2026, 7, 6, 10, 15, 0, 0, time.UTC),
+			},
+		},
+	}
+	service := NewService(Service{
+		TemplateRuns:           runs,
+		TemplateRunLogMetadata: metadata,
+	})
+
+	logs, err := service.ListTemplateRunLogs(context.Background(), ListTemplateRunLogsCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
+	})
+	if err != nil {
+		t.Fatalf("ListTemplateRunLogs returned error: %v", err)
+	}
+
+	if len(logs) != 1 {
+		t.Fatalf("len(logs) = %d, want 1", len(logs))
+	}
+	if metadata.gotListRunID != traits.TemplateRunID("run_123") {
+		t.Fatalf("metadata run lookup = %q, want run_123", metadata.gotListRunID)
+	}
+}
+
 type recordingStackTemplateRepository struct {
 	stackTemplate traits.StackTemplate
 	gotTenantID   traits.TenantID
@@ -372,8 +625,12 @@ func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.C
 
 type recordingTemplateRunRepository struct {
 	created         traits.TemplateRun
+	run             traits.TemplateRun
 	approval        traits.TemplateRunApproval
 	cancellation    traits.TemplateRunCancellation
+	gotGetTenantID  traits.TenantID
+	gotGetRunID     traits.TemplateRunID
+	getErr          error
 	approvalErr     error
 	cancellationErr error
 }
@@ -381,6 +638,15 @@ type recordingTemplateRunRepository struct {
 func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run traits.TemplateRun) error {
 	repository.created = run
 	return nil
+}
+
+func (repository *recordingTemplateRunRepository) GetTemplateRun(_ context.Context, tenantID traits.TenantID, runID traits.TemplateRunID) (traits.TemplateRun, error) {
+	repository.gotGetTenantID = tenantID
+	repository.gotGetRunID = runID
+	if repository.getErr != nil {
+		return traits.TemplateRun{}, repository.getErr
+	}
+	return repository.run, nil
 }
 
 func (repository *recordingTemplateRunRepository) ApproveTemplateRun(_ context.Context, approval traits.TemplateRunApproval) error {
@@ -397,6 +663,57 @@ func (repository *recordingTemplateRunRepository) RequestTemplateRunCancellation
 	}
 	repository.cancellation = cancellation
 	return nil
+}
+
+type recordingTemplateRunLogReader struct {
+	content      []byte
+	err          error
+	gotTenantID  traits.TenantID
+	gotRunID     traits.TemplateRunID
+	gotPhase     string
+	gotObjectKey string
+}
+
+func (reader *recordingTemplateRunLogReader) ReadTemplateRunLog(_ context.Context, log traits.TemplateRunLog) ([]byte, error) {
+	reader.gotTenantID = log.TenantID
+	reader.gotRunID = log.RunID
+	reader.gotPhase = log.Phase
+	reader.gotObjectKey = log.ObjectKey
+	if reader.err != nil {
+		return nil, reader.err
+	}
+	return reader.content, nil
+}
+
+type recordingTemplateRunLogRepository struct {
+	log             traits.TemplateRunLog
+	logs            []traits.TemplateRunLog
+	gotGetTenantID  traits.TenantID
+	gotGetRunID     traits.TemplateRunID
+	gotGetPhase     string
+	gotListTenantID traits.TenantID
+	gotListRunID    traits.TemplateRunID
+	getErr          error
+	listErr         error
+}
+
+func (repository *recordingTemplateRunLogRepository) GetTemplateRunLog(_ context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, phase string) (traits.TemplateRunLog, error) {
+	repository.gotGetTenantID = tenantID
+	repository.gotGetRunID = runID
+	repository.gotGetPhase = phase
+	if repository.getErr != nil {
+		return traits.TemplateRunLog{}, repository.getErr
+	}
+	return repository.log, nil
+}
+
+func (repository *recordingTemplateRunLogRepository) ListTemplateRunLogs(_ context.Context, tenantID traits.TenantID, runID traits.TemplateRunID) ([]traits.TemplateRunLog, error) {
+	repository.gotListTenantID = tenantID
+	repository.gotListRunID = runID
+	if repository.listErr != nil {
+		return nil, repository.listErr
+	}
+	return repository.logs, nil
 }
 
 type recordingWorkflowDispatcher struct {

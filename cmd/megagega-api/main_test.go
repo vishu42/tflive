@@ -82,6 +82,18 @@ func TestRunWiresTemporalDispatcher(t *testing.T) {
 	if deps.service.TemplateRuns != deps.store {
 		t.Fatal("service TemplateRuns is not the store")
 	}
+	if deps.service.TemplateRunLogMetadata != deps.store {
+		t.Fatal("service TemplateRunLogMetadata is not the store")
+	}
+	if deps.artifactStoreConfig.Kind != config.ArtifactStoreFilesystem {
+		t.Fatalf("artifact store kind = %q, want filesystem", deps.artifactStoreConfig.Kind)
+	}
+	if deps.artifactStoreConfig.FilesystemRoot != "/var/lib/megagega/artifacts" {
+		t.Fatalf("artifact store root = %q, want /var/lib/megagega/artifacts", deps.artifactStoreConfig.FilesystemRoot)
+	}
+	if deps.service.TemplateRunLogs != deps.logReader {
+		t.Fatal("service TemplateRunLogs is not the configured log reader")
+	}
 	if deps.serverAddress != ":9090" {
 		t.Fatalf("server address = %q, want :9090", deps.serverAddress)
 	}
@@ -257,6 +269,12 @@ func apiTestEnv(key string) string {
 		return "megagega"
 	case "TEMPORAL_TASK_QUEUE":
 		return "terraform-runs-dev"
+	case "WORKER_RUN_ROOT":
+		return "/var/lib/megagega/runs"
+	case "ARTIFACT_STORE_KIND":
+		return "filesystem"
+	case "ARTIFACT_STORE_FILESYSTEM_ROOT":
+		return "/var/lib/megagega/artifacts"
 	default:
 		return ""
 	}
@@ -270,6 +288,8 @@ type recordingAPIDependencies struct {
 	dispatcher          recordingWorkflowDispatcher
 	temporalConfig      temporal.Config
 	dispatcherTaskQueue string
+	artifactStoreConfig config.ArtifactStoreConfig
+	logReader           recordingTemplateRunLogReader
 	service             app.Service
 	serverAddress       string
 	serverHandler       http.Handler
@@ -319,6 +339,10 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 			}
 			deps.dispatcherTaskQueue = taskQueue
 			return deps.dispatcher
+		},
+		newLogReader: func(cfg config.ArtifactStoreConfig) (app.TemplateRunLogReader, error) {
+			deps.artifactStoreConfig = cfg
+			return deps.logReader, nil
 		},
 		newService: func(service app.Service) (*app.Service, error) {
 			deps.service = service
@@ -370,12 +394,30 @@ func (recordingStore) CreateTemplateRun(context.Context, traits.TemplateRun) err
 	return nil
 }
 
+func (recordingStore) GetTemplateRun(context.Context, traits.TenantID, traits.TemplateRunID) (traits.TemplateRun, error) {
+	return traits.TemplateRun{}, nil
+}
+
+func (recordingStore) GetTemplateRunLog(context.Context, traits.TenantID, traits.TemplateRunID, string) (traits.TemplateRunLog, error) {
+	return traits.TemplateRunLog{}, nil
+}
+
+func (recordingStore) ListTemplateRunLogs(context.Context, traits.TenantID, traits.TemplateRunID) ([]traits.TemplateRunLog, error) {
+	return nil, nil
+}
+
 func (recordingStore) ApproveTemplateRun(context.Context, traits.TemplateRunApproval) error {
 	return nil
 }
 
 func (recordingStore) RequestTemplateRunCancellation(context.Context, traits.TemplateRunCancellation) error {
 	return nil
+}
+
+type recordingTemplateRunLogReader struct{}
+
+func (recordingTemplateRunLogReader) ReadTemplateRunLog(context.Context, traits.TemplateRunLog) ([]byte, error) {
+	return nil, nil
 }
 
 type recordingWorkflowDispatcher struct{}

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/megagega/internal/api"
 	"github.com/vishu42/megagega/internal/app"
+	"github.com/vishu42/megagega/internal/artifacts"
 	"github.com/vishu42/megagega/internal/config"
 	"github.com/vishu42/megagega/internal/postgres"
 	"github.com/vishu42/megagega/internal/temporal"
@@ -27,6 +28,7 @@ type postgresPool interface {
 type appRepositories interface {
 	app.StackTemplateRepository
 	app.TemplateRunRepository
+	app.TemplateRunLogRepository
 }
 
 type apiDependencies struct {
@@ -35,6 +37,7 @@ type apiDependencies struct {
 	newStore        func(postgresPool) (appRepositories, error)
 	dialTemporal    func(context.Context, temporal.Config) (client.Client, error)
 	newDispatcher   func(client.Client, string) app.WorkflowDispatcher
+	newLogReader    func(config.ArtifactStoreConfig) (app.TemplateRunLogReader, error)
 	newService      func(app.Service) (*app.Service, error)
 	listenAndServe  func(context.Context, string, http.Handler) error
 }
@@ -67,6 +70,13 @@ func defaultAPIDependencies() apiDependencies {
 		dialTemporal: temporal.Dial,
 		newDispatcher: func(temporalClient client.Client, taskQueue string) app.WorkflowDispatcher {
 			return temporal.NewDispatcher(temporalClient, taskQueue)
+		},
+		newLogReader: func(cfg config.ArtifactStoreConfig) (app.TemplateRunLogReader, error) {
+			store, err := artifacts.NewObjectStore(cfg)
+			if err != nil {
+				return nil, err
+			}
+			return artifacts.NewLogStore(store), nil
 		},
 		newService: func(service app.Service) (*app.Service, error) {
 			return app.NewService(service), nil
@@ -114,10 +124,16 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 	defer temporalClient.Close()
 
 	dispatcher := deps.newDispatcher(temporalClient, cfg.TemporalTaskQueue)
+	logReader, err := deps.newLogReader(cfg.ArtifactStore)
+	if err != nil {
+		return fmt.Errorf("wire log reader: %w", err)
+	}
 	service, err := deps.newService(app.Service{
-		StackTemplates: store,
-		TemplateRuns:   store,
-		Workflows:      dispatcher,
+		StackTemplates:         store,
+		TemplateRuns:           store,
+		TemplateRunLogs:        logReader,
+		TemplateRunLogMetadata: store,
+		Workflows:              dispatcher,
 	})
 	if err != nil {
 		return fmt.Errorf("wire service: %w", err)

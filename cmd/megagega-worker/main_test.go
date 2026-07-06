@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/vishu42/megagega/internal/activities"
+	"github.com/vishu42/megagega/internal/artifacts"
 	"github.com/vishu42/megagega/internal/config"
 	"github.com/vishu42/megagega/internal/temporal"
 	"github.com/vishu42/megagega/internal/traits"
@@ -88,6 +91,18 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if deps.activityRunRoot != "/tmp/megagega-worker-test" {
 		t.Fatalf("activity run root = %q, want /tmp/megagega-worker-test", deps.activityRunRoot)
 	}
+	if deps.artifactStoreConfig.Kind != config.ArtifactStoreFilesystem {
+		t.Fatalf("artifact store kind = %q, want filesystem", deps.artifactStoreConfig.Kind)
+	}
+	if deps.artifactStoreConfig.FilesystemRoot != "/tmp/megagega-worker-artifacts" {
+		t.Fatalf("artifact store root = %q, want /tmp/megagega-worker-artifacts", deps.artifactStoreConfig.FilesystemRoot)
+	}
+	if deps.activityLogStore != deps.logStore {
+		t.Fatal("activity log store was not wired")
+	}
+	if deps.logMetadataRecorder != deps.store {
+		t.Fatal("log metadata recorder was not wired with the Postgres store")
+	}
 	if !deps.worker.ran {
 		t.Fatal("worker was not run")
 	}
@@ -127,7 +142,7 @@ func TestDefaultWorkerDependenciesRegisterTerraformActivities(t *testing.T) {
 	worker := &recordingTemporalWorker{}
 	deps := defaultWorkerDependencies()
 
-	deps.registerActivities(worker, &recordingWorkerStore{}, t.TempDir())
+	deps.registerActivities(worker, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{})
 
 	if !worker.registeredActivities[traits.PrepareWorkspaceActivityName] {
 		t.Fatalf("activity %q was not registered", traits.PrepareWorkspaceActivityName)
@@ -184,6 +199,10 @@ func workerTestEnv(key string) string {
 		return "terraform-runs-dev"
 	case "WORKER_RUN_ROOT":
 		return "/tmp/megagega-worker-test"
+	case "ARTIFACT_STORE_KIND":
+		return "filesystem"
+	case "ARTIFACT_STORE_FILESYSTEM_ROOT":
+		return "/tmp/megagega-worker-artifacts"
 	default:
 		return ""
 	}
@@ -197,9 +216,13 @@ type recordingWorkerDependencies struct {
 	store                *recordingWorkerStore
 	temporalConfig       temporal.Config
 	workerTaskQueue      string
+	artifactStoreConfig  config.ArtifactStoreConfig
 	migrated             bool
 	activityStoreIsWired bool
 	activityRunRoot      string
+	activityLogStore     activities.TemplateRunLogStore
+	logStore             recordingWorkerLogStore
+	logMetadataRecorder  artifacts.LogMetadataRecorder
 	dialErr              error
 }
 
@@ -252,7 +275,7 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 				Name: traits.TemplateRunWorkflowName,
 			})
 		},
-		registerActivities: func(worker temporalWorker, recorder statusRecorder, runRoot string) {
+		registerActivities: func(worker temporalWorker, recorder statusRecorder, runRoot string, logStore activities.TemplateRunLogStore) {
 			if worker != deps.worker {
 				t.Fatalf("registerActivities worker = %p, want %p", worker, deps.worker)
 			}
@@ -261,6 +284,7 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			}
 			deps.activityStoreIsWired = true
 			deps.activityRunRoot = runRoot
+			deps.activityLogStore = logStore
 			worker.RegisterActivityWithOptions(
 				func(context.Context, traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
 					return traits.PrepareWorkspaceActivityOutput{}, nil
@@ -285,6 +309,11 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 					Name: traits.RecordTemplateRunStatusActivityName,
 				},
 			)
+		},
+		newLogStore: func(cfg config.ArtifactStoreConfig, recorder artifacts.LogMetadataRecorder) (activities.TemplateRunLogStore, error) {
+			deps.artifactStoreConfig = cfg
+			deps.logMetadataRecorder = recorder
+			return deps.logStore, nil
 		},
 		interruptCh: func() <-chan interface{} {
 			ch := make(chan interface{})
@@ -313,6 +342,16 @@ func (pool *recordingWorkerPostgresPool) Close() {
 type recordingWorkerStore struct{}
 
 func (store *recordingWorkerStore) RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error {
+	return nil
+}
+
+func (store *recordingWorkerStore) RecordTemplateRunLog(context.Context, traits.TemplateRunLog) error {
+	return nil
+}
+
+type recordingWorkerLogStore struct{}
+
+func (recordingWorkerLogStore) PutTemplateRunLog(context.Context, traits.TenantID, traits.TemplateRunID, string, io.Reader) error {
 	return nil
 }
 

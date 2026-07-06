@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/megagega/internal/activities"
+	"github.com/vishu42/megagega/internal/artifacts"
 	"github.com/vishu42/megagega/internal/config"
 	"github.com/vishu42/megagega/internal/postgres"
 	"github.com/vishu42/megagega/internal/temporal"
@@ -32,6 +33,7 @@ type postgresPool interface {
 
 type statusRecorder interface {
 	RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error
+	RecordTemplateRunLog(context.Context, traits.TemplateRunLog) error
 }
 
 type workerDependencies struct {
@@ -48,7 +50,9 @@ type workerDependencies struct {
 	// registerWorkflow attaches the workflow implementations this process can execute.
 	registerWorkflow func(temporalWorker)
 	// registerActivities attaches activity handlers and their shared dependencies to the worker.
-	registerActivities func(temporalWorker, statusRecorder, string)
+	registerActivities func(temporalWorker, statusRecorder, string, activities.TemplateRunLogStore)
+	// newLogStore builds the artifact-backed log store used by Terraform activities.
+	newLogStore func(config.ArtifactStoreConfig, artifacts.LogMetadataRecorder) (activities.TemplateRunLogStore, error)
 	// interruptCh provides the shutdown signal consumed by the Temporal worker run loop.
 	interruptCh func() <-chan interface{}
 }
@@ -87,8 +91,8 @@ func defaultWorkerDependencies() workerDependencies {
 				Name: traits.TemplateRunWorkflowName,
 			})
 		},
-		registerActivities: func(worker temporalWorker, recorder statusRecorder, runRoot string) {
-			templateRunActivities := activities.NewTemplateRunActivities(recorder, runRoot)
+		registerActivities: func(worker temporalWorker, recorder statusRecorder, runRoot string, logStore activities.TemplateRunLogStore) {
+			templateRunActivities := activities.NewTemplateRunActivitiesWithLogStore(recorder, runRoot, logStore)
 			worker.RegisterActivityWithOptions(templateRunActivities.PrepareWorkspace, activity.RegisterOptions{
 				Name: traits.PrepareWorkspaceActivityName,
 			})
@@ -98,6 +102,13 @@ func defaultWorkerDependencies() workerDependencies {
 			worker.RegisterActivityWithOptions(templateRunActivities.RecordTemplateRunStatus, activity.RegisterOptions{
 				Name: traits.RecordTemplateRunStatusActivityName,
 			})
+		},
+		newLogStore: func(cfg config.ArtifactStoreConfig, recorder artifacts.LogMetadataRecorder) (activities.TemplateRunLogStore, error) {
+			store, err := artifacts.NewObjectStore(cfg)
+			if err != nil {
+				return nil, err
+			}
+			return artifacts.NewRecordedLogStore(store, recorder), nil
 		},
 		interruptCh: temporalworker.InterruptCh,
 	}
@@ -131,6 +142,10 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 	if err != nil {
 		return fmt.Errorf("wire activities: %w", err)
 	}
+	logStore, err := deps.newLogStore(cfg.ArtifactStore, store)
+	if err != nil {
+		return fmt.Errorf("wire log store: %w", err)
+	}
 
 	temporalClient, err := deps.dialTemporal(ctx, temporal.Config{
 		Address:   cfg.TemporalAddress,
@@ -143,7 +158,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 
 	worker := deps.newWorker(temporalClient, cfg.TemporalTaskQueue)
 	deps.registerWorkflow(worker)
-	deps.registerActivities(worker, store, cfg.WorkerRunRoot)
+	deps.registerActivities(worker, store, cfg.WorkerRunRoot, logStore)
 
 	if err := worker.Run(deps.interruptCh()); err != nil {
 		return fmt.Errorf("run worker: %w", err)

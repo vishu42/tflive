@@ -21,6 +21,9 @@ func NewServer(service *app.Service) *Server {
 	}
 	server.mux.HandleFunc("GET /healthz", server.handleHealth)
 	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/runs", server.handleStartTemplateRun)
+	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-runs/{run_id}", server.handleGetTemplateRun)
+	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs", server.handleListTemplateRunLogs)
+	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs/{phase}", server.handleGetTemplateRunLog)
 	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/approval", server.handleApproveRun)
 	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/cancellation", server.handleCancelRun)
 	return server
@@ -53,6 +56,48 @@ func (server *Server) handleStartTemplateRun(response http.ResponseWriter, reque
 	}
 
 	writeJSON(response, http.StatusCreated, run)
+}
+
+func (server *Server) handleGetTemplateRun(response http.ResponseWriter, request *http.Request) {
+	run, err := server.service.GetTemplateRun(request.Context(), app.GetTemplateRunCommand{
+		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+		RunID:    traits.TemplateRunID(request.PathValue("run_id")),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusOK, run)
+}
+
+func (server *Server) handleGetTemplateRunLog(response http.ResponseWriter, request *http.Request) {
+	content, err := server.service.GetTemplateRunLog(request.Context(), app.GetTemplateRunLogCommand{
+		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+		RunID:    traits.TemplateRunID(request.PathValue("run_id")),
+		Phase:    request.PathValue("phase"),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	response.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(content)
+}
+
+func (server *Server) handleListTemplateRunLogs(response http.ResponseWriter, request *http.Request) {
+	logs, err := server.service.ListTemplateRunLogs(request.Context(), app.ListTemplateRunLogsCommand{
+		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+		RunID:    traits.TemplateRunID(request.PathValue("run_id")),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusOK, logs)
 }
 
 func (server *Server) handleApproveRun(response http.ResponseWriter, request *http.Request) {
@@ -119,6 +164,8 @@ func writeAppError(response http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, app.ErrInvalidCommand):
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+	case errors.Is(err, app.ErrNotFound):
+		writeError(response, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, app.ErrStackTemplateNotRunnable),
 		errors.Is(err, app.ErrRunNotApprovable),
 		errors.Is(err, app.ErrRunNotCancelable):

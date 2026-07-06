@@ -35,7 +35,7 @@ func TestMigrateAppliesSchema(t *testing.T) {
 		t.Fatalf("Migrate returned error: %v", err)
 	}
 
-	for _, table := range []string{"schema_migrations", "stack_templates", "template_runs", "template_run_approvals"} {
+	for _, table := range []string{"schema_migrations", "stack_templates", "template_runs", "template_run_approvals", "template_run_logs"} {
 		table := table
 		t.Run(table, func(t *testing.T) {
 			t.Parallel()
@@ -259,6 +259,232 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 	}
 	if !got.CompletedAt.Equal(run.CompletedAt) {
 		t.Fatalf("CompletedAt = %v, want %v", got.CompletedAt, run.CompletedAt)
+	}
+}
+
+func TestGetTemplateRunReturnsTenantScopedRecord(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	startedAt := time.Date(2026, 7, 5, 9, 30, 0, 123456000, time.UTC)
+	completedAt := time.Date(2026, 7, 5, 9, 45, 0, 123456000, time.UTC)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:                traits.TemplateRunID("run_123"),
+		TenantID:          traits.TenantID("tenant_123"),
+		StackTemplateID:   traits.StackTemplateID("stack_template_123"),
+		Operation:         traits.OperationPlan,
+		SelectedRef:       "main",
+		ResolvedCommitSHA: "abc123",
+		WorkspaceName:     "mtp_acme_prod_vpc_a13f9c",
+		BackendType:       "s3",
+		BackendConfigHash: "backend_hash_123",
+		Status:            traits.TemplateRunCompleted,
+		TriggerActor:      traits.UserID("user_123"),
+		StartedAt:         startedAt,
+		CompletedAt:       completedAt,
+		ErrorSummary:      "previous error summary",
+	})
+
+	run, err := store.GetTemplateRun(ctx, traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"))
+	if err != nil {
+		t.Fatalf("GetTemplateRun returned error: %v", err)
+	}
+
+	want := traits.TemplateRun{
+		ID:                traits.TemplateRunID("run_123"),
+		TenantID:          traits.TenantID("tenant_123"),
+		StackTemplateID:   traits.StackTemplateID("stack_template_123"),
+		Operation:         traits.OperationPlan,
+		SelectedRef:       "main",
+		ResolvedCommitSHA: "abc123",
+		WorkspaceName:     "mtp_acme_prod_vpc_a13f9c",
+		BackendType:       "s3",
+		BackendConfigHash: "backend_hash_123",
+		Status:            traits.TemplateRunCompleted,
+		TriggerActor:      traits.UserID("user_123"),
+		StartedAt:         startedAt,
+		CompletedAt:       completedAt,
+		ErrorSummary:      "previous error summary",
+	}
+	if run != want {
+		t.Fatalf("run = %#v, want %#v", run, want)
+	}
+}
+
+func TestGetTemplateRunReturnsNotFoundForOtherTenant(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_123"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          traits.TemplateRunQueued,
+		TriggerActor:    traits.UserID("user_123"),
+	})
+
+	_, err := store.GetTemplateRun(ctx, traits.TenantID("tenant_456"), traits.TemplateRunID("run_123"))
+	if !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("error = %v, want app.ErrNotFound", err)
+	}
+}
+
+func TestRecordTemplateRunLogUpsertsTenantScopedMetadata(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	uploadedAt := time.Date(2026, 7, 6, 10, 15, 0, 123456000, time.UTC)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_123"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          traits.TemplateRunQueued,
+		TriggerActor:    traits.UserID("user_123"),
+	})
+
+	log := traits.TemplateRunLog{
+		TenantID:    traits.TenantID("tenant_123"),
+		RunID:       traits.TemplateRunID("run_123"),
+		Phase:       "plan",
+		ObjectKey:   "tenants/tenant_123/runs/run_123/logs/plan.log",
+		ContentType: "text/plain; charset=utf-8",
+		SizeBytes:   18,
+		UploadedAt:  uploadedAt,
+	}
+	if err := store.RecordTemplateRunLog(ctx, log); err != nil {
+		t.Fatalf("RecordTemplateRunLog returned error: %v", err)
+	}
+
+	log.SizeBytes = 24
+	log.UploadedAt = uploadedAt.Add(time.Minute)
+	if err := store.RecordTemplateRunLog(ctx, log); err != nil {
+		t.Fatalf("RecordTemplateRunLog upsert returned error: %v", err)
+	}
+
+	got, err := store.GetTemplateRunLog(ctx, traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"), "plan")
+	if err != nil {
+		t.Fatalf("GetTemplateRunLog returned error: %v", err)
+	}
+
+	if got != log {
+		t.Fatalf("log = %#v, want %#v", got, log)
+	}
+}
+
+func TestListTemplateRunLogsReturnsTenantScopedMetadataOrderedByPhase(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	uploadedAt := time.Date(2026, 7, 6, 10, 15, 0, 123456000, time.UTC)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_123"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          traits.TemplateRunQueued,
+		TriggerActor:    traits.UserID("user_123"),
+	})
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_456"),
+		TenantID:        traits.TenantID("tenant_456"),
+		StackTemplateID: traits.StackTemplateID("stack_template_456"),
+		Operation:       traits.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_other_prod_vpc_f47ac",
+		Status:          traits.TemplateRunQueued,
+		TriggerActor:    traits.UserID("user_456"),
+	})
+	for _, log := range []traits.TemplateRunLog{
+		{
+			TenantID:    traits.TenantID("tenant_123"),
+			RunID:       traits.TemplateRunID("run_123"),
+			Phase:       "plan",
+			ObjectKey:   "tenants/tenant_123/runs/run_123/logs/plan.log",
+			ContentType: "text/plain; charset=utf-8",
+			SizeBytes:   18,
+			UploadedAt:  uploadedAt,
+		},
+		{
+			TenantID:    traits.TenantID("tenant_123"),
+			RunID:       traits.TemplateRunID("run_123"),
+			Phase:       "init",
+			ObjectKey:   "tenants/tenant_123/runs/run_123/logs/init.log",
+			ContentType: "text/plain; charset=utf-8",
+			SizeBytes:   12,
+			UploadedAt:  uploadedAt.Add(-time.Minute),
+		},
+		{
+			TenantID:    traits.TenantID("tenant_456"),
+			RunID:       traits.TemplateRunID("run_456"),
+			Phase:       "plan",
+			ObjectKey:   "tenants/tenant_456/runs/run_456/logs/plan.log",
+			ContentType: "text/plain; charset=utf-8",
+			SizeBytes:   17,
+			UploadedAt:  uploadedAt,
+		},
+	} {
+		if err := store.RecordTemplateRunLog(ctx, log); err != nil {
+			t.Fatalf("RecordTemplateRunLog returned error: %v", err)
+		}
+	}
+
+	logs, err := store.ListTemplateRunLogs(ctx, traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"))
+	if err != nil {
+		t.Fatalf("ListTemplateRunLogs returned error: %v", err)
+	}
+
+	if len(logs) != 2 {
+		t.Fatalf("len(logs) = %d, want 2", len(logs))
+	}
+	if logs[0].Phase != "init" || logs[1].Phase != "plan" {
+		t.Fatalf("phases = %q, %q; want init, plan", logs[0].Phase, logs[1].Phase)
+	}
+}
+
+func TestRecordTemplateRunLogReturnsNotFoundForOtherTenant(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_123"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          traits.TemplateRunQueued,
+		TriggerActor:    traits.UserID("user_123"),
+	})
+
+	err := store.RecordTemplateRunLog(ctx, traits.TemplateRunLog{
+		TenantID:    traits.TenantID("tenant_456"),
+		RunID:       traits.TemplateRunID("run_123"),
+		Phase:       "plan",
+		ObjectKey:   "tenants/tenant_456/runs/run_123/logs/plan.log",
+		ContentType: "text/plain; charset=utf-8",
+		SizeBytes:   18,
+		UploadedAt:  time.Date(2026, 7, 6, 10, 15, 0, 0, time.UTC),
+	})
+	if !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("error = %v, want app.ErrNotFound", err)
 	}
 }
 

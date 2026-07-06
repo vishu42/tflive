@@ -103,6 +103,180 @@ func (store *Store) CreateTemplateRun(ctx context.Context, run traits.TemplateRu
 	return nil
 }
 
+func (store *Store) GetTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID) (traits.TemplateRun, error) {
+	var run traits.TemplateRun
+	var startedAt sql.NullTime
+	var completedAt sql.NullTime
+
+	err := store.pool.QueryRow(ctx, `
+		select
+			id,
+			tenant_id,
+			stack_template_id,
+			operation,
+			selected_ref,
+			resolved_commit_sha,
+			workspace_name,
+			backend_type,
+			backend_config_hash,
+			status,
+			trigger_actor,
+			started_at,
+			completed_at,
+			error_summary
+		from template_runs
+		where tenant_id = $1
+			and id = $2
+	`, tenantID, runID).Scan(
+		&run.ID,
+		&run.TenantID,
+		&run.StackTemplateID,
+		&run.Operation,
+		&run.SelectedRef,
+		&run.ResolvedCommitSHA,
+		&run.WorkspaceName,
+		&run.BackendType,
+		&run.BackendConfigHash,
+		&run.Status,
+		&run.TriggerActor,
+		&startedAt,
+		&completedAt,
+		&run.ErrorSummary,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return traits.TemplateRun{}, app.ErrNotFound
+	}
+	if err != nil {
+		return traits.TemplateRun{}, fmt.Errorf("get template run: %w", err)
+	}
+
+	if startedAt.Valid {
+		run.StartedAt = startedAt.Time
+	}
+	if completedAt.Valid {
+		run.CompletedAt = completedAt.Time
+	}
+
+	return run, nil
+}
+
+func (store *Store) RecordTemplateRunLog(ctx context.Context, log traits.TemplateRunLog) error {
+	result, err := store.pool.Exec(ctx, `
+		insert into template_run_logs (
+			tenant_id,
+			run_id,
+			phase,
+			object_key,
+			content_type,
+			size_bytes,
+			uploaded_at
+		)
+		select $1, $2, $3, $4, $5, $6, $7
+		where exists (
+			select 1
+			from template_runs
+			where tenant_id = $1
+				and id = $2
+		)
+		on conflict (tenant_id, run_id, phase) do update set
+			object_key = excluded.object_key,
+			content_type = excluded.content_type,
+			size_bytes = excluded.size_bytes,
+			uploaded_at = excluded.uploaded_at
+	`,
+		log.TenantID,
+		log.RunID,
+		log.Phase,
+		log.ObjectKey,
+		log.ContentType,
+		log.SizeBytes,
+		log.UploadedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("record template run log: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return app.ErrNotFound
+	}
+	return nil
+}
+
+func (store *Store) GetTemplateRunLog(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, phase string) (traits.TemplateRunLog, error) {
+	var log traits.TemplateRunLog
+	err := store.pool.QueryRow(ctx, `
+		select
+			tenant_id,
+			run_id,
+			phase,
+			object_key,
+			content_type,
+			size_bytes,
+			uploaded_at
+		from template_run_logs
+		where tenant_id = $1
+			and run_id = $2
+			and phase = $3
+	`, tenantID, runID, phase).Scan(
+		&log.TenantID,
+		&log.RunID,
+		&log.Phase,
+		&log.ObjectKey,
+		&log.ContentType,
+		&log.SizeBytes,
+		&log.UploadedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return traits.TemplateRunLog{}, app.ErrNotFound
+	}
+	if err != nil {
+		return traits.TemplateRunLog{}, fmt.Errorf("get template run log: %w", err)
+	}
+	return log, nil
+}
+
+func (store *Store) ListTemplateRunLogs(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID) ([]traits.TemplateRunLog, error) {
+	rows, err := store.pool.Query(ctx, `
+		select
+			tenant_id,
+			run_id,
+			phase,
+			object_key,
+			content_type,
+			size_bytes,
+			uploaded_at
+		from template_run_logs
+		where tenant_id = $1
+			and run_id = $2
+		order by phase
+	`, tenantID, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list template run logs: %w", err)
+	}
+	defer rows.Close()
+
+	var logs []traits.TemplateRunLog
+	for rows.Next() {
+		var log traits.TemplateRunLog
+		if err := rows.Scan(
+			&log.TenantID,
+			&log.RunID,
+			&log.Phase,
+			&log.ObjectKey,
+			&log.ContentType,
+			&log.SizeBytes,
+			&log.UploadedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan template run log: %w", err)
+		}
+		logs = append(logs, log)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate template run logs: %w", err)
+	}
+
+	return logs, nil
+}
+
 func (store *Store) ApproveTemplateRun(ctx context.Context, approval traits.TemplateRunApproval) error {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
