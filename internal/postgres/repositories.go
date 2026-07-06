@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -11,6 +12,265 @@ import (
 	"github.com/vishu42/megagega/internal/app"
 	"github.com/vishu42/megagega/internal/traits"
 )
+
+func (store *Store) CreateTemplateRegistration(ctx context.Context, registration traits.TemplateRegistration) error {
+	_, err := store.pool.Exec(ctx, `
+		insert into template_registrations (
+			id,
+			tenant_id,
+			repo_owner,
+			repo_name,
+			source_ref,
+			root_path,
+			status,
+			template_id,
+			resolved_commit_sha,
+			requested_by,
+			requested_at,
+			completed_at,
+			error_summary
+		) values (
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11, $12, $13
+		)
+	`,
+		registration.ID,
+		registration.TenantID,
+		registration.RepoOwner,
+		registration.RepoName,
+		registration.SourceRef,
+		registration.RootPath,
+		registration.Status,
+		registration.TemplateID,
+		registration.ResolvedCommitSHA,
+		registration.RequestedBy,
+		registration.RequestedAt,
+		nullTime(registration.CompletedAt),
+		registration.ErrorSummary,
+	)
+	if err != nil {
+		return fmt.Errorf("create template registration: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) GetTemplateRegistration(ctx context.Context, tenantID traits.TenantID, id traits.TemplateRegistrationID) (traits.TemplateRegistration, error) {
+	var registration traits.TemplateRegistration
+	var completedAt sql.NullTime
+	err := store.pool.QueryRow(ctx, `
+		select
+			id,
+			tenant_id,
+			repo_owner,
+			repo_name,
+			source_ref,
+			root_path,
+			status,
+			template_id,
+			resolved_commit_sha,
+			requested_by,
+			requested_at,
+			completed_at,
+			error_summary
+		from template_registrations
+		where tenant_id = $1
+			and id = $2
+	`, tenantID, id).Scan(
+		&registration.ID,
+		&registration.TenantID,
+		&registration.RepoOwner,
+		&registration.RepoName,
+		&registration.SourceRef,
+		&registration.RootPath,
+		&registration.Status,
+		&registration.TemplateID,
+		&registration.ResolvedCommitSHA,
+		&registration.RequestedBy,
+		&registration.RequestedAt,
+		&completedAt,
+		&registration.ErrorSummary,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return traits.TemplateRegistration{}, app.ErrNotFound
+	}
+	if err != nil {
+		return traits.TemplateRegistration{}, fmt.Errorf("get template registration: %w", err)
+	}
+	if completedAt.Valid {
+		registration.CompletedAt = completedAt.Time
+	}
+	return registration, nil
+}
+
+func (store *Store) RecordTemplateRegistrationStatus(ctx context.Context, input traits.TemplateRegistrationStatusActivityInput) error {
+	var err error
+	if terminalTemplateRegistrationStatus(input.Status) {
+		_, err = store.pool.Exec(ctx, `
+			update template_registrations
+			set
+				status = $1,
+				template_id = $2,
+				resolved_commit_sha = $3,
+				error_summary = $4,
+				completed_at = coalesce(completed_at, now())
+			where tenant_id = $5
+				and id = $6
+		`,
+			input.Status,
+			input.TemplateID,
+			input.ResolvedCommitSHA,
+			input.ErrorSummary,
+			input.TenantID,
+			input.RegistrationID,
+		)
+	} else {
+		_, err = store.pool.Exec(ctx, `
+			update template_registrations
+			set
+				status = $1,
+				template_id = $2,
+				resolved_commit_sha = $3,
+				error_summary = $4
+			where tenant_id = $5
+				and id = $6
+		`,
+			input.Status,
+			input.TemplateID,
+			input.ResolvedCommitSHA,
+			input.ErrorSummary,
+			input.TenantID,
+			input.RegistrationID,
+		)
+	}
+	if err != nil {
+		return fmt.Errorf("record template registration status: %w", err)
+	}
+
+	registration, err := store.GetTemplateRegistration(ctx, input.TenantID, input.RegistrationID)
+	if err != nil {
+		return err
+	}
+	if registration.ID == "" {
+		return app.ErrNotFound
+	}
+	return nil
+}
+
+func (store *Store) UpsertTemplateWithVariables(ctx context.Context, template traits.Template, variables []traits.TemplateVariable) (traits.Template, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return traits.Template{}, fmt.Errorf("begin upsert template: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	tagsJSON, err := json.Marshal(template.Tags)
+	if err != nil {
+		return traits.Template{}, fmt.Errorf("marshal template tags: %w", err)
+	}
+	if tagsJSON == nil {
+		tagsJSON = []byte("[]")
+	}
+
+	inserted, insertedNew, err := insertTemplate(ctx, tx, template, tagsJSON)
+	if err != nil {
+		return traits.Template{}, err
+	}
+	if !insertedNew {
+		if err := tx.Commit(ctx); err != nil {
+			return traits.Template{}, fmt.Errorf("commit reused template: %w", err)
+		}
+		return inserted, nil
+	}
+
+	for _, variable := range variables {
+		if _, err := tx.Exec(ctx, `
+			insert into template_variables (
+				template_id,
+				name,
+				type_expression,
+				description,
+				required,
+				has_default,
+				sensitive,
+				has_validation
+			) values ($1, $2, $3, $4, $5, $6, $7, $8)
+		`,
+			inserted.ID,
+			variable.Name,
+			variable.TypeExpression,
+			variable.Description,
+			variable.Required,
+			variable.HasDefault,
+			variable.Sensitive,
+			variable.HasValidation,
+		); err != nil {
+			return traits.Template{}, fmt.Errorf("insert template variable %q: %w", variable.Name, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return traits.Template{}, fmt.Errorf("commit upsert template: %w", err)
+	}
+	return inserted, nil
+}
+
+func (store *Store) GetTemplateVariables(ctx context.Context, tenantID traits.TenantID, templateID traits.TemplateID) ([]traits.TemplateVariable, error) {
+	var exists bool
+	if err := store.pool.QueryRow(ctx, `
+		select exists (
+			select 1
+			from templates
+			where tenant_id = $1
+				and id = $2
+		)
+	`, tenantID, templateID).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("check template existence: %w", err)
+	}
+	if !exists {
+		return nil, app.ErrNotFound
+	}
+
+	rows, err := store.pool.Query(ctx, `
+		select
+			template_id,
+			name,
+			type_expression,
+			description,
+			required,
+			has_default,
+			sensitive,
+			has_validation
+		from template_variables
+		where template_id = $1
+		order by name
+	`, templateID)
+	if err != nil {
+		return nil, fmt.Errorf("get template variables: %w", err)
+	}
+	defer rows.Close()
+
+	var variables []traits.TemplateVariable
+	for rows.Next() {
+		var variable traits.TemplateVariable
+		if err := rows.Scan(
+			&variable.TemplateID,
+			&variable.Name,
+			&variable.TypeExpression,
+			&variable.Description,
+			&variable.Required,
+			&variable.HasDefault,
+			&variable.Sensitive,
+			&variable.HasValidation,
+		); err != nil {
+			return nil, fmt.Errorf("scan template variable: %w", err)
+		}
+		variables = append(variables, variable)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate template variables: %w", err)
+	}
+	return variables, nil
+}
 
 func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error) {
 	var stackTemplate traits.StackTemplate
@@ -408,6 +668,149 @@ func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.Te
 	}
 
 	return nil
+}
+
+func insertTemplate(ctx context.Context, tx pgx.Tx, template traits.Template, tagsJSON []byte) (traits.Template, bool, error) {
+	var inserted traits.Template
+	var insertedTagsJSON []byte
+	err := tx.QueryRow(ctx, `
+		insert into templates (
+			id,
+			tenant_id,
+			repo_owner,
+			repo_name,
+			source_ref,
+			resolved_commit_sha,
+			root_path,
+			name,
+			description,
+			tags_json,
+			status,
+			created_at
+		) values (
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10::jsonb, $11, coalesce($12::timestamptz, now())
+		)
+		on conflict (tenant_id, repo_owner, repo_name, root_path, resolved_commit_sha) do nothing
+		returning
+			id,
+			tenant_id,
+			repo_owner,
+			repo_name,
+			source_ref,
+			resolved_commit_sha,
+			root_path,
+			name,
+			description,
+			tags_json,
+			status,
+			created_at
+	`,
+		template.ID,
+		template.TenantID,
+		template.RepoOwner,
+		template.RepoName,
+		template.SourceRef,
+		template.ResolvedCommitSHA,
+		template.RootPath,
+		template.Name,
+		template.Description,
+		tagsJSON,
+		template.Status,
+		nullTime(template.CreatedAt),
+	).Scan(
+		&inserted.ID,
+		&inserted.TenantID,
+		&inserted.RepoOwner,
+		&inserted.RepoName,
+		&inserted.SourceRef,
+		&inserted.ResolvedCommitSHA,
+		&inserted.RootPath,
+		&inserted.Name,
+		&inserted.Description,
+		&insertedTagsJSON,
+		&inserted.Status,
+		&inserted.CreatedAt,
+	)
+	if err == nil {
+		if err := json.Unmarshal(insertedTagsJSON, &inserted.Tags); err != nil {
+			return traits.Template{}, false, fmt.Errorf("unmarshal inserted template tags: %w", err)
+		}
+		return inserted, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return traits.Template{}, false, fmt.Errorf("insert template: %w", err)
+	}
+
+	selected, err := selectTemplateByIdentity(ctx, tx, template)
+	if err != nil {
+		return traits.Template{}, false, err
+	}
+	return selected, false, nil
+}
+
+func selectTemplateByIdentity(ctx context.Context, tx pgx.Tx, template traits.Template) (traits.Template, error) {
+	var selected traits.Template
+	var tagsJSON []byte
+	err := tx.QueryRow(ctx, `
+		select
+			id,
+			tenant_id,
+			repo_owner,
+			repo_name,
+			source_ref,
+			resolved_commit_sha,
+			root_path,
+			name,
+			description,
+			tags_json,
+			status,
+			created_at
+		from templates
+		where tenant_id = $1
+			and repo_owner = $2
+			and repo_name = $3
+			and root_path = $4
+			and resolved_commit_sha = $5
+	`,
+		template.TenantID,
+		template.RepoOwner,
+		template.RepoName,
+		template.RootPath,
+		template.ResolvedCommitSHA,
+	).Scan(
+		&selected.ID,
+		&selected.TenantID,
+		&selected.RepoOwner,
+		&selected.RepoName,
+		&selected.SourceRef,
+		&selected.ResolvedCommitSHA,
+		&selected.RootPath,
+		&selected.Name,
+		&selected.Description,
+		&tagsJSON,
+		&selected.Status,
+		&selected.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return traits.Template{}, app.ErrNotFound
+	}
+	if err != nil {
+		return traits.Template{}, fmt.Errorf("select template by identity: %w", err)
+	}
+	if err := json.Unmarshal(tagsJSON, &selected.Tags); err != nil {
+		return traits.Template{}, fmt.Errorf("unmarshal selected template tags: %w", err)
+	}
+	return selected, nil
+}
+
+func terminalTemplateRegistrationStatus(status traits.TemplateRegistrationStatus) bool {
+	switch status {
+	case traits.TemplateRegistrationCompleted, traits.TemplateRegistrationInvalid, traits.TemplateRegistrationFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 func nullTime(value time.Time) any {

@@ -82,6 +82,12 @@ func TestRunWiresTemporalDispatcher(t *testing.T) {
 	if deps.service.TemplateRuns != deps.store {
 		t.Fatal("service TemplateRuns is not the store")
 	}
+	if deps.service.TemplateRegistrations != deps.store {
+		t.Fatal("service TemplateRegistrations is not the store")
+	}
+	if deps.service.Templates != deps.store {
+		t.Fatal("service Templates is not the store")
+	}
 	if deps.service.TemplateRunLogMetadata != deps.store {
 		t.Fatal("service TemplateRunLogMetadata is not the store")
 	}
@@ -414,6 +420,26 @@ func (recordingStore) RequestTemplateRunCancellation(context.Context, traits.Tem
 	return nil
 }
 
+func (recordingStore) CreateTemplateRegistration(context.Context, traits.TemplateRegistration) error {
+	return nil
+}
+
+func (recordingStore) GetTemplateRegistration(context.Context, traits.TenantID, traits.TemplateRegistrationID) (traits.TemplateRegistration, error) {
+	return traits.TemplateRegistration{}, nil
+}
+
+func (recordingStore) RecordTemplateRegistrationStatus(context.Context, traits.TemplateRegistrationStatusActivityInput) error {
+	return nil
+}
+
+func (recordingStore) UpsertTemplateWithVariables(context.Context, traits.Template, []traits.TemplateVariable) (traits.Template, error) {
+	return traits.Template{}, nil
+}
+
+func (recordingStore) GetTemplateVariables(context.Context, traits.TenantID, traits.TemplateID) ([]traits.TemplateVariable, error) {
+	return nil, nil
+}
+
 type recordingTemplateRunLogReader struct{}
 
 func (recordingTemplateRunLogReader) ReadTemplateRunLog(context.Context, traits.TemplateRunLog) ([]byte, error) {
@@ -423,6 +449,10 @@ func (recordingTemplateRunLogReader) ReadTemplateRunLog(context.Context, traits.
 type recordingWorkflowDispatcher struct{}
 
 func (recordingWorkflowDispatcher) StartTemplateRun(context.Context, traits.TemplateRunWorkflowInput) error {
+	return nil
+}
+
+func (recordingWorkflowDispatcher) StartTemplateSync(context.Context, traits.TemplateSyncWorkflowInput) error {
 	return nil
 }
 

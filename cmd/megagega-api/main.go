@@ -28,6 +28,8 @@ type postgresPool interface {
 type appRepositories interface {
 	app.StackTemplateRepository
 	app.TemplateRunRepository
+	app.TemplateRegistrationRepository
+	app.TemplateRepository
 	app.TemplateRunLogRepository
 }
 
@@ -131,6 +133,8 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 	service, err := deps.newService(app.Service{
 		StackTemplates:         store,
 		TemplateRuns:           store,
+		TemplateRegistrations:  store,
+		Templates:              store,
 		TemplateRunLogs:        logReader,
 		TemplateRunLogMetadata: store,
 		Workflows:              dispatcher,

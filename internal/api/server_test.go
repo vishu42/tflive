@@ -122,6 +122,166 @@ func TestStartTemplateRunMapsInvalidCommandToBadRequest(t *testing.T) {
 	}
 }
 
+func TestRegisterTemplateCallsService(t *testing.T) {
+	t.Parallel()
+
+	requestedAt := time.Date(2026, 7, 6, 11, 30, 0, 0, time.UTC)
+	deps := newAPITestDependencies()
+	deps.registrationID = traits.TemplateRegistrationID("template_registration_123")
+	deps.now = requestedAt
+	server := NewServer(deps.service())
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/templates",
+		strings.NewReader(`{"repo_owner":"acme","repo_name":"infra-templates","source_ref":"v0.0.1","root_path":"modules/vpc","requested_by":"user_123"}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusAccepted, response.Body.String())
+	}
+	if deps.registrations.created.TenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant id = %q", deps.registrations.created.TenantID)
+	}
+	if deps.registrations.created.RepoOwner != "acme" {
+		t.Fatalf("repo owner = %q", deps.registrations.created.RepoOwner)
+	}
+	if deps.registrations.created.SourceRef != "v0.0.1" {
+		t.Fatalf("source ref = %q", deps.registrations.created.SourceRef)
+	}
+	if deps.workflows.syncInput.RegistrationID != traits.TemplateRegistrationID("template_registration_123") {
+		t.Fatalf("workflow registration id = %q", deps.workflows.syncInput.RegistrationID)
+	}
+
+	var body traits.TemplateRegistration
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.ID != traits.TemplateRegistrationID("template_registration_123") {
+		t.Fatalf("id = %q, want template_registration_123", body.ID)
+	}
+	if body.Status != traits.TemplateRegistrationPending {
+		t.Fatalf("status = %q, want pending", body.Status)
+	}
+	if !body.RequestedAt.Equal(requestedAt) {
+		t.Fatalf("requested_at = %v, want %v", body.RequestedAt, requestedAt)
+	}
+}
+
+func TestRegisterTemplateRejectsInvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(newAPITestDependencies().service())
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/templates",
+		strings.NewReader(`{"repo_owner":`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
+func TestRegisterTemplateMapsInvalidCommandToBadRequest(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(newAPITestDependencies().service())
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/templates",
+		strings.NewReader(`{"repo_owner":"acme","repo_name":"infra-templates","root_path":"modules/vpc","requested_by":"user_123"}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
+func TestGetTemplateRegistrationReturnsRegistration(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.registrations.registration = traits.TemplateRegistration{
+		ID:       traits.TemplateRegistrationID("template_registration_123"),
+		TenantID: traits.TenantID("tenant_123"),
+		Status:   traits.TemplateRegistrationCompleted,
+	}
+	server := NewServer(deps.service())
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/tenants/tenant_123/template-registrations/template_registration_123",
+		nil,
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if deps.registrations.gotGetTenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant id = %q, want tenant_123", deps.registrations.gotGetTenantID)
+	}
+
+	var body traits.TemplateRegistration
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.ID != traits.TemplateRegistrationID("template_registration_123") {
+		t.Fatalf("id = %q, want template_registration_123", body.ID)
+	}
+}
+
+func TestGetTemplateVariablesReturnsVariables(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.templates.variables = []traits.TemplateVariable{
+		{
+			TemplateID:     traits.TemplateID("template_123"),
+			Name:           "region",
+			TypeExpression: "string",
+			Required:       true,
+		},
+	}
+	server := NewServer(deps.service())
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/tenants/tenant_123/templates/template_123/variables",
+		nil,
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if deps.templates.gotVariablesTemplateID != traits.TemplateID("template_123") {
+		t.Fatalf("template id = %q, want template_123", deps.templates.gotVariablesTemplateID)
+	}
+
+	var body []traits.TemplateVariable
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body) != 1 {
+		t.Fatalf("len(body) = %d, want 1", len(body))
+	}
+	if body[0].Name != "region" {
+		t.Fatalf("variable name = %q, want region", body[0].Name)
+	}
+}
+
 func TestGetTemplateRunReturnsRun(t *testing.T) {
 	t.Parallel()
 
@@ -481,17 +641,21 @@ func TestUnknownRouteReturnsNotFound(t *testing.T) {
 type apiTestDependencies struct {
 	stackTemplates recordingStackTemplateRepository
 	templateRuns   recordingTemplateRunRepository
+	registrations  recordingTemplateRegistrationRepository
+	templates      recordingTemplateRepository
 	logs           recordingTemplateRunLogReader
 	logMetadata    recordingTemplateRunLogRepository
 	workflows      recordingWorkflowDispatcher
 	runID          traits.TemplateRunID
+	registrationID traits.TemplateRegistrationID
 	now            time.Time
 }
 
 func newAPITestDependencies() *apiTestDependencies {
 	return &apiTestDependencies{
-		runID: traits.TemplateRunID("run_123"),
-		now:   time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC),
+		runID:          traits.TemplateRunID("run_123"),
+		registrationID: traits.TemplateRegistrationID("template_registration_123"),
+		now:            time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -499,10 +663,13 @@ func (deps *apiTestDependencies) service() *app.Service {
 	return app.NewService(app.Service{
 		StackTemplates:         &deps.stackTemplates,
 		TemplateRuns:           &deps.templateRuns,
+		TemplateRegistrations:  &deps.registrations,
+		Templates:              &deps.templates,
 		TemplateRunLogs:        &deps.logs,
 		TemplateRunLogMetadata: &deps.logMetadata,
 		Workflows:              &deps.workflows,
 		RunIDs:                 fixedTemplateRunIDGenerator{runID: deps.runID},
+		RegistrationIDs:        fixedTemplateRegistrationIDGenerator{id: deps.registrationID},
 		Clock:                  fixedClock{now: deps.now},
 	})
 }
@@ -610,14 +777,88 @@ func (repository *recordingTemplateRunLogRepository) ListTemplateRunLogs(_ conte
 	return repository.logs, nil
 }
 
+type recordingTemplateRegistrationRepository struct {
+	created        traits.TemplateRegistration
+	registration   traits.TemplateRegistration
+	gotGetTenantID traits.TenantID
+	gotGetID       traits.TemplateRegistrationID
+	createErr      error
+	getErr         error
+	statusInput    traits.TemplateRegistrationStatusActivityInput
+	statusErr      error
+}
+
+func (repository *recordingTemplateRegistrationRepository) CreateTemplateRegistration(_ context.Context, registration traits.TemplateRegistration) error {
+	if repository.createErr != nil {
+		return repository.createErr
+	}
+	repository.created = registration
+	return nil
+}
+
+func (repository *recordingTemplateRegistrationRepository) GetTemplateRegistration(_ context.Context, tenantID traits.TenantID, id traits.TemplateRegistrationID) (traits.TemplateRegistration, error) {
+	repository.gotGetTenantID = tenantID
+	repository.gotGetID = id
+	if repository.getErr != nil {
+		return traits.TemplateRegistration{}, repository.getErr
+	}
+	return repository.registration, nil
+}
+
+func (repository *recordingTemplateRegistrationRepository) RecordTemplateRegistrationStatus(_ context.Context, input traits.TemplateRegistrationStatusActivityInput) error {
+	if repository.statusErr != nil {
+		return repository.statusErr
+	}
+	repository.statusInput = input
+	return nil
+}
+
+type recordingTemplateRepository struct {
+	template               traits.Template
+	variables              []traits.TemplateVariable
+	gotTemplate            traits.Template
+	gotVariables           []traits.TemplateVariable
+	gotVariablesTenantID   traits.TenantID
+	gotVariablesTemplateID traits.TemplateID
+	upsertErr              error
+	variablesErr           error
+}
+
+func (repository *recordingTemplateRepository) UpsertTemplateWithVariables(_ context.Context, template traits.Template, variables []traits.TemplateVariable) (traits.Template, error) {
+	repository.gotTemplate = template
+	repository.gotVariables = variables
+	if repository.upsertErr != nil {
+		return traits.Template{}, repository.upsertErr
+	}
+	if repository.template.ID != "" {
+		return repository.template, nil
+	}
+	return template, nil
+}
+
+func (repository *recordingTemplateRepository) GetTemplateVariables(_ context.Context, tenantID traits.TenantID, templateID traits.TemplateID) ([]traits.TemplateVariable, error) {
+	repository.gotVariablesTenantID = tenantID
+	repository.gotVariablesTemplateID = templateID
+	if repository.variablesErr != nil {
+		return nil, repository.variablesErr
+	}
+	return repository.variables, nil
+}
+
 type recordingWorkflowDispatcher struct {
 	input         traits.TemplateRunWorkflowInput
+	syncInput     traits.TemplateSyncWorkflowInput
 	approvalRunID traits.TemplateRunID
 	cancelRunID   traits.TemplateRunID
 }
 
 func (dispatcher *recordingWorkflowDispatcher) StartTemplateRun(_ context.Context, input traits.TemplateRunWorkflowInput) error {
 	dispatcher.input = input
+	return nil
+}
+
+func (dispatcher *recordingWorkflowDispatcher) StartTemplateSync(_ context.Context, input traits.TemplateSyncWorkflowInput) error {
+	dispatcher.syncInput = input
 	return nil
 }
 
@@ -637,6 +878,14 @@ type fixedTemplateRunIDGenerator struct {
 
 func (generator fixedTemplateRunIDGenerator) NewTemplateRunID() traits.TemplateRunID {
 	return generator.runID
+}
+
+type fixedTemplateRegistrationIDGenerator struct {
+	id traits.TemplateRegistrationID
+}
+
+func (generator fixedTemplateRegistrationIDGenerator) NewTemplateRegistrationID() traits.TemplateRegistrationID {
+	return generator.id
 }
 
 type fixedClock struct {

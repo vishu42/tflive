@@ -49,6 +49,23 @@ func (dispatcher *Dispatcher) StartTemplateRun(ctx context.Context, input traits
 	return nil
 }
 
+// StartTemplateSync dispatches one TemplateSyncWorkflow execution to Temporal.
+func (dispatcher *Dispatcher) StartTemplateSync(ctx context.Context, input traits.TemplateSyncWorkflowInput) error {
+	_, err := dispatcher.client.ExecuteWorkflow(
+		ctx,
+		client.StartWorkflowOptions{
+			ID:        templateSyncWorkflowID(input.TenantID, input.RegistrationID),
+			TaskQueue: dispatcher.taskQueue,
+		},
+		traits.TemplateSyncWorkflowName,
+		input)
+	if err != nil {
+		return fmt.Errorf("start template sync workflow: %w", err)
+	}
+
+	return nil
+}
+
 func (dispatcher *Dispatcher) ApproveTemplateRun(
 	ctx context.Context,
 	tenantID traits.TenantID,
@@ -89,4 +106,8 @@ func (dispatcher *Dispatcher) CancelTemplateRun(
 
 func templateRunWorkflowID(tenantID traits.TenantID, runID traits.TemplateRunID) string {
 	return fmt.Sprintf("template-run/%s/%s", tenantID, runID)
+}
+
+func templateSyncWorkflowID(tenantID traits.TenantID, registrationID traits.TemplateRegistrationID) string {
+	return fmt.Sprintf("template-sync/%s/%s", tenantID, registrationID)
 }

@@ -20,6 +20,9 @@ func NewServer(service *app.Service) *Server {
 		mux:     http.NewServeMux(),
 	}
 	server.mux.HandleFunc("GET /healthz", server.handleHealth)
+	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/templates", server.handleRegisterTemplate)
+	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-registrations/{registration_id}", server.handleGetTemplateRegistration)
+	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/templates/{template_id}/variables", server.handleGetTemplateVariables)
 	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/runs", server.handleStartTemplateRun)
 	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-runs/{run_id}", server.handleGetTemplateRun)
 	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs", server.handleListTemplateRunLogs)
@@ -35,6 +38,55 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 
 func (server *Server) handleHealth(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (server *Server) handleRegisterTemplate(response http.ResponseWriter, request *http.Request) {
+	var body registerTemplateRequest
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	registration, err := server.service.RegisterTemplate(request.Context(), app.RegisterTemplateCommand{
+		TenantID:    traits.TenantID(request.PathValue("tenant_id")),
+		RepoOwner:   body.RepoOwner,
+		RepoName:    body.RepoName,
+		SourceRef:   body.SourceRef,
+		RootPath:    body.RootPath,
+		RequestedBy: traits.UserID(body.RequestedBy),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusAccepted, registration)
+}
+
+func (server *Server) handleGetTemplateRegistration(response http.ResponseWriter, request *http.Request) {
+	registration, err := server.service.GetTemplateRegistration(request.Context(), app.GetTemplateRegistrationCommand{
+		TenantID:       traits.TenantID(request.PathValue("tenant_id")),
+		RegistrationID: traits.TemplateRegistrationID(request.PathValue("registration_id")),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusOK, registration)
+}
+
+func (server *Server) handleGetTemplateVariables(response http.ResponseWriter, request *http.Request) {
+	variables, err := server.service.GetTemplateVariables(request.Context(), app.GetTemplateVariablesCommand{
+		TenantID:   traits.TenantID(request.PathValue("tenant_id")),
+		TemplateID: traits.TemplateID(request.PathValue("template_id")),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusOK, variables)
 }
 
 func (server *Server) handleStartTemplateRun(response http.ResponseWriter, request *http.Request) {
@@ -139,6 +191,14 @@ func (server *Server) handleCancelRun(response http.ResponseWriter, request *htt
 	}
 
 	response.WriteHeader(http.StatusNoContent)
+}
+
+type registerTemplateRequest struct {
+	RepoOwner   string `json:"repo_owner"`
+	RepoName    string `json:"repo_name"`
+	SourceRef   string `json:"source_ref"`
+	RootPath    string `json:"root_path"`
+	RequestedBy string `json:"requested_by"`
 }
 
 type startTemplateRunRequest struct {

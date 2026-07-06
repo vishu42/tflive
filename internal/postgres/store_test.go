@@ -16,8 +16,10 @@ import (
 )
 
 var (
-	_ app.StackTemplateRepository = (*Store)(nil)
-	_ app.TemplateRunRepository   = (*Store)(nil)
+	_ app.StackTemplateRepository        = (*Store)(nil)
+	_ app.TemplateRunRepository          = (*Store)(nil)
+	_ app.TemplateRegistrationRepository = (*Store)(nil)
+	_ app.TemplateRepository             = (*Store)(nil)
 	_ interface {
 		RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error
 	} = (*Store)(nil)
@@ -35,7 +37,16 @@ func TestMigrateAppliesSchema(t *testing.T) {
 		t.Fatalf("Migrate returned error: %v", err)
 	}
 
-	for _, table := range []string{"schema_migrations", "stack_templates", "template_runs", "template_run_approvals", "template_run_logs"} {
+	for _, table := range []string{
+		"schema_migrations",
+		"stack_templates",
+		"template_runs",
+		"template_run_approvals",
+		"template_run_logs",
+		"templates",
+		"template_registrations",
+		"template_variables",
+	} {
 		table := table
 		t.Run(table, func(t *testing.T) {
 			t.Parallel()
@@ -56,6 +67,198 @@ func TestMigrateAppliesSchema(t *testing.T) {
 				t.Fatalf("expected table %q to exist", table)
 			}
 		})
+	}
+}
+
+func TestCreateAndGetTemplateRegistration(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	requestedAt := time.Date(2026, 7, 6, 11, 30, 0, 123456000, time.UTC)
+
+	registration := traits.TemplateRegistration{
+		ID:          traits.TemplateRegistrationID("template_registration_123"),
+		TenantID:    traits.TenantID("tenant_123"),
+		RepoOwner:   "acme",
+		RepoName:    "infra-templates",
+		SourceRef:   "v0.0.1",
+		RootPath:    "modules/vpc",
+		Status:      traits.TemplateRegistrationPending,
+		RequestedBy: traits.UserID("user_123"),
+		RequestedAt: requestedAt,
+	}
+
+	if err := store.CreateTemplateRegistration(ctx, registration); err != nil {
+		t.Fatalf("CreateTemplateRegistration returned error: %v", err)
+	}
+
+	got, err := store.GetTemplateRegistration(ctx, traits.TenantID("tenant_123"), traits.TemplateRegistrationID("template_registration_123"))
+	if err != nil {
+		t.Fatalf("GetTemplateRegistration returned error: %v", err)
+	}
+
+	if got != registration {
+		t.Fatalf("registration = %#v, want %#v", got, registration)
+	}
+
+	_, err = store.GetTemplateRegistration(ctx, traits.TenantID("tenant_456"), traits.TemplateRegistrationID("template_registration_123"))
+	if !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("other tenant error = %v, want app.ErrNotFound", err)
+	}
+}
+
+func TestRecordTemplateRegistrationStatusUpdatesTerminalFields(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	registration := traits.TemplateRegistration{
+		ID:          traits.TemplateRegistrationID("template_registration_123"),
+		TenantID:    traits.TenantID("tenant_123"),
+		RepoOwner:   "acme",
+		RepoName:    "infra-templates",
+		SourceRef:   "v0.0.1",
+		RootPath:    "modules/vpc",
+		Status:      traits.TemplateRegistrationPending,
+		RequestedBy: traits.UserID("user_123"),
+		RequestedAt: time.Date(2026, 7, 6, 11, 30, 0, 0, time.UTC),
+	}
+	if err := store.CreateTemplateRegistration(ctx, registration); err != nil {
+		t.Fatalf("CreateTemplateRegistration returned error: %v", err)
+	}
+
+	err := store.RecordTemplateRegistrationStatus(ctx, traits.TemplateRegistrationStatusActivityInput{
+		RegistrationID:    traits.TemplateRegistrationID("template_registration_123"),
+		TenantID:          traits.TenantID("tenant_123"),
+		Status:            traits.TemplateRegistrationCompleted,
+		TemplateID:        traits.TemplateID("template_123"),
+		ResolvedCommitSHA: "abc123",
+	})
+	if err != nil {
+		t.Fatalf("RecordTemplateRegistrationStatus returned error: %v", err)
+	}
+
+	got, err := store.GetTemplateRegistration(ctx, traits.TenantID("tenant_123"), traits.TemplateRegistrationID("template_registration_123"))
+	if err != nil {
+		t.Fatalf("GetTemplateRegistration returned error: %v", err)
+	}
+	if got.Status != traits.TemplateRegistrationCompleted {
+		t.Fatalf("status = %q, want completed", got.Status)
+	}
+	if got.TemplateID != traits.TemplateID("template_123") {
+		t.Fatalf("template id = %q, want template_123", got.TemplateID)
+	}
+	if got.ResolvedCommitSHA != "abc123" {
+		t.Fatalf("resolved sha = %q, want abc123", got.ResolvedCommitSHA)
+	}
+	if got.CompletedAt.IsZero() {
+		t.Fatal("completed_at was not set for terminal registration status")
+	}
+}
+
+func TestUpsertTemplateWithVariablesCreatesAndReusesImmutableTemplate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	createdAt := time.Date(2026, 7, 6, 12, 0, 0, 123456000, time.UTC)
+	template := traits.Template{
+		ID:                traits.TemplateID("template_123"),
+		TenantID:          traits.TenantID("tenant_123"),
+		RepoOwner:         "acme",
+		RepoName:          "infra-templates",
+		SourceRef:         "v0.0.1",
+		ResolvedCommitSHA: "abc123",
+		RootPath:          "modules/vpc",
+		Name:              "vpc",
+		Description:       "Creates a VPC",
+		Tags:              []string{"network", "aws"},
+		Status:            traits.TemplateActive,
+		CreatedAt:         createdAt,
+	}
+	variables := []traits.TemplateVariable{
+		{
+			TemplateID:     traits.TemplateID("template_123"),
+			Name:           "region",
+			TypeExpression: "string",
+			Description:    "AWS region",
+			Required:       true,
+		},
+		{
+			TemplateID:     traits.TemplateID("template_123"),
+			Name:           "cidr",
+			TypeExpression: "string",
+			HasDefault:     true,
+			HasValidation:  true,
+		},
+	}
+
+	created, err := store.UpsertTemplateWithVariables(ctx, template, variables)
+	if err != nil {
+		t.Fatalf("UpsertTemplateWithVariables returned error: %v", err)
+	}
+	if created.ID != traits.TemplateID("template_123") {
+		t.Fatalf("created template ID = %q, want template_123", created.ID)
+	}
+
+	reused, err := store.UpsertTemplateWithVariables(ctx, traits.Template{
+		ID:                traits.TemplateID("template_456"),
+		TenantID:          traits.TenantID("tenant_123"),
+		RepoOwner:         "acme",
+		RepoName:          "infra-templates",
+		SourceRef:         "v0.0.1",
+		ResolvedCommitSHA: "abc123",
+		RootPath:          "modules/vpc",
+		Name:              "vpc moved tag",
+		Status:            traits.TemplateActive,
+	}, nil)
+	if err != nil {
+		t.Fatalf("second UpsertTemplateWithVariables returned error: %v", err)
+	}
+	if reused.ID != traits.TemplateID("template_123") {
+		t.Fatalf("reused template ID = %q, want template_123", reused.ID)
+	}
+
+	gotVariables, err := store.GetTemplateVariables(ctx, traits.TenantID("tenant_123"), traits.TemplateID("template_123"))
+	if err != nil {
+		t.Fatalf("GetTemplateVariables returned error: %v", err)
+	}
+	if len(gotVariables) != 2 {
+		t.Fatalf("len(gotVariables) = %d, want 2", len(gotVariables))
+	}
+	if gotVariables[0].Name != "cidr" || gotVariables[1].Name != "region" {
+		t.Fatalf("variables ordered by name = %#v", gotVariables)
+	}
+}
+
+func TestGetTemplateVariablesReturnsNotFoundForOtherTenant(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	_, err := store.UpsertTemplateWithVariables(ctx, traits.Template{
+		ID:                traits.TemplateID("template_123"),
+		TenantID:          traits.TenantID("tenant_123"),
+		RepoOwner:         "acme",
+		RepoName:          "infra-templates",
+		SourceRef:         "v0.0.1",
+		ResolvedCommitSHA: "abc123",
+		RootPath:          "modules/vpc",
+		Name:              "vpc",
+		Status:            traits.TemplateActive,
+	}, nil)
+	if err != nil {
+		t.Fatalf("UpsertTemplateWithVariables returned error: %v", err)
+	}
+
+	_, err = store.GetTemplateVariables(ctx, traits.TenantID("tenant_456"), traits.TemplateID("template_123"))
+	if !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("error = %v, want app.ErrNotFound", err)
 	}
 }
 
