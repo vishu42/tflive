@@ -19,15 +19,33 @@ func NewServer(service *app.Service) *Server {
 		service: service,
 		mux:     http.NewServeMux(),
 	}
+
+	// Health routes.
+	// Reports process liveness for probes and local smoke checks.
 	server.mux.HandleFunc("GET /healthz", server.handleHealth)
+
+	// Template registration routes.
+	// Starts async registration for a public GitHub Terraform template source.
 	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/templates", server.handleRegisterTemplate)
+	// Reads the current state of a template registration attempt.
 	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-registrations/{registration_id}", server.handleGetTemplateRegistration)
+	// Lists variables inferred from an immutable registered template.
 	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/templates/{template_id}/variables", server.handleGetTemplateVariables)
+
+	// Template run routes.
+	// Starts a Terraform operation for an installed stack template.
 	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/runs", server.handleStartTemplateRun)
+	// Reads the current state of a template run.
 	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-runs/{run_id}", server.handleGetTemplateRun)
+	// Lists persisted log metadata for all phases of a template run.
 	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs", server.handleListTemplateRunLogs)
+	// Reads the persisted log body for one template run phase.
 	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs/{phase}", server.handleGetTemplateRunLog)
+
+	// Template run decision routes.
+	// Records approval for a waiting template run.
 	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/approval", server.handleApproveRun)
+	// Requests cancellation for a running template run.
 	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/cancellation", server.handleCancelRun)
 	return server
 }
