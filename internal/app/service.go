@@ -16,12 +16,14 @@ import (
 )
 
 var (
-	ErrInvalidCommand           = errors.New("invalid command")
-	ErrDuplicateStackSlug       = errors.New("duplicate stack slug")
-	ErrNotFound                 = errors.New("not found")
-	ErrStackTemplateNotRunnable = errors.New("stack template is not runnable")
-	ErrRunNotApprovable         = errors.New("run is not approvable")
-	ErrRunNotCancelable         = errors.New("run is not cancelable")
+	ErrInvalidCommand             = errors.New("invalid command")
+	ErrDuplicateStackSlug         = errors.New("duplicate stack slug")
+	ErrNotFound                   = errors.New("not found")
+	ErrTemplateNotInstallable     = errors.New("template is not installable")
+	ErrStackTemplateConfigInvalid = errors.New("stack template config is invalid")
+	ErrStackTemplateNotRunnable   = errors.New("stack template is not runnable")
+	ErrRunNotApprovable           = errors.New("run is not approvable")
+	ErrRunNotCancelable           = errors.New("run is not cancelable")
 )
 
 // StackRepository persists and reads tenant-owned stacks.
@@ -59,6 +61,11 @@ type TemplateRepository interface {
 	GetTemplateVariables(ctx context.Context, tenantID traits.TenantID, templateID traits.TemplateID) ([]traits.TemplateVariable, error)
 }
 
+// TemplateMetadataRepository reads immutable template metadata.
+type TemplateMetadataRepository interface {
+	GetTemplate(ctx context.Context, tenantID traits.TenantID, templateID traits.TemplateID) (traits.Template, error)
+}
+
 // TemplateRunLogReader reads persisted log bodies for tenant-owned TemplateRuns.
 type TemplateRunLogReader interface {
 	ReadTemplateRunLog(ctx context.Context, log traits.TemplateRunLog) ([]byte, error)
@@ -93,6 +100,16 @@ type StackIDGenerator interface {
 	NewStackID() traits.StackID
 }
 
+// StackTemplateInstaller persists installed stack templates.
+type StackTemplateInstaller interface {
+	CreateStackTemplate(ctx context.Context, stackTemplate traits.StackTemplate) error
+}
+
+// StackTemplateIDGenerator creates StackTemplate identifiers.
+type StackTemplateIDGenerator interface {
+	NewStackTemplateID() traits.StackTemplateID
+}
+
 // Clock provides current time for app use cases.
 type Clock interface {
 	Now() time.Time
@@ -104,11 +121,14 @@ type Service struct {
 	StackTemplates         StackTemplateRepository
 	TemplateRuns           TemplateRunRepository
 	TemplateRegistrations  TemplateRegistrationRepository
+	TemplateMetadata       TemplateMetadataRepository
 	Templates              TemplateRepository
+	StackTemplateInstaller StackTemplateInstaller
 	TemplateRunLogs        TemplateRunLogReader
 	TemplateRunLogMetadata TemplateRunLogRepository
 	Workflows              WorkflowDispatcher
 	StackIDs               StackIDGenerator
+	StackTemplateIDs       StackTemplateIDGenerator
 	RunIDs                 TemplateRunIDGenerator
 	RegistrationIDs        TemplateRegistrationIDGenerator
 	Clock                  Clock
@@ -131,6 +151,9 @@ func NewService(service Service) *Service {
 	}
 	if service.StackIDs == nil {
 		service.StackIDs = randomStackIDGenerator{}
+	}
+	if service.StackTemplateIDs == nil {
+		service.StackTemplateIDs = randomStackTemplateIDGenerator{}
 	}
 
 	return &service
@@ -297,6 +320,52 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 	}
 
 	return stack, nil
+}
+
+// AddTemplateToStack validates one template install and persists the tenant-owned stack template.
+func (service *Service) AddTemplateToStack(ctx context.Context, command AddTemplateToStackCommand) (traits.StackTemplate, error) {
+	if err := validateAddTemplateToStackCommand(command); err != nil {
+		return traits.StackTemplate{}, err
+	}
+
+	stack, err := service.Stacks.GetStack(ctx, command.TenantID, command.StackID)
+	if err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("get stack: %w", err)
+	}
+
+	template, err := service.TemplateMetadata.GetTemplate(ctx, command.TenantID, command.TemplateID)
+	if err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("get template: %w", err)
+	}
+	if template.Status != traits.TemplateActive {
+		return traits.StackTemplate{}, fmt.Errorf("%w: status is %q", ErrTemplateNotInstallable, template.Status)
+	}
+
+	variables, err := service.Templates.GetTemplateVariables(ctx, command.TenantID, command.TemplateID)
+	if err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("get template variables: %w", err)
+	}
+	configJSON, err := validateTemplateConfig(command.ConfigJSON, variables)
+	if err != nil {
+		return traits.StackTemplate{}, err
+	}
+
+	id := service.StackTemplateIDs.NewStackTemplateID()
+	stackTemplate := traits.StackTemplate{
+		ID:            id,
+		TenantID:      command.TenantID,
+		StackID:       command.StackID,
+		TemplateID:    command.TemplateID,
+		SelectedRef:   strings.TrimSpace(command.SelectedRef),
+		WorkspaceName: workspaceName(stack.Slug, id),
+		ConfigJSON:    configJSON,
+		Lifecycle:     traits.StackTemplateActive,
+	}
+
+	if err := service.StackTemplateInstaller.CreateStackTemplate(ctx, stackTemplate); err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("create stack template: %w", err)
+	}
+	return stackTemplate, nil
 }
 
 // StartTemplateRun creates a queued run and dispatches its workflow.
@@ -554,6 +623,23 @@ func validateGetStackCommand(command GetStackCommand) error {
 	}
 }
 
+func validateAddTemplateToStackCommand(command AddTemplateToStackCommand) error {
+	switch {
+	case command.TenantID == "":
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	case command.StackID == "":
+		return fmt.Errorf("%w: stack id is required", ErrInvalidCommand)
+	case command.TemplateID == "":
+		return fmt.Errorf("%w: template id is required", ErrInvalidCommand)
+	case strings.TrimSpace(command.SelectedRef) == "":
+		return fmt.Errorf("%w: selected ref is required", ErrInvalidCommand)
+	case command.Actor == "":
+		return fmt.Errorf("%w: actor is required", ErrInvalidCommand)
+	default:
+		return nil
+	}
+}
+
 func validateStartTemplateRunCommand(command StartTemplateRunCommand) error {
 	switch {
 	case command.TenantID == "":
@@ -667,6 +753,95 @@ func validLogPhase(phase string) bool {
 	default:
 		return false
 	}
+}
+
+func validateTemplateConfig(raw json.RawMessage, variables []traits.TemplateVariable) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{}`)
+	}
+
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return nil, fmt.Errorf("%w: config must be a JSON object", ErrStackTemplateConfigInvalid)
+	}
+	if config == nil {
+		return nil, fmt.Errorf("%w: config must be a JSON object", ErrStackTemplateConfigInvalid)
+	}
+
+	known := make(map[string]traits.TemplateVariable, len(variables))
+	for _, variable := range variables {
+		known[variable.Name] = variable
+	}
+
+	for name, value := range config {
+		if _, ok := known[name]; !ok {
+			return nil, fmt.Errorf("%w: unknown variable %q", ErrStackTemplateConfigInvalid, name)
+		}
+		if string(value) == "null" {
+			return nil, fmt.Errorf("%w: variable %q must not be null", ErrStackTemplateConfigInvalid, name)
+		}
+	}
+
+	for _, variable := range variables {
+		if variable.Required {
+			value, ok := config[variable.Name]
+			if !ok || string(value) == "null" {
+				return nil, fmt.Errorf("%w: required variable %q is missing", ErrStackTemplateConfigInvalid, variable.Name)
+			}
+		}
+	}
+
+	normalized, err := json.Marshal(config)
+	if err != nil {
+		return nil, fmt.Errorf("marshal stack template config: %w", err)
+	}
+	return normalized, nil
+}
+
+func workspaceName(stackSlug string, stackTemplateID traits.StackTemplateID) string {
+	normalizedSlug := normalizeWorkspacePart(stackSlug)
+	if normalizedSlug == "" {
+		normalizedSlug = "stack"
+	}
+
+	id := string(stackTemplateID)
+	shortID := id
+	if len(shortID) > 8 {
+		shortID = shortID[len(shortID)-8:]
+	}
+
+	const prefix = "meg_"
+	const separator = "_"
+	const maxLength = 90
+	maxSlugLength := maxLength - len(prefix) - len(separator) - len(shortID)
+	if maxSlugLength < 1 {
+		maxSlugLength = 1
+	}
+	if len(normalizedSlug) > maxSlugLength {
+		normalizedSlug = strings.Trim(normalizedSlug[:maxSlugLength], "_")
+	}
+	if normalizedSlug == "" {
+		normalizedSlug = "stack"
+	}
+	return prefix + normalizedSlug + separator + shortID
+}
+
+func normalizeWorkspacePart(value string) string {
+	var builder strings.Builder
+	lastUnderscore := false
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			builder.WriteRune(r)
+			lastUnderscore = false
+		default:
+			if !lastUnderscore && builder.Len() > 0 {
+				builder.WriteByte('_')
+				lastUnderscore = true
+			}
+		}
+	}
+	return strings.Trim(builder.String(), "_")
 }
 
 func slugFromName(name string) string {
@@ -821,4 +996,14 @@ func (randomStackIDGenerator) NewStackID() traits.StackID {
 		return traits.StackID(fmt.Sprintf("stack_%d", time.Now().UTC().UnixNano()))
 	}
 	return traits.StackID("stack_" + hex.EncodeToString(bytes[:]))
+}
+
+type randomStackTemplateIDGenerator struct{}
+
+func (randomStackTemplateIDGenerator) NewStackTemplateID() traits.StackTemplateID {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return traits.StackTemplateID(fmt.Sprintf("stack_template_%d", time.Now().UTC().UnixNano()))
+	}
+	return traits.StackTemplateID("stack_template_" + hex.EncodeToString(bytes[:]))
 }

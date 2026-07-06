@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"testing"
@@ -173,6 +174,155 @@ func TestGetStackPassesTenantAndIDAndNormalizesNilTemplates(t *testing.T) {
 	}
 	if len(view.Templates) != 0 {
 		t.Fatalf("len(templates) = %d, want 0", len(view.Templates))
+	}
+}
+
+func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing.T) {
+	t.Parallel()
+
+	stacks := &recordingStackRepository{
+		stack: traits.Stack{
+			ID:       traits.StackID("stack_123"),
+			TenantID: traits.TenantID("tenant_123"),
+			Name:     "Acme Prod",
+			Slug:     "acme-prod",
+		},
+	}
+	templates := &recordingTemplateRepository{
+		template: traits.Template{
+			ID:        traits.TemplateID("template_123"),
+			TenantID:  traits.TenantID("tenant_123"),
+			SourceRef: "main",
+			Status:    traits.TemplateActive,
+		},
+		variables: []traits.TemplateVariable{
+			{Name: "region", Required: true},
+			{Name: "cidr", Required: false, HasDefault: true},
+		},
+	}
+	installer := &recordingStackTemplateInstaller{}
+	service := NewService(Service{
+		Stacks:                 stacks,
+		TemplateMetadata:       templates,
+		Templates:              templates,
+		StackTemplateInstaller: installer,
+		StackTemplateIDs:       fixedStackTemplateIDGenerator{id: traits.StackTemplateID("stack_template_a1b2c3d4")},
+	})
+
+	stackTemplate, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{
+		TenantID:    traits.TenantID("tenant_123"),
+		StackID:     traits.StackID("stack_123"),
+		TemplateID:  traits.TemplateID("template_123"),
+		SelectedRef: "main",
+		ConfigJSON:  json.RawMessage(`{"region":"us-east-1"}`),
+		Actor:       traits.UserID("user_123"),
+	})
+	if err != nil {
+		t.Fatalf("AddTemplateToStack returned error: %v", err)
+	}
+
+	if stackTemplate.ID != traits.StackTemplateID("stack_template_a1b2c3d4") {
+		t.Fatalf("stack template ID = %q, want stack_template_a1b2c3d4", stackTemplate.ID)
+	}
+	if stackTemplate.TenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant ID = %q, want tenant_123", stackTemplate.TenantID)
+	}
+	if stackTemplate.WorkspaceName != "meg_acme_prod_a1b2c3d4" {
+		t.Fatalf("workspace name = %q, want meg_acme_prod_a1b2c3d4", stackTemplate.WorkspaceName)
+	}
+	if stackTemplate.Lifecycle != traits.StackTemplateActive {
+		t.Fatalf("lifecycle = %q, want active", stackTemplate.Lifecycle)
+	}
+	if string(installer.created.ConfigJSON) != `{"region":"us-east-1"}` {
+		t.Fatalf("config json = %s", installer.created.ConfigJSON)
+	}
+}
+
+func TestAddTemplateToStackRejectsMissingRequiredVariable(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{
+		Stacks: &recordingStackRepository{
+			stack: traits.Stack{ID: traits.StackID("stack_123"), TenantID: traits.TenantID("tenant_123"), Slug: "acme-prod"},
+		},
+		TemplateMetadata: &recordingTemplateRepository{
+			template: traits.Template{ID: traits.TemplateID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateActive},
+		},
+		Templates: &recordingTemplateRepository{
+			variables: []traits.TemplateVariable{{Name: "region", Required: true}},
+		},
+		StackTemplateInstaller: &recordingStackTemplateInstaller{},
+		StackTemplateIDs:       fixedStackTemplateIDGenerator{id: traits.StackTemplateID("stack_template_a1b2c3d4")},
+	})
+
+	_, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{
+		TenantID:    traits.TenantID("tenant_123"),
+		StackID:     traits.StackID("stack_123"),
+		TemplateID:  traits.TemplateID("template_123"),
+		SelectedRef: "main",
+		ConfigJSON:  json.RawMessage(`{}`),
+		Actor:       traits.UserID("user_123"),
+	})
+	if !errors.Is(err, ErrStackTemplateConfigInvalid) {
+		t.Fatalf("error = %v, want ErrStackTemplateConfigInvalid", err)
+	}
+}
+
+func TestAddTemplateToStackRejectsUnknownVariable(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{
+		Stacks: &recordingStackRepository{
+			stack: traits.Stack{ID: traits.StackID("stack_123"), TenantID: traits.TenantID("tenant_123"), Slug: "acme-prod"},
+		},
+		TemplateMetadata: &recordingTemplateRepository{
+			template: traits.Template{ID: traits.TemplateID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateActive},
+		},
+		Templates: &recordingTemplateRepository{
+			variables: []traits.TemplateVariable{{Name: "region", Required: true}},
+		},
+		StackTemplateInstaller: &recordingStackTemplateInstaller{},
+		StackTemplateIDs:       fixedStackTemplateIDGenerator{id: traits.StackTemplateID("stack_template_a1b2c3d4")},
+	})
+
+	_, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{
+		TenantID:    traits.TenantID("tenant_123"),
+		StackID:     traits.StackID("stack_123"),
+		TemplateID:  traits.TemplateID("template_123"),
+		SelectedRef: "main",
+		ConfigJSON:  json.RawMessage(`{"region":"us-east-1","extra":"nope"}`),
+		Actor:       traits.UserID("user_123"),
+	})
+	if !errors.Is(err, ErrStackTemplateConfigInvalid) {
+		t.Fatalf("error = %v, want ErrStackTemplateConfigInvalid", err)
+	}
+}
+
+func TestAddTemplateToStackRejectsInactiveTemplate(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{
+		Stacks: &recordingStackRepository{
+			stack: traits.Stack{ID: traits.StackID("stack_123"), TenantID: traits.TenantID("tenant_123"), Slug: "acme-prod"},
+		},
+		TemplateMetadata: &recordingTemplateRepository{
+			template: traits.Template{ID: traits.TemplateID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateInvalid},
+		},
+		Templates:              &recordingTemplateRepository{},
+		StackTemplateInstaller: &recordingStackTemplateInstaller{},
+		StackTemplateIDs:       fixedStackTemplateIDGenerator{id: traits.StackTemplateID("stack_template_a1b2c3d4")},
+	})
+
+	_, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{
+		TenantID:    traits.TenantID("tenant_123"),
+		StackID:     traits.StackID("stack_123"),
+		TemplateID:  traits.TemplateID("template_123"),
+		SelectedRef: "main",
+		ConfigJSON:  json.RawMessage(`{}`),
+		Actor:       traits.UserID("user_123"),
+	})
+	if !errors.Is(err, ErrTemplateNotInstallable) {
+		t.Fatalf("error = %v, want ErrTemplateNotInstallable", err)
 	}
 }
 
@@ -1117,8 +1267,11 @@ type recordingTemplateRepository struct {
 	variables              []traits.TemplateVariable
 	gotTemplate            traits.Template
 	gotVariables           []traits.TemplateVariable
+	gotGetTemplateTenantID traits.TenantID
+	gotGetTemplateID       traits.TemplateID
 	gotVariablesTenantID   traits.TenantID
 	gotVariablesTemplateID traits.TemplateID
+	getTemplateErr         error
 	upsertErr              error
 	variablesErr           error
 }
@@ -1133,6 +1286,15 @@ func (repository *recordingTemplateRepository) UpsertTemplateWithVariables(_ con
 		return repository.template, nil
 	}
 	return template, nil
+}
+
+func (repository *recordingTemplateRepository) GetTemplate(_ context.Context, tenantID traits.TenantID, templateID traits.TemplateID) (traits.Template, error) {
+	repository.gotGetTemplateTenantID = tenantID
+	repository.gotGetTemplateID = templateID
+	if repository.getTemplateErr != nil {
+		return traits.Template{}, repository.getTemplateErr
+	}
+	return repository.template, nil
 }
 
 func (repository *recordingTemplateRepository) GetTemplateVariables(_ context.Context, tenantID traits.TenantID, templateID traits.TemplateID) ([]traits.TemplateVariable, error) {
@@ -1158,6 +1320,19 @@ func (dispatcher *recordingWorkflowDispatcher) StartTemplateRun(_ context.Contex
 	return nil
 }
 
+type recordingStackTemplateInstaller struct {
+	created   traits.StackTemplate
+	createErr error
+}
+
+func (installer *recordingStackTemplateInstaller) CreateStackTemplate(_ context.Context, stackTemplate traits.StackTemplate) error {
+	if installer.createErr != nil {
+		return installer.createErr
+	}
+	installer.created = stackTemplate
+	return nil
+}
+
 func (dispatcher *recordingWorkflowDispatcher) StartTemplateSync(_ context.Context, input traits.TemplateSyncWorkflowInput) error {
 	dispatcher.syncInput = input
 	return nil
@@ -1177,6 +1352,14 @@ func (dispatcher *recordingWorkflowDispatcher) CancelTemplateRun(_ context.Conte
 
 type fixedTemplateRunIDGenerator struct {
 	runID traits.TemplateRunID
+}
+
+type fixedStackTemplateIDGenerator struct {
+	id traits.StackTemplateID
+}
+
+func (generator fixedStackTemplateIDGenerator) NewStackTemplateID() traits.StackTemplateID {
+	return generator.id
 }
 
 func (generator fixedTemplateRunIDGenerator) NewTemplateRunID() traits.TemplateRunID {
