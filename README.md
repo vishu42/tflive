@@ -108,22 +108,28 @@ UI:  http://localhost:5173
 Start backend dependencies:
 
 ```bash
-docker compose up app-postgres temporal-postgres temporal temporal-ui
+docker compose up app-postgres temporal-postgres temporal temporal-ui minio minio-init
 ```
 
-Start the API with the same environment used by local smoke tests:
+The local MinIO API is available at `http://localhost:9000`, and the console is
+available at `http://localhost:9001`. Credentials and the bucket name are loaded
+from `.env`.
+
+Start the API with the local environment:
 
 ```bash
-DATABASE_URL='postgres://megagega:megagega@localhost:55432/megagega_test?sslmode=disable' \
-TEMPORAL_ADDRESS='localhost:7233' \
+set -a
+source .env
+set +a
 go run ./cmd/megagega-api
 ```
 
 Start the worker in another shell:
 
 ```bash
-DATABASE_URL='postgres://megagega:megagega@localhost:55432/megagega_test?sslmode=disable' \
-TEMPORAL_ADDRESS='localhost:7233' \
+set -a
+source .env
+set +a
 go run ./cmd/megagega-worker
 ```
 
