@@ -298,7 +298,7 @@ func apiTestEnv(key string) string {
 type recordingAPIDependencies struct {
 	apiDependencies
 	pool                *recordingPostgresPool
-	store               recordingStore
+	store               *recordingStore
 	temporalClient      *recordingTemporalClient
 	dispatcher          recordingWorkflowDispatcher
 	temporalConfig      temporal.Config
@@ -319,7 +319,7 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 
 	deps := &recordingAPIDependencies{
 		pool:           &recordingPostgresPool{},
-		store:          recordingStore{},
+		store:          &recordingStore{},
 		temporalClient: &recordingTemporalClient{},
 		dispatcher:     recordingWorkflowDispatcher{},
 	}
@@ -409,6 +409,10 @@ func (recordingStore) GetStack(context.Context, traits.TenantID, traits.StackID)
 	return traits.Stack{}, nil
 }
 
+func (recordingStore) ListStacks(context.Context, traits.TenantID) ([]traits.Stack, error) {
+	return nil, nil
+}
+
 func (recordingStore) GetStackWithTemplates(context.Context, traits.TenantID, traits.StackID) (app.StackView, error) {
 	return app.StackView{}, nil
 }
@@ -423,6 +427,10 @@ func (recordingStore) CreateStackTemplate(context.Context, traits.StackTemplate)
 
 func (recordingStore) GetTemplate(context.Context, traits.TenantID, traits.TemplateID) (traits.Template, error) {
 	return traits.Template{}, nil
+}
+
+func (recordingStore) ListTemplates(context.Context, traits.TenantID) ([]traits.Template, error) {
+	return nil, nil
 }
 
 func (recordingStore) CreateTemplateRun(context.Context, traits.TemplateRun) error {

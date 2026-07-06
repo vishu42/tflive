@@ -6,6 +6,8 @@ import {
   cancelRun,
   createStack,
   getTemplateRunLog,
+  listStacks,
+  listTemplates,
   registerTemplate,
   startTemplateRun
 } from "./client";
@@ -55,6 +57,29 @@ describe("api client", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/v1/tenants/tenant_123/stacks",
       expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("lists tenant stacks and templates", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse([{ id: "stack_123" }]))
+      .mockResolvedValueOnce(jsonResponse([{ id: "template_123" }]));
+
+    const stacks = await listStacks("tenant_123");
+    const templates = await listTemplates("tenant_123");
+
+    expect(stacks).toEqual([{ id: "stack_123" }]);
+    expect(templates).toEqual([{ id: "template_123" }]);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/v1/tenants/tenant_123/stacks",
+      expect.objectContaining({ method: "GET" })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/v1/tenants/tenant_123/templates",
+      expect.objectContaining({ method: "GET" })
     );
   });
 

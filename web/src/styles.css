@@ -124,6 +124,10 @@ select {
   gap: 12px;
 }
 
+.selector-label {
+  margin-bottom: 14px;
+}
+
 .primary-button,
 .secondary-button {
   display: inline-flex;

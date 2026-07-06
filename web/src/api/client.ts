@@ -4,6 +4,7 @@ import type {
   Stack,
   StackTemplate,
   StackView,
+  Template,
   TemplateRegistration,
   TemplateRun,
   TemplateRunLog,
@@ -73,11 +74,19 @@ export function getTemplateVariables(tenantID: string, templateID: string): Prom
   return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/templates/${encodeURIComponent(templateID)}/variables`);
 }
 
+export function listTemplates(tenantID: string): Promise<Template[]> {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/templates`);
+}
+
 export function createStack(tenantID: string, body: CreateStackRequest): Promise<Stack> {
   return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stacks`, {
     method: "POST",
     body: JSON.stringify(body)
   });
+}
+
+export function listStacks(tenantID: string): Promise<Stack[]> {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stacks`);
 }
 
 export function getStack(tenantID: string, stackID: string): Promise<StackView> {

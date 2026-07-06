@@ -5,6 +5,12 @@ export type TemplateRegistrationStatus =
   | "invalid"
   | "failed";
 
+export type TemplateStatus =
+  | "pending_validation"
+  | "validating"
+  | "active"
+  | "invalid";
+
 export type TemplateRunStatus =
   | "queued"
   | "locked"
@@ -47,6 +53,21 @@ export interface TemplateRegistration {
   requested_at: string;
   completed_at?: string;
   error_summary: string;
+}
+
+export interface Template {
+  id: string;
+  tenant_id: string;
+  repo_owner: string;
+  repo_name: string;
+  source_ref: string;
+  resolved_commit_sha: string;
+  root_path: string;
+  name: string;
+  description: string;
+  tags: string[];
+  status: TemplateStatus;
+  created_at: string;
 }
 
 export interface TemplateVariable {

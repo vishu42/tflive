@@ -17,16 +17,27 @@ import {
   approveRun,
   cancelRun,
   createStack,
+  getStack,
   getTemplateRegistration,
   getTemplateRun,
   getTemplateRunLog,
   getTemplateVariables,
+  listStacks,
+  listTemplates,
   listTemplateRunLogs,
   registerTemplate,
   startTemplateRun
 } from "./api/client";
-import type { Stack, StackTemplate, TemplateRegistration, TemplateRun, TemplateRunLog, TemplateVariable } from "./api/types";
+import type { Stack, StackTemplate, Template, TemplateRegistration, TemplateRun, TemplateRunLog, TemplateVariable } from "./api/types";
 import { isTerminalRegistrationStatus, isTerminalRunStatus, nextPollDelayMs } from "./polling";
+import {
+  findSelectedStack,
+  findSelectedTemplate,
+  nextSelectedStackID,
+  nextSelectedTemplateID,
+  stackLabel,
+  templateLabel
+} from "./workflowState";
 
 export default function App() {
   const [tenantID, setTenantID] = useState("tenant_123");
@@ -36,10 +47,14 @@ export default function App() {
   const [sourceRef, setSourceRef] = useState("main");
   const [rootPath, setRootPath] = useState(".");
   const [registration, setRegistration] = useState<TemplateRegistration | null>(null);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [selectedTemplateID, setSelectedTemplateID] = useState("");
   const [variables, setVariables] = useState<TemplateVariable[]>([]);
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
   const [stackName, setStackName] = useState("Acme Prod");
   const [stackSlug, setStackSlug] = useState("");
+  const [stacks, setStacks] = useState<Stack[]>([]);
+  const [selectedStackID, setSelectedStackID] = useState("");
   const [stack, setStack] = useState<Stack | null>(null);
   const [installedTemplate, setInstalledTemplate] = useState<StackTemplate | null>(null);
   const [planRun, setPlanRun] = useState<TemplateRun | null>(null);
@@ -51,12 +66,80 @@ export default function App() {
   const [busyAction, setBusyAction] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
+  const selectedTemplate = findSelectedTemplate(templates, selectedTemplateID);
+  const selectedStack = findSelectedStack(stacks, selectedStackID);
   const currentRun = selectedRunKind === "apply" ? applyRun : planRun;
-  const canInstall = Boolean(registration?.status === "completed" && registration.template_id && stack);
+  const canInstall = Boolean(selectedTemplate?.status === "active" && stack);
   const canPlan = Boolean(installedTemplate && !planRun);
   const canApply = Boolean(installedTemplate && planRun?.status === "completed" && !applyRun);
   const canApprove = applyRun?.status === "waiting_approval";
   const canCancel = Boolean(currentRun && !isTerminalRunStatus(currentRun.status));
+
+  useEffect(() => {
+    let canceled = false;
+
+    setStacks([]);
+    setTemplates([]);
+    setSelectedStackID("");
+    setSelectedTemplateID("");
+    setStack(null);
+    setRegistration(null);
+    setInstalledTemplate(null);
+    setVariables([]);
+    setVariableValues({});
+    resetRunState();
+
+    Promise.all([listStacks(tenantID), listTemplates(tenantID)])
+      .then(([nextStacks, nextTemplates]) => {
+        if (canceled) {
+          return;
+        }
+        setStacks(nextStacks);
+        setTemplates(nextTemplates);
+        setSelectedStackID(nextSelectedStackID(nextStacks, ""));
+        setSelectedTemplateID(nextSelectedTemplateID(nextTemplates, ""));
+      })
+      .catch((error) => {
+        if (!canceled) {
+          setErrorMessage(messageFromError(error));
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [tenantID]);
+
+  useEffect(() => {
+    if (!selectedStackID) {
+      setStack(null);
+      setInstalledTemplate(null);
+      resetRunState();
+      return;
+    }
+
+    let canceled = false;
+    getStack(tenantID, selectedStackID)
+      .then((view) => {
+        if (canceled) {
+          return;
+        }
+        setStack(view.stack);
+        setInstalledTemplate(view.templates[0] ?? null);
+        resetRunState();
+      })
+      .catch((error) => {
+        if (!canceled) {
+          setStack((current) => current?.id === selectedStackID ? current : null);
+          setInstalledTemplate(null);
+          setErrorMessage(messageFromError(error));
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [selectedStackID, tenantID]);
 
   useEffect(() => {
     if (!registration || isTerminalRegistrationStatus(registration.status)) {
@@ -107,8 +190,39 @@ export default function App() {
       return;
     }
 
-    getTemplateVariables(tenantID, registration.template_id)
+    let canceled = false;
+    listTemplates(tenantID)
+      .then((nextTemplates) => {
+        if (canceled) {
+          return;
+        }
+        setTemplates(nextTemplates);
+        setSelectedTemplateID(nextSelectedTemplateID(nextTemplates, registration.template_id));
+      })
+      .catch((error) => {
+        if (!canceled) {
+          setErrorMessage(messageFromError(error));
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [registration?.status, registration?.template_id, tenantID]);
+
+  useEffect(() => {
+    if (!selectedTemplate || selectedTemplate.status !== "active") {
+      setVariables([]);
+      setVariableValues({});
+      return;
+    }
+
+    let canceled = false;
+    getTemplateVariables(tenantID, selectedTemplate.id)
       .then((nextVariables) => {
+        if (canceled) {
+          return;
+        }
         setVariables(nextVariables);
         setVariableValues((current) => {
           const next = { ...current };
@@ -120,8 +234,16 @@ export default function App() {
           return next;
         });
       })
-      .catch((error) => setErrorMessage(messageFromError(error)));
-  }, [registration?.status, registration?.template_id, tenantID]);
+      .catch((error) => {
+        if (!canceled) {
+          setErrorMessage(messageFromError(error));
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [selectedTemplate?.id, selectedTemplate?.status, tenantID]);
 
   useEffect(() => {
     const run = currentRun;
@@ -211,15 +333,11 @@ export default function App() {
         requested_by: actor
       });
       setRegistration(next);
+      setSelectedTemplateID("");
       setVariables([]);
       setVariableValues({});
-      setStack(null);
       setInstalledTemplate(null);
-      setPlanRun(null);
-      setApplyRun(null);
-      setLogs([]);
-      setLogBody("");
-      setSelectedRunKind("plan");
+      resetRunState();
     });
   }
 
@@ -234,11 +352,22 @@ export default function App() {
         actor
       });
       setStack(next);
+      setStacks((current) => [next, ...current.filter((item) => item.id !== next.id)]);
+      setSelectedStackID(next.id);
+      setInstalledTemplate(null);
+      resetRunState();
+
+      const refreshed = await listStacks(tenantID);
+      const hydrated = refreshed.some((item) => item.id === next.id)
+        ? refreshed
+        : [next, ...refreshed];
+      setStacks(hydrated);
+      setSelectedStackID(nextSelectedStackID(hydrated, next.id));
     });
   }
 
   async function handleInstallTemplate() {
-    if (!stack || !registration?.template_id) {
+    if (!stack || !selectedTemplate) {
       return;
     }
 
@@ -249,17 +378,13 @@ export default function App() {
           .filter(([, value]) => String(value).trim() !== "")
       );
       const next = await addTemplateToStack(tenantID, stack.id, {
-        template_id: registration.template_id,
-        selected_ref: registration.source_ref,
+        template_id: selectedTemplate.id,
+        selected_ref: selectedTemplate.source_ref,
         config,
         actor
       });
       setInstalledTemplate(next);
-      setPlanRun(null);
-      setApplyRun(null);
-      setLogs([]);
-      setLogBody("");
-      setSelectedRunKind("plan");
+      resetRunState();
     });
   }
 
@@ -314,6 +439,14 @@ export default function App() {
     });
   }
 
+  function resetRunState() {
+    setPlanRun(null);
+    setApplyRun(null);
+    setLogs([]);
+    setLogBody("");
+    setSelectedRunKind("plan");
+  }
+
   async function runAction(name: string, action: () => Promise<void>) {
     setBusyAction(name);
     setErrorMessage("");
@@ -351,6 +484,17 @@ export default function App() {
         <div className="workflow-grid">
           <section className="panel">
             <h2>Template</h2>
+            <label className="selector-label">
+              Saved template
+              <select value={selectedTemplateID} onChange={(event) => setSelectedTemplateID(event.target.value)}>
+                <option value="">Select template</option>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {templateLabel(template)}
+                  </option>
+                ))}
+              </select>
+            </label>
             <form className="form-grid" onSubmit={handleRegister}>
               <label>
                 Owner
@@ -373,12 +517,24 @@ export default function App() {
                 Register
               </button>
             </form>
+            <StatusRow label="Template" value={selectedTemplate?.status ?? "not selected"} />
             <StatusRow label="Registration" value={registration?.status ?? "not started"} />
             {registration?.error_summary && <p className="error-text">{registration.error_summary}</p>}
           </section>
 
           <section className="panel">
             <h2>Stack</h2>
+            <label className="selector-label">
+              Saved stack
+              <select value={selectedStackID} onChange={(event) => setSelectedStackID(event.target.value)}>
+                <option value="">Select stack</option>
+                {stacks.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {stackLabel(item)}
+                  </option>
+                ))}
+              </select>
+            </label>
             <form className="form-grid" onSubmit={handleCreateStack}>
               <label>
                 Name
@@ -393,7 +549,7 @@ export default function App() {
                 Create stack
               </button>
             </form>
-            <StatusRow label="Stack" value={stack?.slug ?? "not created"} />
+            <StatusRow label="Stack" value={stack?.slug || selectedStack?.slug || "not selected"} />
           </section>
 
           <section className="panel wide">
@@ -475,9 +631,9 @@ export default function App() {
               <dt>Registration</dt>
               <dd>{registration?.id ?? "-"}</dd>
               <dt>Template</dt>
-              <dd>{registration?.template_id ?? "-"}</dd>
+              <dd>{selectedTemplate?.id ?? registration?.template_id ?? "-"}</dd>
               <dt>Stack</dt>
-              <dd>{stack?.id ?? "-"}</dd>
+              <dd>{(stack?.id ?? selectedStackID) || "-"}</dd>
               <dt>Stack template</dt>
               <dd>{installedTemplate?.id ?? "-"}</dd>
               <dt>Plan run</dt>
@@ -514,7 +670,9 @@ function StatusRow({ label, value }: { label: string; value: string }) {
 function inProgressStatus(value: string): boolean {
   return [
     "pending",
+    "pending_validation",
     "running",
+    "validating",
     "queued",
     "locked",
     "workspace_prepared",
