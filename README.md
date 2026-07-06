@@ -96,6 +96,47 @@ The API does not call workers directly. The API creates product records in Postg
  +----------------------+
 ```
 
+## Local UI Development
+
+Run the backend API and the Vite UI as separate processes.
+
+```text
+API: http://localhost:8081
+UI:  http://localhost:5173
+```
+
+Start backend dependencies:
+
+```bash
+docker compose up app-postgres temporal-postgres temporal temporal-ui
+```
+
+Start the API with the same environment used by local smoke tests:
+
+```bash
+DATABASE_URL='postgres://megagega:megagega@localhost:55432/megagega_test?sslmode=disable' \
+TEMPORAL_ADDRESS='localhost:7233' \
+go run ./cmd/megagega-api
+```
+
+Start the worker in another shell:
+
+```bash
+DATABASE_URL='postgres://megagega:megagega@localhost:55432/megagega_test?sslmode=disable' \
+TEMPORAL_ADDRESS='localhost:7233' \
+go run ./cmd/megagega-worker
+```
+
+Start the UI:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+The Vite dev server proxies `/v1/*` and `/healthz` to the Go API.
+
 ## Core Boundaries
 
 The platform has three important boundaries:
