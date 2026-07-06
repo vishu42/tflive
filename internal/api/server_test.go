@@ -265,6 +265,47 @@ func TestCreateStackCallsService(t *testing.T) {
 	}
 }
 
+func TestListStacksReturnsTenantStacks(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Date(2026, 7, 6, 13, 30, 0, 0, time.UTC)
+	deps := newAPITestDependencies()
+	deps.stacks.list = []traits.Stack{
+		{
+			ID:        traits.StackID("stack_123"),
+			TenantID:  traits.TenantID("tenant_123"),
+			Name:      "Acme Prod",
+			Slug:      "acme-prod",
+			Tags:      map[string]string{"env": "prod"},
+			CreatedBy: traits.UserID("user_123"),
+			CreatedAt: createdAt,
+		},
+	}
+	server := NewServer(deps.service())
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if deps.stacks.gotListTenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant list lookup = %q, want tenant_123", deps.stacks.gotListTenantID)
+	}
+
+	var body []stackResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body) != 1 {
+		t.Fatalf("len(body) = %d, want 1", len(body))
+	}
+	if body[0].ID != "stack_123" || body[0].Slug != "acme-prod" {
+		t.Fatalf("stack response = %#v", body[0])
+	}
+}
+
 func TestGetStackReturnsStackView(t *testing.T) {
 	t.Parallel()
 
@@ -387,6 +428,51 @@ func TestGetTemplateRegistrationReturnsRegistration(t *testing.T) {
 	}
 	if body.ID != traits.TemplateRegistrationID("template_registration_123") {
 		t.Fatalf("id = %q, want template_registration_123", body.ID)
+	}
+}
+
+func TestListTemplatesReturnsTenantTemplates(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	deps := newAPITestDependencies()
+	deps.templates.templates = []traits.Template{
+		{
+			ID:                traits.TemplateID("template_123"),
+			TenantID:          traits.TenantID("tenant_123"),
+			RepoOwner:         "acme",
+			RepoName:          "infra-templates",
+			SourceRef:         "main",
+			ResolvedCommitSHA: "abc123",
+			RootPath:          ".",
+			Name:              "infra-templates",
+			Tags:              []string{"aws"},
+			Status:            traits.TemplateActive,
+			CreatedAt:         createdAt,
+		},
+	}
+	server := NewServer(deps.service())
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/templates", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if deps.templates.gotListTenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant list lookup = %q, want tenant_123", deps.templates.gotListTenantID)
+	}
+
+	var body []traits.Template
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body) != 1 {
+		t.Fatalf("len(body) = %d, want 1", len(body))
+	}
+	if body[0].ID != traits.TemplateID("template_123") || body[0].Status != traits.TemplateActive {
+		t.Fatalf("template response = %#v", body[0])
 	}
 }
 
@@ -835,14 +921,17 @@ func (deps *apiTestDependencies) service() *app.Service {
 }
 
 type recordingStackRepository struct {
-	created     traits.Stack
-	stack       traits.Stack
-	view        app.StackView
-	gotTenantID traits.TenantID
-	gotStackID  traits.StackID
-	createErr   error
-	getErr      error
-	getViewErr  error
+	created         traits.Stack
+	stack           traits.Stack
+	list            []traits.Stack
+	view            app.StackView
+	gotTenantID     traits.TenantID
+	gotStackID      traits.StackID
+	gotListTenantID traits.TenantID
+	createErr       error
+	getErr          error
+	listErr         error
+	getViewErr      error
 }
 
 func (repository *recordingStackRepository) CreateStack(_ context.Context, stack traits.Stack) error {
@@ -869,6 +958,14 @@ func (repository *recordingStackRepository) GetStackWithTemplates(_ context.Cont
 		return app.StackView{}, repository.getViewErr
 	}
 	return repository.view, nil
+}
+
+func (repository *recordingStackRepository) ListStacks(_ context.Context, tenantID traits.TenantID) ([]traits.Stack, error) {
+	repository.gotListTenantID = tenantID
+	if repository.listErr != nil {
+		return nil, repository.listErr
+	}
+	return repository.list, nil
 }
 
 type recordingStackTemplateRepository struct {
@@ -1029,14 +1126,17 @@ func (repository *recordingTemplateRegistrationRepository) RecordTemplateRegistr
 
 type recordingTemplateRepository struct {
 	template               traits.Template
+	templates              []traits.Template
 	variables              []traits.TemplateVariable
 	gotTemplate            traits.Template
 	gotVariables           []traits.TemplateVariable
+	gotListTenantID        traits.TenantID
 	gotGetTemplateTenantID traits.TenantID
 	gotGetTemplateID       traits.TemplateID
 	gotVariablesTenantID   traits.TenantID
 	gotVariablesTemplateID traits.TemplateID
 	getTemplateErr         error
+	listErr                error
 	upsertErr              error
 	variablesErr           error
 }
@@ -1060,6 +1160,14 @@ func (repository *recordingTemplateRepository) GetTemplate(_ context.Context, te
 		return traits.Template{}, repository.getTemplateErr
 	}
 	return repository.template, nil
+}
+
+func (repository *recordingTemplateRepository) ListTemplates(_ context.Context, tenantID traits.TenantID) ([]traits.Template, error) {
+	repository.gotListTenantID = tenantID
+	if repository.listErr != nil {
+		return nil, repository.listErr
+	}
+	return repository.templates, nil
 }
 
 func (repository *recordingTemplateRepository) GetTemplateVariables(_ context.Context, tenantID traits.TenantID, templateID traits.TemplateID) ([]traits.TemplateVariable, error) {

@@ -28,6 +28,8 @@ func NewServer(service *app.Service) *Server {
 	// Template registration routes.
 	// Starts async registration for a public GitHub Terraform template source.
 	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/templates", server.handleRegisterTemplate)
+	// Lists registered template metadata for the tenant.
+	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/templates", server.handleListTemplates)
 	// Reads the current state of a template registration attempt.
 	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-registrations/{registration_id}", server.handleGetTemplateRegistration)
 	// Lists variables inferred from an immutable registered template.
@@ -36,6 +38,8 @@ func NewServer(service *app.Service) *Server {
 	// Stack routes.
 	// Creates a logical infrastructure stack.
 	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/stacks", server.handleCreateStack)
+	// Lists tenant-owned stacks.
+	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/stacks", server.handleListStacks)
 	// Reads one stack with installed templates.
 	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/stacks/{stack_id}", server.handleGetStack)
 	// Installs a registered template into a stack.
@@ -90,6 +94,18 @@ func (server *Server) handleRegisterTemplate(response http.ResponseWriter, reque
 	writeJSON(response, http.StatusAccepted, registration)
 }
 
+func (server *Server) handleListTemplates(response http.ResponseWriter, request *http.Request) {
+	templates, err := server.service.ListTemplates(request.Context(), app.ListTemplatesCommand{
+		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusOK, templates)
+}
+
 func (server *Server) handleGetTemplateRegistration(response http.ResponseWriter, request *http.Request) {
 	registration, err := server.service.GetTemplateRegistration(request.Context(), app.GetTemplateRegistrationCommand{
 		TenantID:       traits.TenantID(request.PathValue("tenant_id")),
@@ -142,6 +158,22 @@ func (server *Server) handleCreateStack(response http.ResponseWriter, request *h
 	}
 
 	writeJSON(response, http.StatusCreated, newStackResponse(stack))
+}
+
+func (server *Server) handleListStacks(response http.ResponseWriter, request *http.Request) {
+	stacks, err := server.service.ListStacks(request.Context(), app.ListStacksCommand{
+		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	body := make([]stackResponse, 0, len(stacks))
+	for _, stack := range stacks {
+		body = append(body, newStackResponse(stack))
+	}
+	writeJSON(response, http.StatusOK, body)
 }
 
 func (server *Server) handleGetStack(response http.ResponseWriter, request *http.Request) {

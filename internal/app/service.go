@@ -31,6 +31,7 @@ type StackRepository interface {
 	CreateStack(ctx context.Context, stack traits.Stack) error
 	GetStack(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error)
 	GetStackWithTemplates(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (StackView, error)
+	ListStacks(ctx context.Context, tenantID traits.TenantID) ([]traits.Stack, error)
 }
 
 // StackTemplateRepository reads installed template state for use cases.
@@ -58,6 +59,7 @@ type TemplateRegistrationRepository interface {
 // TemplateRepository persists immutable template metadata and inferred variables.
 type TemplateRepository interface {
 	UpsertTemplateWithVariables(ctx context.Context, template traits.Template, variables []traits.TemplateVariable) (traits.Template, error)
+	ListTemplates(ctx context.Context, tenantID traits.TenantID) ([]traits.Template, error)
 	GetTemplateVariables(ctx context.Context, tenantID traits.TenantID, templateID traits.TemplateID) ([]traits.TemplateVariable, error)
 }
 
@@ -223,6 +225,16 @@ type CancelRunCommand struct {
 type GetStackCommand struct {
 	TenantID traits.TenantID
 	StackID  traits.StackID
+}
+
+// ListStacksCommand asks the app to list tenant-owned stacks.
+type ListStacksCommand struct {
+	TenantID traits.TenantID
+}
+
+// ListTemplatesCommand asks the app to list tenant-owned registered templates.
+type ListTemplatesCommand struct {
+	TenantID traits.TenantID
 }
 
 // GetTemplateRunCommand asks the app to read one tenant-owned run.
@@ -433,6 +445,38 @@ func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (
 	return view, nil
 }
 
+// ListStacks returns tenant-owned stacks ordered for UI selection.
+func (service *Service) ListStacks(ctx context.Context, command ListStacksCommand) ([]traits.Stack, error) {
+	if err := validateListStacksCommand(command); err != nil {
+		return nil, err
+	}
+
+	stacks, err := service.Stacks.ListStacks(ctx, command.TenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list stacks: %w", err)
+	}
+	if stacks == nil {
+		return []traits.Stack{}, nil
+	}
+	return stacks, nil
+}
+
+// ListTemplates returns tenant-owned registered templates ordered for UI selection.
+func (service *Service) ListTemplates(ctx context.Context, command ListTemplatesCommand) ([]traits.Template, error) {
+	if err := validateListTemplatesCommand(command); err != nil {
+		return nil, err
+	}
+
+	templates, err := service.Templates.ListTemplates(ctx, command.TenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list templates: %w", err)
+	}
+	if templates == nil {
+		return []traits.Template{}, nil
+	}
+	return templates, nil
+}
+
 // GetTemplateRegistration returns one tenant-owned registration attempt.
 func (service *Service) GetTemplateRegistration(ctx context.Context, command GetTemplateRegistrationCommand) (traits.TemplateRegistration, error) {
 	if err := validateGetTemplateRegistrationCommand(command); err != nil {
@@ -621,6 +665,20 @@ func validateGetStackCommand(command GetStackCommand) error {
 	default:
 		return nil
 	}
+}
+
+func validateListStacksCommand(command ListStacksCommand) error {
+	if command.TenantID == "" {
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	}
+	return nil
+}
+
+func validateListTemplatesCommand(command ListTemplatesCommand) error {
+	if command.TenantID == "" {
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	}
+	return nil
 }
 
 func validateAddTemplateToStackCommand(command AddTemplateToStackCommand) error {

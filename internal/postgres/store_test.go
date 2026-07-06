@@ -336,6 +336,55 @@ func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
 	}
 }
 
+func TestListStacksReturnsTenantScopedStacksNewestFirst(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	older := traits.Stack{
+		ID:        traits.StackID("stack_older"),
+		TenantID:  traits.TenantID("tenant_123"),
+		Name:      "Older Stack",
+		Slug:      "older-stack",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
+	}
+	newer := traits.Stack{
+		ID:        traits.StackID("stack_newer"),
+		TenantID:  traits.TenantID("tenant_123"),
+		Name:      "Newer Stack",
+		Slug:      "newer-stack",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Date(2026, 7, 6, 11, 0, 0, 0, time.UTC),
+	}
+	otherTenant := traits.Stack{
+		ID:        traits.StackID("stack_other"),
+		TenantID:  traits.TenantID("tenant_456"),
+		Name:      "Other Stack",
+		Slug:      "other-stack",
+		CreatedBy: traits.UserID("user_456"),
+		CreatedAt: time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
+	}
+	for _, stack := range []traits.Stack{older, newer, otherTenant} {
+		if err := store.CreateStack(ctx, stack); err != nil {
+			t.Fatalf("CreateStack(%s) returned error: %v", stack.ID, err)
+		}
+	}
+
+	stacks, err := store.ListStacks(ctx, traits.TenantID("tenant_123"))
+	if err != nil {
+		t.Fatalf("ListStacks returned error: %v", err)
+	}
+
+	if len(stacks) != 2 {
+		t.Fatalf("len(stacks) = %d, want 2: %#v", len(stacks), stacks)
+	}
+	if stacks[0].ID != traits.StackID("stack_newer") || stacks[1].ID != traits.StackID("stack_older") {
+		t.Fatalf("stack order = %#v", stacks)
+	}
+}
+
 func TestGetTemplateReturnsTenantScopedTemplate(t *testing.T) {
 	t.Parallel()
 
@@ -371,6 +420,67 @@ func TestGetTemplateReturnsTenantScopedTemplate(t *testing.T) {
 	_, err = store.GetTemplate(ctx, traits.TenantID("tenant_456"), traits.TemplateID("template_123"))
 	if !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("other tenant error = %v, want app.ErrNotFound", err)
+	}
+}
+
+func TestListTemplatesReturnsTenantScopedTemplatesNewestFirst(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	older := traits.Template{
+		ID:                traits.TemplateID("template_older"),
+		TenantID:          traits.TenantID("tenant_123"),
+		RepoOwner:         "acme",
+		RepoName:          "infra-templates",
+		SourceRef:         "v0.0.1",
+		ResolvedCommitSHA: "abc123",
+		RootPath:          ".",
+		Name:              "older",
+		Status:            traits.TemplateActive,
+		CreatedAt:         time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
+	}
+	newer := traits.Template{
+		ID:                traits.TemplateID("template_newer"),
+		TenantID:          traits.TenantID("tenant_123"),
+		RepoOwner:         "acme",
+		RepoName:          "infra-templates",
+		SourceRef:         "v0.0.2",
+		ResolvedCommitSHA: "def456",
+		RootPath:          ".",
+		Name:              "newer",
+		Status:            traits.TemplateActive,
+		CreatedAt:         time.Date(2026, 7, 6, 11, 0, 0, 0, time.UTC),
+	}
+	otherTenant := traits.Template{
+		ID:                traits.TemplateID("template_other"),
+		TenantID:          traits.TenantID("tenant_456"),
+		RepoOwner:         "acme",
+		RepoName:          "infra-templates",
+		SourceRef:         "v0.0.3",
+		ResolvedCommitSHA: "ghi789",
+		RootPath:          ".",
+		Name:              "other",
+		Status:            traits.TemplateActive,
+		CreatedAt:         time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
+	}
+	for _, template := range []traits.Template{older, newer, otherTenant} {
+		if _, err := store.UpsertTemplateWithVariables(ctx, template, nil); err != nil {
+			t.Fatalf("UpsertTemplateWithVariables(%s) returned error: %v", template.ID, err)
+		}
+	}
+
+	templates, err := store.ListTemplates(ctx, traits.TenantID("tenant_123"))
+	if err != nil {
+		t.Fatalf("ListTemplates returned error: %v", err)
+	}
+
+	if len(templates) != 2 {
+		t.Fatalf("len(templates) = %d, want 2: %#v", len(templates), templates)
+	}
+	if templates[0].ID != traits.TemplateID("template_newer") || templates[1].ID != traits.TemplateID("template_older") {
+		t.Fatalf("template order = %#v", templates)
 	}
 }
 

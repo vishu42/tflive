@@ -273,6 +273,44 @@ func (store *Store) GetTemplateVariables(ctx context.Context, tenantID traits.Te
 	return variables, nil
 }
 
+func (store *Store) ListTemplates(ctx context.Context, tenantID traits.TenantID) ([]traits.Template, error) {
+	rows, err := store.pool.Query(ctx, `
+		select
+			id,
+			tenant_id,
+			repo_owner,
+			repo_name,
+			source_ref,
+			resolved_commit_sha,
+			root_path,
+			name,
+			description,
+			tags_json,
+			status,
+			created_at
+		from templates
+		where tenant_id = $1
+		order by created_at desc, id desc
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list templates: %w", err)
+	}
+	defer rows.Close()
+
+	var templates []traits.Template
+	for rows.Next() {
+		template, err := scanTemplate(rows)
+		if err != nil {
+			return nil, err
+		}
+		templates = append(templates, template)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate templates: %w", err)
+	}
+	return templates, nil
+}
+
 func (store *Store) CreateStack(ctx context.Context, stack traits.Stack) error {
 	tagsJSON, err := json.Marshal(stack.Tags)
 	if err != nil {
@@ -326,6 +364,40 @@ func (store *Store) GetStack(ctx context.Context, tenantID traits.TenantID, stac
 		return traits.Stack{}, err
 	}
 	return stack, nil
+}
+
+func (store *Store) ListStacks(ctx context.Context, tenantID traits.TenantID) ([]traits.Stack, error) {
+	rows, err := store.pool.Query(ctx, `
+		select
+			id,
+			tenant_id,
+			name,
+			slug,
+			tags_json,
+			default_credential_ids_json,
+			created_by,
+			created_at
+		from stacks
+		where tenant_id = $1
+		order by created_at desc, id desc
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list stacks: %w", err)
+	}
+	defer rows.Close()
+
+	var stacks []traits.Stack
+	for rows.Next() {
+		stack, err := scanStack(rows)
+		if err != nil {
+			return nil, err
+		}
+		stacks = append(stacks, stack)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate stacks: %w", err)
+	}
+	return stacks, nil
 }
 
 func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (app.StackView, error) {
@@ -422,9 +494,7 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 }
 
 func (store *Store) GetTemplate(ctx context.Context, tenantID traits.TenantID, templateID traits.TemplateID) (traits.Template, error) {
-	var template traits.Template
-	var tagsJSON []byte
-	err := store.pool.QueryRow(ctx, `
+	row := store.pool.QueryRow(ctx, `
 		select
 			id,
 			tenant_id,
@@ -441,28 +511,13 @@ func (store *Store) GetTemplate(ctx context.Context, tenantID traits.TenantID, t
 		from templates
 		where tenant_id = $1
 			and id = $2
-	`, tenantID, templateID).Scan(
-		&template.ID,
-		&template.TenantID,
-		&template.RepoOwner,
-		&template.RepoName,
-		&template.SourceRef,
-		&template.ResolvedCommitSHA,
-		&template.RootPath,
-		&template.Name,
-		&template.Description,
-		&tagsJSON,
-		&template.Status,
-		&template.CreatedAt,
-	)
+	`, tenantID, templateID)
+	template, err := scanTemplate(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return traits.Template{}, app.ErrNotFound
 	}
 	if err != nil {
 		return traits.Template{}, fmt.Errorf("get template: %w", err)
-	}
-	if err := json.Unmarshal(tagsJSON, &template.Tags); err != nil {
-		return traits.Template{}, fmt.Errorf("unmarshal template tags: %w", err)
 	}
 	return template, nil
 }
@@ -850,6 +905,14 @@ type stackTemplateScanner interface {
 	Scan(dest ...any) error
 }
 
+type stackScanner interface {
+	Scan(dest ...any) error
+}
+
+type templateScanner interface {
+	Scan(dest ...any) error
+}
+
 func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, error) {
 	var stackTemplate traits.StackTemplate
 	var configJSON []byte
@@ -877,12 +940,60 @@ func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, erro
 	return stackTemplate, nil
 }
 
-func (store *Store) getStack(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error) {
+func scanTemplate(scanner templateScanner) (traits.Template, error) {
+	var template traits.Template
+	var tagsJSON []byte
+
+	if err := scanner.Scan(
+		&template.ID,
+		&template.TenantID,
+		&template.RepoOwner,
+		&template.RepoName,
+		&template.SourceRef,
+		&template.ResolvedCommitSHA,
+		&template.RootPath,
+		&template.Name,
+		&template.Description,
+		&tagsJSON,
+		&template.Status,
+		&template.CreatedAt,
+	); err != nil {
+		return traits.Template{}, err
+	}
+	if err := json.Unmarshal(tagsJSON, &template.Tags); err != nil {
+		return traits.Template{}, fmt.Errorf("unmarshal template tags: %w", err)
+	}
+	return template, nil
+}
+
+func scanStack(scanner stackScanner) (traits.Stack, error) {
 	var stack traits.Stack
 	var tagsJSON []byte
 	var credentialIDsJSON []byte
 
-	err := store.pool.QueryRow(ctx, `
+	if err := scanner.Scan(
+		&stack.ID,
+		&stack.TenantID,
+		&stack.Name,
+		&stack.Slug,
+		&tagsJSON,
+		&credentialIDsJSON,
+		&stack.CreatedBy,
+		&stack.CreatedAt,
+	); err != nil {
+		return traits.Stack{}, err
+	}
+	if err := json.Unmarshal(tagsJSON, &stack.Tags); err != nil {
+		return traits.Stack{}, fmt.Errorf("unmarshal stack tags: %w", err)
+	}
+	if err := json.Unmarshal(credentialIDsJSON, &stack.DefaultCredentialIDs); err != nil {
+		return traits.Stack{}, fmt.Errorf("unmarshal stack credential IDs: %w", err)
+	}
+	return stack, nil
+}
+
+func (store *Store) getStack(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error) {
+	row := store.pool.QueryRow(ctx, `
 		select
 			id,
 			tenant_id,
@@ -895,27 +1006,13 @@ func (store *Store) getStack(ctx context.Context, tenantID traits.TenantID, stac
 		from stacks
 		where tenant_id = $1
 			and id = $2
-	`, tenantID, stackID).Scan(
-		&stack.ID,
-		&stack.TenantID,
-		&stack.Name,
-		&stack.Slug,
-		&tagsJSON,
-		&credentialIDsJSON,
-		&stack.CreatedBy,
-		&stack.CreatedAt,
-	)
+	`, tenantID, stackID)
+	stack, err := scanStack(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return traits.Stack{}, app.ErrNotFound
 	}
 	if err != nil {
 		return traits.Stack{}, fmt.Errorf("get stack: %w", err)
-	}
-	if err := json.Unmarshal(tagsJSON, &stack.Tags); err != nil {
-		return traits.Stack{}, fmt.Errorf("unmarshal stack tags: %w", err)
-	}
-	if err := json.Unmarshal(credentialIDsJSON, &stack.DefaultCredentialIDs); err != nil {
-		return traits.Stack{}, fmt.Errorf("unmarshal stack credential IDs: %w", err)
 	}
 	return stack, nil
 }

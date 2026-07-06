@@ -177,6 +177,54 @@ func TestGetStackPassesTenantAndIDAndNormalizesNilTemplates(t *testing.T) {
 	}
 }
 
+func TestListStacksPassesTenantAndNormalizesNilStacks(t *testing.T) {
+	t.Parallel()
+
+	stacks := &recordingStackRepository{list: nil}
+	service := NewService(Service{Stacks: stacks})
+
+	got, err := service.ListStacks(context.Background(), ListStacksCommand{
+		TenantID: traits.TenantID("tenant_123"),
+	})
+	if err != nil {
+		t.Fatalf("ListStacks returned error: %v", err)
+	}
+
+	if stacks.gotListTenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant list lookup = %q, want tenant_123", stacks.gotListTenantID)
+	}
+	if got == nil {
+		t.Fatal("stacks = nil, want empty slice")
+	}
+	if len(got) != 0 {
+		t.Fatalf("len(stacks) = %d, want 0", len(got))
+	}
+}
+
+func TestListTemplatesPassesTenantAndNormalizesNilTemplates(t *testing.T) {
+	t.Parallel()
+
+	templates := &recordingTemplateRepository{templates: nil}
+	service := NewService(Service{Templates: templates})
+
+	got, err := service.ListTemplates(context.Background(), ListTemplatesCommand{
+		TenantID: traits.TenantID("tenant_123"),
+	})
+	if err != nil {
+		t.Fatalf("ListTemplates returned error: %v", err)
+	}
+
+	if templates.gotListTenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant list lookup = %q, want tenant_123", templates.gotListTenantID)
+	}
+	if got == nil {
+		t.Fatal("templates = nil, want empty slice")
+	}
+	if len(got) != 0 {
+		t.Fatalf("len(templates) = %d, want 0", len(got))
+	}
+}
+
 func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing.T) {
 	t.Parallel()
 
@@ -1097,14 +1145,17 @@ func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.C
 }
 
 type recordingStackRepository struct {
-	created     traits.Stack
-	stack       traits.Stack
-	view        StackView
-	gotTenantID traits.TenantID
-	gotStackID  traits.StackID
-	createErr   error
-	getErr      error
-	getViewErr  error
+	created         traits.Stack
+	stack           traits.Stack
+	list            []traits.Stack
+	view            StackView
+	gotTenantID     traits.TenantID
+	gotStackID      traits.StackID
+	gotListTenantID traits.TenantID
+	createErr       error
+	getErr          error
+	listErr         error
+	getViewErr      error
 }
 
 func (repository *recordingStackRepository) CreateStack(_ context.Context, stack traits.Stack) error {
@@ -1131,6 +1182,14 @@ func (repository *recordingStackRepository) GetStackWithTemplates(_ context.Cont
 		return StackView{}, repository.getViewErr
 	}
 	return repository.view, nil
+}
+
+func (repository *recordingStackRepository) ListStacks(_ context.Context, tenantID traits.TenantID) ([]traits.Stack, error) {
+	repository.gotListTenantID = tenantID
+	if repository.listErr != nil {
+		return nil, repository.listErr
+	}
+	return repository.list, nil
 }
 
 type recordingTemplateRunRepository struct {
@@ -1264,14 +1323,17 @@ func (repository *recordingTemplateRegistrationRepository) RecordTemplateRegistr
 
 type recordingTemplateRepository struct {
 	template               traits.Template
+	templates              []traits.Template
 	variables              []traits.TemplateVariable
 	gotTemplate            traits.Template
 	gotVariables           []traits.TemplateVariable
+	gotListTenantID        traits.TenantID
 	gotGetTemplateTenantID traits.TenantID
 	gotGetTemplateID       traits.TemplateID
 	gotVariablesTenantID   traits.TenantID
 	gotVariablesTemplateID traits.TemplateID
 	getTemplateErr         error
+	listErr                error
 	upsertErr              error
 	variablesErr           error
 }
@@ -1295,6 +1357,14 @@ func (repository *recordingTemplateRepository) GetTemplate(_ context.Context, te
 		return traits.Template{}, repository.getTemplateErr
 	}
 	return repository.template, nil
+}
+
+func (repository *recordingTemplateRepository) ListTemplates(_ context.Context, tenantID traits.TenantID) ([]traits.Template, error) {
+	repository.gotListTenantID = tenantID
+	if repository.listErr != nil {
+		return nil, repository.listErr
+	}
+	return repository.templates, nil
 }
 
 func (repository *recordingTemplateRepository) GetTemplateVariables(_ context.Context, tenantID traits.TenantID, templateID traits.TemplateID) ([]traits.TemplateVariable, error) {
