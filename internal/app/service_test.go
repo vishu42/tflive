@@ -10,6 +10,92 @@ import (
 	"github.com/vishu42/megagega/internal/traits"
 )
 
+func TestCreateStackDerivesSlugAndPersistsStack(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := time.Date(2026, 7, 6, 13, 30, 0, 0, time.UTC)
+	stacks := &recordingStackRepository{}
+	service := NewService(Service{
+		Stacks:   stacks,
+		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
+		Clock:    fixedClock{now: now},
+	})
+
+	stack, err := service.CreateStack(ctx, CreateStackCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		Name:     "Acme Prod",
+		Tags: map[string]string{
+			"env": "prod",
+		},
+		DefaultCredentialIDs: []traits.CredentialSetID{traits.CredentialSetID("credential_123")},
+		Actor:                traits.UserID("user_123"),
+	})
+	if err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+
+	if stack.ID != traits.StackID("stack_123") {
+		t.Fatalf("stack ID = %q, want stack_123", stack.ID)
+	}
+	if stack.Slug != "acme-prod" {
+		t.Fatalf("slug = %q, want acme-prod", stack.Slug)
+	}
+	if stack.CreatedBy != traits.UserID("user_123") {
+		t.Fatalf("created by = %q, want user_123", stack.CreatedBy)
+	}
+	if !stack.CreatedAt.Equal(now) {
+		t.Fatalf("created at = %v, want %v", stack.CreatedAt, now)
+	}
+	if stacks.created.ID != stack.ID {
+		t.Fatalf("persisted stack ID = %q, want %q", stacks.created.ID, stack.ID)
+	}
+	if stacks.created.Tags["env"] != "prod" {
+		t.Fatalf("persisted tags = %#v", stacks.created.Tags)
+	}
+	if len(stacks.created.DefaultCredentialIDs) != 1 || stacks.created.DefaultCredentialIDs[0] != traits.CredentialSetID("credential_123") {
+		t.Fatalf("default credential IDs = %#v", stacks.created.DefaultCredentialIDs)
+	}
+}
+
+func TestCreateStackRejectsMissingActor(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{
+		Stacks:   &recordingStackRepository{},
+		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
+	})
+
+	_, err := service.CreateStack(context.Background(), CreateStackCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		Name:     "Acme Prod",
+	})
+	if !errors.Is(err, ErrInvalidCommand) {
+		t.Fatalf("error = %v, want ErrInvalidCommand", err)
+	}
+}
+
+func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
+	t.Parallel()
+
+	stacks := &recordingStackRepository{createErr: ErrDuplicateStackSlug}
+	service := NewService(Service{
+		Stacks:   stacks,
+		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
+		Clock:    fixedClock{now: time.Now()},
+	})
+
+	_, err := service.CreateStack(context.Background(), CreateStackCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		Name:     "Acme Prod",
+		Slug:     "acme-prod",
+		Actor:    traits.UserID("user_123"),
+	})
+	if !errors.Is(err, ErrDuplicateStackSlug) {
+		t.Fatalf("error = %v, want ErrDuplicateStackSlug", err)
+	}
+}
+
 func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 	t.Parallel()
 
@@ -780,6 +866,43 @@ func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.C
 	return repository.stackTemplate, nil
 }
 
+type recordingStackRepository struct {
+	created     traits.Stack
+	stack       traits.Stack
+	view        StackView
+	gotTenantID traits.TenantID
+	gotStackID  traits.StackID
+	createErr   error
+	getErr      error
+	getViewErr  error
+}
+
+func (repository *recordingStackRepository) CreateStack(_ context.Context, stack traits.Stack) error {
+	if repository.createErr != nil {
+		return repository.createErr
+	}
+	repository.created = stack
+	return nil
+}
+
+func (repository *recordingStackRepository) GetStack(_ context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error) {
+	repository.gotTenantID = tenantID
+	repository.gotStackID = stackID
+	if repository.getErr != nil {
+		return traits.Stack{}, repository.getErr
+	}
+	return repository.stack, nil
+}
+
+func (repository *recordingStackRepository) GetStackWithTemplates(_ context.Context, tenantID traits.TenantID, stackID traits.StackID) (StackView, error) {
+	repository.gotTenantID = tenantID
+	repository.gotStackID = stackID
+	if repository.getViewErr != nil {
+		return StackView{}, repository.getViewErr
+	}
+	return repository.view, nil
+}
+
 type recordingTemplateRunRepository struct {
 	created         traits.TemplateRun
 	run             traits.TemplateRun
@@ -985,6 +1108,14 @@ type fixedTemplateRegistrationIDGenerator struct {
 }
 
 func (generator fixedTemplateRegistrationIDGenerator) NewTemplateRegistrationID() traits.TemplateRegistrationID {
+	return generator.id
+}
+
+type fixedStackIDGenerator struct {
+	id traits.StackID
+}
+
+func (generator fixedStackIDGenerator) NewStackID() traits.StackID {
 	return generator.id
 }
 

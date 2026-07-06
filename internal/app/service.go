@@ -17,11 +17,19 @@ import (
 
 var (
 	ErrInvalidCommand           = errors.New("invalid command")
+	ErrDuplicateStackSlug       = errors.New("duplicate stack slug")
 	ErrNotFound                 = errors.New("not found")
 	ErrStackTemplateNotRunnable = errors.New("stack template is not runnable")
 	ErrRunNotApprovable         = errors.New("run is not approvable")
 	ErrRunNotCancelable         = errors.New("run is not cancelable")
 )
+
+// StackRepository persists and reads tenant-owned stacks.
+type StackRepository interface {
+	CreateStack(ctx context.Context, stack traits.Stack) error
+	GetStack(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error)
+	GetStackWithTemplates(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (StackView, error)
+}
 
 // StackTemplateRepository reads installed template state for use cases.
 type StackTemplateRepository interface {
@@ -80,6 +88,11 @@ type TemplateRegistrationIDGenerator interface {
 	NewTemplateRegistrationID() traits.TemplateRegistrationID
 }
 
+// StackIDGenerator creates Stack identifiers.
+type StackIDGenerator interface {
+	NewStackID() traits.StackID
+}
+
 // Clock provides current time for app use cases.
 type Clock interface {
 	Now() time.Time
@@ -87,6 +100,7 @@ type Clock interface {
 
 // Service owns app use cases and the dependencies wired by cmd packages.
 type Service struct {
+	Stacks                 StackRepository
 	StackTemplates         StackTemplateRepository
 	TemplateRuns           TemplateRunRepository
 	TemplateRegistrations  TemplateRegistrationRepository
@@ -94,6 +108,7 @@ type Service struct {
 	TemplateRunLogs        TemplateRunLogReader
 	TemplateRunLogMetadata TemplateRunLogRepository
 	Workflows              WorkflowDispatcher
+	StackIDs               StackIDGenerator
 	RunIDs                 TemplateRunIDGenerator
 	RegistrationIDs        TemplateRegistrationIDGenerator
 	Clock                  Clock
@@ -113,6 +128,9 @@ func NewService(service Service) *Service {
 	}
 	if service.RegistrationIDs == nil {
 		service.RegistrationIDs = randomTemplateRegistrationIDGenerator{}
+	}
+	if service.StackIDs == nil {
+		service.StackIDs = randomStackIDGenerator{}
 	}
 
 	return &service
@@ -136,6 +154,12 @@ type CreateStackCommand struct {
 	Tags                 map[string]string
 	DefaultCredentialIDs []traits.CredentialSetID
 	Actor                traits.UserID
+}
+
+// StackView returns one stack with its installed templates.
+type StackView struct {
+	Stack     traits.Stack
+	Templates []traits.StackTemplate
 }
 
 // AddTemplateToStackCommand asks the app to install one template into a stack.
@@ -170,6 +194,12 @@ type CancelRunCommand struct {
 	RunID       traits.TemplateRunID
 	RequestedBy traits.UserID
 	Reason      string
+}
+
+// GetStackCommand asks the app to read one stack and its installed templates.
+type GetStackCommand struct {
+	TenantID traits.TenantID
+	StackID  traits.StackID
 }
 
 // GetTemplateRunCommand asks the app to read one tenant-owned run.
@@ -240,6 +270,35 @@ func (service *Service) RegisterTemplate(ctx context.Context, command RegisterTe
 	return registration, nil
 }
 
+// CreateStack creates a tenant-owned infrastructure stack.
+func (service *Service) CreateStack(ctx context.Context, command CreateStackCommand) (traits.Stack, error) {
+	if err := validateCreateStackCommand(command); err != nil {
+		return traits.Stack{}, err
+	}
+
+	slug := strings.TrimSpace(command.Slug)
+	if slug == "" {
+		slug = slugFromName(command.Name)
+	}
+
+	stack := traits.Stack{
+		ID:                   service.StackIDs.NewStackID(),
+		TenantID:             command.TenantID,
+		Name:                 strings.TrimSpace(command.Name),
+		Slug:                 slug,
+		Tags:                 cloneStringMap(command.Tags),
+		DefaultCredentialIDs: append([]traits.CredentialSetID(nil), command.DefaultCredentialIDs...),
+		CreatedBy:            command.Actor,
+		CreatedAt:            service.Clock.Now(),
+	}
+
+	if err := service.Stacks.CreateStack(ctx, stack); err != nil {
+		return traits.Stack{}, fmt.Errorf("create stack: %w", err)
+	}
+
+	return stack, nil
+}
+
 // StartTemplateRun creates a queued run and dispatches its workflow.
 func (service *Service) StartTemplateRun(ctx context.Context, command StartTemplateRunCommand) (traits.TemplateRun, error) {
 	if err := validateStartTemplateRunCommand(command); err != nil {
@@ -287,6 +346,19 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	}
 
 	return run, nil
+}
+
+// GetStack returns one tenant-owned stack with installed templates.
+func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (StackView, error) {
+	if err := validateGetStackCommand(command); err != nil {
+		return StackView{}, err
+	}
+
+	view, err := service.Stacks.GetStackWithTemplates(ctx, command.TenantID, command.StackID)
+	if err != nil {
+		return StackView{}, fmt.Errorf("get stack: %w", err)
+	}
+	return view, nil
 }
 
 // GetTemplateRegistration returns one tenant-owned registration attempt.
@@ -447,6 +519,34 @@ func (service *Service) ListTemplateRunLogs(ctx context.Context, command ListTem
 	return logs, nil
 }
 
+func validateCreateStackCommand(command CreateStackCommand) error {
+	switch {
+	case command.TenantID == "":
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	case strings.TrimSpace(command.Name) == "":
+		return fmt.Errorf("%w: stack name is required", ErrInvalidCommand)
+	case strings.TrimSpace(command.Slug) != "" && !validStackSlug(command.Slug):
+		return fmt.Errorf("%w: stack slug is invalid", ErrInvalidCommand)
+	case strings.TrimSpace(command.Slug) == "" && slugFromName(command.Name) == "":
+		return fmt.Errorf("%w: stack slug is invalid", ErrInvalidCommand)
+	case command.Actor == "":
+		return fmt.Errorf("%w: actor is required", ErrInvalidCommand)
+	default:
+		return nil
+	}
+}
+
+func validateGetStackCommand(command GetStackCommand) error {
+	switch {
+	case command.TenantID == "":
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	case command.StackID == "":
+		return fmt.Errorf("%w: stack id is required", ErrInvalidCommand)
+	default:
+		return nil
+	}
+}
+
 func validateStartTemplateRunCommand(command StartTemplateRunCommand) error {
 	switch {
 	case command.TenantID == "":
@@ -562,6 +662,52 @@ func validLogPhase(phase string) bool {
 	}
 }
 
+func slugFromName(name string) string {
+	var builder strings.Builder
+	lastHyphen := false
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			builder.WriteRune(r)
+			lastHyphen = false
+		default:
+			if !lastHyphen && builder.Len() > 0 {
+				builder.WriteByte('-')
+				lastHyphen = true
+			}
+		}
+	}
+	return strings.Trim(builder.String(), "-")
+}
+
+func validStackSlug(slug string) bool {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return false
+	}
+	for _, r := range slug {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return map[string]string{}
+	}
+	cloned := make(map[string]string, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
+}
+
 func validGitHubPathComponent(component string) bool {
 	component = strings.TrimSpace(component)
 	if component == "" {
@@ -613,4 +759,14 @@ func (randomTemplateRegistrationIDGenerator) NewTemplateRegistrationID() traits.
 		return traits.TemplateRegistrationID(fmt.Sprintf("template_registration_%d", time.Now().UTC().UnixNano()))
 	}
 	return traits.TemplateRegistrationID("template_registration_" + hex.EncodeToString(bytes[:]))
+}
+
+type randomStackIDGenerator struct{}
+
+func (randomStackIDGenerator) NewStackID() traits.StackID {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return traits.StackID(fmt.Sprintf("stack_%d", time.Now().UTC().UnixNano()))
+	}
+	return traits.StackID("stack_" + hex.EncodeToString(bytes[:]))
 }

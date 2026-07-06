@@ -236,29 +236,30 @@ type TemplateVariable struct {
 }
 
 // Stack is a logical infrastructure composition.
-// stack is logical infrastructure composition
 type Stack struct {
-	ID                   StackID
-	TenantID             TenantID
-	Name                 string
-	Slug                 string
-	Tags                 map[string]string
-	DefaultCredentialIDs []CredentialSetID
+	ID                   StackID           `json:"id"`
+	TenantID             TenantID          `json:"tenant_id"`
+	Name                 string            `json:"name"`
+	Slug                 string            `json:"slug"`
+	Tags                 map[string]string `json:"tags"`
+	DefaultCredentialIDs []CredentialSetID `json:"default_credential_ids"`
+	CreatedBy            UserID            `json:"created_by"`
+	CreatedAt            time.Time         `json:"created_at"`
 }
 
 // StackTemplate is one template installed into one stack.
-// stacktemplate is one template installed into one stack
 type StackTemplate struct {
-	ID               StackTemplateID
-	StackID          StackID
-	TemplateID       TemplateID
-	SelectedRef      string
-	WorkspaceName    string
-	ConfigJSON       json.RawMessage
-	LastAppliedRunID TemplateRunID
-	LastAppliedRef   string
-	LastAppliedAt    time.Time
-	Lifecycle        StackTemplateLifecycle
+	ID               StackTemplateID        `json:"id"`
+	TenantID         TenantID               `json:"tenant_id"`
+	StackID          StackID                `json:"stack_id"`
+	TemplateID       TemplateID             `json:"template_id"`
+	SelectedRef      string                 `json:"selected_ref"`
+	WorkspaceName    string                 `json:"workspace_name"`
+	ConfigJSON       json.RawMessage        `json:"config_json"`
+	LastAppliedRunID TemplateRunID          `json:"last_applied_run_id"`
+	LastAppliedRef   string                 `json:"last_applied_ref"`
+	LastAppliedAt    time.Time              `json:"last_applied_at,omitempty"`
+	Lifecycle        StackTemplateLifecycle `json:"lifecycle"`
 }
 
 // TemplateRun is one Terraform operation against a StackTemplate.
