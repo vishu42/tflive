@@ -358,6 +358,9 @@ func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (
 	if err != nil {
 		return StackView{}, fmt.Errorf("get stack: %w", err)
 	}
+	if view.Templates == nil {
+		view.Templates = []traits.StackTemplate{}
+	}
 	return view, nil
 }
 
@@ -529,6 +532,10 @@ func validateCreateStackCommand(command CreateStackCommand) error {
 		return fmt.Errorf("%w: stack slug is invalid", ErrInvalidCommand)
 	case strings.TrimSpace(command.Slug) == "" && slugFromName(command.Name) == "":
 		return fmt.Errorf("%w: stack slug is invalid", ErrInvalidCommand)
+	case !validStackTags(command.Tags):
+		return fmt.Errorf("%w: tags are invalid", ErrInvalidCommand)
+	case !validCredentialSetIDs(command.DefaultCredentialIDs):
+		return fmt.Errorf("%w: default credential ids are invalid", ErrInvalidCommand)
 	case command.Actor == "":
 		return fmt.Errorf("%w: actor is required", ErrInvalidCommand)
 	default:
@@ -706,6 +713,51 @@ func cloneStringMap(input map[string]string) map[string]string {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func validStackTags(tags map[string]string) bool {
+	for key, value := range tags {
+		if !validTagKey(key) || !validTagValue(value) {
+			return false
+		}
+	}
+	return true
+}
+
+func validTagKey(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	for _, r := range key {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-', r == '_', r == '.', r == '/', r == ':':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validTagValue(value string) bool {
+	for _, r := range strings.TrimSpace(value) {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func validCredentialSetIDs(ids []traits.CredentialSetID) bool {
+	for _, id := range ids {
+		if strings.TrimSpace(string(id)) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func validGitHubPathComponent(component string) bool {

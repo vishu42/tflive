@@ -96,6 +96,86 @@ func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
 	}
 }
 
+func TestCreateStackRejectsInvalidTagKey(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{
+		Stacks:   &recordingStackRepository{},
+		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
+	})
+
+	_, err := service.CreateStack(context.Background(), CreateStackCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		Name:     "Acme Prod",
+		Tags: map[string]string{
+			"bad key": "prod",
+		},
+		Actor: traits.UserID("user_123"),
+	})
+	if !errors.Is(err, ErrInvalidCommand) {
+		t.Fatalf("error = %v, want ErrInvalidCommand", err)
+	}
+}
+
+func TestCreateStackRejectsEmptyDefaultCredentialID(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{
+		Stacks:   &recordingStackRepository{},
+		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
+	})
+
+	_, err := service.CreateStack(context.Background(), CreateStackCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		Name:     "Acme Prod",
+		DefaultCredentialIDs: []traits.CredentialSetID{
+			traits.CredentialSetID(""),
+		},
+		Actor: traits.UserID("user_123"),
+	})
+	if !errors.Is(err, ErrInvalidCommand) {
+		t.Fatalf("error = %v, want ErrInvalidCommand", err)
+	}
+}
+
+func TestGetStackPassesTenantAndIDAndNormalizesNilTemplates(t *testing.T) {
+	t.Parallel()
+
+	stacks := &recordingStackRepository{
+		view: StackView{
+			Stack: traits.Stack{
+				ID:       traits.StackID("stack_123"),
+				TenantID: traits.TenantID("tenant_123"),
+				Name:     "Acme Prod",
+				Slug:     "acme-prod",
+			},
+			Templates: nil,
+		},
+	}
+	service := NewService(Service{Stacks: stacks})
+
+	view, err := service.GetStack(context.Background(), GetStackCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		StackID:  traits.StackID("stack_123"),
+	})
+	if err != nil {
+		t.Fatalf("GetStack returned error: %v", err)
+	}
+
+	if stacks.gotTenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant lookup = %q, want tenant_123", stacks.gotTenantID)
+	}
+	if stacks.gotStackID != traits.StackID("stack_123") {
+		t.Fatalf("stack lookup = %q, want stack_123", stacks.gotStackID)
+	}
+	if view.Templates == nil {
+		t.Fatal("templates = nil, want empty slice")
+	}
+	if len(view.Templates) != 0 {
+		t.Fatalf("len(templates) = %d, want 0", len(view.Templates))
+	}
+}
+
 func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 	t.Parallel()
 
