@@ -79,6 +79,33 @@ func TestTemplateStatusValid(t *testing.T) {
 	}
 }
 
+func TestTemplateRegistrationStatusValid(t *testing.T) {
+	t.Parallel()
+
+	validStatuses := []TemplateRegistrationStatus{
+		TemplateRegistrationPending,
+		TemplateRegistrationRunning,
+		TemplateRegistrationCompleted,
+		TemplateRegistrationInvalid,
+		TemplateRegistrationFailed,
+	}
+
+	for _, status := range validStatuses {
+		status := status
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+
+			if !status.Valid() {
+				t.Fatalf("expected %q to be valid", status)
+			}
+		})
+	}
+
+	if TemplateRegistrationStatus("queued").Valid() {
+		t.Fatal("expected unknown template registration status to be invalid")
+	}
+}
+
 func TestTemplateRunStatusTerminal(t *testing.T) {
 	t.Parallel()
 
@@ -139,6 +166,18 @@ func TestWorkflowNames(t *testing.T) {
 	}
 }
 
+func TestTemplateSyncActivityNames(t *testing.T) {
+	t.Parallel()
+
+	if SyncTemplateActivityName != "SyncTemplate" {
+		t.Fatalf("SyncTemplateActivityName = %q", SyncTemplateActivityName)
+	}
+
+	if RecordTemplateRegistrationStatusActivityName != "RecordTemplateRegistrationStatus" {
+		t.Fatalf("RecordTemplateRegistrationStatusActivityName = %q", RecordTemplateRegistrationStatusActivityName)
+	}
+}
+
 func TestTemplateRunWorkflowInputUsesTraitTypes(t *testing.T) {
 	t.Parallel()
 
@@ -158,6 +197,30 @@ func TestTemplateRunWorkflowInputUsesTraitTypes(t *testing.T) {
 	if input.WorkspaceName == "" {
 		t.Fatal("expected workspace name to be carried into workflow input")
 	}
+}
+
+func TestTemplateSyncWorkflowInputUsesRegistrationSource(t *testing.T) {
+	t.Parallel()
+
+	input := TemplateSyncWorkflowInput{
+		RegistrationID: traitsTemplateRegistrationID("template_registration_123"),
+		TenantID:       TenantID("tenant_123"),
+		RepoOwner:      "acme",
+		RepoName:       "infra",
+		SourceRef:      "v0.0.1",
+		RootPath:       "modules/vpc",
+	}
+
+	if input.RegistrationID == "" {
+		t.Fatal("expected registration id to be carried into workflow input")
+	}
+	if input.SourceRef != "v0.0.1" {
+		t.Fatalf("SourceRef = %q, want v0.0.1", input.SourceRef)
+	}
+}
+
+func traitsTemplateRegistrationID(id string) TemplateRegistrationID {
+	return TemplateRegistrationID(id)
 }
 
 func TestSignalNames(t *testing.T) {

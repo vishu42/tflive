@@ -15,14 +15,15 @@ func (id ID) Valid() bool {
 }
 
 type (
-	TenantID        ID
-	UserID          ID
-	TemplateID      ID
-	StackID         ID
-	StackTemplateID ID
-	TemplateRunID   ID
-	StackRunID      ID
-	CredentialSetID ID
+	TenantID               ID
+	UserID                 ID
+	TemplateID             ID
+	TemplateRegistrationID ID
+	StackID                ID
+	StackTemplateID        ID
+	TemplateRunID          ID
+	StackRunID             ID
+	CredentialSetID        ID
 )
 
 // OperationType identifies a Terraform operation supported by the platform.
@@ -68,6 +69,31 @@ const (
 func (status TemplateStatus) Valid() bool {
 	switch status {
 	case TemplatePendingValidation, TemplateValidating, TemplateActive, TemplateInvalid:
+		return true
+	default:
+		return false
+	}
+}
+
+// TemplateRegistrationStatus identifies the lifecycle of one template registration request.
+type TemplateRegistrationStatus string
+
+const (
+	TemplateRegistrationPending   TemplateRegistrationStatus = "pending"
+	TemplateRegistrationRunning   TemplateRegistrationStatus = "running"
+	TemplateRegistrationCompleted TemplateRegistrationStatus = "completed"
+	TemplateRegistrationInvalid   TemplateRegistrationStatus = "invalid"
+	TemplateRegistrationFailed    TemplateRegistrationStatus = "failed"
+)
+
+// Valid reports whether the status is one of the supported registration states.
+func (status TemplateRegistrationStatus) Valid() bool {
+	switch status {
+	case TemplateRegistrationPending,
+		TemplateRegistrationRunning,
+		TemplateRegistrationCompleted,
+		TemplateRegistrationInvalid,
+		TemplateRegistrationFailed:
 		return true
 	default:
 		return false
@@ -165,32 +191,48 @@ type Tenant struct {
 }
 
 // Template is a GitHub-sourced Terraform template.
-// Template contains github ref of the template
 type Template struct {
-	ID                   TemplateID
-	TenantID             TenantID
-	GitHubInstallationID int64
-	RepoOwner            string
-	RepoName             string
-	DefaultRef           string
-	RootPath             string
-	Name                 string
-	Description          string
-	Tags                 []string
-	Status               TemplateStatus
+	ID                TemplateID     `json:"id"`
+	TenantID          TenantID       `json:"tenant_id"`
+	RepoOwner         string         `json:"repo_owner"`
+	RepoName          string         `json:"repo_name"`
+	SourceRef         string         `json:"source_ref"`
+	ResolvedCommitSHA string         `json:"resolved_commit_sha"`
+	RootPath          string         `json:"root_path"`
+	Name              string         `json:"name"`
+	Description       string         `json:"description"`
+	Tags              []string       `json:"tags"`
+	Status            TemplateStatus `json:"status"`
+	CreatedAt         time.Time      `json:"created_at"`
+}
+
+// TemplateRegistration records one async template registration request.
+type TemplateRegistration struct {
+	ID                TemplateRegistrationID     `json:"id"`
+	TenantID          TenantID                   `json:"tenant_id"`
+	RepoOwner         string                     `json:"repo_owner"`
+	RepoName          string                     `json:"repo_name"`
+	SourceRef         string                     `json:"source_ref"`
+	RootPath          string                     `json:"root_path"`
+	Status            TemplateRegistrationStatus `json:"status"`
+	TemplateID        TemplateID                 `json:"template_id"`
+	ResolvedCommitSHA string                     `json:"resolved_commit_sha"`
+	RequestedBy       UserID                     `json:"requested_by"`
+	RequestedAt       time.Time                  `json:"requested_at"`
+	CompletedAt       time.Time                  `json:"completed_at,omitempty"`
+	ErrorSummary      string                     `json:"error_summary"`
 }
 
 // TemplateVariable is inferred from Terraform root module variables.
-// TemplateVariable is the template variable inferred from root terraform module variables
 type TemplateVariable struct {
-	TemplateID     TemplateID
-	Name           string
-	TypeExpression string
-	Description    string
-	Required       bool
-	HasDefault     bool
-	Sensitive      bool
-	HasValidation  bool
+	TemplateID     TemplateID `json:"template_id"`
+	Name           string     `json:"name"`
+	TypeExpression string     `json:"type_expression"`
+	Description    string     `json:"description"`
+	Required       bool       `json:"required"`
+	HasDefault     bool       `json:"has_default"`
+	Sensitive      bool       `json:"sensitive"`
+	HasValidation  bool       `json:"has_validation"`
 }
 
 // Stack is a logical infrastructure composition.
@@ -295,9 +337,11 @@ const (
 	ApprovalSignalName = "approval"
 	CancelSignalName   = "cancel"
 
-	RecordTemplateRunStatusActivityName = "RecordTemplateRunStatus"
-	PrepareWorkspaceActivityName        = "PrepareWorkspace"
-	RunTerraformActivityName            = "RunTerraform"
+	RecordTemplateRunStatusActivityName          = "RecordTemplateRunStatus"
+	RecordTemplateRegistrationStatusActivityName = "RecordTemplateRegistrationStatus"
+	PrepareWorkspaceActivityName                 = "PrepareWorkspace"
+	RunTerraformActivityName                     = "RunTerraform"
+	SyncTemplateActivityName                     = "SyncTemplate"
 )
 
 // TemplateRunWorkflowInput starts one Terraform operation for one StackTemplate.
@@ -339,15 +383,42 @@ type RunTerraformActivityInput struct {
 	Command       TerraformCommandType
 }
 
-// TemplateSyncWorkflowInput starts template metadata sync for a GitHub template.
+// TemplateSyncWorkflowInput starts template metadata sync for a public GitHub template.
 type TemplateSyncWorkflowInput struct {
-	TemplateID           TemplateID
-	TenantID             TenantID
-	RepoOwner            string
-	RepoName             string
-	SelectedRef          string
-	RootPath             string
-	GitHubInstallationID int64
+	RegistrationID TemplateRegistrationID
+	TenantID       TenantID
+	RepoOwner      string
+	RepoName       string
+	SourceRef      string
+	RootPath       string
+}
+
+// TemplateSyncActivityInput asks the worker to sync one template registration source.
+type TemplateSyncActivityInput struct {
+	RegistrationID TemplateRegistrationID
+	TenantID       TenantID
+	RepoOwner      string
+	RepoName       string
+	SourceRef      string
+	RootPath       string
+}
+
+// TemplateSyncActivityOutput reports the sync result for one registration source.
+type TemplateSyncActivityOutput struct {
+	Status            TemplateRegistrationStatus
+	TemplateID        TemplateID
+	ResolvedCommitSHA string
+	ErrorSummary      string
+}
+
+// TemplateRegistrationStatusActivityInput asks the worker to persist one registration status transition.
+type TemplateRegistrationStatusActivityInput struct {
+	RegistrationID    TemplateRegistrationID
+	TenantID          TenantID
+	Status            TemplateRegistrationStatus
+	TemplateID        TemplateID
+	ResolvedCommitSHA string
+	ErrorSummary      string
 }
 
 // ApprovalSignal records an approval actor for a waiting apply run.

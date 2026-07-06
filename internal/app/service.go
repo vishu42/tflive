@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/vishu42/megagega/internal/traits"
@@ -36,6 +38,19 @@ type TemplateRunRepository interface {
 	RequestTemplateRunCancellation(ctx context.Context, cancellation traits.TemplateRunCancellation) error
 }
 
+// TemplateRegistrationRepository persists template registration attempts.
+type TemplateRegistrationRepository interface {
+	CreateTemplateRegistration(ctx context.Context, registration traits.TemplateRegistration) error
+	GetTemplateRegistration(ctx context.Context, tenantID traits.TenantID, id traits.TemplateRegistrationID) (traits.TemplateRegistration, error)
+	RecordTemplateRegistrationStatus(ctx context.Context, input traits.TemplateRegistrationStatusActivityInput) error
+}
+
+// TemplateRepository persists immutable template metadata and inferred variables.
+type TemplateRepository interface {
+	UpsertTemplateWithVariables(ctx context.Context, template traits.Template, variables []traits.TemplateVariable) (traits.Template, error)
+	GetTemplateVariables(ctx context.Context, tenantID traits.TenantID, templateID traits.TemplateID) ([]traits.TemplateVariable, error)
+}
+
 // TemplateRunLogReader reads persisted log bodies for tenant-owned TemplateRuns.
 type TemplateRunLogReader interface {
 	ReadTemplateRunLog(ctx context.Context, log traits.TemplateRunLog) ([]byte, error)
@@ -50,6 +65,7 @@ type TemplateRunLogRepository interface {
 // WorkflowDispatcher starts workflows and sends workflow signals.
 type WorkflowDispatcher interface {
 	StartTemplateRun(ctx context.Context, input traits.TemplateRunWorkflowInput) error
+	StartTemplateSync(ctx context.Context, input traits.TemplateSyncWorkflowInput) error
 	ApproveTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, signal traits.ApprovalSignal) error
 	CancelTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, signal traits.CancelSignal) error
 }
@@ -57,6 +73,11 @@ type WorkflowDispatcher interface {
 // TemplateRunIDGenerator creates TemplateRun identifiers.
 type TemplateRunIDGenerator interface {
 	NewTemplateRunID() traits.TemplateRunID
+}
+
+// TemplateRegistrationIDGenerator creates TemplateRegistration identifiers.
+type TemplateRegistrationIDGenerator interface {
+	NewTemplateRegistrationID() traits.TemplateRegistrationID
 }
 
 // Clock provides current time for app use cases.
@@ -68,10 +89,13 @@ type Clock interface {
 type Service struct {
 	StackTemplates         StackTemplateRepository
 	TemplateRuns           TemplateRunRepository
+	TemplateRegistrations  TemplateRegistrationRepository
+	Templates              TemplateRepository
 	TemplateRunLogs        TemplateRunLogReader
 	TemplateRunLogMetadata TemplateRunLogRepository
 	Workflows              WorkflowDispatcher
 	RunIDs                 TemplateRunIDGenerator
+	RegistrationIDs        TemplateRegistrationIDGenerator
 	Clock                  Clock
 }
 
@@ -87,22 +111,21 @@ func NewService(service Service) *Service {
 	if service.RunIDs == nil {
 		service.RunIDs = randomTemplateRunIDGenerator{}
 	}
+	if service.RegistrationIDs == nil {
+		service.RegistrationIDs = randomTemplateRegistrationIDGenerator{}
+	}
 
 	return &service
 }
 
 // RegisterTemplateCommand asks the app to register a Terraform template source.
 type RegisterTemplateCommand struct {
-	TenantID             traits.TenantID
-	GitHubInstallationID int64
-	RepoOwner            string
-	RepoName             string
-	DefaultRef           string
-	RootPath             string
-	Name                 string
-	Description          string
-	Tags                 []string
-	Actor                traits.UserID
+	TenantID    traits.TenantID
+	RepoOwner   string
+	RepoName    string
+	SourceRef   string
+	RootPath    string
+	RequestedBy traits.UserID
 }
 
 // CreateStackCommand asks the app to create a logical infrastructure stack.
@@ -168,6 +191,55 @@ type ListTemplateRunLogsCommand struct {
 	RunID    traits.TemplateRunID
 }
 
+// GetTemplateRegistrationCommand asks the app to read one tenant-owned registration attempt.
+type GetTemplateRegistrationCommand struct {
+	TenantID       traits.TenantID
+	RegistrationID traits.TemplateRegistrationID
+}
+
+// GetTemplateVariablesCommand asks the app to read inferred variables for one tenant-owned template.
+type GetTemplateVariablesCommand struct {
+	TenantID   traits.TenantID
+	TemplateID traits.TemplateID
+}
+
+// RegisterTemplate creates a pending registration attempt and dispatches its sync workflow.
+func (service *Service) RegisterTemplate(ctx context.Context, command RegisterTemplateCommand) (traits.TemplateRegistration, error) {
+	if err := validateRegisterTemplateCommand(command); err != nil {
+		return traits.TemplateRegistration{}, err
+	}
+
+	registration := traits.TemplateRegistration{
+		ID:          service.RegistrationIDs.NewTemplateRegistrationID(),
+		TenantID:    command.TenantID,
+		RepoOwner:   strings.TrimSpace(command.RepoOwner),
+		RepoName:    strings.TrimSpace(command.RepoName),
+		SourceRef:   strings.TrimSpace(command.SourceRef),
+		RootPath:    filepath.Clean(strings.TrimSpace(command.RootPath)),
+		Status:      traits.TemplateRegistrationPending,
+		RequestedBy: command.RequestedBy,
+		RequestedAt: service.Clock.Now(),
+	}
+
+	if err := service.TemplateRegistrations.CreateTemplateRegistration(ctx, registration); err != nil {
+		return traits.TemplateRegistration{}, fmt.Errorf("create template registration: %w", err)
+	}
+
+	input := traits.TemplateSyncWorkflowInput{
+		RegistrationID: registration.ID,
+		TenantID:       registration.TenantID,
+		RepoOwner:      registration.RepoOwner,
+		RepoName:       registration.RepoName,
+		SourceRef:      registration.SourceRef,
+		RootPath:       registration.RootPath,
+	}
+	if err := service.Workflows.StartTemplateSync(ctx, input); err != nil {
+		return traits.TemplateRegistration{}, fmt.Errorf("start template sync workflow: %w", err)
+	}
+
+	return registration, nil
+}
+
 // StartTemplateRun creates a queued run and dispatches its workflow.
 func (service *Service) StartTemplateRun(ctx context.Context, command StartTemplateRunCommand) (traits.TemplateRun, error) {
 	if err := validateStartTemplateRunCommand(command); err != nil {
@@ -215,6 +287,37 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	}
 
 	return run, nil
+}
+
+// GetTemplateRegistration returns one tenant-owned registration attempt.
+func (service *Service) GetTemplateRegistration(ctx context.Context, command GetTemplateRegistrationCommand) (traits.TemplateRegistration, error) {
+	if err := validateGetTemplateRegistrationCommand(command); err != nil {
+		return traits.TemplateRegistration{}, err
+	}
+
+	registration, err := service.TemplateRegistrations.GetTemplateRegistration(ctx, command.TenantID, command.RegistrationID)
+	if err != nil {
+		return traits.TemplateRegistration{}, fmt.Errorf("get template registration: %w", err)
+	}
+
+	return registration, nil
+}
+
+// GetTemplateVariables returns inferred variables for one tenant-owned template.
+func (service *Service) GetTemplateVariables(ctx context.Context, command GetTemplateVariablesCommand) ([]traits.TemplateVariable, error) {
+	if err := validateGetTemplateVariablesCommand(command); err != nil {
+		return nil, err
+	}
+
+	variables, err := service.Templates.GetTemplateVariables(ctx, command.TenantID, command.TemplateID)
+	if err != nil {
+		return nil, fmt.Errorf("get template variables: %w", err)
+	}
+	if variables == nil {
+		return []traits.TemplateVariable{}, nil
+	}
+
+	return variables, nil
 }
 
 // ApproveRun records an approval decision and signals the waiting workflow.
@@ -359,6 +462,25 @@ func validateStartTemplateRunCommand(command StartTemplateRunCommand) error {
 	}
 }
 
+func validateRegisterTemplateCommand(command RegisterTemplateCommand) error {
+	switch {
+	case command.TenantID == "":
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	case !validGitHubPathComponent(command.RepoOwner):
+		return fmt.Errorf("%w: repo owner is required", ErrInvalidCommand)
+	case !validGitHubPathComponent(command.RepoName):
+		return fmt.Errorf("%w: repo name is required", ErrInvalidCommand)
+	case strings.TrimSpace(command.SourceRef) == "":
+		return fmt.Errorf("%w: source ref is required", ErrInvalidCommand)
+	case !validTemplateRootPath(command.RootPath):
+		return fmt.Errorf("%w: root path is invalid", ErrInvalidCommand)
+	case command.RequestedBy == "":
+		return fmt.Errorf("%w: requested by is required", ErrInvalidCommand)
+	default:
+		return nil
+	}
+}
+
 func validateApproveRunCommand(command ApproveRunCommand) error {
 	switch {
 	case command.TenantID == "":
@@ -380,6 +502,28 @@ func validateCancelRunCommand(command CancelRunCommand) error {
 		return fmt.Errorf("%w: run id is required", ErrInvalidCommand)
 	case command.RequestedBy == "":
 		return fmt.Errorf("%w: requested by is required", ErrInvalidCommand)
+	default:
+		return nil
+	}
+}
+
+func validateGetTemplateRegistrationCommand(command GetTemplateRegistrationCommand) error {
+	switch {
+	case command.TenantID == "":
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	case command.RegistrationID == "":
+		return fmt.Errorf("%w: template registration id is required", ErrInvalidCommand)
+	default:
+		return nil
+	}
+}
+
+func validateGetTemplateVariablesCommand(command GetTemplateVariablesCommand) error {
+	switch {
+	case command.TenantID == "":
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	case command.TemplateID == "":
+		return fmt.Errorf("%w: template id is required", ErrInvalidCommand)
 	default:
 		return nil
 	}
@@ -418,6 +562,33 @@ func validLogPhase(phase string) bool {
 	}
 }
 
+func validGitHubPathComponent(component string) bool {
+	component = strings.TrimSpace(component)
+	if component == "" {
+		return false
+	}
+	for _, r := range component {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-', r == '_', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validTemplateRootPath(rootPath string) bool {
+	rootPath = strings.TrimSpace(rootPath)
+	if rootPath == "" || filepath.IsAbs(rootPath) {
+		return false
+	}
+	cleaned := filepath.Clean(rootPath)
+	return cleaned != ".." && !strings.HasPrefix(cleaned, ".."+string(filepath.Separator))
+}
+
 type systemClock struct{}
 
 func (systemClock) Now() time.Time {
@@ -432,4 +603,14 @@ func (randomTemplateRunIDGenerator) NewTemplateRunID() traits.TemplateRunID {
 		return traits.TemplateRunID(fmt.Sprintf("run_%d", time.Now().UTC().UnixNano()))
 	}
 	return traits.TemplateRunID("run_" + hex.EncodeToString(bytes[:]))
+}
+
+type randomTemplateRegistrationIDGenerator struct{}
+
+func (randomTemplateRegistrationIDGenerator) NewTemplateRegistrationID() traits.TemplateRegistrationID {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return traits.TemplateRegistrationID(fmt.Sprintf("template_registration_%d", time.Now().UTC().UnixNano()))
+	}
+	return traits.TemplateRegistrationID("template_registration_" + hex.EncodeToString(bytes[:]))
 }
