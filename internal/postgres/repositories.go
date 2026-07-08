@@ -2,10 +2,13 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -172,8 +175,17 @@ func (store *Store) UpsertTemplateWithVariables(ctx context.Context, template tr
 		tagsJSON = []byte("[]")
 	}
 
+	sourceTemplateID, err := upsertSourceTemplate(ctx, tx, template)
+	if err != nil {
+		return traits.Template{}, err
+	}
+	template.SourceTemplateID = sourceTemplateID
+
 	inserted, insertedNew, err := insertTemplate(ctx, tx, template, tagsJSON)
 	if err != nil {
+		return traits.Template{}, err
+	}
+	if err := recordLatestTemplateRevision(ctx, tx, inserted); err != nil {
 		return traits.Template{}, err
 	}
 	if !insertedNew {
@@ -278,6 +290,7 @@ func (store *Store) ListTemplates(ctx context.Context, tenantID traits.TenantID)
 		select
 			id,
 			tenant_id,
+			source_template_id,
 			repo_owner,
 			repo_name,
 			source_ref,
@@ -412,9 +425,14 @@ func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.T
 			tenant_id,
 			stack_id,
 			template_id,
+			component_key,
+			source_template_id,
+			desired_template_id,
+			last_applied_template_id,
 			selected_ref,
 			workspace_name,
 			config_json,
+			desired_config_json,
 			last_applied_run_id,
 			last_applied_ref,
 			last_applied_at,
@@ -450,6 +468,18 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 	if len(configJSON) == 0 {
 		configJSON = json.RawMessage(`{}`)
 	}
+	desiredConfigJSON := stackTemplate.DesiredConfigJSON
+	if len(desiredConfigJSON) == 0 {
+		desiredConfigJSON = configJSON
+	}
+	componentKey := strings.TrimSpace(stackTemplate.ComponentKey)
+	if componentKey == "" {
+		componentKey = string(stackTemplate.ID)
+	}
+	desiredTemplateID := stackTemplate.DesiredTemplateID
+	if desiredTemplateID == "" {
+		desiredTemplateID = stackTemplate.TemplateID
+	}
 
 	result, err := store.pool.Exec(ctx, `
 		insert into stack_templates (
@@ -457,16 +487,21 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 			tenant_id,
 			stack_id,
 			template_id,
+			component_key,
+			source_template_id,
+			desired_template_id,
+			last_applied_template_id,
 			selected_ref,
 			workspace_name,
 			config_json,
+			desired_config_json,
 			last_applied_run_id,
 			last_applied_ref,
 			last_applied_at,
 			created_by,
 			lifecycle
 		)
-		select $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12
+		select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, $14, $15, $16, $17
 		where exists (
 			select 1
 			from stacks
@@ -478,9 +513,14 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 		stackTemplate.TenantID,
 		stackTemplate.StackID,
 		stackTemplate.TemplateID,
+		componentKey,
+		stackTemplate.SourceTemplateID,
+		desiredTemplateID,
+		stackTemplate.LastAppliedTemplateID,
 		stackTemplate.SelectedRef,
 		stackTemplate.WorkspaceName,
 		configJSON,
+		desiredConfigJSON,
 		stackTemplate.LastAppliedRunID,
 		stackTemplate.LastAppliedRef,
 		nullTime(stackTemplate.LastAppliedAt),
@@ -488,6 +528,9 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 		stackTemplate.Lifecycle,
 	)
 	if err != nil {
+		if duplicateConstraint(err, "stack_templates_active_component_key_idx") {
+			return app.ErrDuplicateStackTemplateComponentKey
+		}
 		return fmt.Errorf("create stack template: %w", err)
 	}
 	if result.RowsAffected() == 0 {
@@ -501,6 +544,7 @@ func (store *Store) GetTemplate(ctx context.Context, tenantID traits.TenantID, t
 		select
 			id,
 			tenant_id,
+			source_template_id,
 			repo_owner,
 			repo_name,
 			source_ref,
@@ -532,9 +576,14 @@ func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.Tenant
 			tenant_id,
 			stack_id,
 			template_id,
+			component_key,
+			source_template_id,
+			desired_template_id,
+			last_applied_template_id,
 			selected_ref,
 			workspace_name,
 			config_json,
+			desired_config_json,
 			last_applied_run_id,
 			last_applied_ref,
 			last_applied_at,
@@ -560,10 +609,13 @@ func (store *Store) CreateTemplateRun(ctx context.Context, run traits.TemplateRu
 			id,
 			tenant_id,
 			stack_template_id,
+			template_id,
+			source_template_id,
 			operation,
 			selected_ref,
 			resolved_commit_sha,
 			workspace_name,
+			config_json,
 			backend_type,
 			backend_config_hash,
 			status,
@@ -572,17 +624,20 @@ func (store *Store) CreateTemplateRun(ctx context.Context, run traits.TemplateRu
 			completed_at,
 			error_summary
 		) values (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11, $12, $13, $14
+			$1, $2, $3, $4, $5, $6, $7, $8,
+			$9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17
 		)
 	`,
 		run.ID,
 		run.TenantID,
 		run.StackTemplateID,
+		run.TemplateID,
+		run.SourceTemplateID,
 		run.Operation,
 		run.SelectedRef,
 		run.ResolvedCommitSHA,
 		run.WorkspaceName,
+		defaultJSON(run.ConfigJSON),
 		run.BackendType,
 		run.BackendConfigHash,
 		run.Status,
@@ -608,10 +663,13 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID traits.TenantID
 			id,
 			tenant_id,
 			stack_template_id,
+			template_id,
+			source_template_id,
 			operation,
 			selected_ref,
 			resolved_commit_sha,
 			workspace_name,
+			config_json,
 			backend_type,
 			backend_config_hash,
 			status,
@@ -626,10 +684,13 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID traits.TenantID
 		&run.ID,
 		&run.TenantID,
 		&run.StackTemplateID,
+		&run.TemplateID,
+		&run.SourceTemplateID,
 		&run.Operation,
 		&run.SelectedRef,
 		&run.ResolvedCommitSHA,
 		&run.WorkspaceName,
+		&run.ConfigJSON,
 		&run.BackendType,
 		&run.BackendConfigHash,
 		&run.Status,
@@ -947,6 +1008,7 @@ func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLas
 		update stack_templates
 		set
 			last_applied_run_id = template_runs.id,
+			last_applied_template_id = template_runs.template_id,
 			last_applied_ref = template_runs.selected_ref,
 			last_applied_at = now()
 		from template_runs
@@ -989,6 +1051,7 @@ type templateScanner interface {
 func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, error) {
 	var stackTemplate traits.StackTemplate
 	var configJSON []byte
+	var desiredConfigJSON []byte
 	var lastAppliedAt sql.NullTime
 
 	if err := scanner.Scan(
@@ -996,9 +1059,14 @@ func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, erro
 		&stackTemplate.TenantID,
 		&stackTemplate.StackID,
 		&stackTemplate.TemplateID,
+		&stackTemplate.ComponentKey,
+		&stackTemplate.SourceTemplateID,
+		&stackTemplate.DesiredTemplateID,
+		&stackTemplate.LastAppliedTemplateID,
 		&stackTemplate.SelectedRef,
 		&stackTemplate.WorkspaceName,
 		&configJSON,
+		&desiredConfigJSON,
 		&stackTemplate.LastAppliedRunID,
 		&stackTemplate.LastAppliedRef,
 		&lastAppliedAt,
@@ -1008,6 +1076,7 @@ func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, erro
 		return traits.StackTemplate{}, fmt.Errorf("scan stack template: %w", err)
 	}
 	stackTemplate.ConfigJSON = configJSON
+	stackTemplate.DesiredConfigJSON = desiredConfigJSON
 	if lastAppliedAt.Valid {
 		stackTemplate.LastAppliedAt = lastAppliedAt.Time
 	}
@@ -1021,6 +1090,7 @@ func scanTemplate(scanner templateScanner) (traits.Template, error) {
 	if err := scanner.Scan(
 		&template.ID,
 		&template.TenantID,
+		&template.SourceTemplateID,
 		&template.RepoOwner,
 		&template.RepoName,
 		&template.SourceRef,
@@ -1096,6 +1166,81 @@ func duplicateConstraint(err error, constraint string) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
 }
 
+func upsertSourceTemplate(ctx context.Context, tx pgx.Tx, template traits.Template) (traits.SourceTemplateID, error) {
+	sourceTemplateID := template.SourceTemplateID
+	if sourceTemplateID == "" {
+		sourceTemplateID = deterministicSourceTemplateID(template)
+	}
+
+	var persistedID traits.SourceTemplateID
+	err := tx.QueryRow(ctx, `
+		insert into source_templates (
+			id,
+			tenant_id,
+			repo_owner,
+			repo_name,
+			source_ref,
+			root_path
+		) values ($1, $2, $3, $4, $5, $6)
+		on conflict (tenant_id, repo_owner, repo_name, root_path, source_ref) do update set
+			updated_at = now()
+		returning id
+	`,
+		sourceTemplateID,
+		template.TenantID,
+		template.RepoOwner,
+		template.RepoName,
+		template.SourceRef,
+		template.RootPath,
+	).Scan(&persistedID)
+	if err != nil {
+		return "", fmt.Errorf("upsert source template: %w", err)
+	}
+
+	return persistedID, nil
+}
+
+func recordLatestTemplateRevision(ctx context.Context, tx pgx.Tx, template traits.Template) error {
+	commandTag, err := tx.Exec(ctx, `
+		update source_templates
+		set
+			latest_template_revision_id = $1,
+			updated_at = now()
+		where tenant_id = $2
+			and id = $3
+	`,
+		template.ID,
+		template.TenantID,
+		template.SourceTemplateID,
+	)
+	if err != nil {
+		return fmt.Errorf("record latest template revision: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return app.ErrNotFound
+	}
+
+	return nil
+}
+
+func deterministicSourceTemplateID(template traits.Template) traits.SourceTemplateID {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		string(template.TenantID),
+		template.RepoOwner,
+		template.RepoName,
+		template.RootPath,
+		template.SourceRef,
+	}, "\x00")))
+	return traits.SourceTemplateID("source_template_" + hex.EncodeToString(sum[:16]))
+}
+
+func defaultJSON(input json.RawMessage) json.RawMessage {
+	if len(input) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	return input
+}
+
 func insertTemplate(ctx context.Context, tx pgx.Tx, template traits.Template, tagsJSON []byte) (traits.Template, bool, error) {
 	var inserted traits.Template
 	var insertedTagsJSON []byte
@@ -1103,6 +1248,7 @@ func insertTemplate(ctx context.Context, tx pgx.Tx, template traits.Template, ta
 		insert into templates (
 			id,
 			tenant_id,
+			source_template_id,
 			repo_owner,
 			repo_name,
 			source_ref,
@@ -1114,13 +1260,14 @@ func insertTemplate(ctx context.Context, tx pgx.Tx, template traits.Template, ta
 			status,
 			created_at
 		) values (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10::jsonb, $11, coalesce($12::timestamptz, now())
+			$1, $2, $3, $4, $5, $6, $7, $8,
+			$9, $10, $11::jsonb, $12, coalesce($13::timestamptz, now())
 		)
-		on conflict (tenant_id, repo_owner, repo_name, root_path, resolved_commit_sha) do nothing
+		on conflict (tenant_id, source_template_id, resolved_commit_sha) do nothing
 		returning
 			id,
 			tenant_id,
+			source_template_id,
 			repo_owner,
 			repo_name,
 			source_ref,
@@ -1134,6 +1281,7 @@ func insertTemplate(ctx context.Context, tx pgx.Tx, template traits.Template, ta
 	`,
 		template.ID,
 		template.TenantID,
+		template.SourceTemplateID,
 		template.RepoOwner,
 		template.RepoName,
 		template.SourceRef,
@@ -1147,6 +1295,7 @@ func insertTemplate(ctx context.Context, tx pgx.Tx, template traits.Template, ta
 	).Scan(
 		&inserted.ID,
 		&inserted.TenantID,
+		&inserted.SourceTemplateID,
 		&inserted.RepoOwner,
 		&inserted.RepoName,
 		&inserted.SourceRef,
@@ -1182,6 +1331,7 @@ func selectTemplateByIdentity(ctx context.Context, tx pgx.Tx, template traits.Te
 		select
 			id,
 			tenant_id,
+			source_template_id,
 			repo_owner,
 			repo_name,
 			source_ref,
@@ -1194,19 +1344,16 @@ func selectTemplateByIdentity(ctx context.Context, tx pgx.Tx, template traits.Te
 			created_at
 		from templates
 		where tenant_id = $1
-			and repo_owner = $2
-			and repo_name = $3
-			and root_path = $4
-			and resolved_commit_sha = $5
+			and source_template_id = $2
+			and resolved_commit_sha = $3
 	`,
 		template.TenantID,
-		template.RepoOwner,
-		template.RepoName,
-		template.RootPath,
+		template.SourceTemplateID,
 		template.ResolvedCommitSHA,
 	).Scan(
 		&selected.ID,
 		&selected.TenantID,
+		&selected.SourceTemplateID,
 		&selected.RepoOwner,
 		&selected.RepoName,
 		&selected.SourceRef,

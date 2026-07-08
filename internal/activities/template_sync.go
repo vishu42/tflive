@@ -102,6 +102,7 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 		return invalidTemplateSyncOutput("read template metadata: %v", err), nil
 	}
 
+	sourceTemplateID := deterministicSourceTemplateID(input, rootPath)
 	templateID := deterministicTemplateID(input, rootPath, resolvedSHA)
 	variables, err := inferTemplateVariables(templateRoot, templateID)
 	if err != nil {
@@ -114,6 +115,7 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 	template := traits.Template{
 		ID:                templateID,
 		TenantID:          input.TenantID,
+		SourceTemplateID:  sourceTemplateID,
 		RepoOwner:         input.RepoOwner,
 		RepoName:          input.RepoName,
 		SourceRef:         input.SourceRef,
@@ -386,4 +388,15 @@ func deterministicTemplateID(input traits.TemplateSyncActivityInput, rootPath st
 		resolvedSHA,
 	}, "\x00")))
 	return traits.TemplateID("template_" + hex.EncodeToString(sum[:16]))
+}
+
+func deterministicSourceTemplateID(input traits.TemplateSyncActivityInput, rootPath string) traits.SourceTemplateID {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		string(input.TenantID),
+		input.RepoOwner,
+		input.RepoName,
+		rootPath,
+		input.SourceRef,
+	}, "\x00")))
+	return traits.SourceTemplateID("source_template_" + hex.EncodeToString(sum[:16]))
 }

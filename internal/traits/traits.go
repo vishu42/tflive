@@ -17,6 +17,7 @@ func (id ID) Valid() bool {
 type (
 	TenantID               ID
 	UserID                 ID
+	SourceTemplateID       ID
 	TemplateID             ID
 	TemplateRegistrationID ID
 	StackID                ID
@@ -190,20 +191,34 @@ type Tenant struct {
 	Name string
 }
 
+// SourceTemplate is the stable logical identity tracked by template revisions.
+type SourceTemplate struct {
+	ID                       SourceTemplateID `json:"id"`
+	TenantID                 TenantID         `json:"tenant_id"`
+	RepoOwner                string           `json:"repo_owner"`
+	RepoName                 string           `json:"repo_name"`
+	SourceRef                string           `json:"source_ref"`
+	RootPath                 string           `json:"root_path"`
+	LatestTemplateRevisionID TemplateID       `json:"latest_template_revision_id"`
+	CreatedAt                time.Time        `json:"created_at"`
+	UpdatedAt                time.Time        `json:"updated_at"`
+}
+
 // Template is a GitHub-sourced Terraform template.
 type Template struct {
-	ID                TemplateID     `json:"id"`
-	TenantID          TenantID       `json:"tenant_id"`
-	RepoOwner         string         `json:"repo_owner"`
-	RepoName          string         `json:"repo_name"`
-	SourceRef         string         `json:"source_ref"`
-	ResolvedCommitSHA string         `json:"resolved_commit_sha"`
-	RootPath          string         `json:"root_path"`
-	Name              string         `json:"name"`
-	Description       string         `json:"description"`
-	Tags              []string       `json:"tags"`
-	Status            TemplateStatus `json:"status"`
-	CreatedAt         time.Time      `json:"created_at"`
+	ID                TemplateID       `json:"id"`
+	TenantID          TenantID         `json:"tenant_id"`
+	SourceTemplateID  SourceTemplateID `json:"source_template_id"`
+	RepoOwner         string           `json:"repo_owner"`
+	RepoName          string           `json:"repo_name"`
+	SourceRef         string           `json:"source_ref"`
+	ResolvedCommitSHA string           `json:"resolved_commit_sha"`
+	RootPath          string           `json:"root_path"`
+	Name              string           `json:"name"`
+	Description       string           `json:"description"`
+	Tags              []string         `json:"tags"`
+	Status            TemplateStatus   `json:"status"`
+	CreatedAt         time.Time        `json:"created_at"`
 }
 
 // TemplateRegistration records one async template registration request.
@@ -249,18 +264,23 @@ type Stack struct {
 
 // StackTemplate is one template installed into one stack.
 type StackTemplate struct {
-	ID               StackTemplateID        `json:"id"`
-	TenantID         TenantID               `json:"tenant_id"`
-	StackID          StackID                `json:"stack_id"`
-	TemplateID       TemplateID             `json:"template_id"`
-	SelectedRef      string                 `json:"selected_ref"`
-	WorkspaceName    string                 `json:"workspace_name"`
-	ConfigJSON       json.RawMessage        `json:"config_json"`
-	LastAppliedRunID TemplateRunID          `json:"last_applied_run_id"`
-	LastAppliedRef   string                 `json:"last_applied_ref"`
-	LastAppliedAt    time.Time              `json:"last_applied_at,omitempty"`
-	CreatedBy        UserID                 `json:"created_by"`
-	Lifecycle        StackTemplateLifecycle `json:"lifecycle"`
+	ID                    StackTemplateID        `json:"id"`
+	TenantID              TenantID               `json:"tenant_id"`
+	StackID               StackID                `json:"stack_id"`
+	TemplateID            TemplateID             `json:"template_id"`
+	ComponentKey          string                 `json:"component_key"`
+	SourceTemplateID      SourceTemplateID       `json:"source_template_id"`
+	DesiredTemplateID     TemplateID             `json:"desired_template_id"`
+	LastAppliedTemplateID TemplateID             `json:"last_applied_template_id"`
+	SelectedRef           string                 `json:"selected_ref"`
+	WorkspaceName         string                 `json:"workspace_name"`
+	ConfigJSON            json.RawMessage        `json:"config_json"`
+	DesiredConfigJSON     json.RawMessage        `json:"desired_config_json"`
+	LastAppliedRunID      TemplateRunID          `json:"last_applied_run_id"`
+	LastAppliedRef        string                 `json:"last_applied_ref"`
+	LastAppliedAt         time.Time              `json:"last_applied_at,omitempty"`
+	CreatedBy             UserID                 `json:"created_by"`
+	Lifecycle             StackTemplateLifecycle `json:"lifecycle"`
 }
 
 // TemplateRun is one Terraform operation against a StackTemplate.
@@ -269,10 +289,13 @@ type TemplateRun struct {
 	ID                TemplateRunID     `json:"id"`
 	TenantID          TenantID          `json:"tenant_id"`
 	StackTemplateID   StackTemplateID   `json:"stack_template_id"`
+	TemplateID        TemplateID        `json:"template_id"`
+	SourceTemplateID  SourceTemplateID  `json:"source_template_id"`
 	Operation         OperationType     `json:"operation"`
 	SelectedRef       string            `json:"selected_ref"`
 	ResolvedCommitSHA string            `json:"resolved_commit_sha"`
 	WorkspaceName     string            `json:"workspace_name"`
+	ConfigJSON        json.RawMessage   `json:"config_json"`
 	BackendType       string            `json:"backend_type"`
 	BackendConfigHash string            `json:"backend_config_hash"`
 	Status            TemplateRunStatus `json:"status"`

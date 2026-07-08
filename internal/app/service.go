@@ -16,14 +16,15 @@ import (
 )
 
 var (
-	ErrInvalidCommand             = errors.New("invalid command")
-	ErrDuplicateStackSlug         = errors.New("duplicate stack slug")
-	ErrNotFound                   = errors.New("not found")
-	ErrTemplateNotInstallable     = errors.New("template is not installable")
-	ErrStackTemplateConfigInvalid = errors.New("stack template config is invalid")
-	ErrStackTemplateNotRunnable   = errors.New("stack template is not runnable")
-	ErrRunNotApprovable           = errors.New("run is not approvable")
-	ErrRunNotCancelable           = errors.New("run is not cancelable")
+	ErrInvalidCommand                     = errors.New("invalid command")
+	ErrDuplicateStackSlug                 = errors.New("duplicate stack slug")
+	ErrDuplicateStackTemplateComponentKey = errors.New("duplicate stack template component key")
+	ErrNotFound                           = errors.New("not found")
+	ErrTemplateNotInstallable             = errors.New("template is not installable")
+	ErrStackTemplateConfigInvalid         = errors.New("stack template config is invalid")
+	ErrStackTemplateNotRunnable           = errors.New("stack template is not runnable")
+	ErrRunNotApprovable                   = errors.New("run is not approvable")
+	ErrRunNotCancelable                   = errors.New("run is not cancelable")
 )
 
 // StackRepository persists and reads tenant-owned stacks.

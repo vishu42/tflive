@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -48,6 +49,7 @@ func TestMigrateAppliesSchema(t *testing.T) {
 		"template_runs",
 		"template_run_approvals",
 		"template_run_logs",
+		"source_templates",
 		"templates",
 		"template_registrations",
 		"template_variables",
@@ -539,6 +541,147 @@ func TestCreateStackTemplateAndGetStackWithTemplates(t *testing.T) {
 	}
 }
 
+func TestCreateStackTemplateAllowsRepeatedSourceWithDistinctComponentKeys(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	tenantID := traits.TenantID("tenant_123")
+	sourceTemplateID := traits.SourceTemplateID("source_template_vpc")
+
+	stack := traits.Stack{
+		ID:        traits.StackID("stack_123"),
+		TenantID:  tenantID,
+		Name:      "Acme Prod",
+		Slug:      "acme-prod",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateStack(ctx, stack); err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+
+	template := traits.Template{
+		ID:                traits.TemplateID("template_rev_1"),
+		TenantID:          tenantID,
+		SourceTemplateID:  sourceTemplateID,
+		RepoOwner:         "acme",
+		RepoName:          "infra",
+		SourceRef:         "main",
+		ResolvedCommitSHA: "sha-1",
+		RootPath:          "vpc",
+		Name:              "vpc",
+		Status:            traits.TemplateActive,
+		CreatedAt:         time.Now().UTC(),
+	}
+	if _, err := store.UpsertTemplateWithVariables(ctx, template, nil); err != nil {
+		t.Fatalf("UpsertTemplateWithVariables returned error: %v", err)
+	}
+
+	first := traits.StackTemplate{
+		ID:                traits.StackTemplateID("stack_template_primary"),
+		TenantID:          tenantID,
+		StackID:           stack.ID,
+		TemplateID:        template.ID,
+		SourceTemplateID:  sourceTemplateID,
+		DesiredTemplateID: template.ID,
+		ComponentKey:      "primary-vpc",
+		SelectedRef:       "main",
+		WorkspaceName:     "meg_acme_primary",
+		ConfigJSON:        json.RawMessage(`{"region":"us-east-1"}`),
+		DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
+		CreatedBy:         traits.UserID("user_123"),
+		Lifecycle:         traits.StackTemplateActive,
+	}
+	second := first
+	second.ID = traits.StackTemplateID("stack_template_shared")
+	second.ComponentKey = "shared-vpc"
+	second.WorkspaceName = "meg_acme_shared"
+
+	if err := store.CreateStackTemplate(ctx, first); err != nil {
+		t.Fatalf("CreateStackTemplate first returned error: %v", err)
+	}
+	if err := store.CreateStackTemplate(ctx, second); err != nil {
+		t.Fatalf("CreateStackTemplate second returned error: %v", err)
+	}
+
+	view, err := store.GetStackWithTemplates(ctx, tenantID, stack.ID)
+	if err != nil {
+		t.Fatalf("GetStackWithTemplates returned error: %v", err)
+	}
+	if len(view.Templates) != 2 {
+		t.Fatalf("template count = %d, want 2", len(view.Templates))
+	}
+	if view.Templates[0].SourceTemplateID != sourceTemplateID || view.Templates[1].SourceTemplateID != sourceTemplateID {
+		t.Fatalf("source template IDs = %#v", view.Templates)
+	}
+}
+
+func TestCreateStackTemplateRejectsDuplicateActiveComponentKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	tenantID := traits.TenantID("tenant_123")
+	sourceTemplateID := traits.SourceTemplateID("source_template_vpc")
+
+	stack := traits.Stack{
+		ID:        traits.StackID("stack_123"),
+		TenantID:  tenantID,
+		Name:      "Acme Prod",
+		Slug:      "acme-prod",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateStack(ctx, stack); err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+
+	template := traits.Template{
+		ID:                traits.TemplateID("template_rev_1"),
+		TenantID:          tenantID,
+		SourceTemplateID:  sourceTemplateID,
+		RepoOwner:         "acme",
+		RepoName:          "infra",
+		SourceRef:         "main",
+		ResolvedCommitSHA: "sha-1",
+		RootPath:          "vpc",
+		Name:              "vpc",
+		Status:            traits.TemplateActive,
+		CreatedAt:         time.Now().UTC(),
+	}
+	if _, err := store.UpsertTemplateWithVariables(ctx, template, nil); err != nil {
+		t.Fatalf("UpsertTemplateWithVariables returned error: %v", err)
+	}
+
+	stackTemplate := traits.StackTemplate{
+		ID:                traits.StackTemplateID("stack_template_primary"),
+		TenantID:          tenantID,
+		StackID:           stack.ID,
+		TemplateID:        template.ID,
+		SourceTemplateID:  sourceTemplateID,
+		DesiredTemplateID: template.ID,
+		ComponentKey:      "primary-vpc",
+		SelectedRef:       "main",
+		WorkspaceName:     "meg_acme_primary",
+		ConfigJSON:        json.RawMessage(`{}`),
+		DesiredConfigJSON: json.RawMessage(`{}`),
+		CreatedBy:         traits.UserID("user_123"),
+		Lifecycle:         traits.StackTemplateActive,
+	}
+
+	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
+		t.Fatalf("CreateStackTemplate first returned error: %v", err)
+	}
+	stackTemplate.ID = traits.StackTemplateID("stack_template_duplicate")
+	err := store.CreateStackTemplate(ctx, stackTemplate)
+	if !errors.Is(err, app.ErrDuplicateStackTemplateComponentKey) {
+		t.Fatalf("error = %v, want ErrDuplicateStackTemplateComponentKey", err)
+	}
+}
+
 func TestGetStackTemplateReturnsTenantScopedRecord(t *testing.T) {
 	t.Parallel()
 
@@ -786,9 +929,10 @@ func TestGetTemplateRunReturnsTenantScopedRecord(t *testing.T) {
 		TriggerActor:      traits.UserID("user_123"),
 		StartedAt:         startedAt,
 		CompletedAt:       completedAt,
+		ConfigJSON:        json.RawMessage(`{}`),
 		ErrorSummary:      "previous error summary",
 	}
-	if run != want {
+	if !reflect.DeepEqual(run, want) {
 		t.Fatalf("run = %#v, want %#v", run, want)
 	}
 }
