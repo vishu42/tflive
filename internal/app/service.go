@@ -193,6 +193,7 @@ type AddTemplateToStackCommand struct {
 	TenantID      traits.TenantID
 	StackID       traits.StackID
 	TemplateID    traits.TemplateID
+	ComponentKey  string
 	SelectedRef   string
 	WorkspaceName string
 	ConfigJSON    json.RawMessage
@@ -365,15 +366,19 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 
 	id := service.StackTemplateIDs.NewStackTemplateID()
 	stackTemplate := traits.StackTemplate{
-		ID:            id,
-		TenantID:      command.TenantID,
-		StackID:       command.StackID,
-		TemplateID:    command.TemplateID,
-		SelectedRef:   strings.TrimSpace(command.SelectedRef),
-		WorkspaceName: workspaceName(stack.Slug, id),
-		ConfigJSON:    configJSON,
-		CreatedBy:     command.Actor,
-		Lifecycle:     traits.StackTemplateActive,
+		ID:                id,
+		TenantID:          command.TenantID,
+		StackID:           command.StackID,
+		TemplateID:        command.TemplateID,
+		ComponentKey:      componentKey(command.ComponentKey, id),
+		SourceTemplateID:  template.SourceTemplateID,
+		DesiredTemplateID: command.TemplateID,
+		SelectedRef:       strings.TrimSpace(command.SelectedRef),
+		WorkspaceName:     workspaceName(stack.Slug, id),
+		ConfigJSON:        configJSON,
+		DesiredConfigJSON: configJSON,
+		CreatedBy:         command.Actor,
+		Lifecycle:         traits.StackTemplateActive,
 	}
 
 	if err := service.StackTemplateInstaller.CreateStackTemplate(ctx, stackTemplate); err != nil {
@@ -397,21 +402,38 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	}
 	// TODO: Reject active StackTemplate records with missing SelectedRef or WorkspaceName,
 	// or enforce those invariants with Postgres CHECK constraints.
-	template, err := service.TemplateMetadata.GetTemplate(ctx, command.TenantID, stackTemplate.TemplateID)
+	desiredTemplateID := stackTemplate.DesiredTemplateID
+	if desiredTemplateID == "" {
+		desiredTemplateID = stackTemplate.TemplateID
+	}
+	desiredConfigJSON := stackTemplate.DesiredConfigJSON
+	if len(desiredConfigJSON) == 0 {
+		desiredConfigJSON = stackTemplate.ConfigJSON
+	}
+
+	template, err := service.TemplateMetadata.GetTemplate(ctx, command.TenantID, desiredTemplateID)
 	if err != nil {
 		return traits.TemplateRun{}, fmt.Errorf("get template metadata: %w", err)
 	}
+	sourceTemplateID := stackTemplate.SourceTemplateID
+	if sourceTemplateID == "" {
+		sourceTemplateID = template.SourceTemplateID
+	}
 
 	run := traits.TemplateRun{
-		ID:              service.RunIDs.NewTemplateRunID(),
-		TenantID:        command.TenantID,
-		StackTemplateID: command.StackTemplateID,
-		Operation:       command.Operation,
-		SelectedRef:     stackTemplate.SelectedRef,
-		WorkspaceName:   stackTemplate.WorkspaceName,
-		Status:          traits.TemplateRunQueued,
-		TriggerActor:    command.TriggerActor,
-		StartedAt:       service.Clock.Now(),
+		ID:                service.RunIDs.NewTemplateRunID(),
+		TenantID:          command.TenantID,
+		StackTemplateID:   command.StackTemplateID,
+		TemplateID:        desiredTemplateID,
+		SourceTemplateID:  sourceTemplateID,
+		Operation:         command.Operation,
+		SelectedRef:       stackTemplate.SelectedRef,
+		ResolvedCommitSHA: template.ResolvedCommitSHA,
+		WorkspaceName:     stackTemplate.WorkspaceName,
+		ConfigJSON:        desiredConfigJSON,
+		Status:            traits.TemplateRunQueued,
+		TriggerActor:      command.TriggerActor,
+		StartedAt:         service.Clock.Now(),
 	}
 
 	if err := service.TemplateRuns.CreateTemplateRun(ctx, run); err != nil {
@@ -863,6 +885,14 @@ func validateTemplateConfig(raw json.RawMessage, variables []traits.TemplateVari
 		return nil, fmt.Errorf("marshal stack template config: %w", err)
 	}
 	return normalized, nil
+}
+
+func componentKey(value string, stackTemplateID traits.StackTemplateID) string {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		return value
+	}
+	return string(stackTemplateID)
 }
 
 func workspaceName(stackSlug string, stackTemplateID traits.StackTemplateID) string {

@@ -238,10 +238,11 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	}
 	templates := &recordingTemplateRepository{
 		template: traits.Template{
-			ID:        traits.TemplateID("template_123"),
-			TenantID:  traits.TenantID("tenant_123"),
-			SourceRef: "main",
-			Status:    traits.TemplateActive,
+			ID:               traits.TemplateID("template_123"),
+			TenantID:         traits.TenantID("tenant_123"),
+			SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
+			SourceRef:        "main",
+			Status:           traits.TemplateActive,
 		},
 		variables: []traits.TemplateVariable{
 			{Name: "region", Required: true},
@@ -258,12 +259,13 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	})
 
 	stackTemplate, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{
-		TenantID:    traits.TenantID("tenant_123"),
-		StackID:     traits.StackID("stack_123"),
-		TemplateID:  traits.TemplateID("template_123"),
-		SelectedRef: "main",
-		ConfigJSON:  json.RawMessage(`{"region":"us-east-1"}`),
-		Actor:       traits.UserID("user_123"),
+		TenantID:     traits.TenantID("tenant_123"),
+		StackID:      traits.StackID("stack_123"),
+		TemplateID:   traits.TemplateID("template_123"),
+		ComponentKey: "primary-vpc",
+		SelectedRef:  "main",
+		ConfigJSON:   json.RawMessage(`{"region":"us-east-1"}`),
+		Actor:        traits.UserID("user_123"),
 	})
 	if err != nil {
 		t.Fatalf("AddTemplateToStack returned error: %v", err)
@@ -284,11 +286,32 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	if stackTemplate.CreatedBy != traits.UserID("user_123") {
 		t.Fatalf("created by = %q, want user_123", stackTemplate.CreatedBy)
 	}
+	if stackTemplate.ComponentKey != "primary-vpc" {
+		t.Fatalf("component key = %q, want primary-vpc", stackTemplate.ComponentKey)
+	}
+	if stackTemplate.SourceTemplateID != traits.SourceTemplateID("source_template_vpc") {
+		t.Fatalf("source template ID = %q, want source_template_vpc", stackTemplate.SourceTemplateID)
+	}
+	if stackTemplate.DesiredTemplateID != traits.TemplateID("template_123") {
+		t.Fatalf("desired template ID = %q, want template_123", stackTemplate.DesiredTemplateID)
+	}
+	if string(stackTemplate.DesiredConfigJSON) != `{"region":"us-east-1"}` {
+		t.Fatalf("desired config json = %s", stackTemplate.DesiredConfigJSON)
+	}
 	if installer.created.CreatedBy != traits.UserID("user_123") {
 		t.Fatalf("persisted created by = %q, want user_123", installer.created.CreatedBy)
 	}
 	if string(installer.created.ConfigJSON) != `{"region":"us-east-1"}` {
 		t.Fatalf("config json = %s", installer.created.ConfigJSON)
+	}
+	if installer.created.SourceTemplateID != traits.SourceTemplateID("source_template_vpc") {
+		t.Fatalf("persisted source template ID = %q, want source_template_vpc", installer.created.SourceTemplateID)
+	}
+	if installer.created.DesiredTemplateID != traits.TemplateID("template_123") {
+		t.Fatalf("persisted desired template ID = %q, want template_123", installer.created.DesiredTemplateID)
+	}
+	if string(installer.created.DesiredConfigJSON) != `{"region":"us-east-1"}` {
+		t.Fatalf("persisted desired config json = %s", installer.created.DesiredConfigJSON)
 	}
 }
 
@@ -388,22 +411,27 @@ func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 
 	stackTemplates := &recordingStackTemplateRepository{
 		stackTemplate: traits.StackTemplate{
-			ID:            traits.StackTemplateID("stack_template_123"),
-			StackID:       traits.StackID("stack_123"),
-			TemplateID:    traits.TemplateID("template_123"),
-			SelectedRef:   "main",
-			WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-			Lifecycle:     traits.StackTemplateActive,
+			ID:                traits.StackTemplateID("stack_template_123"),
+			StackID:           traits.StackID("stack_123"),
+			TemplateID:        traits.TemplateID("template_123"),
+			SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
+			DesiredTemplateID: traits.TemplateID("template_rev_2"),
+			DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
+			SelectedRef:       "main",
+			WorkspaceName:     "mtp_acme_prod_vpc_a13f9c",
+			Lifecycle:         traits.StackTemplateActive,
 		},
 	}
 	templates := &recordingTemplateRepository{
 		template: traits.Template{
-			ID:        traits.TemplateID("template_123"),
-			TenantID:  traits.TenantID("tenant_123"),
-			RepoOwner: "acme",
-			RepoName:  "infra-templates",
-			RootPath:  "modules/vpc",
-			Status:    traits.TemplateActive,
+			ID:                traits.TemplateID("template_rev_2"),
+			TenantID:          traits.TenantID("tenant_123"),
+			SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
+			RepoOwner:         "acme",
+			RepoName:          "infra-templates",
+			ResolvedCommitSHA: "sha-2",
+			RootPath:          "modules/vpc",
+			Status:            traits.TemplateActive,
 		},
 	}
 	runs := &recordingTemplateRunRepository{}
@@ -444,8 +472,20 @@ func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 		t.Fatalf("run.SelectedRef = %q, want main", run.SelectedRef)
 	}
 
-	if run.ResolvedCommitSHA != "" {
-		t.Fatalf("run.ResolvedCommitSHA = %q, want empty before workflow resolves it", run.ResolvedCommitSHA)
+	if run.TemplateID != traits.TemplateID("template_rev_2") {
+		t.Fatalf("run.TemplateID = %q, want template_rev_2", run.TemplateID)
+	}
+
+	if run.SourceTemplateID != traits.SourceTemplateID("source_template_vpc") {
+		t.Fatalf("run.SourceTemplateID = %q, want source_template_vpc", run.SourceTemplateID)
+	}
+
+	if string(run.ConfigJSON) != `{"region":"us-east-1"}` {
+		t.Fatalf("run.ConfigJSON = %s", run.ConfigJSON)
+	}
+
+	if run.ResolvedCommitSHA != "sha-2" {
+		t.Fatalf("run.ResolvedCommitSHA = %q, want sha-2", run.ResolvedCommitSHA)
 	}
 
 	if !run.StartedAt.Equal(now) {
@@ -476,8 +516,8 @@ func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 		t.Fatalf("template lookup tenant = %q, want tenant_123", templates.gotGetTemplateTenantID)
 	}
 
-	if templates.gotGetTemplateID != traits.TemplateID("template_123") {
-		t.Fatalf("template lookup ID = %q, want template_123", templates.gotGetTemplateID)
+	if templates.gotGetTemplateID != traits.TemplateID("template_rev_2") {
+		t.Fatalf("template lookup ID = %q, want template_rev_2", templates.gotGetTemplateID)
 	}
 
 	if workflows.input.RepoOwner != "acme" {

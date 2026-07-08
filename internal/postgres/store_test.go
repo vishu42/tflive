@@ -807,10 +807,13 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 		ID:                traits.TemplateRunID("run_123"),
 		TenantID:          traits.TenantID("tenant_123"),
 		StackTemplateID:   traits.StackTemplateID("stack_template_123"),
+		TemplateID:        traits.TemplateID("template_rev_2"),
+		SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
 		Operation:         traits.OperationApply,
 		SelectedRef:       "main",
 		ResolvedCommitSHA: "abc123",
 		WorkspaceName:     "mtp_acme_prod_vpc_a13f9c",
+		ConfigJSON:        json.RawMessage(`{"region":"us-east-1"}`),
 		BackendType:       "s3",
 		BackendConfigHash: "backend_hash_123",
 		Status:            traits.TemplateRunQueued,
@@ -830,10 +833,13 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 			id,
 			tenant_id,
 			stack_template_id,
+			template_id,
+			source_template_id,
 			operation,
 			selected_ref,
 			resolved_commit_sha,
 			workspace_name,
+			config_json,
 			backend_type,
 			backend_config_hash,
 			status,
@@ -847,10 +853,13 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 		&got.ID,
 		&got.TenantID,
 		&got.StackTemplateID,
+		&got.TemplateID,
+		&got.SourceTemplateID,
 		&got.Operation,
 		&got.SelectedRef,
 		&got.ResolvedCommitSHA,
 		&got.WorkspaceName,
+		&got.ConfigJSON,
 		&got.BackendType,
 		&got.BackendConfigHash,
 		&got.Status,
@@ -866,10 +875,13 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 	if got.ID != run.ID ||
 		got.TenantID != run.TenantID ||
 		got.StackTemplateID != run.StackTemplateID ||
+		got.TemplateID != run.TemplateID ||
+		got.SourceTemplateID != run.SourceTemplateID ||
 		got.Operation != run.Operation ||
 		got.SelectedRef != run.SelectedRef ||
 		got.ResolvedCommitSHA != run.ResolvedCommitSHA ||
 		got.WorkspaceName != run.WorkspaceName ||
+		string(got.ConfigJSON) != string(run.ConfigJSON) ||
 		got.BackendType != run.BackendType ||
 		got.BackendConfigHash != run.BackendConfigHash ||
 		got.Status != run.Status ||
@@ -1397,28 +1409,33 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
 	stackTemplate := traits.StackTemplate{
-		ID:            traits.StackTemplateID("stack_template_123"),
-		TenantID:      traits.TenantID("tenant_123"),
-		StackID:       traits.StackID("stack_123"),
-		TemplateID:    traits.TemplateID("template_123"),
-		SelectedRef:   "main",
-		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		ConfigJSON:    json.RawMessage(`{"region":"us-east-1"}`),
-		CreatedBy:     traits.UserID("installer_123"),
-		Lifecycle:     traits.StackTemplateActive,
+		ID:                traits.StackTemplateID("stack_template_123"),
+		TenantID:          traits.TenantID("tenant_123"),
+		StackID:           traits.StackID("stack_123"),
+		TemplateID:        traits.TemplateID("template_123"),
+		SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateID: traits.TemplateID("template_rev_2"),
+		SelectedRef:       "main",
+		WorkspaceName:     "mtp_acme_prod_vpc_a13f9c",
+		ConfigJSON:        json.RawMessage(`{"region":"us-east-1"}`),
+		DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
+		CreatedBy:         traits.UserID("installer_123"),
+		Lifecycle:         traits.StackTemplateActive,
 	}
 	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
 		t.Fatalf("CreateStackTemplate returned error: %v", err)
 	}
 	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationApply,
-		SelectedRef:     "release-2026-07-08",
-		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunApplyStarted,
-		TriggerActor:    traits.UserID("user_123"),
+		ID:               traits.TemplateRunID("run_123"),
+		TenantID:         traits.TenantID("tenant_123"),
+		StackTemplateID:  traits.StackTemplateID("stack_template_123"),
+		TemplateID:       traits.TemplateID("template_rev_2"),
+		SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
+		Operation:        traits.OperationApply,
+		SelectedRef:      "release-2026-07-08",
+		WorkspaceName:    "mtp_acme_prod_vpc_a13f9c",
+		Status:           traits.TemplateRunApplyStarted,
+		TriggerActor:     traits.UserID("user_123"),
 	})
 
 	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
@@ -1433,15 +1450,17 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 	}
 
 	var lastAppliedRunID traits.TemplateRunID
+	var lastAppliedTemplateID traits.TemplateID
 	var lastAppliedRef string
 	var lastAppliedAt time.Time
 	if err := pool.QueryRow(ctx, `
-		select last_applied_run_id, last_applied_ref, last_applied_at
+		select last_applied_run_id, last_applied_template_id, last_applied_ref, last_applied_at
 		from stack_templates
 		where tenant_id = $1
 			and id = $2
 	`, "tenant_123", "stack_template_123").Scan(
 		&lastAppliedRunID,
+		&lastAppliedTemplateID,
 		&lastAppliedRef,
 		&lastAppliedAt,
 	); err != nil {
@@ -1449,6 +1468,9 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 	}
 	if lastAppliedRunID != traits.TemplateRunID("run_123") {
 		t.Fatalf("LastAppliedRunID = %q, want run_123", lastAppliedRunID)
+	}
+	if lastAppliedTemplateID != traits.TemplateID("template_rev_2") {
+		t.Fatalf("LastAppliedTemplateID = %q, want template_rev_2", lastAppliedTemplateID)
 	}
 	if lastAppliedRef != "release-2026-07-08" {
 		t.Fatalf("LastAppliedRef = %q, want release-2026-07-08", lastAppliedRef)
@@ -1506,10 +1528,13 @@ func seedTemplateRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run 
 			id,
 			tenant_id,
 			stack_template_id,
+			template_id,
+			source_template_id,
 			operation,
 			selected_ref,
 			resolved_commit_sha,
 			workspace_name,
+			config_json,
 			backend_type,
 			backend_config_hash,
 			status,
@@ -1518,17 +1543,20 @@ func seedTemplateRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run 
 			completed_at,
 			error_summary
 		) values (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11, $12, $13, $14
+			$1, $2, $3, $4, $5, $6, $7, $8,
+			$9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17
 		)
 	`,
 		run.ID,
 		run.TenantID,
 		run.StackTemplateID,
+		run.TemplateID,
+		run.SourceTemplateID,
 		run.Operation,
 		run.SelectedRef,
 		run.ResolvedCommitSHA,
 		run.WorkspaceName,
+		defaultJSON(run.ConfigJSON),
 		run.BackendType,
 		run.BackendConfigHash,
 		run.Status,
