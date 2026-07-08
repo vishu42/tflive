@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -418,6 +419,14 @@ func (recordingStore) GetStackWithTemplates(context.Context, traits.TenantID, tr
 }
 
 func (recordingStore) GetStackTemplate(context.Context, traits.TenantID, traits.StackTemplateID) (traits.StackTemplate, error) {
+	return traits.StackTemplate{}, nil
+}
+
+func (recordingStore) UpdateStackTemplateConfig(context.Context, traits.TenantID, traits.StackTemplateID, json.RawMessage) (traits.StackTemplate, error) {
+	return traits.StackTemplate{}, nil
+}
+
+func (recordingStore) UpdateStackTemplateDesiredRevision(context.Context, traits.TenantID, traits.StackTemplateID, traits.TemplateID, json.RawMessage) (traits.StackTemplate, error) {
 	return traits.StackTemplate{}, nil
 }
 

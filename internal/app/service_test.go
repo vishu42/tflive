@@ -533,6 +533,137 @@ func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 	}
 }
 
+func TestUpdateStackTemplateConfigValidatesDesiredRevisionVariables(t *testing.T) {
+	t.Parallel()
+
+	stackTemplates := &recordingStackTemplateRepository{
+		stackTemplate: traits.StackTemplate{
+			ID:                traits.StackTemplateID("stack_template_123"),
+			TenantID:          traits.TenantID("tenant_123"),
+			TemplateID:        traits.TemplateID("template_rev_1"),
+			DesiredTemplateID: traits.TemplateID("template_rev_2"),
+			Lifecycle:         traits.StackTemplateActive,
+		},
+	}
+	templates := &recordingTemplateRepository{
+		variables: []traits.TemplateVariable{
+			{Name: "region", Required: true},
+		},
+	}
+	service := NewService(Service{
+		StackTemplates: stackTemplates,
+		Templates:      templates,
+	})
+
+	updated, err := service.UpdateStackTemplateConfig(context.Background(), UpdateStackTemplateConfigCommand{
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		ConfigJSON:      json.RawMessage(`{"region":"us-east-1"}`),
+		Actor:           traits.UserID("user_123"),
+	})
+	if err != nil {
+		t.Fatalf("UpdateStackTemplateConfig returned error: %v", err)
+	}
+
+	if templates.gotVariablesTemplateID != traits.TemplateID("template_rev_2") {
+		t.Fatalf("variables template ID = %q, want template_rev_2", templates.gotVariablesTemplateID)
+	}
+	if string(stackTemplates.gotConfigJSON) != `{"region":"us-east-1"}` {
+		t.Fatalf("updated config = %s", stackTemplates.gotConfigJSON)
+	}
+	if string(updated.DesiredConfigJSON) != `{"region":"us-east-1"}` {
+		t.Fatalf("returned desired config = %s", updated.DesiredConfigJSON)
+	}
+}
+
+func TestUpgradeStackTemplateCarriesForwardCompatibleConfig(t *testing.T) {
+	t.Parallel()
+
+	stackTemplates := &recordingStackTemplateRepository{
+		stackTemplate: traits.StackTemplate{
+			ID:                traits.StackTemplateID("stack_template_123"),
+			TenantID:          traits.TenantID("tenant_123"),
+			SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
+			DesiredTemplateID: traits.TemplateID("template_rev_1"),
+			DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1","removed":"old"}`),
+			Lifecycle:         traits.StackTemplateActive,
+		},
+	}
+	templates := &recordingTemplateRepository{
+		template: traits.Template{
+			ID:               traits.TemplateID("template_rev_2"),
+			TenantID:         traits.TenantID("tenant_123"),
+			SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
+			Status:           traits.TemplateActive,
+		},
+		variables: []traits.TemplateVariable{
+			{Name: "region", Required: true},
+			{Name: "size", HasDefault: true},
+		},
+	}
+	service := NewService(Service{
+		StackTemplates:   stackTemplates,
+		TemplateMetadata: templates,
+		Templates:        templates,
+	})
+
+	updated, err := service.UpgradeStackTemplate(context.Background(), UpgradeStackTemplateCommand{
+		TenantID:         traits.TenantID("tenant_123"),
+		StackTemplateID:  traits.StackTemplateID("stack_template_123"),
+		TargetTemplateID: traits.TemplateID("template_rev_2"),
+		Actor:            traits.UserID("user_123"),
+	})
+	if err != nil {
+		t.Fatalf("UpgradeStackTemplate returned error: %v", err)
+	}
+
+	if stackTemplates.gotDesiredTemplateID != traits.TemplateID("template_rev_2") {
+		t.Fatalf("updated desired template ID = %q, want template_rev_2", stackTemplates.gotDesiredTemplateID)
+	}
+	if string(stackTemplates.gotConfigJSON) != `{"region":"us-east-1"}` {
+		t.Fatalf("carried config = %s, want region only", stackTemplates.gotConfigJSON)
+	}
+	if updated.DesiredTemplateID != traits.TemplateID("template_rev_2") {
+		t.Fatalf("returned desired template ID = %q, want template_rev_2", updated.DesiredTemplateID)
+	}
+}
+
+func TestUpgradeStackTemplateRejectsDifferentSourceTemplate(t *testing.T) {
+	t.Parallel()
+
+	stackTemplates := &recordingStackTemplateRepository{
+		stackTemplate: traits.StackTemplate{
+			ID:               traits.StackTemplateID("stack_template_123"),
+			TenantID:         traits.TenantID("tenant_123"),
+			SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
+			Lifecycle:        traits.StackTemplateActive,
+		},
+	}
+	templates := &recordingTemplateRepository{
+		template: traits.Template{
+			ID:               traits.TemplateID("template_rev_2"),
+			TenantID:         traits.TenantID("tenant_123"),
+			SourceTemplateID: traits.SourceTemplateID("source_template_db"),
+			Status:           traits.TemplateActive,
+		},
+	}
+	service := NewService(Service{
+		StackTemplates:   stackTemplates,
+		TemplateMetadata: templates,
+		Templates:        templates,
+	})
+
+	_, err := service.UpgradeStackTemplate(context.Background(), UpgradeStackTemplateCommand{
+		TenantID:         traits.TenantID("tenant_123"),
+		StackTemplateID:  traits.StackTemplateID("stack_template_123"),
+		TargetTemplateID: traits.TemplateID("template_rev_2"),
+		Actor:            traits.UserID("user_123"),
+	})
+	if !errors.Is(err, ErrStackTemplateUpgradeInvalid) {
+		t.Fatalf("error = %v, want ErrStackTemplateUpgradeInvalid", err)
+	}
+}
+
 func TestStartTemplateRunRejectsInvalidOperation(t *testing.T) {
 	t.Parallel()
 
@@ -1221,15 +1352,37 @@ func TestListTemplateRunLogsChecksRunOwnershipBeforeListingMetadata(t *testing.T
 }
 
 type recordingStackTemplateRepository struct {
-	stackTemplate traits.StackTemplate
-	gotTenantID   traits.TenantID
-	gotID         traits.StackTemplateID
+	stackTemplate        traits.StackTemplate
+	gotTenantID          traits.TenantID
+	gotID                traits.StackTemplateID
+	gotConfigJSON        json.RawMessage
+	gotDesiredTemplateID traits.TemplateID
 }
 
 func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error) {
 	repository.gotTenantID = tenantID
 	repository.gotID = id
 	return repository.stackTemplate, nil
+}
+
+func (repository *recordingStackTemplateRepository) UpdateStackTemplateConfig(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {
+	repository.gotTenantID = tenantID
+	repository.gotID = id
+	repository.gotConfigJSON = configJSON
+	updated := repository.stackTemplate
+	updated.DesiredConfigJSON = configJSON
+	return updated, nil
+}
+
+func (repository *recordingStackTemplateRepository) UpdateStackTemplateDesiredRevision(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateID traits.TemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {
+	repository.gotTenantID = tenantID
+	repository.gotID = id
+	repository.gotDesiredTemplateID = templateID
+	repository.gotConfigJSON = configJSON
+	updated := repository.stackTemplate
+	updated.DesiredTemplateID = templateID
+	updated.DesiredConfigJSON = configJSON
+	return updated, nil
 }
 
 type recordingStackRepository struct {

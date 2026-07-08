@@ -682,6 +682,107 @@ func TestCreateStackTemplateRejectsDuplicateActiveComponentKey(t *testing.T) {
 	}
 }
 
+func TestUpdateStackTemplateConfigPersistsDesiredConfig(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	tenantID := traits.TenantID("tenant_123")
+	stack := traits.Stack{
+		ID:        traits.StackID("stack_123"),
+		TenantID:  tenantID,
+		Name:      "Acme Prod",
+		Slug:      "acme-prod",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateStack(ctx, stack); err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+	stackTemplate := traits.StackTemplate{
+		ID:                traits.StackTemplateID("stack_template_123"),
+		TenantID:          tenantID,
+		StackID:           stack.ID,
+		TemplateID:        traits.TemplateID("template_rev_1"),
+		SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateID: traits.TemplateID("template_rev_1"),
+		ComponentKey:      "primary-vpc",
+		SelectedRef:       "main",
+		WorkspaceName:     "meg_acme_primary",
+		ConfigJSON:        json.RawMessage(`{"region":"us-east-1"}`),
+		DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
+		CreatedBy:         traits.UserID("user_123"),
+		Lifecycle:         traits.StackTemplateActive,
+	}
+	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
+		t.Fatalf("CreateStackTemplate returned error: %v", err)
+	}
+
+	updated, err := store.UpdateStackTemplateConfig(ctx, tenantID, stackTemplate.ID, json.RawMessage(`{"region":"us-west-2"}`))
+	if err != nil {
+		t.Fatalf("UpdateStackTemplateConfig returned error: %v", err)
+	}
+	if string(updated.DesiredConfigJSON) != `{"region":"us-west-2"}` {
+		t.Fatalf("updated desired config = %s", updated.DesiredConfigJSON)
+	}
+	if string(updated.ConfigJSON) != `{"region":"us-east-1"}` {
+		t.Fatalf("legacy config changed = %s", updated.ConfigJSON)
+	}
+}
+
+func TestUpdateStackTemplateDesiredRevisionPersistsRevisionAndConfig(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	tenantID := traits.TenantID("tenant_123")
+	stack := traits.Stack{
+		ID:        traits.StackID("stack_123"),
+		TenantID:  tenantID,
+		Name:      "Acme Prod",
+		Slug:      "acme-prod",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateStack(ctx, stack); err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+	stackTemplate := traits.StackTemplate{
+		ID:                traits.StackTemplateID("stack_template_123"),
+		TenantID:          tenantID,
+		StackID:           stack.ID,
+		TemplateID:        traits.TemplateID("template_rev_1"),
+		SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateID: traits.TemplateID("template_rev_1"),
+		ComponentKey:      "primary-vpc",
+		SelectedRef:       "main",
+		WorkspaceName:     "meg_acme_primary",
+		ConfigJSON:        json.RawMessage(`{"region":"us-east-1"}`),
+		DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
+		CreatedBy:         traits.UserID("user_123"),
+		Lifecycle:         traits.StackTemplateActive,
+	}
+	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
+		t.Fatalf("CreateStackTemplate returned error: %v", err)
+	}
+
+	updated, err := store.UpdateStackTemplateDesiredRevision(ctx, tenantID, stackTemplate.ID, traits.TemplateID("template_rev_2"), json.RawMessage(`{"region":"us-west-2"}`))
+	if err != nil {
+		t.Fatalf("UpdateStackTemplateDesiredRevision returned error: %v", err)
+	}
+	if updated.DesiredTemplateID != traits.TemplateID("template_rev_2") {
+		t.Fatalf("updated desired template ID = %q, want template_rev_2", updated.DesiredTemplateID)
+	}
+	if string(updated.DesiredConfigJSON) != `{"region":"us-west-2"}` {
+		t.Fatalf("updated desired config = %s", updated.DesiredConfigJSON)
+	}
+	if updated.LastAppliedTemplateID != "" {
+		t.Fatalf("last applied template ID = %q, want empty", updated.LastAppliedTemplateID)
+	}
+}
+
 func TestGetStackTemplateReturnsTenantScopedRecord(t *testing.T) {
 	t.Parallel()
 

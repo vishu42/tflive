@@ -22,6 +22,7 @@ var (
 	ErrNotFound                           = errors.New("not found")
 	ErrTemplateNotInstallable             = errors.New("template is not installable")
 	ErrStackTemplateConfigInvalid         = errors.New("stack template config is invalid")
+	ErrStackTemplateUpgradeInvalid        = errors.New("stack template upgrade is invalid")
 	ErrStackTemplateNotRunnable           = errors.New("stack template is not runnable")
 	ErrRunNotApprovable                   = errors.New("run is not approvable")
 	ErrRunNotCancelable                   = errors.New("run is not cancelable")
@@ -38,6 +39,8 @@ type StackRepository interface {
 // StackTemplateRepository reads installed template state for use cases.
 type StackTemplateRepository interface {
 	GetStackTemplate(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error)
+	UpdateStackTemplateConfig(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID, configJSON json.RawMessage) (traits.StackTemplate, error)
+	UpdateStackTemplateDesiredRevision(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateID traits.TemplateID, configJSON json.RawMessage) (traits.StackTemplate, error)
 }
 
 // TemplateRunRepository persists TemplateRun records and run decisions.
@@ -206,6 +209,23 @@ type StartTemplateRunCommand struct {
 	StackTemplateID traits.StackTemplateID
 	Operation       traits.OperationType
 	TriggerActor    traits.UserID
+}
+
+// UpdateStackTemplateConfigCommand asks the app to edit desired config before a run.
+type UpdateStackTemplateConfigCommand struct {
+	TenantID        traits.TenantID
+	StackTemplateID traits.StackTemplateID
+	ConfigJSON      json.RawMessage
+	Actor           traits.UserID
+}
+
+// UpgradeStackTemplateCommand asks the app to point one install at another revision.
+type UpgradeStackTemplateCommand struct {
+	TenantID         traits.TenantID
+	StackTemplateID  traits.StackTemplateID
+	TargetTemplateID traits.TemplateID
+	ConfigJSON       json.RawMessage
+	Actor            traits.UserID
 }
 
 // ApproveRunCommand asks the app to approve a waiting run.
@@ -458,6 +478,88 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	}
 
 	return run, nil
+}
+
+// UpdateStackTemplateConfig validates and saves desired config for an installed template.
+func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command UpdateStackTemplateConfigCommand) (traits.StackTemplate, error) {
+	if err := validateUpdateStackTemplateConfigCommand(command); err != nil {
+		return traits.StackTemplate{}, err
+	}
+
+	stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, command.TenantID, command.StackTemplateID)
+	if err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
+	}
+	if stackTemplate.Lifecycle != traits.StackTemplateActive {
+		return traits.StackTemplate{}, fmt.Errorf("%w: lifecycle is %q", ErrStackTemplateUpgradeInvalid, stackTemplate.Lifecycle)
+	}
+
+	desiredTemplateID := stackTemplate.DesiredTemplateID
+	if desiredTemplateID == "" {
+		desiredTemplateID = stackTemplate.TemplateID
+	}
+	variables, err := service.Templates.GetTemplateVariables(ctx, command.TenantID, desiredTemplateID)
+	if err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("get template variables: %w", err)
+	}
+	configJSON, err := validateTemplateConfig(command.ConfigJSON, variables)
+	if err != nil {
+		return traits.StackTemplate{}, err
+	}
+
+	updated, err := service.StackTemplates.UpdateStackTemplateConfig(ctx, command.TenantID, command.StackTemplateID, configJSON)
+	if err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("update stack template config: %w", err)
+	}
+	return updated, nil
+}
+
+// UpgradeStackTemplate changes desired revision for an existing installed template.
+func (service *Service) UpgradeStackTemplate(ctx context.Context, command UpgradeStackTemplateCommand) (traits.StackTemplate, error) {
+	if err := validateUpgradeStackTemplateCommand(command); err != nil {
+		return traits.StackTemplate{}, err
+	}
+
+	stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, command.TenantID, command.StackTemplateID)
+	if err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
+	}
+	if stackTemplate.Lifecycle != traits.StackTemplateActive {
+		return traits.StackTemplate{}, fmt.Errorf("%w: lifecycle is %q", ErrStackTemplateUpgradeInvalid, stackTemplate.Lifecycle)
+	}
+
+	target, err := service.TemplateMetadata.GetTemplate(ctx, command.TenantID, command.TargetTemplateID)
+	if err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("get target template: %w", err)
+	}
+	if target.Status != traits.TemplateActive {
+		return traits.StackTemplate{}, fmt.Errorf("%w: status is %q", ErrTemplateNotInstallable, target.Status)
+	}
+	if stackTemplate.SourceTemplateID != "" && target.SourceTemplateID != "" && stackTemplate.SourceTemplateID != target.SourceTemplateID {
+		return traits.StackTemplate{}, fmt.Errorf("%w: source template mismatch", ErrStackTemplateUpgradeInvalid)
+	}
+
+	variables, err := service.Templates.GetTemplateVariables(ctx, command.TenantID, command.TargetTemplateID)
+	if err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("get target template variables: %w", err)
+	}
+	configJSON := command.ConfigJSON
+	if len(configJSON) == 0 {
+		configJSON, err = carryForwardConfig(stackTemplate.DesiredConfigJSON, stackTemplate.ConfigJSON, variables)
+		if err != nil {
+			return traits.StackTemplate{}, err
+		}
+	}
+	configJSON, err = validateTemplateConfig(configJSON, variables)
+	if err != nil {
+		return traits.StackTemplate{}, err
+	}
+
+	updated, err := service.StackTemplates.UpdateStackTemplateDesiredRevision(ctx, command.TenantID, command.StackTemplateID, target.ID, configJSON)
+	if err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("update stack template desired revision: %w", err)
+	}
+	return updated, nil
 }
 
 // GetStack returns one tenant-owned stack with installed templates.
@@ -744,6 +846,36 @@ func validateStartTemplateRunCommand(command StartTemplateRunCommand) error {
 	}
 }
 
+func validateUpdateStackTemplateConfigCommand(command UpdateStackTemplateConfigCommand) error {
+	switch {
+	case command.TenantID == "":
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	case command.StackTemplateID == "":
+		return fmt.Errorf("%w: stack template id is required", ErrInvalidCommand)
+	case len(command.ConfigJSON) == 0:
+		return fmt.Errorf("%w: config is required", ErrInvalidCommand)
+	case command.Actor == "":
+		return fmt.Errorf("%w: actor is required", ErrInvalidCommand)
+	default:
+		return nil
+	}
+}
+
+func validateUpgradeStackTemplateCommand(command UpgradeStackTemplateCommand) error {
+	switch {
+	case command.TenantID == "":
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	case command.StackTemplateID == "":
+		return fmt.Errorf("%w: stack template id is required", ErrInvalidCommand)
+	case command.TargetTemplateID == "":
+		return fmt.Errorf("%w: target template id is required", ErrInvalidCommand)
+	case command.Actor == "":
+		return fmt.Errorf("%w: actor is required", ErrInvalidCommand)
+	default:
+		return nil
+	}
+}
+
 func validateRegisterTemplateCommand(command RegisterTemplateCommand) error {
 	switch {
 	case command.TenantID == "":
@@ -883,6 +1015,38 @@ func validateTemplateConfig(raw json.RawMessage, variables []traits.TemplateVari
 	normalized, err := json.Marshal(config)
 	if err != nil {
 		return nil, fmt.Errorf("marshal stack template config: %w", err)
+	}
+	return normalized, nil
+}
+
+func carryForwardConfig(desiredConfigJSON json.RawMessage, legacyConfigJSON json.RawMessage, variables []traits.TemplateVariable) (json.RawMessage, error) {
+	raw := desiredConfigJSON
+	if len(raw) == 0 {
+		raw = legacyConfigJSON
+	}
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{}`)
+	}
+
+	var current map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &current); err != nil {
+		return nil, fmt.Errorf("%w: current config must be a JSON object", ErrStackTemplateConfigInvalid)
+	}
+	if current == nil {
+		current = map[string]json.RawMessage{}
+	}
+
+	carried := make(map[string]json.RawMessage)
+	for _, variable := range variables {
+		value, ok := current[variable.Name]
+		if ok {
+			carried[variable.Name] = value
+		}
+	}
+
+	normalized, err := json.Marshal(carried)
+	if err != nil {
+		return nil, fmt.Errorf("marshal carried stack template config: %w", err)
 	}
 	return normalized, nil
 }

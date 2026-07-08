@@ -603,6 +603,78 @@ func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.Tenant
 	return stackTemplate, nil
 }
 
+func (store *Store) UpdateStackTemplateConfig(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {
+	row := store.pool.QueryRow(ctx, `
+		update stack_templates
+		set desired_config_json = $1::jsonb
+		where tenant_id = $2
+			and id = $3
+		returning
+			id,
+			tenant_id,
+			stack_id,
+			template_id,
+			component_key,
+			source_template_id,
+			desired_template_id,
+			last_applied_template_id,
+			selected_ref,
+			workspace_name,
+			config_json,
+			desired_config_json,
+			last_applied_run_id,
+			last_applied_ref,
+			last_applied_at,
+			created_by,
+			lifecycle
+	`, defaultJSON(configJSON), tenantID, id)
+	stackTemplate, err := scanStackTemplate(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return traits.StackTemplate{}, app.ErrNotFound
+	}
+	if err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("update stack template config: %w", err)
+	}
+	return stackTemplate, nil
+}
+
+func (store *Store) UpdateStackTemplateDesiredRevision(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateID traits.TemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {
+	row := store.pool.QueryRow(ctx, `
+		update stack_templates
+		set
+			desired_template_id = $1,
+			desired_config_json = $2::jsonb
+		where tenant_id = $3
+			and id = $4
+		returning
+			id,
+			tenant_id,
+			stack_id,
+			template_id,
+			component_key,
+			source_template_id,
+			desired_template_id,
+			last_applied_template_id,
+			selected_ref,
+			workspace_name,
+			config_json,
+			desired_config_json,
+			last_applied_run_id,
+			last_applied_ref,
+			last_applied_at,
+			created_by,
+			lifecycle
+	`, templateID, defaultJSON(configJSON), tenantID, id)
+	stackTemplate, err := scanStackTemplate(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return traits.StackTemplate{}, app.ErrNotFound
+	}
+	if err != nil {
+		return traits.StackTemplate{}, fmt.Errorf("update stack template desired revision: %w", err)
+	}
+	return stackTemplate, nil
+}
+
 func (store *Store) CreateTemplateRun(ctx context.Context, run traits.TemplateRun) error {
 	_, err := store.pool.Exec(ctx, `
 		insert into template_runs (

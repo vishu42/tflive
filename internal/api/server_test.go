@@ -987,6 +987,23 @@ func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.C
 	return repository.stackTemplate, nil
 }
 
+func (repository *recordingStackTemplateRepository) UpdateStackTemplateConfig(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {
+	repository.gotTenantID = tenantID
+	repository.gotID = id
+	updated := repository.stackTemplate
+	updated.DesiredConfigJSON = configJSON
+	return updated, nil
+}
+
+func (repository *recordingStackTemplateRepository) UpdateStackTemplateDesiredRevision(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateID traits.TemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {
+	repository.gotTenantID = tenantID
+	repository.gotID = id
+	updated := repository.stackTemplate
+	updated.DesiredTemplateID = templateID
+	updated.DesiredConfigJSON = configJSON
+	return updated, nil
+}
+
 type recordingStackTemplateInstaller struct {
 	created   traits.StackTemplate
 	createErr error
