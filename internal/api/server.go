@@ -389,6 +389,7 @@ type stackTemplateResponse struct {
 	LastAppliedRunID string         `json:"last_applied_run_id"`
 	LastAppliedRef   string         `json:"last_applied_ref"`
 	LastAppliedAt    string         `json:"last_applied_at,omitempty"`
+	CreatedBy        string         `json:"created_by"`
 	Lifecycle        string         `json:"lifecycle"`
 }
 
@@ -449,6 +450,7 @@ func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateR
 		Config:           config,
 		LastAppliedRunID: string(stackTemplate.LastAppliedRunID),
 		LastAppliedRef:   stackTemplate.LastAppliedRef,
+		CreatedBy:        string(stackTemplate.CreatedBy),
 		Lifecycle:        string(stackTemplate.Lifecycle),
 	}
 	if !stackTemplate.LastAppliedAt.IsZero() {

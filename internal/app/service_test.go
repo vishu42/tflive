@@ -281,6 +281,12 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	if stackTemplate.Lifecycle != traits.StackTemplateActive {
 		t.Fatalf("lifecycle = %q, want active", stackTemplate.Lifecycle)
 	}
+	if stackTemplate.CreatedBy != traits.UserID("user_123") {
+		t.Fatalf("created by = %q, want user_123", stackTemplate.CreatedBy)
+	}
+	if installer.created.CreatedBy != traits.UserID("user_123") {
+		t.Fatalf("persisted created by = %q, want user_123", installer.created.CreatedBy)
+	}
 	if string(installer.created.ConfigJSON) != `{"region":"us-east-1"}` {
 		t.Fatalf("config json = %s", installer.created.ConfigJSON)
 	}

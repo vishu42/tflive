@@ -391,6 +391,9 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 	if body.ID != "stack_template_a1b2c3d4" {
 		t.Fatalf("response id = %q, want stack_template_a1b2c3d4", body.ID)
 	}
+	if body.CreatedBy != "user_123" {
+		t.Fatalf("response created by = %q, want user_123", body.CreatedBy)
+	}
 	if body.Config["region"] != "us-east-1" {
 		t.Fatalf("response config = %#v", body.Config)
 	}

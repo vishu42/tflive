@@ -213,6 +213,85 @@ button:disabled {
   text-align: right;
 }
 
+.stack-template-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  border-top: 1px solid #e5e8e1;
+  padding-top: 12px;
+}
+
+.stack-template-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stack-template-list h3 {
+  margin: 0;
+  color: #1f2933;
+  font-size: 0.9rem;
+  letter-spacing: 0;
+}
+
+.stack-template-list-header span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  min-height: 24px;
+  border: 1px solid #c8cfc4;
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #536064;
+  background: #f8faf7;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.stack-template-items {
+  display: grid;
+  gap: 8px;
+}
+
+.stack-template-items button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 56px;
+  border: 1px solid #d2d7cc;
+  border-radius: 6px;
+  padding: 9px 10px;
+  color: #293541;
+  background: #ffffff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.stack-template-items button.active {
+  border-color: #2f6f5e;
+  background: #eef7f3;
+  box-shadow: inset 3px 0 0 #2f6f5e;
+}
+
+.stack-template-items span,
+.stack-template-items small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.stack-template-items span {
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+.stack-template-items small {
+  color: #66705f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.75rem;
+}
+
 .alert,
 .error-text {
   color: #991b1b;

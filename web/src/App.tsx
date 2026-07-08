@@ -32,10 +32,13 @@ import type { Stack, StackTemplate, Template, TemplateRegistration, TemplateRun,
 import { isTerminalRegistrationStatus, isTerminalRunStatus, nextPollDelayMs } from "./polling";
 import {
   findSelectedStack,
+  findSelectedStackTemplate,
   findSelectedTemplate,
   nextSelectedStackID,
+  nextSelectedStackTemplateID,
   nextSelectedTemplateID,
   stackLabel,
+  stackTemplateLabel,
   templateLabel
 } from "./workflowState";
 
@@ -56,7 +59,8 @@ export default function App() {
   const [stacks, setStacks] = useState<Stack[]>([]);
   const [selectedStackID, setSelectedStackID] = useState("");
   const [stack, setStack] = useState<Stack | null>(null);
-  const [installedTemplate, setInstalledTemplate] = useState<StackTemplate | null>(null);
+  const [stackTemplates, setStackTemplates] = useState<StackTemplate[]>([]);
+  const [selectedStackTemplateID, setSelectedStackTemplateID] = useState("");
   const [planRun, setPlanRun] = useState<TemplateRun | null>(null);
   const [applyRun, setApplyRun] = useState<TemplateRun | null>(null);
   const [selectedRunKind, setSelectedRunKind] = useState<"plan" | "apply">("plan");
@@ -68,6 +72,7 @@ export default function App() {
 
   const selectedTemplate = findSelectedTemplate(templates, selectedTemplateID);
   const selectedStack = findSelectedStack(stacks, selectedStackID);
+  const installedTemplate = findSelectedStackTemplate(stackTemplates, selectedStackTemplateID);
   const currentRun = selectedRunKind === "apply" ? applyRun : planRun;
   const canInstall = Boolean(selectedTemplate?.status === "active" && stack);
   const canPlan = Boolean(installedTemplate && !planRun);
@@ -84,7 +89,8 @@ export default function App() {
     setSelectedTemplateID("");
     setStack(null);
     setRegistration(null);
-    setInstalledTemplate(null);
+    setStackTemplates([]);
+    setSelectedStackTemplateID("");
     setVariables([]);
     setVariableValues({});
     resetRunState();
@@ -113,25 +119,33 @@ export default function App() {
   useEffect(() => {
     if (!selectedStackID) {
       setStack(null);
-      setInstalledTemplate(null);
+      setStackTemplates([]);
+      setSelectedStackTemplateID("");
       resetRunState();
       return;
     }
 
     let canceled = false;
+    setStack(null);
+    setStackTemplates([]);
+    setSelectedStackTemplateID("");
+    resetRunState();
+
     getStack(tenantID, selectedStackID)
       .then((view) => {
         if (canceled) {
           return;
         }
         setStack(view.stack);
-        setInstalledTemplate(view.templates[0] ?? null);
+        setStackTemplates(view.templates);
+        setSelectedStackTemplateID((current) => nextSelectedStackTemplateID(view.templates, current));
         resetRunState();
       })
       .catch((error) => {
         if (!canceled) {
           setStack((current) => current?.id === selectedStackID ? current : null);
-          setInstalledTemplate(null);
+          setStackTemplates([]);
+          setSelectedStackTemplateID("");
           setErrorMessage(messageFromError(error));
         }
       });
@@ -336,7 +350,6 @@ export default function App() {
       setSelectedTemplateID("");
       setVariables([]);
       setVariableValues({});
-      setInstalledTemplate(null);
       resetRunState();
     });
   }
@@ -354,7 +367,8 @@ export default function App() {
       setStack(next);
       setStacks((current) => [next, ...current.filter((item) => item.id !== next.id)]);
       setSelectedStackID(next.id);
-      setInstalledTemplate(null);
+      setStackTemplates([]);
+      setSelectedStackTemplateID("");
       resetRunState();
 
       const refreshed = await listStacks(tenantID);
@@ -383,9 +397,18 @@ export default function App() {
         config,
         actor
       });
-      setInstalledTemplate(next);
+      setStackTemplates((current) => [next, ...current.filter((item) => item.id !== next.id)]);
+      setSelectedStackTemplateID(next.id);
       resetRunState();
     });
+  }
+
+  function handleSelectStackTemplate(stackTemplateID: string) {
+    if (stackTemplateID === selectedStackTemplateID) {
+      return;
+    }
+    setSelectedStackTemplateID(stackTemplateID);
+    resetRunState();
   }
 
   async function handleStartRun(operation: "plan" | "apply") {
@@ -550,6 +573,29 @@ export default function App() {
               </button>
             </form>
             <StatusRow label="Stack" value={stack?.slug || selectedStack?.slug || "not selected"} />
+            <div className="stack-template-list">
+              <div className="stack-template-list-header">
+                <h3>Stack templates</h3>
+                <span>{stackTemplates.length}</span>
+              </div>
+              {stackTemplates.length === 0 ? (
+                <p className="muted">No stack templates installed</p>
+              ) : (
+                <div className="stack-template-items">
+                  {stackTemplates.map((item) => (
+                    <button
+                      className={item.id === selectedStackTemplateID ? "active" : ""}
+                      key={item.id}
+                      onClick={() => handleSelectStackTemplate(item.id)}
+                      type="button"
+                    >
+                      <span>{stackTemplateLabel(item)}</span>
+                      <small>{item.template_id}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </section>
 
           <section className="panel wide">

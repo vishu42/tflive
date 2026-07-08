@@ -511,6 +511,7 @@ func TestCreateStackTemplateAndGetStackWithTemplates(t *testing.T) {
 		SelectedRef:   "main",
 		WorkspaceName: "meg_acme_prod_late_123",
 		ConfigJSON:    json.RawMessage(`{"region":"us-east-1"}`),
+		CreatedBy:     traits.UserID("installer_123"),
 		Lifecycle:     traits.StackTemplateActive,
 	}
 	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
@@ -529,6 +530,9 @@ func TestCreateStackTemplateAndGetStackWithTemplates(t *testing.T) {
 	}
 	if view.Templates[0].TenantID != traits.TenantID("tenant_123") {
 		t.Fatalf("template tenant ID = %q, want tenant_123", view.Templates[0].TenantID)
+	}
+	if view.Templates[0].CreatedBy != traits.UserID("installer_123") {
+		t.Fatalf("template created by = %q, want installer_123", view.Templates[0].CreatedBy)
 	}
 	if string(view.Templates[0].ConfigJSON) != `{"region": "us-east-1"}` {
 		t.Fatalf("template config = %s", view.Templates[0].ConfigJSON)

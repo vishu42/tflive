@@ -259,6 +259,7 @@ type StackTemplate struct {
 	LastAppliedRunID TemplateRunID          `json:"last_applied_run_id"`
 	LastAppliedRef   string                 `json:"last_applied_ref"`
 	LastAppliedAt    time.Time              `json:"last_applied_at,omitempty"`
+	CreatedBy        UserID                 `json:"created_by"`
 	Lifecycle        StackTemplateLifecycle `json:"lifecycle"`
 }
 

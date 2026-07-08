@@ -418,6 +418,7 @@ func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.T
 			last_applied_run_id,
 			last_applied_ref,
 			last_applied_at,
+			created_by,
 			lifecycle
 		from stack_templates
 		where tenant_id = $1
@@ -462,9 +463,10 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 			last_applied_run_id,
 			last_applied_ref,
 			last_applied_at,
+			created_by,
 			lifecycle
 		)
-		select $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11
+		select $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12
 		where exists (
 			select 1
 			from stacks
@@ -482,6 +484,7 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 		stackTemplate.LastAppliedRunID,
 		stackTemplate.LastAppliedRef,
 		nullTime(stackTemplate.LastAppliedAt),
+		stackTemplate.CreatedBy,
 		stackTemplate.Lifecycle,
 	)
 	if err != nil {
@@ -535,6 +538,7 @@ func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.Tenant
 			last_applied_run_id,
 			last_applied_ref,
 			last_applied_at,
+			created_by,
 			lifecycle
 		from stack_templates
 		where tenant_id = $1
@@ -929,6 +933,7 @@ func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, erro
 		&stackTemplate.LastAppliedRunID,
 		&stackTemplate.LastAppliedRef,
 		&lastAppliedAt,
+		&stackTemplate.CreatedBy,
 		&stackTemplate.Lifecycle,
 	); err != nil {
 		return traits.StackTemplate{}, fmt.Errorf("scan stack template: %w", err)

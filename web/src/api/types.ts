@@ -102,6 +102,7 @@ export interface StackTemplate {
   last_applied_run_id: string;
   last_applied_ref: string;
   last_applied_at?: string;
+  created_by: string;
   lifecycle: string;
 }
 

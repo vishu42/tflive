@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { Stack, Template } from "./api/types";
+import type { Stack, StackTemplate, Template } from "./api/types";
 import {
   findSelectedStack,
+  findSelectedStackTemplate,
   findSelectedTemplate,
   nextSelectedStackID,
+  nextSelectedStackTemplateID,
   nextSelectedTemplateID,
   stackLabel,
+  stackTemplateLabel,
   templateLabel
 } from "./workflowState";
 
@@ -41,6 +44,33 @@ describe("workflow state helpers", () => {
     expect(templateLabel(selectedTemplate)).toBe("acme/infra @ main");
     expect(findSelectedTemplate([selectedTemplate], selectedTemplate.id)).toEqual(selectedTemplate);
   });
+
+  it("keeps the active stack template when it still belongs to the selected stack", () => {
+    const firstTemplate = stackTemplate({ id: "stack_template_first", workspace_name: "prod-web" });
+    const activeTemplate = stackTemplate({ id: "stack_template_active", workspace_name: "prod-api" });
+    const stackTemplates = [firstTemplate, activeTemplate];
+
+    expect(nextSelectedStackTemplateID(stackTemplates, activeTemplate.id)).toBe(activeTemplate.id);
+    expect(findSelectedStackTemplate(stackTemplates, activeTemplate.id)).toEqual(activeTemplate);
+  });
+
+  it("falls back to the first stack template when the active one is absent", () => {
+    const firstTemplate = stackTemplate({ id: "stack_template_first", workspace_name: "prod-web" });
+    const secondTemplate = stackTemplate({ id: "stack_template_second", workspace_name: "prod-api" });
+
+    expect(nextSelectedStackTemplateID([firstTemplate, secondTemplate], "missing_stack_template")).toBe(firstTemplate.id);
+    expect(nextSelectedStackTemplateID([], "missing_stack_template")).toBe("");
+  });
+
+  it("formats stack template rows from workspace, ref, and lifecycle", () => {
+    const installedTemplate = stackTemplate({
+      workspace_name: "prod-web",
+      selected_ref: "release-2026-07",
+      lifecycle: "active"
+    });
+
+    expect(stackTemplateLabel(installedTemplate)).toBe("prod-web @ release-2026-07 (active)");
+  });
 });
 
 function stack(overrides: Partial<Stack>): Stack {
@@ -71,6 +101,22 @@ function template(overrides: Partial<Template>): Template {
     tags: [],
     status: "active",
     created_at: "2026-07-06T00:00:00Z",
+    ...overrides
+  };
+}
+
+function stackTemplate(overrides: Partial<StackTemplate>): StackTemplate {
+  return {
+    id: "stack_template_123",
+    stack_id: "stack_123",
+    template_id: "template_123",
+    selected_ref: "main",
+    workspace_name: "prod-workspace",
+    config: {},
+    last_applied_run_id: "",
+    last_applied_ref: "",
+    created_by: "user_123",
+    lifecycle: "active",
     ...overrides
   };
 }

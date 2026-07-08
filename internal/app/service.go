@@ -371,6 +371,7 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 		SelectedRef:   strings.TrimSpace(command.SelectedRef),
 		WorkspaceName: workspaceName(stack.Slug, id),
 		ConfigJSON:    configJSON,
+		CreatedBy:     command.Actor,
 		Lifecycle:     traits.StackTemplateActive,
 	}
 
