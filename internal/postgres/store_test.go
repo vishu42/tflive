@@ -1235,6 +1235,85 @@ func TestRecordTemplateRunStatusSetsCompletedAtForTerminalStatus(t *testing.T) {
 	}
 }
 
+func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulApply(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	stack := traits.Stack{
+		ID:        traits.StackID("stack_123"),
+		TenantID:  traits.TenantID("tenant_123"),
+		Name:      "Acme Prod",
+		Slug:      "acme-prod",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateStack(ctx, stack); err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+	stackTemplate := traits.StackTemplate{
+		ID:            traits.StackTemplateID("stack_template_123"),
+		TenantID:      traits.TenantID("tenant_123"),
+		StackID:       traits.StackID("stack_123"),
+		TemplateID:    traits.TemplateID("template_123"),
+		SelectedRef:   "main",
+		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+		ConfigJSON:    json.RawMessage(`{"region":"us-east-1"}`),
+		CreatedBy:     traits.UserID("installer_123"),
+		Lifecycle:     traits.StackTemplateActive,
+	}
+	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
+		t.Fatalf("CreateStackTemplate returned error: %v", err)
+	}
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_123"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationApply,
+		SelectedRef:     "release-2026-07-08",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          traits.TemplateRunApplyStarted,
+		TriggerActor:    traits.UserID("user_123"),
+	})
+
+	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
+		RunID:           traits.TemplateRunID("run_123"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationApply,
+		Status:          traits.TemplateRunApplied,
+	})
+	if err != nil {
+		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+	}
+
+	var lastAppliedRunID traits.TemplateRunID
+	var lastAppliedRef string
+	var lastAppliedAt time.Time
+	if err := pool.QueryRow(ctx, `
+		select last_applied_run_id, last_applied_ref, last_applied_at
+		from stack_templates
+		where tenant_id = $1
+			and id = $2
+	`, "tenant_123", "stack_template_123").Scan(
+		&lastAppliedRunID,
+		&lastAppliedRef,
+		&lastAppliedAt,
+	); err != nil {
+		t.Fatalf("read stack template last applied fields: %v", err)
+	}
+	if lastAppliedRunID != traits.TemplateRunID("run_123") {
+		t.Fatalf("LastAppliedRunID = %q, want run_123", lastAppliedRunID)
+	}
+	if lastAppliedRef != "release-2026-07-08" {
+		t.Fatalf("LastAppliedRef = %q, want release-2026-07-08", lastAppliedRef)
+	}
+	if lastAppliedAt.IsZero() {
+		t.Fatal("LastAppliedAt was not set")
+	}
+}
+
 func TestRecordTemplateRunStatusReturnsNotFoundForOtherTenant(t *testing.T) {
 	t.Parallel()
 

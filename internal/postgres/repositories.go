@@ -857,11 +857,40 @@ func (store *Store) RequestTemplateRunCancellation(ctx context.Context, cancella
 }
 
 func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.TemplateRunStatusActivityInput) error {
+	if recordsStackTemplateLastApplied(input) {
+		tx, err := store.pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin record template run status: %w", err)
+		}
+		defer func() {
+			_ = tx.Rollback(ctx)
+		}()
+
+		if err := recordTemplateRunStatus(ctx, tx, input); err != nil {
+			return err
+		}
+		if err := recordStackTemplateLastApplied(ctx, tx, input); err != nil {
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit record template run status: %w", err)
+		}
+		return nil
+	}
+
+	return recordTemplateRunStatus(ctx, store.pool, input)
+}
+
+type templateRunStatusWriter interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func recordTemplateRunStatus(ctx context.Context, writer templateRunStatusWriter, input traits.TemplateRunStatusActivityInput) error {
 	var updatedRunID traits.TemplateRunID
 	var err error
 
 	if input.Status.Terminal() {
-		err = store.pool.QueryRow(ctx, `
+		err = writer.QueryRow(ctx, `
 			update template_runs
 			set
 				status = $1,
@@ -879,7 +908,7 @@ func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.Te
 			input.Operation,
 		).Scan(&updatedRunID)
 	} else {
-		err = store.pool.QueryRow(ctx, `
+		err = writer.QueryRow(ctx, `
 			update template_runs
 			set status = $1
 			where tenant_id = $2
@@ -900,6 +929,46 @@ func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.Te
 	}
 	if err != nil {
 		return fmt.Errorf("record template run status: %w", err)
+	}
+
+	return nil
+}
+
+type stackTemplateLastAppliedWriter interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+func recordsStackTemplateLastApplied(input traits.TemplateRunStatusActivityInput) bool {
+	return input.Operation == traits.OperationApply && input.Status == traits.TemplateRunApplied
+}
+
+func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLastAppliedWriter, input traits.TemplateRunStatusActivityInput) error {
+	commandTag, err := writer.Exec(ctx, `
+		update stack_templates
+		set
+			last_applied_run_id = template_runs.id,
+			last_applied_ref = template_runs.selected_ref,
+			last_applied_at = now()
+		from template_runs
+		where stack_templates.tenant_id = $1
+			and stack_templates.id = $2
+			and template_runs.tenant_id = stack_templates.tenant_id
+			and template_runs.id = $3
+			and template_runs.stack_template_id = stack_templates.id
+			and template_runs.operation = $4
+			and template_runs.status = $5
+	`,
+		input.TenantID,
+		input.StackTemplateID,
+		input.RunID,
+		input.Operation,
+		input.Status,
+	)
+	if err != nil {
+		return fmt.Errorf("record stack template last applied: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return ErrNotFound
 	}
 
 	return nil
