@@ -18,7 +18,7 @@ type (
 	TenantID               ID
 	UserID                 ID
 	SourceTemplateID       ID
-	TemplateID             ID
+	TemplateRevisionID     ID
 	TemplateRegistrationID ID
 	StackID                ID
 	StackTemplateID        ID
@@ -56,20 +56,20 @@ func (operation OperationType) Valid() bool {
 	}
 }
 
-// TemplateStatus identifies template registration and validation state.
-type TemplateStatus string
+// TemplateRevisionStatus identifies template revision validation state.
+type TemplateRevisionStatus string
 
 const (
-	TemplatePendingValidation TemplateStatus = "pending_validation"
-	TemplateValidating        TemplateStatus = "validating"
-	TemplateActive            TemplateStatus = "active"
-	TemplateInvalid           TemplateStatus = "invalid"
+	TemplateRevisionPendingValidation TemplateRevisionStatus = "pending_validation"
+	TemplateRevisionValidating        TemplateRevisionStatus = "validating"
+	TemplateRevisionActive            TemplateRevisionStatus = "active"
+	TemplateRevisionInvalid           TemplateRevisionStatus = "invalid"
 )
 
-// Valid reports whether the status is one of the supported template states.
-func (status TemplateStatus) Valid() bool {
+// Valid reports whether the status is one of the supported template revision states.
+func (status TemplateRevisionStatus) Valid() bool {
 	switch status {
-	case TemplatePendingValidation, TemplateValidating, TemplateActive, TemplateInvalid:
+	case TemplateRevisionPendingValidation, TemplateRevisionValidating, TemplateRevisionActive, TemplateRevisionInvalid:
 		return true
 	default:
 		return false
@@ -193,61 +193,61 @@ type Tenant struct {
 
 // SourceTemplate is the stable logical identity tracked by template revisions.
 type SourceTemplate struct {
-	ID                       SourceTemplateID `json:"id"`
-	TenantID                 TenantID         `json:"tenant_id"`
-	RepoOwner                string           `json:"repo_owner"`
-	RepoName                 string           `json:"repo_name"`
-	SourceRef                string           `json:"source_ref"`
-	RootPath                 string           `json:"root_path"`
-	LatestTemplateRevisionID TemplateID       `json:"latest_template_revision_id"`
-	CreatedAt                time.Time        `json:"created_at"`
-	UpdatedAt                time.Time        `json:"updated_at"`
+	ID                       SourceTemplateID   `json:"id"`
+	TenantID                 TenantID           `json:"tenant_id"`
+	RepoOwner                string             `json:"repo_owner"`
+	RepoName                 string             `json:"repo_name"`
+	SourceRef                string             `json:"source_ref"`
+	RootPath                 string             `json:"root_path"`
+	LatestTemplateRevisionID TemplateRevisionID `json:"latest_template_revision_id"`
+	CreatedAt                time.Time          `json:"created_at"`
+	UpdatedAt                time.Time          `json:"updated_at"`
 }
 
-// Template is a GitHub-sourced Terraform template.
-type Template struct {
-	ID                TemplateID       `json:"id"`
-	TenantID          TenantID         `json:"tenant_id"`
-	SourceTemplateID  SourceTemplateID `json:"source_template_id"`
-	RepoOwner         string           `json:"repo_owner"`
-	RepoName          string           `json:"repo_name"`
-	SourceRef         string           `json:"source_ref"`
-	ResolvedCommitSHA string           `json:"resolved_commit_sha"`
-	RootPath          string           `json:"root_path"`
-	Name              string           `json:"name"`
-	Description       string           `json:"description"`
-	Tags              []string         `json:"tags"`
-	Status            TemplateStatus   `json:"status"`
-	CreatedAt         time.Time        `json:"created_at"`
+// TemplateRevision is one resolved GitHub-sourced Terraform template revision.
+type TemplateRevision struct {
+	ID                TemplateRevisionID     `json:"id"`
+	TenantID          TenantID               `json:"tenant_id"`
+	SourceTemplateID  SourceTemplateID       `json:"source_template_id"`
+	RepoOwner         string                 `json:"repo_owner"`
+	RepoName          string                 `json:"repo_name"`
+	SourceRef         string                 `json:"source_ref"`
+	ResolvedCommitSHA string                 `json:"resolved_commit_sha"`
+	RootPath          string                 `json:"root_path"`
+	Name              string                 `json:"name"`
+	Description       string                 `json:"description"`
+	Tags              []string               `json:"tags"`
+	Status            TemplateRevisionStatus `json:"status"`
+	CreatedAt         time.Time              `json:"created_at"`
 }
 
 // TemplateRegistration records one async template registration request.
 type TemplateRegistration struct {
-	ID                TemplateRegistrationID     `json:"id"`
-	TenantID          TenantID                   `json:"tenant_id"`
-	RepoOwner         string                     `json:"repo_owner"`
-	RepoName          string                     `json:"repo_name"`
-	SourceRef         string                     `json:"source_ref"`
-	RootPath          string                     `json:"root_path"`
-	Status            TemplateRegistrationStatus `json:"status"`
-	TemplateID        TemplateID                 `json:"template_id"`
-	ResolvedCommitSHA string                     `json:"resolved_commit_sha"`
-	RequestedBy       UserID                     `json:"requested_by"`
-	RequestedAt       time.Time                  `json:"requested_at"`
-	CompletedAt       time.Time                  `json:"completed_at,omitempty"`
-	ErrorSummary      string                     `json:"error_summary"`
+	ID                 TemplateRegistrationID     `json:"id"`
+	TenantID           TenantID                   `json:"tenant_id"`
+	RepoOwner          string                     `json:"repo_owner"`
+	RepoName           string                     `json:"repo_name"`
+	SourceRef          string                     `json:"source_ref"`
+	RootPath           string                     `json:"root_path"`
+	Status             TemplateRegistrationStatus `json:"status"`
+	TemplateRevisionID TemplateRevisionID         `json:"template_revision_id"`
+	ResolvedCommitSHA  string                     `json:"resolved_commit_sha"`
+	RequestedBy        UserID                     `json:"requested_by"`
+	RequestedAt        time.Time                  `json:"requested_at"`
+	CompletedAt        time.Time                  `json:"completed_at,omitempty"`
+	ErrorSummary       string                     `json:"error_summary"`
 }
 
 // TemplateVariable is inferred from Terraform root module variables.
 type TemplateVariable struct {
-	TemplateID     TemplateID `json:"template_id"`
-	Name           string     `json:"name"`
-	TypeExpression string     `json:"type_expression"`
-	Description    string     `json:"description"`
-	Required       bool       `json:"required"`
-	HasDefault     bool       `json:"has_default"`
-	Sensitive      bool       `json:"sensitive"`
-	HasValidation  bool       `json:"has_validation"`
+	TemplateRevisionID TemplateRevisionID `json:"template_revision_id"`
+	Name               string             `json:"name"`
+	TypeExpression     string             `json:"type_expression"`
+	Description        string             `json:"description"`
+	Required           bool               `json:"required"`
+	HasDefault         bool               `json:"has_default"`
+	Sensitive          bool               `json:"sensitive"`
+	HasValidation      bool               `json:"has_validation"`
 }
 
 // Stack is a logical infrastructure composition.
@@ -262,47 +262,64 @@ type Stack struct {
 	CreatedAt            time.Time         `json:"created_at"`
 }
 
-// StackTemplate is one template installed into one stack.
+// StackTemplate is one long-lived template install/component instance in a stack.
 type StackTemplate struct {
-	ID                    StackTemplateID        `json:"id"`
-	TenantID              TenantID               `json:"tenant_id"`
-	StackID               StackID                `json:"stack_id"`
-	TemplateID            TemplateID             `json:"template_id"`
-	ComponentKey          string                 `json:"component_key"`
-	SourceTemplateID      SourceTemplateID       `json:"source_template_id"`
-	DesiredTemplateID     TemplateID             `json:"desired_template_id"`
-	LastAppliedTemplateID TemplateID             `json:"last_applied_template_id"`
-	SelectedRef           string                 `json:"selected_ref"`
-	WorkspaceName         string                 `json:"workspace_name"`
-	ConfigJSON            json.RawMessage        `json:"config_json"`
-	DesiredConfigJSON     json.RawMessage        `json:"desired_config_json"`
-	LastAppliedRunID      TemplateRunID          `json:"last_applied_run_id"`
-	LastAppliedRef        string                 `json:"last_applied_ref"`
-	LastAppliedAt         time.Time              `json:"last_applied_at,omitempty"`
-	CreatedBy             UserID                 `json:"created_by"`
-	Lifecycle             StackTemplateLifecycle `json:"lifecycle"`
+	// ID uniquely identifies this installed component instance.
+	ID StackTemplateID `json:"id"`
+	// TenantID scopes the install to one tenant.
+	TenantID TenantID `json:"tenant_id"`
+	// StackID is the stack this component is installed into.
+	StackID StackID `json:"stack_id"`
+	// TemplateRevisionID is the install-time template revision.
+	TemplateRevisionID TemplateRevisionID `json:"template_revision_id"`
+	// ComponentKey is the human/stable key unique among active installs in a stack.
+	ComponentKey string `json:"component_key"`
+	// SourceTemplateID is the stable source identity shared by all revisions.
+	SourceTemplateID SourceTemplateID `json:"source_template_id"`
+	// DesiredTemplateRevisionID is the template revision to use for the next run.
+	DesiredTemplateRevisionID TemplateRevisionID `json:"desired_template_revision_id"`
+	// LastAppliedTemplateRevisionID is the template revision from the last successful apply.
+	LastAppliedTemplateRevisionID TemplateRevisionID `json:"last_applied_template_revision_id"`
+	// SelectedRef records the source ref selected when the component was installed.
+	SelectedRef string `json:"selected_ref"`
+	// WorkspaceName is the Terraform workspace used for this component.
+	WorkspaceName string `json:"workspace_name"`
+	// ConfigJSON is the install-time config and legacy fallback for desired config.
+	ConfigJSON json.RawMessage `json:"config_json"`
+	// DesiredConfigJSON is the config to snapshot into the next run.
+	DesiredConfigJSON json.RawMessage `json:"desired_config_json"`
+	// LastAppliedRunID is the run that last applied this component successfully.
+	LastAppliedRunID TemplateRunID `json:"last_applied_run_id"`
+	// LastAppliedRef is the source ref recorded by the last successful apply.
+	LastAppliedRef string `json:"last_applied_ref"`
+	// LastAppliedAt is when the last successful apply completed.
+	LastAppliedAt time.Time `json:"last_applied_at,omitempty"`
+	// CreatedBy is the user that installed this component.
+	CreatedBy UserID `json:"created_by"`
+	// Lifecycle determines whether this component can run or is being removed.
+	Lifecycle StackTemplateLifecycle `json:"lifecycle"`
 }
 
 // TemplateRun is one Terraform operation against a StackTemplate.
 // TemplateRun is one terraform operation against a StackTemplate
 type TemplateRun struct {
-	ID                TemplateRunID     `json:"id"`
-	TenantID          TenantID          `json:"tenant_id"`
-	StackTemplateID   StackTemplateID   `json:"stack_template_id"`
-	TemplateID        TemplateID        `json:"template_id"`
-	SourceTemplateID  SourceTemplateID  `json:"source_template_id"`
-	Operation         OperationType     `json:"operation"`
-	SelectedRef       string            `json:"selected_ref"`
-	ResolvedCommitSHA string            `json:"resolved_commit_sha"`
-	WorkspaceName     string            `json:"workspace_name"`
-	ConfigJSON        json.RawMessage   `json:"config_json"`
-	BackendType       string            `json:"backend_type"`
-	BackendConfigHash string            `json:"backend_config_hash"`
-	Status            TemplateRunStatus `json:"status"`
-	TriggerActor      UserID            `json:"trigger_actor"`
-	StartedAt         time.Time         `json:"started_at"`
-	CompletedAt       time.Time         `json:"completed_at,omitempty"`
-	ErrorSummary      string            `json:"error_summary"`
+	ID                 TemplateRunID      `json:"id"`
+	TenantID           TenantID           `json:"tenant_id"`
+	StackTemplateID    StackTemplateID    `json:"stack_template_id"`
+	TemplateRevisionID TemplateRevisionID `json:"template_revision_id"`
+	SourceTemplateID   SourceTemplateID   `json:"source_template_id"`
+	Operation          OperationType      `json:"operation"`
+	SelectedRef        string             `json:"selected_ref"`
+	ResolvedCommitSHA  string             `json:"resolved_commit_sha"`
+	WorkspaceName      string             `json:"workspace_name"`
+	ConfigJSON         json.RawMessage    `json:"config_json"`
+	BackendType        string             `json:"backend_type"`
+	BackendConfigHash  string             `json:"backend_config_hash"`
+	Status             TemplateRunStatus  `json:"status"`
+	TriggerActor       UserID             `json:"trigger_actor"`
+	StartedAt          time.Time          `json:"started_at"`
+	CompletedAt        time.Time          `json:"completed_at,omitempty"`
+	ErrorSummary       string             `json:"error_summary"`
 }
 
 // TemplateRunLog records the object-store location for one run phase log.
@@ -451,20 +468,20 @@ type TemplateSyncActivityInput struct {
 
 // TemplateSyncActivityOutput reports the sync result for one registration source.
 type TemplateSyncActivityOutput struct {
-	Status            TemplateRegistrationStatus
-	TemplateID        TemplateID
-	ResolvedCommitSHA string
-	ErrorSummary      string
+	Status             TemplateRegistrationStatus
+	TemplateRevisionID TemplateRevisionID
+	ResolvedCommitSHA  string
+	ErrorSummary       string
 }
 
 // TemplateRegistrationStatusActivityInput asks the worker to persist one registration status transition.
 type TemplateRegistrationStatusActivityInput struct {
-	RegistrationID    TemplateRegistrationID
-	TenantID          TenantID
-	Status            TemplateRegistrationStatus
-	TemplateID        TemplateID
-	ResolvedCommitSHA string
-	ErrorSummary      string
+	RegistrationID     TemplateRegistrationID
+	TenantID           TenantID
+	Status             TemplateRegistrationStatus
+	TemplateRevisionID TemplateRevisionID
+	ResolvedCommitSHA  string
+	ErrorSummary       string
 }
 
 // ApprovalSignal records an approval actor for a waiting apply run.

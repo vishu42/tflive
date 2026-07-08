@@ -53,14 +53,14 @@ func TestIDValid(t *testing.T) {
 	}
 }
 
-func TestTemplateStatusValid(t *testing.T) {
+func TestTemplateRevisionStatusValid(t *testing.T) {
 	t.Parallel()
 
-	validStatuses := []TemplateStatus{
-		TemplatePendingValidation,
-		TemplateValidating,
-		TemplateActive,
-		TemplateInvalid,
+	validStatuses := []TemplateRevisionStatus{
+		TemplateRevisionPendingValidation,
+		TemplateRevisionValidating,
+		TemplateRevisionActive,
+		TemplateRevisionInvalid,
 	}
 
 	for _, status := range validStatuses {
@@ -74,8 +74,8 @@ func TestTemplateStatusValid(t *testing.T) {
 		})
 	}
 
-	if TemplateStatus("deleted").Valid() {
-		t.Fatal("expected unknown template status to be invalid")
+	if TemplateRevisionStatus("deleted").Valid() {
+		t.Fatal("expected unknown template revision status to be invalid")
 	}
 }
 
@@ -137,12 +137,12 @@ func TestStackTemplateWorkspaceStable(t *testing.T) {
 	t.Parallel()
 
 	stackTemplate := StackTemplate{
-		ID:            StackTemplateID("stack_template_123"),
-		StackID:       StackID("stack_123"),
-		TemplateID:    TemplateID("template_123"),
-		SelectedRef:   "main",
-		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Lifecycle:     StackTemplateActive,
+		ID:                 StackTemplateID("stack_template_123"),
+		StackID:            StackID("stack_123"),
+		TemplateRevisionID: TemplateRevisionID("template_rev_123"),
+		SelectedRef:        "main",
+		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
+		Lifecycle:          StackTemplateActive,
 	}
 
 	if stackTemplate.WorkspaceName == "" {
