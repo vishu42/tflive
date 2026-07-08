@@ -28,6 +28,32 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 			events = append(events, "prepare_workspace")
 			return traits.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/megagega/runs/tenant_123/run_123"}, nil
 		})
+	env.OnActivity(traits.FetchSourceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput traits.FetchSourceActivityInput) (traits.FetchSourceActivityOutput, error) {
+			if activityInput.RunID != input.RunID {
+				t.Fatalf("fetch source RunID = %q, want %q", activityInput.RunID, input.RunID)
+			}
+			if activityInput.TenantID != input.TenantID {
+				t.Fatalf("fetch source TenantID = %q, want %q", activityInput.TenantID, input.TenantID)
+			}
+			if activityInput.WorkspacePath != "/tmp/megagega/runs/tenant_123/run_123" {
+				t.Fatalf("fetch source WorkspacePath = %q", activityInput.WorkspacePath)
+			}
+			if activityInput.RepoOwner != input.RepoOwner {
+				t.Fatalf("fetch source RepoOwner = %q, want %q", activityInput.RepoOwner, input.RepoOwner)
+			}
+			if activityInput.RepoName != input.RepoName {
+				t.Fatalf("fetch source RepoName = %q, want %q", activityInput.RepoName, input.RepoName)
+			}
+			if activityInput.SourceRef != input.SelectedRef {
+				t.Fatalf("fetch source SourceRef = %q, want %q", activityInput.SourceRef, input.SelectedRef)
+			}
+			if activityInput.RootPath != input.RootPath {
+				t.Fatalf("fetch source RootPath = %q, want %q", activityInput.RootPath, input.RootPath)
+			}
+			events = append(events, "fetch_source")
+			return traits.FetchSourceActivityOutput{TerraformPath: "/tmp/megagega/runs/tenant_123/run_123/source/modules/vpc"}, nil
+		})
 	env.OnActivity(traits.RunTerraformActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, activityInput traits.RunTerraformActivityInput) error {
 			if activityInput.RunID != input.RunID {
@@ -38,6 +64,9 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 			}
 			if activityInput.WorkspacePath != "/tmp/megagega/runs/tenant_123/run_123" {
 				t.Fatalf("run terraform WorkspacePath = %q", activityInput.WorkspacePath)
+			}
+			if activityInput.TerraformPath != "/tmp/megagega/runs/tenant_123/run_123/source/modules/vpc" {
+				t.Fatalf("run terraform TerraformPath = %q", activityInput.TerraformPath)
 			}
 			if activityInput.WorkspaceName != input.WorkspaceName {
 				t.Fatalf("run terraform WorkspaceName = %q, want %q", activityInput.WorkspaceName, input.WorkspaceName)
@@ -58,6 +87,7 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 		string(traits.TemplateRunLocked),
 		"prepare_workspace",
 		string(traits.TemplateRunWorkspacePrepared),
+		"fetch_source",
 		string(traits.TemplateRunSourceFetched),
 		"terraform:" + string(traits.TerraformCommandInit),
 		string(traits.TemplateRunInit),
@@ -81,6 +111,7 @@ func TestTemplateRunWorkflowWaitsForApplyApproval(t *testing.T) {
 	var statuses []traits.TemplateRunStatus
 	var commands []traits.TerraformCommandType
 	mockPrepareWorkspace(t, env)
+	mockFetchSource(t, env)
 	mockRunTerraform(t, env, &commands)
 	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
@@ -132,6 +163,7 @@ func TestTemplateRunWorkflowCancelsApplyWhileWaitingApproval(t *testing.T) {
 	var statuses []traits.TemplateRunStatus
 	var commands []traits.TerraformCommandType
 	mockPrepareWorkspace(t, env)
+	mockFetchSource(t, env)
 	mockRunTerraform(t, env, &commands)
 	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
@@ -182,6 +214,7 @@ func TestTemplateRunWorkflowCancelsPlanWhenSignalArrivesDuringTerraform(t *testi
 	var statuses []traits.TemplateRunStatus
 	var commands []traits.TerraformCommandType
 	mockPrepareWorkspace(t, env)
+	mockFetchSource(t, env)
 	mockRunTerraform(t, env, &commands)
 	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
@@ -219,6 +252,7 @@ func TestTemplateRunWorkflowRecordsDestroyStatuses(t *testing.T) {
 	var statuses []traits.TemplateRunStatus
 	var commands []traits.TerraformCommandType
 	mockPrepareWorkspace(t, env)
+	mockFetchSource(t, env)
 	mockRunTerraform(t, env, &commands)
 	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
@@ -271,6 +305,12 @@ func newTemplateRunWorkflowTestEnvironment(t *testing.T) *testsuite.TestWorkflow
 		activity.RegisterOptions{Name: traits.PrepareWorkspaceActivityName},
 	)
 	env.RegisterActivityWithOptions(
+		func(context.Context, traits.FetchSourceActivityInput) (traits.FetchSourceActivityOutput, error) {
+			return traits.FetchSourceActivityOutput{}, nil
+		},
+		activity.RegisterOptions{Name: traits.FetchSourceActivityName},
+	)
+	env.RegisterActivityWithOptions(
 		func(context.Context, traits.RunTerraformActivityInput) error {
 			return nil
 		},
@@ -284,6 +324,13 @@ func mockPrepareWorkspace(t *testing.T, env *testsuite.TestWorkflowEnvironment) 
 
 	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
 		Return(traits.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/megagega/runs/tenant_123/run_123"}, nil)
+}
+
+func mockFetchSource(t *testing.T, env *testsuite.TestWorkflowEnvironment) {
+	t.Helper()
+
+	env.OnActivity(traits.FetchSourceActivityName, mock.Anything, mock.Anything).
+		Return(traits.FetchSourceActivityOutput{TerraformPath: "/tmp/megagega/runs/tenant_123/run_123/source/modules/vpc"}, nil)
 }
 
 func mockRunTerraform(t *testing.T, env *testsuite.TestWorkflowEnvironment, commands *[]traits.TerraformCommandType) {
@@ -304,6 +351,9 @@ func templateRunWorkflowInput(operation traits.OperationType) traits.TemplateRun
 		Operation:       operation,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		RepoOwner:       "acme",
+		RepoName:        "infra-templates",
+		RootPath:        "modules/vpc",
 	}
 }
 

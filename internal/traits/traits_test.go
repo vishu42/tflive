@@ -178,6 +178,14 @@ func TestTemplateSyncActivityNames(t *testing.T) {
 	}
 }
 
+func TestTemplateRunActivityNames(t *testing.T) {
+	t.Parallel()
+
+	if FetchSourceActivityName != "FetchSource" {
+		t.Fatalf("FetchSourceActivityName = %q", FetchSourceActivityName)
+	}
+}
+
 func TestTemplateRunWorkflowInputUsesTraitTypes(t *testing.T) {
 	t.Parallel()
 
@@ -188,6 +196,9 @@ func TestTemplateRunWorkflowInputUsesTraitTypes(t *testing.T) {
 		Operation:       OperationApply,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		RepoOwner:       "acme",
+		RepoName:        "infra",
+		RootPath:        "modules/vpc",
 	}
 
 	if input.Operation != OperationApply {
@@ -196,6 +207,10 @@ func TestTemplateRunWorkflowInputUsesTraitTypes(t *testing.T) {
 
 	if input.WorkspaceName == "" {
 		t.Fatal("expected workspace name to be carried into workflow input")
+	}
+
+	if input.RootPath != "modules/vpc" {
+		t.Fatalf("RootPath = %q, want modules/vpc", input.RootPath)
 	}
 }
 

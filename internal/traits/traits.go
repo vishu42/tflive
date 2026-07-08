@@ -341,6 +341,7 @@ const (
 	RecordTemplateRunStatusActivityName          = "RecordTemplateRunStatus"
 	RecordTemplateRegistrationStatusActivityName = "RecordTemplateRegistrationStatus"
 	PrepareWorkspaceActivityName                 = "PrepareWorkspace"
+	FetchSourceActivityName                      = "FetchSource"
 	RunTerraformActivityName                     = "RunTerraform"
 	SyncTemplateActivityName                     = "SyncTemplate"
 )
@@ -353,6 +354,9 @@ type TemplateRunWorkflowInput struct {
 	Operation       OperationType
 	SelectedRef     string
 	WorkspaceName   string
+	RepoOwner       string
+	RepoName        string
+	RootPath        string
 }
 
 // TemplateRunStatusActivityInput asks the worker to persist one run status transition.
@@ -375,11 +379,28 @@ type PrepareWorkspaceActivityOutput struct {
 	WorkspacePath string
 }
 
+// FetchSourceActivityInput asks the worker to clone a template source into a prepared run workspace.
+type FetchSourceActivityInput struct {
+	RunID         TemplateRunID
+	TenantID      TenantID
+	WorkspacePath string
+	RepoOwner     string
+	RepoName      string
+	SourceRef     string
+	RootPath      string
+}
+
+// FetchSourceActivityOutput identifies the Terraform module directory within the cloned source.
+type FetchSourceActivityOutput struct {
+	TerraformPath string
+}
+
 // RunTerraformActivityInput asks the worker to run one Terraform subprocess command.
 type RunTerraformActivityInput struct {
 	RunID         TemplateRunID
 	TenantID      TenantID
 	WorkspacePath string
+	TerraformPath string
 	WorkspaceName string
 	Command       TerraformCommandType
 }

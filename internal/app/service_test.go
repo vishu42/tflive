@@ -390,15 +390,26 @@ func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 			Lifecycle:     traits.StackTemplateActive,
 		},
 	}
+	templates := &recordingTemplateRepository{
+		template: traits.Template{
+			ID:        traits.TemplateID("template_123"),
+			TenantID:  traits.TenantID("tenant_123"),
+			RepoOwner: "acme",
+			RepoName:  "infra-templates",
+			RootPath:  "modules/vpc",
+			Status:    traits.TemplateActive,
+		},
+	}
 	runs := &recordingTemplateRunRepository{}
 	workflows := &recordingWorkflowDispatcher{}
 
 	service := NewService(Service{
-		StackTemplates: stackTemplates,
-		TemplateRuns:   runs,
-		Workflows:      workflows,
-		RunIDs:         fixedTemplateRunIDGenerator{runID: traits.TemplateRunID("run_123")},
-		Clock:          fixedClock{now: now},
+		StackTemplates:   stackTemplates,
+		TemplateRuns:     runs,
+		TemplateMetadata: templates,
+		Workflows:        workflows,
+		RunIDs:           fixedTemplateRunIDGenerator{runID: traits.TemplateRunID("run_123")},
+		Clock:            fixedClock{now: now},
 	})
 
 	run, err := service.StartTemplateRun(ctx, StartTemplateRunCommand{
@@ -453,6 +464,26 @@ func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 
 	if workflows.input.SelectedRef != "main" {
 		t.Fatalf("workflow selected ref = %q, want main", workflows.input.SelectedRef)
+	}
+
+	if templates.gotGetTemplateTenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("template lookup tenant = %q, want tenant_123", templates.gotGetTemplateTenantID)
+	}
+
+	if templates.gotGetTemplateID != traits.TemplateID("template_123") {
+		t.Fatalf("template lookup ID = %q, want template_123", templates.gotGetTemplateID)
+	}
+
+	if workflows.input.RepoOwner != "acme" {
+		t.Fatalf("workflow repo owner = %q, want acme", workflows.input.RepoOwner)
+	}
+
+	if workflows.input.RepoName != "infra-templates" {
+		t.Fatalf("workflow repo name = %q, want infra-templates", workflows.input.RepoName)
+	}
+
+	if workflows.input.RootPath != "modules/vpc" {
+		t.Fatalf("workflow root path = %q, want modules/vpc", workflows.input.RootPath)
 	}
 }
 
@@ -525,6 +556,7 @@ func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
 	stackTemplates := &recordingStackTemplateRepository{
 		stackTemplate: traits.StackTemplate{
 			ID:            traits.StackTemplateID("stack_template_123"),
+			TemplateID:    traits.TemplateID("template_123"),
 			SelectedRef:   "main",
 			WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 			Lifecycle:     traits.StackTemplateActive,
@@ -534,8 +566,18 @@ func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
 	service := NewService(Service{
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
-		Workflows:      &recordingWorkflowDispatcher{},
-		Clock:          fixedClock{now: time.Now()},
+		TemplateMetadata: &recordingTemplateRepository{
+			template: traits.Template{
+				ID:        traits.TemplateID("template_123"),
+				TenantID:  traits.TenantID("tenant_123"),
+				RepoOwner: "acme",
+				RepoName:  "infra-templates",
+				RootPath:  ".",
+				Status:    traits.TemplateActive,
+			},
+		},
+		Workflows: &recordingWorkflowDispatcher{},
+		Clock:     fixedClock{now: time.Now()},
 	})
 
 	run, err := service.StartTemplateRun(context.Background(), StartTemplateRunCommand{

@@ -395,6 +395,10 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	}
 	// TODO: Reject active StackTemplate records with missing SelectedRef or WorkspaceName,
 	// or enforce those invariants with Postgres CHECK constraints.
+	template, err := service.TemplateMetadata.GetTemplate(ctx, command.TenantID, stackTemplate.TemplateID)
+	if err != nil {
+		return traits.TemplateRun{}, fmt.Errorf("get template metadata: %w", err)
+	}
 
 	run := traits.TemplateRun{
 		ID:              service.RunIDs.NewTemplateRunID(),
@@ -421,6 +425,9 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 		Operation:       run.Operation,
 		SelectedRef:     run.SelectedRef,
 		WorkspaceName:   run.WorkspaceName,
+		RepoOwner:       template.RepoOwner,
+		RepoName:        template.RepoName,
+		RootPath:        template.RootPath,
 	}
 	if err := service.Workflows.StartTemplateRun(ctx, input); err != nil {
 		return traits.TemplateRun{}, fmt.Errorf("start template run workflow: %w", err)

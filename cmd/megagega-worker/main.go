@@ -100,6 +100,9 @@ func defaultWorkerDependencies() workerDependencies {
 			worker.RegisterActivityWithOptions(templateRunActivities.PrepareWorkspace, activity.RegisterOptions{
 				Name: traits.PrepareWorkspaceActivityName,
 			})
+			worker.RegisterActivityWithOptions(templateRunActivities.FetchSource, activity.RegisterOptions{
+				Name: traits.FetchSourceActivityName,
+			})
 			worker.RegisterActivityWithOptions(templateRunActivities.RunTerraform, activity.RegisterOptions{
 				Name: traits.RunTerraformActivityName,
 			})

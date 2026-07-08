@@ -1,0 +1,1 @@
+- terraform plan if s3 config is incorrect, it shouldnt happen

@@ -45,6 +45,8 @@ type TemplateRunActivities struct {
 	runRoot string
 	// terraformRunner executes Terraform commands for RunTerraform activity calls.
 	terraformRunner TerraformRunner
+	// git clones template source repositories into run workspaces.
+	git runner.GitRunner
 }
 
 // NewTemplateRunActivities constructs the activity handler set registered by the worker.
@@ -70,6 +72,7 @@ func NewTemplateRunActivitiesWithLogStore(recorder StatusRecorder, runRoot strin
 		recorder:        recorder,
 		runRoot:         runRoot,
 		terraformRunner: terraformRunner,
+		git:             runner.NewLocalGitRunner(),
 	}
 }
 
@@ -105,6 +108,38 @@ func (activities *TemplateRunActivities) PrepareWorkspace(ctx context.Context, i
 	}
 
 	return traits.PrepareWorkspaceActivityOutput{WorkspacePath: workspacePath}, nil
+}
+
+// FetchSource clones the template source into the prepared run workspace.
+//
+// The full repository is cloned under a stable "source" directory, while the
+// returned TerraformPath points at the configured template root inside that
+// clone. Keeping WorkspacePath separate lets log files remain run-scoped even
+// when Terraform executes from a nested module directory.
+func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input traits.FetchSourceActivityInput) (traits.FetchSourceActivityOutput, error) {
+	rootPath, err := safeTemplateRootPath(input.RootPath)
+	if err != nil {
+		return traits.FetchSourceActivityOutput{}, fmt.Errorf("source root path: %w", err)
+	}
+	if strings.TrimSpace(input.WorkspacePath) == "" {
+		return traits.FetchSourceActivityOutput{}, fmt.Errorf("workspace path is required")
+	}
+
+	sourcePath := filepath.Join(input.WorkspacePath, "source")
+	git := activities.git
+	if git == nil {
+		git = runner.NewLocalGitRunner()
+	}
+	if err := git.Clone(ctx, publicGitHubRepoURL(input.RepoOwner, input.RepoName), input.SourceRef, sourcePath); err != nil {
+		return traits.FetchSourceActivityOutput{}, fmt.Errorf("clone source: %w", err)
+	}
+
+	terraformPath := filepath.Clean(filepath.Join(sourcePath, rootPath))
+	if err := ensureTemplateRoot(terraformPath); err != nil {
+		return traits.FetchSourceActivityOutput{}, fmt.Errorf("source root %q: %w", rootPath, err)
+	}
+
+	return traits.FetchSourceActivityOutput{TerraformPath: terraformPath}, nil
 }
 
 // RunTerraform executes one Terraform phase requested by TemplateRunWorkflow.
@@ -166,7 +201,7 @@ func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input 
 	}
 
 	runErr := localRunner.runner.Run(ctx, runner.TerraformCommand{
-		WorkspacePath: input.WorkspacePath,
+		WorkspacePath: terraformPath(input),
 		WorkspaceName: input.WorkspaceName,
 		Command:       input.Command,
 		Stdout:        writer,
@@ -194,4 +229,11 @@ func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input 
 		return runErr
 	}
 	return nil
+}
+
+func terraformPath(input traits.RunTerraformActivityInput) string {
+	if strings.TrimSpace(input.TerraformPath) != "" {
+		return input.TerraformPath
+	}
+	return input.WorkspacePath
 }

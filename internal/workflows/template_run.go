@@ -30,6 +30,13 @@ func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowI
 	return nil
 }
 
+type templateRunWorkflow struct {
+	ctx           workflow.Context
+	input         traits.TemplateRunWorkflowInput
+	workspacePath string
+	terraformPath string
+}
+
 func (run *templateRunWorkflow) execute() error {
 	if err := run.prepareWorkspace(); err != nil {
 		return err
@@ -53,12 +60,6 @@ func (run *templateRunWorkflow) execute() error {
 	}
 }
 
-type templateRunWorkflow struct {
-	ctx           workflow.Context
-	input         traits.TemplateRunWorkflowInput
-	workspacePath string
-}
-
 func (run *templateRunWorkflow) prepareWorkspace() error {
 	if err := run.recordStatus(traits.TemplateRunLocked); err != nil {
 		return err
@@ -66,7 +67,13 @@ func (run *templateRunWorkflow) prepareWorkspace() error {
 	if err := run.prepareLocalWorkspace(); err != nil {
 		return err
 	}
-	if err := run.recordStatuses(traits.TemplateRunWorkspacePrepared, traits.TemplateRunSourceFetched); err != nil {
+	if err := run.recordStatus(traits.TemplateRunWorkspacePrepared); err != nil {
+		return err
+	}
+	if err := run.fetchSource(); err != nil {
+		return err
+	}
+	if err := run.recordStatus(traits.TemplateRunSourceFetched); err != nil {
 		return err
 	}
 	if err := run.runTerraform(traits.TerraformCommandInit); err != nil {
@@ -101,6 +108,28 @@ func (run *templateRunWorkflow) prepareLocalWorkspace() error {
 		return err
 	}
 	run.workspacePath = output.WorkspacePath
+	return nil
+}
+
+func (run *templateRunWorkflow) fetchSource() error {
+	input := traits.FetchSourceActivityInput{
+		RunID:         run.input.RunID,
+		TenantID:      run.input.TenantID,
+		WorkspacePath: run.workspacePath,
+		RepoOwner:     run.input.RepoOwner,
+		RepoName:      run.input.RepoName,
+		SourceRef:     run.input.SelectedRef,
+		RootPath:      run.input.RootPath,
+	}
+	var output traits.FetchSourceActivityOutput
+	if err := workflow.ExecuteActivity(
+		run.ctx,
+		traits.FetchSourceActivityName,
+		input,
+	).Get(run.ctx, &output); err != nil {
+		return err
+	}
+	run.terraformPath = output.TerraformPath
 	return nil
 }
 
@@ -188,6 +217,7 @@ func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType
 		RunID:         run.input.RunID,
 		TenantID:      run.input.TenantID,
 		WorkspacePath: run.workspacePath,
+		TerraformPath: run.terraformPath,
 		WorkspaceName: run.input.WorkspaceName,
 		Command:       command,
 	}

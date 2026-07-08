@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
+	"github.com/vishu42/megagega/internal/runner"
 	"github.com/vishu42/megagega/internal/traits"
 	"github.com/zclconf/go-cty/cty"
 	"gopkg.in/yaml.v3"
@@ -25,20 +25,15 @@ type TemplateSyncStore interface {
 	UpsertTemplateWithVariables(context.Context, traits.Template, []traits.TemplateVariable) (traits.Template, error)
 }
 
-type GitRunner interface {
-	Clone(ctx context.Context, repoURL string, ref string, dest string) error
-	ResolveHead(ctx context.Context, repoPath string) (string, error)
-}
-
 type TemplateSyncActivities struct {
 	store    TemplateSyncStore
-	git      GitRunner
+	git      runner.GitRunner
 	tempRoot string
 }
 
 type TemplateSyncOption func(*TemplateSyncActivities)
 
-func WithTemplateSyncGitRunner(git GitRunner) TemplateSyncOption {
+func WithTemplateSyncGitRunner(git runner.GitRunner) TemplateSyncOption {
 	return func(activities *TemplateSyncActivities) {
 		if git != nil {
 			activities.git = git
@@ -55,7 +50,7 @@ func WithTemplateSyncTempRoot(tempRoot string) TemplateSyncOption {
 func NewTemplateSyncActivities(store TemplateSyncStore, options ...TemplateSyncOption) *TemplateSyncActivities {
 	activities := &TemplateSyncActivities{
 		store: store,
-		git:   localGitRunner{},
+		git:   runner.NewLocalGitRunner(),
 	}
 	for _, option := range options {
 		option(activities)
@@ -140,24 +135,6 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 		TemplateID:        persisted.ID,
 		ResolvedCommitSHA: persisted.ResolvedCommitSHA,
 	}, nil
-}
-
-type localGitRunner struct{}
-
-func (localGitRunner) Clone(ctx context.Context, repoURL string, ref string, dest string) error {
-	output, err := exec.CommandContext(ctx, "git", "clone", "--depth", "1", "--branch", ref, repoURL, dest).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("git clone: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	return nil
-}
-
-func (localGitRunner) ResolveHead(ctx context.Context, repoPath string) (string, error) {
-	output, err := exec.CommandContext(ctx, "git", "-C", repoPath, "rev-parse", "HEAD").CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("git rev-parse HEAD: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	return strings.TrimSpace(string(output)), nil
 }
 
 func publicGitHubRepoURL(owner string, repo string) string {

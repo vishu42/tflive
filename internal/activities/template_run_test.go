@@ -117,6 +117,75 @@ func TestPrepareWorkspaceRejectsUnsafePathComponents(t *testing.T) {
 	}
 }
 
+func TestFetchSourceClonesRepositoryAndReturnsTerraformPath(t *testing.T) {
+	t.Parallel()
+
+	workspacePath := t.TempDir()
+	git := &recordingSourceGitRunner{}
+	activities := &TemplateRunActivities{
+		recorder:        &recordingStatusRecorder{},
+		runRoot:         t.TempDir(),
+		terraformRunner: &recordingTerraformRunner{},
+		git:             git,
+	}
+
+	output, err := activities.FetchSource(context.Background(), traits.FetchSourceActivityInput{
+		RunID:         traits.TemplateRunID("run_123"),
+		TenantID:      traits.TenantID("tenant_123"),
+		WorkspacePath: workspacePath,
+		RepoOwner:     "acme",
+		RepoName:      "infra-templates",
+		SourceRef:     "main",
+		RootPath:      "modules/vpc",
+	})
+	if err != nil {
+		t.Fatalf("FetchSource returned error: %v", err)
+	}
+
+	if git.repoURL != "https://github.com/acme/infra-templates.git" {
+		t.Fatalf("repoURL = %q", git.repoURL)
+	}
+	if git.ref != "main" {
+		t.Fatalf("ref = %q, want main", git.ref)
+	}
+	wantCloneDest := filepath.Join(workspacePath, "source")
+	if git.dest != wantCloneDest {
+		t.Fatalf("dest = %q, want %q", git.dest, wantCloneDest)
+	}
+	wantTerraformPath := filepath.Join(workspacePath, "source", "modules", "vpc")
+	if output.TerraformPath != wantTerraformPath {
+		t.Fatalf("TerraformPath = %q, want %q", output.TerraformPath, wantTerraformPath)
+	}
+}
+
+func TestFetchSourceRejectsUnsafeRootPath(t *testing.T) {
+	t.Parallel()
+
+	git := &recordingSourceGitRunner{}
+	activities := &TemplateRunActivities{
+		recorder:        &recordingStatusRecorder{},
+		runRoot:         t.TempDir(),
+		terraformRunner: &recordingTerraformRunner{},
+		git:             git,
+	}
+
+	_, err := activities.FetchSource(context.Background(), traits.FetchSourceActivityInput{
+		RunID:         traits.TemplateRunID("run_123"),
+		TenantID:      traits.TenantID("tenant_123"),
+		WorkspacePath: t.TempDir(),
+		RepoOwner:     "acme",
+		RepoName:      "infra-templates",
+		SourceRef:     "main",
+		RootPath:      "../secret",
+	})
+	if err == nil {
+		t.Fatal("FetchSource returned nil error, want unsafe root path error")
+	}
+	if git.repoURL != "" {
+		t.Fatalf("git clone was called with repoURL %q", git.repoURL)
+	}
+}
+
 func TestRunTerraformDelegatesToRunner(t *testing.T) {
 	t.Parallel()
 
@@ -279,6 +348,27 @@ type recordingTerraformRunner struct {
 func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input traits.RunTerraformActivityInput) error {
 	runner.input = input
 	return runner.err
+}
+
+type recordingSourceGitRunner struct {
+	repoURL string
+	ref     string
+	dest    string
+	err     error
+}
+
+func (runner *recordingSourceGitRunner) Clone(_ context.Context, repoURL string, ref string, dest string) error {
+	runner.repoURL = repoURL
+	runner.ref = ref
+	runner.dest = dest
+	if runner.err != nil {
+		return runner.err
+	}
+	return os.MkdirAll(filepath.Join(dest, "modules", "vpc"), 0o700)
+}
+
+func (runner *recordingSourceGitRunner) ResolveHead(context.Context, string) (string, error) {
+	return "", nil
 }
 
 type recordingTemplateRunLogStore struct {

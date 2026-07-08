@@ -82,6 +82,9 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if !deps.worker.registeredActivities[traits.PrepareWorkspaceActivityName] {
 		t.Fatalf("activity %q was not registered", traits.PrepareWorkspaceActivityName)
 	}
+	if !deps.worker.registeredActivities[traits.FetchSourceActivityName] {
+		t.Fatalf("activity %q was not registered", traits.FetchSourceActivityName)
+	}
 	if !deps.worker.registeredActivities[traits.RunTerraformActivityName] {
 		t.Fatalf("activity %q was not registered", traits.RunTerraformActivityName)
 	}
@@ -146,6 +149,9 @@ func TestDefaultWorkerDependenciesRegisterTerraformActivities(t *testing.T) {
 
 	if !worker.registeredActivities[traits.PrepareWorkspaceActivityName] {
 		t.Fatalf("activity %q was not registered", traits.PrepareWorkspaceActivityName)
+	}
+	if !worker.registeredActivities[traits.FetchSourceActivityName] {
+		t.Fatalf("activity %q was not registered", traits.FetchSourceActivityName)
 	}
 	if !worker.registeredActivities[traits.RunTerraformActivityName] {
 		t.Fatalf("activity %q was not registered", traits.RunTerraformActivityName)
@@ -323,6 +329,14 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 				},
 				activity.RegisterOptions{
 					Name: traits.PrepareWorkspaceActivityName,
+				},
+			)
+			worker.RegisterActivityWithOptions(
+				func(context.Context, traits.FetchSourceActivityInput) (traits.FetchSourceActivityOutput, error) {
+					return traits.FetchSourceActivityOutput{}, nil
+				},
+				activity.RegisterOptions{
+					Name: traits.FetchSourceActivityName,
 				},
 			)
 			worker.RegisterActivityWithOptions(
