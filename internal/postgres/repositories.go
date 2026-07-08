@@ -27,7 +27,7 @@ func (store *Store) CreateTemplateRegistration(ctx context.Context, registration
 			source_ref,
 			root_path,
 			status,
-			template_id,
+			template_revision_id,
 			resolved_commit_sha,
 			requested_by,
 			requested_at,
@@ -45,7 +45,7 @@ func (store *Store) CreateTemplateRegistration(ctx context.Context, registration
 		registration.SourceRef,
 		registration.RootPath,
 		registration.Status,
-		registration.TemplateID,
+		registration.TemplateRevisionID,
 		registration.ResolvedCommitSHA,
 		registration.RequestedBy,
 		registration.RequestedAt,
@@ -70,7 +70,7 @@ func (store *Store) GetTemplateRegistration(ctx context.Context, tenantID traits
 			source_ref,
 			root_path,
 			status,
-			template_id,
+			template_revision_id,
 			resolved_commit_sha,
 			requested_by,
 			requested_at,
@@ -87,7 +87,7 @@ func (store *Store) GetTemplateRegistration(ctx context.Context, tenantID traits
 		&registration.SourceRef,
 		&registration.RootPath,
 		&registration.Status,
-		&registration.TemplateID,
+		&registration.TemplateRevisionID,
 		&registration.ResolvedCommitSHA,
 		&registration.RequestedBy,
 		&registration.RequestedAt,
@@ -113,7 +113,7 @@ func (store *Store) RecordTemplateRegistrationStatus(ctx context.Context, input 
 			update template_registrations
 			set
 				status = $1,
-				template_id = $2,
+				template_revision_id = $2,
 				resolved_commit_sha = $3,
 				error_summary = $4,
 				completed_at = coalesce(completed_at, now())
@@ -121,7 +121,7 @@ func (store *Store) RecordTemplateRegistrationStatus(ctx context.Context, input 
 				and id = $6
 		`,
 			input.Status,
-			input.TemplateID,
+			input.TemplateRevisionID,
 			input.ResolvedCommitSHA,
 			input.ErrorSummary,
 			input.TenantID,
@@ -132,14 +132,14 @@ func (store *Store) RecordTemplateRegistrationStatus(ctx context.Context, input 
 			update template_registrations
 			set
 				status = $1,
-				template_id = $2,
+				template_revision_id = $2,
 				resolved_commit_sha = $3,
 				error_summary = $4
 			where tenant_id = $5
 				and id = $6
 		`,
 			input.Status,
-			input.TemplateID,
+			input.TemplateRevisionID,
 			input.ResolvedCommitSHA,
 			input.ErrorSummary,
 			input.TenantID,
@@ -160,37 +160,37 @@ func (store *Store) RecordTemplateRegistrationStatus(ctx context.Context, input 
 	return nil
 }
 
-func (store *Store) UpsertTemplateWithVariables(ctx context.Context, template traits.Template, variables []traits.TemplateVariable) (traits.Template, error) {
+func (store *Store) UpsertTemplateRevisionWithVariables(ctx context.Context, templateRevision traits.TemplateRevision, variables []traits.TemplateVariable) (traits.TemplateRevision, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return traits.Template{}, fmt.Errorf("begin upsert template: %w", err)
+		return traits.TemplateRevision{}, fmt.Errorf("begin upsert template revision: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	tagsJSON, err := json.Marshal(template.Tags)
+	tagsJSON, err := json.Marshal(templateRevision.Tags)
 	if err != nil {
-		return traits.Template{}, fmt.Errorf("marshal template tags: %w", err)
+		return traits.TemplateRevision{}, fmt.Errorf("marshal template revision tags: %w", err)
 	}
 	if tagsJSON == nil {
 		tagsJSON = []byte("[]")
 	}
 
-	sourceTemplateID, err := upsertSourceTemplate(ctx, tx, template)
+	sourceTemplateID, err := upsertSourceTemplate(ctx, tx, templateRevision)
 	if err != nil {
-		return traits.Template{}, err
+		return traits.TemplateRevision{}, err
 	}
-	template.SourceTemplateID = sourceTemplateID
+	templateRevision.SourceTemplateID = sourceTemplateID
 
-	inserted, insertedNew, err := insertTemplate(ctx, tx, template, tagsJSON)
+	inserted, insertedNew, err := insertTemplateRevision(ctx, tx, templateRevision, tagsJSON)
 	if err != nil {
-		return traits.Template{}, err
+		return traits.TemplateRevision{}, err
 	}
 	if err := recordLatestTemplateRevision(ctx, tx, inserted); err != nil {
-		return traits.Template{}, err
+		return traits.TemplateRevision{}, err
 	}
 	if !insertedNew {
 		if err := tx.Commit(ctx); err != nil {
-			return traits.Template{}, fmt.Errorf("commit reused template: %w", err)
+			return traits.TemplateRevision{}, fmt.Errorf("commit reused template revision: %w", err)
 		}
 		return inserted, nil
 	}
@@ -198,7 +198,7 @@ func (store *Store) UpsertTemplateWithVariables(ctx context.Context, template tr
 	for _, variable := range variables {
 		if _, err := tx.Exec(ctx, `
 			insert into template_variables (
-				template_id,
+				template_revision_id,
 				name,
 				type_expression,
 				description,
@@ -217,27 +217,27 @@ func (store *Store) UpsertTemplateWithVariables(ctx context.Context, template tr
 			variable.Sensitive,
 			variable.HasValidation,
 		); err != nil {
-			return traits.Template{}, fmt.Errorf("insert template variable %q: %w", variable.Name, err)
+			return traits.TemplateRevision{}, fmt.Errorf("insert template revision variable %q: %w", variable.Name, err)
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return traits.Template{}, fmt.Errorf("commit upsert template: %w", err)
+		return traits.TemplateRevision{}, fmt.Errorf("commit upsert template revision: %w", err)
 	}
 	return inserted, nil
 }
 
-func (store *Store) GetTemplateVariables(ctx context.Context, tenantID traits.TenantID, templateID traits.TemplateID) ([]traits.TemplateVariable, error) {
+func (store *Store) GetTemplateRevisionVariables(ctx context.Context, tenantID traits.TenantID, templateRevisionID traits.TemplateRevisionID) ([]traits.TemplateVariable, error) {
 	var exists bool
 	if err := store.pool.QueryRow(ctx, `
 		select exists (
 			select 1
-			from templates
+			from template_revisions
 			where tenant_id = $1
 				and id = $2
 		)
-	`, tenantID, templateID).Scan(&exists); err != nil {
-		return nil, fmt.Errorf("check template existence: %w", err)
+	`, tenantID, templateRevisionID).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("check template revision existence: %w", err)
 	}
 	if !exists {
 		return nil, app.ErrNotFound
@@ -245,7 +245,7 @@ func (store *Store) GetTemplateVariables(ctx context.Context, tenantID traits.Te
 
 	rows, err := store.pool.Query(ctx, `
 		select
-			template_id,
+			template_revision_id,
 			name,
 			type_expression,
 			description,
@@ -254,11 +254,11 @@ func (store *Store) GetTemplateVariables(ctx context.Context, tenantID traits.Te
 			sensitive,
 			has_validation
 		from template_variables
-		where template_id = $1
+		where template_revision_id = $1
 		order by name
-	`, templateID)
+	`, templateRevisionID)
 	if err != nil {
-		return nil, fmt.Errorf("get template variables: %w", err)
+		return nil, fmt.Errorf("get template revision variables: %w", err)
 	}
 	defer rows.Close()
 
@@ -266,7 +266,7 @@ func (store *Store) GetTemplateVariables(ctx context.Context, tenantID traits.Te
 	for rows.Next() {
 		var variable traits.TemplateVariable
 		if err := rows.Scan(
-			&variable.TemplateID,
+			&variable.TemplateRevisionID,
 			&variable.Name,
 			&variable.TypeExpression,
 			&variable.Description,
@@ -275,17 +275,17 @@ func (store *Store) GetTemplateVariables(ctx context.Context, tenantID traits.Te
 			&variable.Sensitive,
 			&variable.HasValidation,
 		); err != nil {
-			return nil, fmt.Errorf("scan template variable: %w", err)
+			return nil, fmt.Errorf("scan template revision variable: %w", err)
 		}
 		variables = append(variables, variable)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate template variables: %w", err)
+		return nil, fmt.Errorf("iterate template revision variables: %w", err)
 	}
 	return variables, nil
 }
 
-func (store *Store) ListTemplates(ctx context.Context, tenantID traits.TenantID) ([]traits.Template, error) {
+func (store *Store) ListTemplateRevisions(ctx context.Context, tenantID traits.TenantID) ([]traits.TemplateRevision, error) {
 	rows, err := store.pool.Query(ctx, `
 		select
 			id,
@@ -301,27 +301,27 @@ func (store *Store) ListTemplates(ctx context.Context, tenantID traits.TenantID)
 			tags_json,
 			status,
 			created_at
-		from templates
+		from template_revisions
 		where tenant_id = $1
 		order by created_at desc, id desc
 	`, tenantID)
 	if err != nil {
-		return nil, fmt.Errorf("list templates: %w", err)
+		return nil, fmt.Errorf("list template revisions: %w", err)
 	}
 	defer rows.Close()
 
-	var templates []traits.Template
+	var templateRevisions []traits.TemplateRevision
 	for rows.Next() {
-		template, err := scanTemplate(rows)
+		templateRevision, err := scanTemplateRevision(rows)
 		if err != nil {
 			return nil, err
 		}
-		templates = append(templates, template)
+		templateRevisions = append(templateRevisions, templateRevision)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate templates: %w", err)
+		return nil, fmt.Errorf("iterate template revisions: %w", err)
 	}
-	return templates, nil
+	return templateRevisions, nil
 }
 
 func (store *Store) CreateStack(ctx context.Context, stack traits.Stack) error {
@@ -424,11 +424,11 @@ func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.T
 			id,
 			tenant_id,
 			stack_id,
-			template_id,
+			template_revision_id,
 			component_key,
 			source_template_id,
-			desired_template_id,
-			last_applied_template_id,
+			desired_template_revision_id,
+			last_applied_template_revision_id,
 			selected_ref,
 			workspace_name,
 			config_json,
@@ -476,9 +476,9 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 	if componentKey == "" {
 		componentKey = string(stackTemplate.ID)
 	}
-	desiredTemplateID := stackTemplate.DesiredTemplateID
-	if desiredTemplateID == "" {
-		desiredTemplateID = stackTemplate.TemplateID
+	desiredTemplateRevisionID := stackTemplate.DesiredTemplateRevisionID
+	if desiredTemplateRevisionID == "" {
+		desiredTemplateRevisionID = stackTemplate.TemplateRevisionID
 	}
 
 	result, err := store.pool.Exec(ctx, `
@@ -486,11 +486,11 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 			id,
 			tenant_id,
 			stack_id,
-			template_id,
+			template_revision_id,
 			component_key,
 			source_template_id,
-			desired_template_id,
-			last_applied_template_id,
+			desired_template_revision_id,
+			last_applied_template_revision_id,
 			selected_ref,
 			workspace_name,
 			config_json,
@@ -512,11 +512,11 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 		stackTemplate.ID,
 		stackTemplate.TenantID,
 		stackTemplate.StackID,
-		stackTemplate.TemplateID,
+		stackTemplate.TemplateRevisionID,
 		componentKey,
 		stackTemplate.SourceTemplateID,
-		desiredTemplateID,
-		stackTemplate.LastAppliedTemplateID,
+		desiredTemplateRevisionID,
+		stackTemplate.LastAppliedTemplateRevisionID,
 		stackTemplate.SelectedRef,
 		stackTemplate.WorkspaceName,
 		configJSON,
@@ -539,7 +539,7 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 	return nil
 }
 
-func (store *Store) GetTemplate(ctx context.Context, tenantID traits.TenantID, templateID traits.TemplateID) (traits.Template, error) {
+func (store *Store) GetTemplateRevision(ctx context.Context, tenantID traits.TenantID, templateRevisionID traits.TemplateRevisionID) (traits.TemplateRevision, error) {
 	row := store.pool.QueryRow(ctx, `
 		select
 			id,
@@ -555,18 +555,18 @@ func (store *Store) GetTemplate(ctx context.Context, tenantID traits.TenantID, t
 			tags_json,
 			status,
 			created_at
-		from templates
+		from template_revisions
 		where tenant_id = $1
 			and id = $2
-	`, tenantID, templateID)
-	template, err := scanTemplate(row)
+	`, tenantID, templateRevisionID)
+	templateRevision, err := scanTemplateRevision(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return traits.Template{}, app.ErrNotFound
+		return traits.TemplateRevision{}, app.ErrNotFound
 	}
 	if err != nil {
-		return traits.Template{}, fmt.Errorf("get template: %w", err)
+		return traits.TemplateRevision{}, fmt.Errorf("get template revision: %w", err)
 	}
-	return template, nil
+	return templateRevision, nil
 }
 
 func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error) {
@@ -575,11 +575,11 @@ func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.Tenant
 			id,
 			tenant_id,
 			stack_id,
-			template_id,
+			template_revision_id,
 			component_key,
 			source_template_id,
-			desired_template_id,
-			last_applied_template_id,
+			desired_template_revision_id,
+			last_applied_template_revision_id,
 			selected_ref,
 			workspace_name,
 			config_json,
@@ -613,11 +613,11 @@ func (store *Store) UpdateStackTemplateConfig(ctx context.Context, tenantID trai
 			id,
 			tenant_id,
 			stack_id,
-			template_id,
+			template_revision_id,
 			component_key,
 			source_template_id,
-			desired_template_id,
-			last_applied_template_id,
+			desired_template_revision_id,
+			last_applied_template_revision_id,
 			selected_ref,
 			workspace_name,
 			config_json,
@@ -638,11 +638,11 @@ func (store *Store) UpdateStackTemplateConfig(ctx context.Context, tenantID trai
 	return stackTemplate, nil
 }
 
-func (store *Store) UpdateStackTemplateDesiredRevision(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateID traits.TemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {
+func (store *Store) UpdateStackTemplateDesiredRevision(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateRevisionID traits.TemplateRevisionID, configJSON json.RawMessage) (traits.StackTemplate, error) {
 	row := store.pool.QueryRow(ctx, `
 		update stack_templates
 		set
-			desired_template_id = $1,
+			desired_template_revision_id = $1,
 			desired_config_json = $2::jsonb
 		where tenant_id = $3
 			and id = $4
@@ -650,11 +650,11 @@ func (store *Store) UpdateStackTemplateDesiredRevision(ctx context.Context, tena
 			id,
 			tenant_id,
 			stack_id,
-			template_id,
+			template_revision_id,
 			component_key,
 			source_template_id,
-			desired_template_id,
-			last_applied_template_id,
+			desired_template_revision_id,
+			last_applied_template_revision_id,
 			selected_ref,
 			workspace_name,
 			config_json,
@@ -664,7 +664,7 @@ func (store *Store) UpdateStackTemplateDesiredRevision(ctx context.Context, tena
 			last_applied_at,
 			created_by,
 			lifecycle
-	`, templateID, defaultJSON(configJSON), tenantID, id)
+	`, templateRevisionID, defaultJSON(configJSON), tenantID, id)
 	stackTemplate, err := scanStackTemplate(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return traits.StackTemplate{}, app.ErrNotFound
@@ -681,7 +681,7 @@ func (store *Store) CreateTemplateRun(ctx context.Context, run traits.TemplateRu
 			id,
 			tenant_id,
 			stack_template_id,
-			template_id,
+			template_revision_id,
 			source_template_id,
 			operation,
 			selected_ref,
@@ -703,7 +703,7 @@ func (store *Store) CreateTemplateRun(ctx context.Context, run traits.TemplateRu
 		run.ID,
 		run.TenantID,
 		run.StackTemplateID,
-		run.TemplateID,
+		run.TemplateRevisionID,
 		run.SourceTemplateID,
 		run.Operation,
 		run.SelectedRef,
@@ -735,7 +735,7 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID traits.TenantID
 			id,
 			tenant_id,
 			stack_template_id,
-			template_id,
+			template_revision_id,
 			source_template_id,
 			operation,
 			selected_ref,
@@ -756,7 +756,7 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID traits.TenantID
 		&run.ID,
 		&run.TenantID,
 		&run.StackTemplateID,
-		&run.TemplateID,
+		&run.TemplateRevisionID,
 		&run.SourceTemplateID,
 		&run.Operation,
 		&run.SelectedRef,
@@ -1080,7 +1080,7 @@ func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLas
 		update stack_templates
 		set
 			last_applied_run_id = template_runs.id,
-			last_applied_template_id = template_runs.template_id,
+			last_applied_template_revision_id = template_runs.template_revision_id,
 			last_applied_ref = template_runs.selected_ref,
 			last_applied_at = now()
 		from template_runs
@@ -1130,11 +1130,11 @@ func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, erro
 		&stackTemplate.ID,
 		&stackTemplate.TenantID,
 		&stackTemplate.StackID,
-		&stackTemplate.TemplateID,
+		&stackTemplate.TemplateRevisionID,
 		&stackTemplate.ComponentKey,
 		&stackTemplate.SourceTemplateID,
-		&stackTemplate.DesiredTemplateID,
-		&stackTemplate.LastAppliedTemplateID,
+		&stackTemplate.DesiredTemplateRevisionID,
+		&stackTemplate.LastAppliedTemplateRevisionID,
 		&stackTemplate.SelectedRef,
 		&stackTemplate.WorkspaceName,
 		&configJSON,
@@ -1155,31 +1155,31 @@ func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, erro
 	return stackTemplate, nil
 }
 
-func scanTemplate(scanner templateScanner) (traits.Template, error) {
-	var template traits.Template
+func scanTemplateRevision(scanner templateScanner) (traits.TemplateRevision, error) {
+	var templateRevision traits.TemplateRevision
 	var tagsJSON []byte
 
 	if err := scanner.Scan(
-		&template.ID,
-		&template.TenantID,
-		&template.SourceTemplateID,
-		&template.RepoOwner,
-		&template.RepoName,
-		&template.SourceRef,
-		&template.ResolvedCommitSHA,
-		&template.RootPath,
-		&template.Name,
-		&template.Description,
+		&templateRevision.ID,
+		&templateRevision.TenantID,
+		&templateRevision.SourceTemplateID,
+		&templateRevision.RepoOwner,
+		&templateRevision.RepoName,
+		&templateRevision.SourceRef,
+		&templateRevision.ResolvedCommitSHA,
+		&templateRevision.RootPath,
+		&templateRevision.Name,
+		&templateRevision.Description,
 		&tagsJSON,
-		&template.Status,
-		&template.CreatedAt,
+		&templateRevision.Status,
+		&templateRevision.CreatedAt,
 	); err != nil {
-		return traits.Template{}, err
+		return traits.TemplateRevision{}, err
 	}
-	if err := json.Unmarshal(tagsJSON, &template.Tags); err != nil {
-		return traits.Template{}, fmt.Errorf("unmarshal template tags: %w", err)
+	if err := json.Unmarshal(tagsJSON, &templateRevision.Tags); err != nil {
+		return traits.TemplateRevision{}, fmt.Errorf("unmarshal template revision tags: %w", err)
 	}
-	return template, nil
+	return templateRevision, nil
 }
 
 func scanStack(scanner stackScanner) (traits.Stack, error) {
@@ -1238,10 +1238,10 @@ func duplicateConstraint(err error, constraint string) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
 }
 
-func upsertSourceTemplate(ctx context.Context, tx pgx.Tx, template traits.Template) (traits.SourceTemplateID, error) {
-	sourceTemplateID := template.SourceTemplateID
+func upsertSourceTemplate(ctx context.Context, tx pgx.Tx, templateRevision traits.TemplateRevision) (traits.SourceTemplateID, error) {
+	sourceTemplateID := templateRevision.SourceTemplateID
 	if sourceTemplateID == "" {
-		sourceTemplateID = deterministicSourceTemplateID(template)
+		sourceTemplateID = deterministicSourceTemplateID(templateRevision)
 	}
 
 	var persistedID traits.SourceTemplateID
@@ -1259,11 +1259,11 @@ func upsertSourceTemplate(ctx context.Context, tx pgx.Tx, template traits.Templa
 		returning id
 	`,
 		sourceTemplateID,
-		template.TenantID,
-		template.RepoOwner,
-		template.RepoName,
-		template.SourceRef,
-		template.RootPath,
+		templateRevision.TenantID,
+		templateRevision.RepoOwner,
+		templateRevision.RepoName,
+		templateRevision.SourceRef,
+		templateRevision.RootPath,
 	).Scan(&persistedID)
 	if err != nil {
 		return "", fmt.Errorf("upsert source template: %w", err)
@@ -1272,7 +1272,7 @@ func upsertSourceTemplate(ctx context.Context, tx pgx.Tx, template traits.Templa
 	return persistedID, nil
 }
 
-func recordLatestTemplateRevision(ctx context.Context, tx pgx.Tx, template traits.Template) error {
+func recordLatestTemplateRevision(ctx context.Context, tx pgx.Tx, templateRevision traits.TemplateRevision) error {
 	commandTag, err := tx.Exec(ctx, `
 		update source_templates
 		set
@@ -1281,9 +1281,9 @@ func recordLatestTemplateRevision(ctx context.Context, tx pgx.Tx, template trait
 		where tenant_id = $2
 			and id = $3
 	`,
-		template.ID,
-		template.TenantID,
-		template.SourceTemplateID,
+		templateRevision.ID,
+		templateRevision.TenantID,
+		templateRevision.SourceTemplateID,
 	)
 	if err != nil {
 		return fmt.Errorf("record latest template revision: %w", err)
@@ -1295,13 +1295,13 @@ func recordLatestTemplateRevision(ctx context.Context, tx pgx.Tx, template trait
 	return nil
 }
 
-func deterministicSourceTemplateID(template traits.Template) traits.SourceTemplateID {
+func deterministicSourceTemplateID(templateRevision traits.TemplateRevision) traits.SourceTemplateID {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
-		string(template.TenantID),
-		template.RepoOwner,
-		template.RepoName,
-		template.RootPath,
-		template.SourceRef,
+		string(templateRevision.TenantID),
+		templateRevision.RepoOwner,
+		templateRevision.RepoName,
+		templateRevision.RootPath,
+		templateRevision.SourceRef,
 	}, "\x00")))
 	return traits.SourceTemplateID("source_template_" + hex.EncodeToString(sum[:16]))
 }
@@ -1313,11 +1313,11 @@ func defaultJSON(input json.RawMessage) json.RawMessage {
 	return input
 }
 
-func insertTemplate(ctx context.Context, tx pgx.Tx, template traits.Template, tagsJSON []byte) (traits.Template, bool, error) {
-	var inserted traits.Template
+func insertTemplateRevision(ctx context.Context, tx pgx.Tx, templateRevision traits.TemplateRevision, tagsJSON []byte) (traits.TemplateRevision, bool, error) {
+	var inserted traits.TemplateRevision
 	var insertedTagsJSON []byte
 	err := tx.QueryRow(ctx, `
-		insert into templates (
+		insert into template_revisions (
 			id,
 			tenant_id,
 			source_template_id,
@@ -1351,19 +1351,19 @@ func insertTemplate(ctx context.Context, tx pgx.Tx, template traits.Template, ta
 			status,
 			created_at
 	`,
-		template.ID,
-		template.TenantID,
-		template.SourceTemplateID,
-		template.RepoOwner,
-		template.RepoName,
-		template.SourceRef,
-		template.ResolvedCommitSHA,
-		template.RootPath,
-		template.Name,
-		template.Description,
+		templateRevision.ID,
+		templateRevision.TenantID,
+		templateRevision.SourceTemplateID,
+		templateRevision.RepoOwner,
+		templateRevision.RepoName,
+		templateRevision.SourceRef,
+		templateRevision.ResolvedCommitSHA,
+		templateRevision.RootPath,
+		templateRevision.Name,
+		templateRevision.Description,
 		tagsJSON,
-		template.Status,
-		nullTime(template.CreatedAt),
+		templateRevision.Status,
+		nullTime(templateRevision.CreatedAt),
 	).Scan(
 		&inserted.ID,
 		&inserted.TenantID,
@@ -1381,23 +1381,23 @@ func insertTemplate(ctx context.Context, tx pgx.Tx, template traits.Template, ta
 	)
 	if err == nil {
 		if err := json.Unmarshal(insertedTagsJSON, &inserted.Tags); err != nil {
-			return traits.Template{}, false, fmt.Errorf("unmarshal inserted template tags: %w", err)
+			return traits.TemplateRevision{}, false, fmt.Errorf("unmarshal inserted template revision tags: %w", err)
 		}
 		return inserted, true, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return traits.Template{}, false, fmt.Errorf("insert template: %w", err)
+		return traits.TemplateRevision{}, false, fmt.Errorf("insert template revision: %w", err)
 	}
 
-	selected, err := selectTemplateByIdentity(ctx, tx, template)
+	selected, err := selectTemplateRevisionByIdentity(ctx, tx, templateRevision)
 	if err != nil {
-		return traits.Template{}, false, err
+		return traits.TemplateRevision{}, false, err
 	}
 	return selected, false, nil
 }
 
-func selectTemplateByIdentity(ctx context.Context, tx pgx.Tx, template traits.Template) (traits.Template, error) {
-	var selected traits.Template
+func selectTemplateRevisionByIdentity(ctx context.Context, tx pgx.Tx, templateRevision traits.TemplateRevision) (traits.TemplateRevision, error) {
+	var selected traits.TemplateRevision
 	var tagsJSON []byte
 	err := tx.QueryRow(ctx, `
 		select
@@ -1414,14 +1414,14 @@ func selectTemplateByIdentity(ctx context.Context, tx pgx.Tx, template traits.Te
 			tags_json,
 			status,
 			created_at
-		from templates
+		from template_revisions
 		where tenant_id = $1
 			and source_template_id = $2
 			and resolved_commit_sha = $3
 	`,
-		template.TenantID,
-		template.SourceTemplateID,
-		template.ResolvedCommitSHA,
+		templateRevision.TenantID,
+		templateRevision.SourceTemplateID,
+		templateRevision.ResolvedCommitSHA,
 	).Scan(
 		&selected.ID,
 		&selected.TenantID,
@@ -1438,13 +1438,13 @@ func selectTemplateByIdentity(ctx context.Context, tx pgx.Tx, template traits.Te
 		&selected.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return traits.Template{}, app.ErrNotFound
+		return traits.TemplateRevision{}, app.ErrNotFound
 	}
 	if err != nil {
-		return traits.Template{}, fmt.Errorf("select template by identity: %w", err)
+		return traits.TemplateRevision{}, fmt.Errorf("select template revision by identity: %w", err)
 	}
 	if err := json.Unmarshal(tagsJSON, &selected.Tags); err != nil {
-		return traits.Template{}, fmt.Errorf("unmarshal selected template tags: %w", err)
+		return traits.TemplateRevision{}, fmt.Errorf("unmarshal selected template revision tags: %w", err)
 	}
 	return selected, nil
 }
