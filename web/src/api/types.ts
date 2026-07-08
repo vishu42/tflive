@@ -58,6 +58,7 @@ export interface TemplateRegistration {
 export interface Template {
   id: string;
   tenant_id: string;
+  source_template_id: string;
   repo_owner: string;
   repo_name: string;
   source_ref: string;
@@ -96,6 +97,10 @@ export interface StackTemplate {
   id: string;
   stack_id: string;
   template_id: string;
+  component_key: string;
+  source_template_id: string;
+  desired_template_id: string;
+  last_applied_template_id: string;
   selected_ref: string;
   workspace_name: string;
   config: Record<string, unknown>;
@@ -115,10 +120,13 @@ export interface TemplateRun {
   id: string;
   tenant_id: string;
   stack_template_id: string;
+  template_id: string;
+  source_template_id: string;
   operation: Operation;
   selected_ref: string;
   resolved_commit_sha: string;
   workspace_name: string;
+  config_json: Record<string, unknown>;
   backend_type: string;
   backend_config_hash: string;
   status: TemplateRunStatus;

@@ -44,6 +44,10 @@ func NewServer(service *app.Service) *Server {
 	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/stacks/{stack_id}", server.handleGetStack)
 	// Installs a registered template into a stack.
 	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/stacks/{stack_id}/templates", server.handleAddTemplateToStack)
+	// Edits desired config for an installed stack template.
+	server.mux.HandleFunc("PATCH /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/config", server.handleUpdateStackTemplateConfig)
+	// Stages an installed stack template to a newer template revision.
+	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/upgrade", server.handleUpgradeStackTemplate)
 
 	// Template run routes.
 	// Starts a Terraform operation for an installed stack template.
@@ -196,23 +200,19 @@ func (server *Server) handleAddTemplateToStack(response http.ResponseWriter, req
 		return
 	}
 
-	config := body.Config
-	if config == nil {
-		config = map[string]any{}
-	}
-	configJSON, err := json.Marshal(config)
-	if err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_request", "config must be a JSON object")
+	configJSON, ok := stackTemplateConfigJSON(response, body.Config)
+	if !ok {
 		return
 	}
 
 	stackTemplate, err := server.service.AddTemplateToStack(request.Context(), app.AddTemplateToStackCommand{
-		TenantID:    traits.TenantID(request.PathValue("tenant_id")),
-		StackID:     traits.StackID(request.PathValue("stack_id")),
-		TemplateID:  traits.TemplateID(body.TemplateID),
-		SelectedRef: body.SelectedRef,
-		ConfigJSON:  configJSON,
-		Actor:       traits.UserID(body.Actor),
+		TenantID:     traits.TenantID(request.PathValue("tenant_id")),
+		StackID:      traits.StackID(request.PathValue("stack_id")),
+		TemplateID:   traits.TemplateID(body.TemplateID),
+		ComponentKey: body.ComponentKey,
+		SelectedRef:  body.SelectedRef,
+		ConfigJSON:   configJSON,
+		Actor:        traits.UserID(body.Actor),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -220,6 +220,63 @@ func (server *Server) handleAddTemplateToStack(response http.ResponseWriter, req
 	}
 
 	writeJSON(response, http.StatusCreated, newStackTemplateResponse(stackTemplate))
+}
+
+func (server *Server) handleUpdateStackTemplateConfig(response http.ResponseWriter, request *http.Request) {
+	var body updateStackTemplateConfigRequest
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	configJSON, ok := stackTemplateConfigJSON(response, body.Config)
+	if !ok {
+		return
+	}
+
+	stackTemplate, err := server.service.UpdateStackTemplateConfig(request.Context(), app.UpdateStackTemplateConfigCommand{
+		TenantID:        traits.TenantID(request.PathValue("tenant_id")),
+		StackTemplateID: traits.StackTemplateID(request.PathValue("stack_template_id")),
+		ConfigJSON:      configJSON,
+		Actor:           traits.UserID(body.Actor),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusOK, newStackTemplateResponse(stackTemplate))
+}
+
+func (server *Server) handleUpgradeStackTemplate(response http.ResponseWriter, request *http.Request) {
+	var body upgradeStackTemplateRequest
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	var configJSON json.RawMessage
+	if body.Config != nil {
+		var ok bool
+		configJSON, ok = stackTemplateConfigJSON(response, body.Config)
+		if !ok {
+			return
+		}
+	}
+
+	stackTemplate, err := server.service.UpgradeStackTemplate(request.Context(), app.UpgradeStackTemplateCommand{
+		TenantID:         traits.TenantID(request.PathValue("tenant_id")),
+		StackTemplateID:  traits.StackTemplateID(request.PathValue("stack_template_id")),
+		TargetTemplateID: traits.TemplateID(body.TargetTemplateRevisionID),
+		ConfigJSON:       configJSON,
+		Actor:            traits.UserID(body.Actor),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusOK, newStackTemplateResponse(stackTemplate))
 }
 
 func (server *Server) handleStartTemplateRun(response http.ResponseWriter, request *http.Request) {
@@ -326,6 +383,18 @@ func (server *Server) handleCancelRun(response http.ResponseWriter, request *htt
 	response.WriteHeader(http.StatusNoContent)
 }
 
+func stackTemplateConfigJSON(response http.ResponseWriter, config map[string]any) (json.RawMessage, bool) {
+	if config == nil {
+		config = map[string]any{}
+	}
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", "config must be a JSON object")
+		return nil, false
+	}
+	return configJSON, true
+}
+
 type registerTemplateRequest struct {
 	RepoOwner   string `json:"repo_owner"`
 	RepoName    string `json:"repo_name"`
@@ -343,10 +412,22 @@ type createStackRequest struct {
 }
 
 type addTemplateToStackRequest struct {
-	TemplateID  string         `json:"template_id"`
-	SelectedRef string         `json:"selected_ref"`
-	Config      map[string]any `json:"config"`
-	Actor       string         `json:"actor"`
+	TemplateID   string         `json:"template_id"`
+	ComponentKey string         `json:"component_key"`
+	SelectedRef  string         `json:"selected_ref"`
+	Config       map[string]any `json:"config"`
+	Actor        string         `json:"actor"`
+}
+
+type updateStackTemplateConfigRequest struct {
+	Config map[string]any `json:"config"`
+	Actor  string         `json:"actor"`
+}
+
+type upgradeStackTemplateRequest struct {
+	TargetTemplateRevisionID string         `json:"target_template_revision_id"`
+	Config                   map[string]any `json:"config"`
+	Actor                    string         `json:"actor"`
 }
 
 type startTemplateRunRequest struct {
@@ -380,17 +461,21 @@ type stackResponse struct {
 }
 
 type stackTemplateResponse struct {
-	ID               string         `json:"id"`
-	StackID          string         `json:"stack_id"`
-	TemplateID       string         `json:"template_id"`
-	SelectedRef      string         `json:"selected_ref"`
-	WorkspaceName    string         `json:"workspace_name"`
-	Config           map[string]any `json:"config"`
-	LastAppliedRunID string         `json:"last_applied_run_id"`
-	LastAppliedRef   string         `json:"last_applied_ref"`
-	LastAppliedAt    string         `json:"last_applied_at,omitempty"`
-	CreatedBy        string         `json:"created_by"`
-	Lifecycle        string         `json:"lifecycle"`
+	ID                    string         `json:"id"`
+	StackID               string         `json:"stack_id"`
+	TemplateID            string         `json:"template_id"`
+	ComponentKey          string         `json:"component_key"`
+	SourceTemplateID      string         `json:"source_template_id"`
+	DesiredTemplateID     string         `json:"desired_template_id"`
+	LastAppliedTemplateID string         `json:"last_applied_template_id"`
+	SelectedRef           string         `json:"selected_ref"`
+	WorkspaceName         string         `json:"workspace_name"`
+	Config                map[string]any `json:"config"`
+	LastAppliedRunID      string         `json:"last_applied_run_id"`
+	LastAppliedRef        string         `json:"last_applied_ref"`
+	LastAppliedAt         string         `json:"last_applied_at,omitempty"`
+	CreatedBy             string         `json:"created_by"`
+	Lifecycle             string         `json:"lifecycle"`
 }
 
 type errorResponse struct {
@@ -434,24 +519,32 @@ func newStackResponse(stack traits.Stack) stackResponse {
 
 func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateResponse {
 	var config map[string]any
-	if len(stackTemplate.ConfigJSON) > 0 {
-		_ = json.Unmarshal(stackTemplate.ConfigJSON, &config)
+	configJSON := stackTemplate.DesiredConfigJSON
+	if len(configJSON) == 0 {
+		configJSON = stackTemplate.ConfigJSON
+	}
+	if len(configJSON) > 0 {
+		_ = json.Unmarshal(configJSON, &config)
 	}
 	if config == nil {
 		config = map[string]any{}
 	}
 
 	response := stackTemplateResponse{
-		ID:               string(stackTemplate.ID),
-		StackID:          string(stackTemplate.StackID),
-		TemplateID:       string(stackTemplate.TemplateID),
-		SelectedRef:      stackTemplate.SelectedRef,
-		WorkspaceName:    stackTemplate.WorkspaceName,
-		Config:           config,
-		LastAppliedRunID: string(stackTemplate.LastAppliedRunID),
-		LastAppliedRef:   stackTemplate.LastAppliedRef,
-		CreatedBy:        string(stackTemplate.CreatedBy),
-		Lifecycle:        string(stackTemplate.Lifecycle),
+		ID:                    string(stackTemplate.ID),
+		StackID:               string(stackTemplate.StackID),
+		TemplateID:            string(stackTemplate.TemplateID),
+		ComponentKey:          stackTemplate.ComponentKey,
+		SourceTemplateID:      string(stackTemplate.SourceTemplateID),
+		DesiredTemplateID:     string(stackTemplate.DesiredTemplateID),
+		LastAppliedTemplateID: string(stackTemplate.LastAppliedTemplateID),
+		SelectedRef:           stackTemplate.SelectedRef,
+		WorkspaceName:         stackTemplate.WorkspaceName,
+		Config:                config,
+		LastAppliedRunID:      string(stackTemplate.LastAppliedRunID),
+		LastAppliedRef:        stackTemplate.LastAppliedRef,
+		CreatedBy:             string(stackTemplate.CreatedBy),
+		Lifecycle:             string(stackTemplate.Lifecycle),
 	}
 	if !stackTemplate.LastAppliedAt.IsZero() {
 		response.LastAppliedAt = stackTemplate.LastAppliedAt.Format(time.RFC3339Nano)
@@ -470,7 +563,8 @@ func writeAppError(response http.ResponseWriter, err error) {
 		errors.Is(err, app.ErrRunNotCancelable),
 		errors.Is(err, app.ErrDuplicateStackSlug),
 		errors.Is(err, app.ErrTemplateNotInstallable),
-		errors.Is(err, app.ErrStackTemplateConfigInvalid):
+		errors.Is(err, app.ErrStackTemplateConfigInvalid),
+		errors.Is(err, app.ErrStackTemplateUpgradeInvalid):
 		writeError(response, http.StatusConflict, "conflict", err.Error())
 	default:
 		writeError(response, http.StatusInternalServerError, "internal_error", "internal server error")

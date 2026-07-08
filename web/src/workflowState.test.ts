@@ -91,6 +91,7 @@ function template(overrides: Partial<Template>): Template {
   return {
     id: "template_123",
     tenant_id: "tenant_123",
+    source_template_id: "source_template_123",
     repo_owner: "hashicorp",
     repo_name: "terraform-template",
     source_ref: "main",
@@ -110,6 +111,10 @@ function stackTemplate(overrides: Partial<StackTemplate>): StackTemplate {
     id: "stack_template_123",
     stack_id: "stack_123",
     template_id: "template_123",
+    component_key: "primary",
+    source_template_id: "source_template_123",
+    desired_template_id: "template_123",
+    last_applied_template_id: "",
     selected_ref: "main",
     workspace_name: "prod-workspace",
     config: {},

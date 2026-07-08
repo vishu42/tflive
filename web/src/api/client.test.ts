@@ -9,7 +9,9 @@ import {
   listStacks,
   listTemplates,
   registerTemplate,
-  startTemplateRun
+  startTemplateRun,
+  updateStackTemplateConfig,
+  upgradeStackTemplate
 } from "./client";
 
 describe("api client", () => {
@@ -95,6 +97,33 @@ describe("api client", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/v1/tenants/tenant_123/stacks/stack_123/templates",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("edits and upgrades installed stack templates", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ id: "stack_template_123" }))
+      .mockResolvedValueOnce(jsonResponse({ id: "stack_template_123" }));
+
+    await updateStackTemplateConfig("tenant_123", "stack_template_123", {
+      config: { region: "us-west-2" },
+      actor: "user_123"
+    });
+    await upgradeStackTemplate("tenant_123", "stack_template_123", {
+      target_template_revision_id: "template_rev_2",
+      actor: "user_123"
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/v1/tenants/tenant_123/stack-templates/stack_template_123/config",
+      expect.objectContaining({ method: "PATCH" })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade",
       expect.objectContaining({ method: "POST" })
     );
   });

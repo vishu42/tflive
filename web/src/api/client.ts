@@ -40,8 +40,20 @@ interface CreateStackRequest {
 
 interface AddTemplateToStackRequest {
   template_id: string;
+  component_key?: string;
   selected_ref: string;
   config: Record<string, unknown>;
+  actor: string;
+}
+
+interface UpdateStackTemplateConfigRequest {
+  config: Record<string, unknown>;
+  actor: string;
+}
+
+interface UpgradeStackTemplateRequest {
+  target_template_revision_id: string;
+  config?: Record<string, unknown>;
   actor: string;
 }
 
@@ -95,6 +107,20 @@ export function getStack(tenantID: string, stackID: string): Promise<StackView> 
 
 export function addTemplateToStack(tenantID: string, stackID: string, body: AddTemplateToStackRequest): Promise<StackTemplate> {
   return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stacks/${encodeURIComponent(stackID)}/templates`, {
+    method: "POST",
+    body: JSON.stringify(body)
+  });
+}
+
+export function updateStackTemplateConfig(tenantID: string, stackTemplateID: string, body: UpdateStackTemplateConfigRequest): Promise<StackTemplate> {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stack-templates/${encodeURIComponent(stackTemplateID)}/config`, {
+    method: "PATCH",
+    body: JSON.stringify(body)
+  });
+}
+
+export function upgradeStackTemplate(tenantID: string, stackTemplateID: string, body: UpgradeStackTemplateRequest): Promise<StackTemplate> {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stack-templates/${encodeURIComponent(stackTemplateID)}/upgrade`, {
     method: "POST",
     body: JSON.stringify(body)
   });

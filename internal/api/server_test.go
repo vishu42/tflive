@@ -399,6 +399,202 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 	}
 }
 
+func TestUpdateStackTemplateConfigCallsService(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stackTemplates.stackTemplate = traits.StackTemplate{
+		ID:                traits.StackTemplateID("stack_template_123"),
+		TenantID:          traits.TenantID("tenant_123"),
+		TemplateID:        traits.TemplateID("template_rev_1"),
+		DesiredTemplateID: traits.TemplateID("template_rev_1"),
+		Lifecycle:         traits.StackTemplateActive,
+	}
+	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
+	server := NewServer(deps.service())
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPatch,
+		"/v1/tenants/tenant_123/stack-templates/stack_template_123/config",
+		strings.NewReader(`{"config":{"region":"us-west-2"},"actor":"user_123"}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if string(deps.stackTemplates.gotConfigJSON) != `{"region":"us-west-2"}` {
+		t.Fatalf("config update = %s", deps.stackTemplates.gotConfigJSON)
+	}
+
+	var body stackTemplateResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Config["region"] != "us-west-2" {
+		t.Fatalf("response config = %#v", body.Config)
+	}
+}
+
+func TestUpgradeStackTemplateCallsService(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stackTemplates.stackTemplate = traits.StackTemplate{
+		ID:                traits.StackTemplateID("stack_template_123"),
+		TenantID:          traits.TenantID("tenant_123"),
+		SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateID: traits.TemplateID("template_rev_1"),
+		DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
+		Lifecycle:         traits.StackTemplateActive,
+	}
+	deps.templates.template = traits.Template{
+		ID:               traits.TemplateID("template_rev_2"),
+		TenantID:         traits.TenantID("tenant_123"),
+		SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
+		Status:           traits.TemplateActive,
+	}
+	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
+	server := NewServer(deps.service())
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade",
+		strings.NewReader(`{"target_template_revision_id":"template_rev_2","actor":"user_123"}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if deps.stackTemplates.gotDesiredTemplateID != traits.TemplateID("template_rev_2") {
+		t.Fatalf("desired template update = %q, want template_rev_2", deps.stackTemplates.gotDesiredTemplateID)
+	}
+
+	var body stackTemplateResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.DesiredTemplateID != "template_rev_2" {
+		t.Fatalf("desired template id = %q, want template_rev_2", body.DesiredTemplateID)
+	}
+	if body.Config["region"] != "us-east-1" {
+		t.Fatalf("response config = %#v", body.Config)
+	}
+}
+
+func TestUpgradeStackTemplateMapsMissingRequiredVariableToConflict(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stackTemplates.stackTemplate = traits.StackTemplate{
+		ID:                traits.StackTemplateID("stack_template_123"),
+		TenantID:          traits.TenantID("tenant_123"),
+		SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateID: traits.TemplateID("template_rev_1"),
+		DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
+		Lifecycle:         traits.StackTemplateActive,
+	}
+	deps.templates.template = traits.Template{
+		ID:               traits.TemplateID("template_rev_2"),
+		TenantID:         traits.TenantID("tenant_123"),
+		SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
+		Status:           traits.TemplateActive,
+	}
+	deps.templates.variables = []traits.TemplateVariable{
+		{Name: "region", Required: true},
+		{Name: "cidr_block", Required: true},
+	}
+	server := NewServer(deps.service())
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade",
+		strings.NewReader(`{"target_template_revision_id":"template_rev_2","actor":"user_123"}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusConflict, response.Body.String())
+	}
+}
+
+func TestUpgradeStackTemplateMapsSourceMismatchToConflict(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stackTemplates.stackTemplate = traits.StackTemplate{
+		ID:               traits.StackTemplateID("stack_template_123"),
+		TenantID:         traits.TenantID("tenant_123"),
+		SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
+		Lifecycle:        traits.StackTemplateActive,
+	}
+	deps.templates.template = traits.Template{
+		ID:               traits.TemplateID("template_rev_2"),
+		TenantID:         traits.TenantID("tenant_123"),
+		SourceTemplateID: traits.SourceTemplateID("source_template_db"),
+		Status:           traits.TemplateActive,
+	}
+	server := NewServer(deps.service())
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade",
+		strings.NewReader(`{"target_template_revision_id":"template_rev_2","actor":"user_123"}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusConflict, response.Body.String())
+	}
+}
+
+func TestStackTemplateEditRoutesMapMissingStackTemplateToNotFound(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{
+			name:   "config edit",
+			method: http.MethodPatch,
+			path:   "/v1/tenants/tenant_123/stack-templates/missing_stack_template/config",
+			body:   `{"config":{},"actor":"user_123"}`,
+		},
+		{
+			name:   "upgrade",
+			method: http.MethodPost,
+			path:   "/v1/tenants/tenant_123/stack-templates/missing_stack_template/upgrade",
+			body:   `{"target_template_revision_id":"template_rev_2","actor":"user_123"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newAPITestDependencies()
+			deps.stackTemplates.getErr = app.ErrNotFound
+			server := NewServer(deps.service())
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestGetTemplateRegistrationReturnsRegistration(t *testing.T) {
 	t.Parallel()
 
@@ -972,10 +1168,12 @@ func (repository *recordingStackRepository) ListStacks(_ context.Context, tenant
 }
 
 type recordingStackTemplateRepository struct {
-	stackTemplate traits.StackTemplate
-	gotTenantID   traits.TenantID
-	gotID         traits.StackTemplateID
-	getErr        error
+	stackTemplate        traits.StackTemplate
+	gotTenantID          traits.TenantID
+	gotID                traits.StackTemplateID
+	gotConfigJSON        json.RawMessage
+	gotDesiredTemplateID traits.TemplateID
+	getErr               error
 }
 
 func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error) {
@@ -990,6 +1188,7 @@ func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.C
 func (repository *recordingStackTemplateRepository) UpdateStackTemplateConfig(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {
 	repository.gotTenantID = tenantID
 	repository.gotID = id
+	repository.gotConfigJSON = configJSON
 	updated := repository.stackTemplate
 	updated.DesiredConfigJSON = configJSON
 	return updated, nil
@@ -998,6 +1197,8 @@ func (repository *recordingStackTemplateRepository) UpdateStackTemplateConfig(_ 
 func (repository *recordingStackTemplateRepository) UpdateStackTemplateDesiredRevision(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateID traits.TemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {
 	repository.gotTenantID = tenantID
 	repository.gotID = id
+	repository.gotDesiredTemplateID = templateID
+	repository.gotConfigJSON = configJSON
 	updated := repository.stackTemplate
 	updated.DesiredTemplateID = templateID
 	updated.DesiredConfigJSON = configJSON
