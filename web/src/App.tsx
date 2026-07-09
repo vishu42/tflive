@@ -36,6 +36,7 @@ import type { Stack, StackTemplate, TemplateRevision, TemplateRegistration, Temp
 import { isTerminalRegistrationStatus, isTerminalRunStatus, nextPollDelayMs } from "./polling";
 import {
   canUpgradeStackTemplate,
+  canSaveStackTemplateConfig,
   configFromVariableValues,
   findSelectedStack,
   findSelectedStackTemplate,
@@ -83,7 +84,7 @@ export default function App() {
   const installedTemplate = findSelectedStackTemplate(stackTemplates, selectedStackTemplateID);
   const currentRun = selectedRunKind === "apply" ? applyRun : planRun;
   const canInstall = Boolean(selectedTemplateRevision?.status === "active" && stack);
-  const canSaveConfig = Boolean(installedTemplate && selectedTemplateRevision?.id === installedTemplate.desired_template_revision_id);
+  const canSaveConfig = canSaveStackTemplateConfig(installedTemplate, selectedTemplateRevision, variables, variableValues);
   const canUpgrade = canUpgradeStackTemplate(installedTemplate, selectedTemplateRevision);
   const canPlan = Boolean(installedTemplate && !planRun);
   const canApply = Boolean(installedTemplate && planRun?.status === "completed" && !applyRun);

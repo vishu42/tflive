@@ -52,6 +52,21 @@ export function canUpgradeStackTemplate(stackTemplate: StackTemplate | null, tem
   return stackTemplate.source_template_id === templateRevision.source_template_id;
 }
 
+export function canSaveStackTemplateConfig(
+  stackTemplate: StackTemplate | null,
+  templateRevision: TemplateRevision | null,
+  variables: TemplateVariable[],
+  variableValues: Record<string, string>
+): boolean {
+  if (!stackTemplate || !templateRevision || templateRevision.id !== stackTemplate.desired_template_revision_id) {
+    return false;
+  }
+
+  const currentConfig = configFromVariableValues(variables, variableValues);
+  const savedConfig = configFromVariableValues(variables, variableValuesFromConfig(stackTemplate.config, variables));
+  return !areStringRecordEqual(currentConfig, savedConfig);
+}
+
 export function variableValuesFromConfig(config: Record<string, unknown>, variables: TemplateVariable[]): Record<string, string> {
   const values: Record<string, string> = {};
   for (const variable of variables) {
@@ -77,6 +92,20 @@ export function upsertStackTemplate(stackTemplates: StackTemplate[], stackTempla
     return stackTemplates.map((item) => item.id === stackTemplate.id ? stackTemplate : item);
   }
   return [stackTemplate, ...stackTemplates];
+}
+
+function areStringRecordEqual(left: Record<string, string>, right: Record<string, string>): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  for (const key of leftKeys) {
+    if ((left[key] ?? "") !== (right[key] ?? "")) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function shortCommitSHA(commitSHA: string): string {

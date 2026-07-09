@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Stack, StackTemplate, TemplateRevision, TemplateVariable } from "./api/types";
 import {
   canUpgradeStackTemplate,
+  canSaveStackTemplateConfig,
   configFromVariableValues,
   findSelectedStack,
   findSelectedStackTemplate,
@@ -103,6 +104,34 @@ describe("workflow state helpers", () => {
       source_template_id: "source_template_vpc",
       status: "invalid"
     }))).toBe(false);
+  });
+
+  it("enables saving only when the editable config actually changes", () => {
+    const installedTemplate = stackTemplate({
+      desired_template_revision_id: "template_rev_1",
+      config: {
+        region: "us-east-1",
+        size: 3
+      }
+    });
+    const selectedTemplateRevision = templateRevision({ id: "template_rev_1" });
+    const variables = [
+      templateVariable({ name: "region" }),
+      templateVariable({ name: "size" })
+    ];
+
+    expect(canSaveStackTemplateConfig(installedTemplate, selectedTemplateRevision, variables, {
+      region: " us-east-1 ",
+      size: "3"
+    })).toBe(false);
+    expect(canSaveStackTemplateConfig(installedTemplate, selectedTemplateRevision, variables, {
+      region: "us-west-2",
+      size: "3"
+    })).toBe(true);
+    expect(canSaveStackTemplateConfig(installedTemplate, templateRevision({ id: "template_rev_2" }), variables, {
+      region: "us-west-2",
+      size: "3"
+    })).toBe(false);
   });
 
   it("maps stack template config to editable variable values and request config", () => {
