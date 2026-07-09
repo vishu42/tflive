@@ -30,7 +30,7 @@ func TestLocalProcessRunnerRunsTerraformPlan(t *testing.T) {
 	want := []recordedTerraformCommand{
 		{
 			dir:  "/tmp/megagega/runs/tenant_123/run_123",
-			name: "terraform",
+			name: "tofu",
 			args: []string{"plan", "-input=false", "-no-color"},
 		},
 	}
@@ -57,7 +57,7 @@ func TestLocalProcessRunnerRunsTerraformApply(t *testing.T) {
 	want := []recordedTerraformCommand{
 		{
 			dir:  "/tmp/megagega/runs/tenant_123/run_123",
-			name: "terraform",
+			name: "tofu",
 			args: []string{"apply", "-input=false", "-auto-approve", "-no-color"},
 		},
 	}
@@ -108,7 +108,7 @@ func TestLocalProcessRunnerSetsTerraformVariablesForPlanAndApply(t *testing.T) {
 				{
 					dir:  "/tmp/megagega/runs/tenant_123/run_123",
 					env:  []string{"TF_VAR_enabled=true", "TF_VAR_region=us-east-1", "TF_VAR_replicas=3", "TF_VAR_tags={\"env\":\"prod\"}", "TF_VAR_zones=[\"us-east-1a\",\"us-east-1b\"]"},
-					name: "terraform",
+					name: "tofu",
 					args: tt.args,
 				},
 			}
@@ -137,7 +137,7 @@ func TestLocalProcessRunnerSelectsExistingWorkspace(t *testing.T) {
 	want := []recordedTerraformCommand{
 		{
 			dir:  "/tmp/megagega/runs/tenant_123/run_123",
-			name: "terraform",
+			name: "tofu",
 			args: []string{"workspace", "select", "-no-color", "mtp_acme_prod_vpc_a13f9c"},
 		},
 	}
@@ -166,17 +166,39 @@ func TestLocalProcessRunnerCreatesMissingWorkspace(t *testing.T) {
 	want := []recordedTerraformCommand{
 		{
 			dir:  "/tmp/megagega/runs/tenant_123/run_123",
-			name: "terraform",
+			name: "tofu",
 			args: []string{"workspace", "select", "-no-color", "mtp_acme_prod_vpc_a13f9c"},
 		},
 		{
 			dir:  "/tmp/megagega/runs/tenant_123/run_123",
-			name: "terraform",
+			name: "tofu",
 			args: []string{"workspace", "new", "-no-color", "mtp_acme_prod_vpc_a13f9c"},
 		},
 	}
 	if !reflect.DeepEqual(executor.commands, want) {
 		t.Fatalf("commands = %#v, want %#v", executor.commands, want)
+	}
+}
+
+func TestLocalProcessRunnerWrapsWorkspaceCreationErrorWithTofuContext(t *testing.T) {
+	t.Parallel()
+
+	createErr := errors.New("create failed")
+	executor := &recordingTerraformCommandExecutor{
+		errs: []error{errors.New("workspace does not exist"), createErr},
+	}
+	runner := NewLocalProcessRunnerWithExecutor(executor)
+
+	err := runner.Run(context.Background(), TerraformCommand{
+		WorkspacePath: "/tmp/megagega/runs/tenant_123/run_123",
+		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+		Command:       traits.TerraformCommandSelectWorkspace,
+	})
+	if !errors.Is(err, createErr) {
+		t.Fatalf("error = %v, want createErr", err)
+	}
+	if !strings.Contains(err.Error(), "tofu workspace select or new") {
+		t.Fatalf("error = %q, want tofu workspace context", err.Error())
 	}
 }
 
@@ -195,8 +217,8 @@ func TestLocalProcessRunnerWrapsCommandErrors(t *testing.T) {
 	if !errors.Is(err, commandErr) {
 		t.Fatalf("error = %v, want commandErr", err)
 	}
-	if !strings.Contains(err.Error(), "terraform plan") {
-		t.Fatalf("error = %q, want terraform plan context", err.Error())
+	if !strings.Contains(err.Error(), "tofu plan") {
+		t.Fatalf("error = %q, want tofu plan context", err.Error())
 	}
 }
 

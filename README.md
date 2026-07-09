@@ -213,16 +213,16 @@ For MVP, workers use a local process runner:
 LocalProcessRunner
 ```
 
-Each Terraform activity:
+Each Terraform-compatible activity uses the OpenTofu CLI (`tofu`) and:
 
 - Creates a fresh temporary working directory.
 - Clones the template GitHub repository.
 - Checks out the selected ref.
 - Changes into the template root path.
 - Reads `template.yaml` as metadata when needed.
-- Runs `terraform init`.
+- Runs `tofu init`.
 - Selects or creates the assigned Terraform workspace.
-- Runs `terraform plan`, `terraform apply`, or `terraform destroy`.
+- Runs `tofu plan`, `tofu apply`, or `tofu destroy`.
 - Streams redacted logs.
 - Persists redacted logs.
 - Cleans up the temporary working directory.
@@ -231,7 +231,7 @@ The runner should be implemented behind an interface so a future `KubernetesJobR
 
 ### Runner Security
 
-The MVP local process runner is optimized for fast feedback, but it should be treated as trusted-template execution. Terraform providers, provisioners, external data sources, and local-exec style behavior may execute code inside the worker pod with access to the run's injected credentials.
+The MVP local process runner is optimized for fast feedback, but it should be treated as trusted-template execution. OpenTofu/Terraform providers, provisioners, external data sources, and local-exec style behavior may execute code inside the worker pod with access to the run's injected credentials.
 
 MVP worker deployments should use the following guardrails:
 
@@ -288,8 +288,8 @@ Package ownership:
 - `internal/postgres`: Postgres repositories, transactions, SQL queries, persistence models, and migration helper code.
 - `internal/temporal`: Temporal client adapter that implements `app` workflow-dispatch interfaces and is wired in `cmd`. API and app code should depend on interfaces, not on this adapter package directly.
 - `internal/workflows`: deterministic Temporal workflow definitions such as `TemplateRunWorkflow`, `TemplateSyncWorkflow`, and future `StackRunWorkflow`.
-- `internal/activities`: Temporal activities that perform side effects such as cloning repositories, parsing templates, acquiring locks, running Terraform, persisting logs, and writing activity events.
-- `internal/runner`: Terraform runner interface and runner implementations, including the MVP `LocalProcessRunner`.
+- `internal/activities`: Temporal activities that perform side effects such as cloning repositories, parsing templates, acquiring locks, running the OpenTofu CLI for Terraform-compatible operations, persisting logs, and writing activity events.
+- `internal/runner`: Terraform-compatible runner interface and runner implementations, including the MVP OpenTofu-backed `LocalProcessRunner`.
 - `internal/terraform`: Terraform-specific helpers for HCL variable parsing, tfvars rendering, backend metadata extraction, plan summary parsing, and workspace command modeling.
 - `internal/githubapp`: GitHub App integration, installation token generation, repository clone helpers, and ref-to-commit resolution.
 - `internal/secrets`: secret store boundary, credential set resolution, and Vault or local development adapters.
@@ -486,8 +486,8 @@ Templates must bring their own backend configuration. The platform does not prov
 The platform still enforces workspace selection:
 
 ```text
-terraform init
-terraform workspace select <workspace> || terraform workspace new <workspace>
+tofu init
+tofu workspace select <workspace> || tofu workspace new <workspace>
 ```
 
 The isolation contract is:

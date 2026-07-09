@@ -27,7 +27,7 @@ type TerraformCommand struct {
 // Implementations receive the fully resolved working directory, output streams,
 // executable name, and CLI arguments. The production executor starts a real
 // process with os/exec, while tests can provide a recorder or fake executor to
-// verify command construction without invoking Terraform.
+// verify command construction without invoking OpenTofu.
 type CommandExecutor interface {
 	Run(ctx context.Context, dir string, env []string, stdout io.Writer, stderr io.Writer, name string, args ...string) error
 }
@@ -36,7 +36,9 @@ type LocalProcessRunner struct {
 	executor CommandExecutor
 }
 
-// NewLocalProcessRunner returns a runner that executes Terraform with os/exec.
+const terraformExecutable = "tofu"
+
+// NewLocalProcessRunner returns a runner that executes OpenTofu with os/exec.
 //
 // Commands run in the requested workspace directory, inherit the process
 // context for cancellation, and write to the command's configured output
@@ -48,16 +50,16 @@ func NewLocalProcessRunner() *LocalProcessRunner {
 // NewLocalProcessRunnerWithExecutor returns a runner backed by executor.
 //
 // Tests and alternate adapters can provide a custom executor to observe command
-// construction or to avoid spawning real Terraform subprocesses.
+// construction or to avoid spawning real OpenTofu subprocesses.
 func NewLocalProcessRunnerWithExecutor(executor CommandExecutor) *LocalProcessRunner {
 	return &LocalProcessRunner{executor: executor}
 }
 
-// Run validates input and executes the requested Terraform command.
+// Run validates input and executes the requested Terraform-compatible command.
 //
-// The runner owns the concrete Terraform CLI arguments for each supported
+// The runner owns the concrete OpenTofu CLI arguments for each supported
 // command type. Workspace selection is special-cased so a missing workspace is
-// created with `terraform workspace new` after `terraform workspace select`
+// created with `tofu workspace new` after `tofu workspace select`
 // fails.
 func (runner *LocalProcessRunner) Run(ctx context.Context, input TerraformCommand) error {
 	if strings.TrimSpace(input.WorkspacePath) == "" {
@@ -69,13 +71,13 @@ func (runner *LocalProcessRunner) Run(ctx context.Context, input TerraformComman
 
 	switch input.Command {
 	case traits.TerraformCommandInit:
-		return runner.run(ctx, input, nil, "terraform init", "init", "-input=false", "-no-color")
+		return runner.run(ctx, input, nil, "tofu init", "init", "-input=false", "-no-color")
 	case traits.TerraformCommandSelectWorkspace:
 		return runner.selectWorkspace(ctx, input)
 	case traits.TerraformCommandPlan:
-		return runner.runWithTerraformVariables(ctx, input, "terraform plan", "plan", "-input=false", "-no-color")
+		return runner.runWithTerraformVariables(ctx, input, "tofu plan", "plan", "-input=false", "-no-color")
 	case traits.TerraformCommandApply:
-		return runner.runWithTerraformVariables(ctx, input, "terraform apply", "apply", "-input=false", "-auto-approve", "-no-color")
+		return runner.runWithTerraformVariables(ctx, input, "tofu apply", "apply", "-input=false", "-auto-approve", "-no-color")
 	default:
 		return fmt.Errorf("unsupported terraform command %q", input.Command)
 	}
@@ -83,8 +85,8 @@ func (runner *LocalProcessRunner) Run(ctx context.Context, input TerraformComman
 
 // selectWorkspace selects the requested Terraform workspace or creates it.
 //
-// Terraform exits non-zero when the workspace does not exist, so this method
-// treats a select failure as the signal to run `terraform workspace new`. If the
+// OpenTofu exits non-zero when the workspace does not exist, so this method
+// treats a select failure as the signal to run `tofu workspace new`. If the
 // creation also fails, the returned error includes context for both attempts.
 func (runner *LocalProcessRunner) selectWorkspace(ctx context.Context, input TerraformCommand) error {
 	stdout, stderr := outputWriters(input)
@@ -94,7 +96,7 @@ func (runner *LocalProcessRunner) selectWorkspace(ctx context.Context, input Ter
 		nil,
 		stdout,
 		stderr,
-		"terraform",
+		terraformExecutable,
 		"workspace",
 		"select",
 		"-no-color",
@@ -110,24 +112,24 @@ func (runner *LocalProcessRunner) selectWorkspace(ctx context.Context, input Ter
 		nil,
 		stdout,
 		stderr,
-		"terraform",
+		terraformExecutable,
 		"workspace",
 		"new",
 		"-no-color",
 		input.WorkspaceName,
 	); err != nil {
-		return fmt.Errorf("terraform workspace select or new: %w", err)
+		return fmt.Errorf("tofu workspace select or new: %w", err)
 	}
 	return nil
 }
 
-// run executes a non-workspace Terraform command with shared error wrapping.
+// run executes a non-workspace OpenTofu command with shared error wrapping.
 //
 // The label is used only for human-readable error context; args are the exact
-// Terraform CLI arguments passed to the command executor.
+// OpenTofu CLI arguments passed to the command executor.
 func (runner *LocalProcessRunner) run(ctx context.Context, input TerraformCommand, env []string, label string, args ...string) error {
 	stdout, stderr := outputWriters(input)
-	if err := runner.executor.Run(ctx, input.WorkspacePath, env, stdout, stderr, "terraform", args...); err != nil {
+	if err := runner.executor.Run(ctx, input.WorkspacePath, env, stdout, stderr, terraformExecutable, args...); err != nil {
 		return fmt.Errorf("%s: %w", label, err)
 	}
 	return nil
@@ -188,7 +190,7 @@ func terraformVariableValue(raw json.RawMessage) (string, error) {
 
 // outputWriters returns the command-specific output writers with process defaults.
 //
-// Callers can pass writers to capture Terraform output in logs. When either
+// Callers can pass writers to capture OpenTofu output in logs. When either
 // writer is nil, the runner preserves the CLI-like default of writing to the
 // current process stdout or stderr.
 func outputWriters(input TerraformCommand) (io.Writer, io.Writer) {
@@ -208,7 +210,7 @@ type osExecCommandExecutor struct{}
 // Run starts one subprocess in dir and connects its output streams.
 //
 // The context is passed to exec.CommandContext so cancellation or deadline
-// expiry can terminate the Terraform process. The command name and args are
+// expiry can terminate the OpenTofu process. The command name and args are
 // intentionally supplied by LocalProcessRunner so this adapter stays generic.
 func (osExecCommandExecutor) Run(ctx context.Context, dir string, env []string, stdout io.Writer, stderr io.Writer, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)

@@ -20,7 +20,7 @@ type StatusRecorder interface {
 
 // TerraformRunner is the activity-local boundary for running Terraform.
 //
-// The production implementation shells out to the Terraform CLI, while tests can
+// The production implementation shells out to the OpenTofu CLI, while tests can
 // provide a fake runner to verify activity behavior without starting external
 // processes.
 type TerraformRunner interface {
@@ -37,13 +37,13 @@ type TemplateRunLogStore interface {
 // Temporal invokes methods on this value when TemplateRunWorkflow schedules the
 // matching activity names. The struct holds the dependencies those handlers need
 // outside the deterministic workflow runtime: persistence, filesystem paths, and
-// local Terraform execution.
+// local OpenTofu execution.
 type TemplateRunActivities struct {
 	// recorder writes status changes back to the application store.
 	recorder StatusRecorder
 	// runRoot is the base directory under which per-tenant, per-run workspaces are created.
 	runRoot string
-	// terraformRunner executes Terraform commands for RunTerraform activity calls.
+	// terraformRunner executes Terraform-compatible commands for RunTerraform activity calls.
 	terraformRunner TerraformRunner
 	// git clones template source repositories into run workspaces.
 	git runner.GitRunner
@@ -51,10 +51,10 @@ type TemplateRunActivities struct {
 
 // NewTemplateRunActivities constructs the activity handler set registered by the worker.
 //
-// By default it wires a local Terraform runner backed by real subprocess
+// By default it wires a local OpenTofu-backed runner backed by real subprocess
 // execution. Tests may pass a TerraformRunner override, which keeps the public
 // constructor small while still allowing activity tests to avoid invoking the
-// Terraform binary.
+// OpenTofu binary.
 func NewTemplateRunActivities(recorder StatusRecorder, runRoot string, terraformRunners ...TerraformRunner) *TemplateRunActivities {
 	return NewTemplateRunActivitiesWithLogStore(recorder, runRoot, nil, terraformRunners...)
 }
@@ -173,7 +173,7 @@ func safePathComponent(component string) bool {
 
 // localTerraformRunner adapts the shared runner package to the activity interface.
 //
-// It adds activity-specific concerns around Terraform execution, such as mapping
+// It adds activity-specific concerns around Terraform-compatible execution, such as mapping
 // workflow command types to log phases and opening the per-workspace log file
 // before delegating to runner.LocalProcessRunner.
 type localTerraformRunner struct {
@@ -182,7 +182,7 @@ type localTerraformRunner struct {
 	logStore TemplateRunLogStore
 }
 
-// RunTerraform writes command output to the workspace log file and runs Terraform.
+// RunTerraform writes command output to the workspace log file and runs OpenTofu.
 //
 // The log phase is derived from the Terraform command so each phase writes to a
 // predictable file under the workspace logs directory. Stdout and stderr share
