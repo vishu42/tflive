@@ -2,10 +2,12 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/vishu42/megagega/internal/traits"
@@ -15,6 +17,7 @@ type TerraformCommand struct {
 	WorkspacePath string
 	WorkspaceName string
 	Command       traits.TerraformCommandType
+	ConfigJSON    json.RawMessage
 	Stdout        io.Writer
 	Stderr        io.Writer
 }
@@ -26,7 +29,7 @@ type TerraformCommand struct {
 // process with os/exec, while tests can provide a recorder or fake executor to
 // verify command construction without invoking Terraform.
 type CommandExecutor interface {
-	Run(ctx context.Context, dir string, stdout io.Writer, stderr io.Writer, name string, args ...string) error
+	Run(ctx context.Context, dir string, env []string, stdout io.Writer, stderr io.Writer, name string, args ...string) error
 }
 
 type LocalProcessRunner struct {
@@ -66,13 +69,13 @@ func (runner *LocalProcessRunner) Run(ctx context.Context, input TerraformComman
 
 	switch input.Command {
 	case traits.TerraformCommandInit:
-		return runner.run(ctx, input, "terraform init", "init", "-input=false", "-no-color")
+		return runner.run(ctx, input, nil, "terraform init", "init", "-input=false", "-no-color")
 	case traits.TerraformCommandSelectWorkspace:
 		return runner.selectWorkspace(ctx, input)
 	case traits.TerraformCommandPlan:
-		return runner.run(ctx, input, "terraform plan", "plan", "-input=false", "-no-color")
+		return runner.runWithTerraformVariables(ctx, input, "terraform plan", "plan", "-input=false", "-no-color")
 	case traits.TerraformCommandApply:
-		return runner.run(ctx, input, "terraform apply", "apply", "-input=false", "-auto-approve", "-no-color")
+		return runner.runWithTerraformVariables(ctx, input, "terraform apply", "apply", "-input=false", "-auto-approve", "-no-color")
 	default:
 		return fmt.Errorf("unsupported terraform command %q", input.Command)
 	}
@@ -88,6 +91,7 @@ func (runner *LocalProcessRunner) selectWorkspace(ctx context.Context, input Ter
 	err := runner.executor.Run(
 		ctx,
 		input.WorkspacePath,
+		nil,
 		stdout,
 		stderr,
 		"terraform",
@@ -103,6 +107,7 @@ func (runner *LocalProcessRunner) selectWorkspace(ctx context.Context, input Ter
 	if err := runner.executor.Run(
 		ctx,
 		input.WorkspacePath,
+		nil,
 		stdout,
 		stderr,
 		"terraform",
@@ -120,12 +125,65 @@ func (runner *LocalProcessRunner) selectWorkspace(ctx context.Context, input Ter
 //
 // The label is used only for human-readable error context; args are the exact
 // Terraform CLI arguments passed to the command executor.
-func (runner *LocalProcessRunner) run(ctx context.Context, input TerraformCommand, label string, args ...string) error {
+func (runner *LocalProcessRunner) run(ctx context.Context, input TerraformCommand, env []string, label string, args ...string) error {
 	stdout, stderr := outputWriters(input)
-	if err := runner.executor.Run(ctx, input.WorkspacePath, stdout, stderr, "terraform", args...); err != nil {
+	if err := runner.executor.Run(ctx, input.WorkspacePath, env, stdout, stderr, "terraform", args...); err != nil {
 		return fmt.Errorf("%s: %w", label, err)
 	}
 	return nil
+}
+
+func (runner *LocalProcessRunner) runWithTerraformVariables(ctx context.Context, input TerraformCommand, label string, args ...string) error {
+	env, err := terraformVariableEnv(input.ConfigJSON)
+	if err != nil {
+		return fmt.Errorf("%s variables: %w", label, err)
+	}
+	return runner.run(ctx, input, env, label, args...)
+}
+
+func terraformVariableEnv(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return nil, fmt.Errorf("decode config JSON: %w", err)
+	}
+	if config == nil {
+		return nil, fmt.Errorf("config must be a JSON object")
+	}
+	if len(config) == 0 {
+		return nil, nil
+	}
+
+	keys := make([]string, 0, len(config))
+	for key := range config {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	env := make([]string, 0, len(keys))
+	for _, key := range keys {
+		value, err := terraformVariableValue(config[key])
+		if err != nil {
+			return nil, fmt.Errorf("variable %q: %w", key, err)
+		}
+		env = append(env, "TF_VAR_"+key+"="+value)
+	}
+	return env, nil
+}
+
+func terraformVariableValue(raw json.RawMessage) (string, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if strings.HasPrefix(trimmed, `"`) {
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return "", err
+		}
+		return value, nil
+	}
+	return trimmed, nil
 }
 
 // outputWriters returns the command-specific output writers with process defaults.
@@ -152,10 +210,13 @@ type osExecCommandExecutor struct{}
 // The context is passed to exec.CommandContext so cancellation or deadline
 // expiry can terminate the Terraform process. The command name and args are
 // intentionally supplied by LocalProcessRunner so this adapter stays generic.
-func (osExecCommandExecutor) Run(ctx context.Context, dir string, stdout io.Writer, stderr io.Writer, name string, args ...string) error {
+func (osExecCommandExecutor) Run(ctx context.Context, dir string, env []string, stdout io.Writer, stderr io.Writer, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	return cmd.Run()
 }

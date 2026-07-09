@@ -471,6 +471,7 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 		RepoOwner:       templateRevision.RepoOwner,
 		RepoName:        templateRevision.RepoName,
 		RootPath:        templateRevision.RootPath,
+		ConfigJSON:      run.ConfigJSON,
 	}
 	if err := service.Workflows.StartTemplateRun(ctx, input); err != nil {
 		return traits.TemplateRun{}, fmt.Errorf("start template run workflow: %w", err)

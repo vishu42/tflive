@@ -220,6 +220,7 @@ func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType
 		TerraformPath: run.terraformPath,
 		WorkspaceName: run.input.WorkspaceName,
 		Command:       command,
+		ConfigJSON:    run.input.ConfigJSON,
 	}
 
 	activityCtx, cancelActivity := workflow.WithCancel(run.ctx)

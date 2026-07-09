@@ -204,6 +204,7 @@ func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input 
 		WorkspacePath: terraformPath(input),
 		WorkspaceName: input.WorkspaceName,
 		Command:       input.Command,
+		ConfigJSON:    input.ConfigJSON,
 		Stdout:        writer,
 		Stderr:        writer,
 	})

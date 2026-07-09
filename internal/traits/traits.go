@@ -396,6 +396,7 @@ type TemplateRunWorkflowInput struct {
 	RepoOwner       string
 	RepoName        string
 	RootPath        string
+	ConfigJSON      json.RawMessage
 }
 
 // TemplateRunStatusActivityInput asks the worker to persist one run status transition.
@@ -442,6 +443,7 @@ type RunTerraformActivityInput struct {
 	TerraformPath string
 	WorkspaceName string
 	Command       TerraformCommandType
+	ConfigJSON    json.RawMessage
 }
 
 // TemplateSyncWorkflowInput starts template metadata sync for a public GitHub template.

@@ -511,6 +511,10 @@ func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 		t.Fatalf("workflow selected ref = %q, want main", workflows.input.SelectedRef)
 	}
 
+	if string(workflows.input.ConfigJSON) != `{"region":"us-east-1"}` {
+		t.Fatalf("workflow config JSON = %s", workflows.input.ConfigJSON)
+	}
+
 	if templates.gotGetTemplateTenantID != traits.TenantID("tenant_123") {
 		t.Fatalf("template lookup tenant = %q, want tenant_123", templates.gotGetTemplateTenantID)
 	}

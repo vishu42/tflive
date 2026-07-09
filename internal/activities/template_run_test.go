@@ -226,6 +226,7 @@ func TestLocalTerraformRunnerWritesCommandLogFile(t *testing.T) {
 		WorkspacePath: workspacePath,
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 		Command:       traits.TerraformCommandPlan,
+		ConfigJSON:    []byte(`{"region":"us-east-1"}`),
 	})
 	if err != nil {
 		t.Fatalf("RunTerraform returned error: %v", err)
@@ -237,6 +238,9 @@ func TestLocalTerraformRunnerWritesCommandLogFile(t *testing.T) {
 	}
 	if string(got) != "plan stdout\nplan stderr\n" {
 		t.Fatalf("plan log = %q", string(got))
+	}
+	if !reflect.DeepEqual(executor.env, []string{"TF_VAR_region=us-east-1"}) {
+		t.Fatalf("env = %#v, want TF_VAR_region", executor.env)
 	}
 }
 
@@ -394,10 +398,12 @@ func (store *recordingTemplateRunLogStore) PutTemplateRunLog(_ context.Context, 
 type recordingCommandExecutor struct {
 	stdout string
 	stderr string
+	env    []string
 	err    error
 }
 
-func (executor *recordingCommandExecutor) Run(_ context.Context, _ string, stdout io.Writer, stderr io.Writer, _ string, _ ...string) error {
+func (executor *recordingCommandExecutor) Run(_ context.Context, _ string, env []string, stdout io.Writer, stderr io.Writer, _ string, _ ...string) error {
+	executor.env = append([]string(nil), env...)
 	if _, err := io.WriteString(stdout, executor.stdout); err != nil {
 		return err
 	}

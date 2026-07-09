@@ -66,6 +66,59 @@ func TestLocalProcessRunnerRunsTerraformApply(t *testing.T) {
 	}
 }
 
+func TestLocalProcessRunnerSetsTerraformVariablesForPlanAndApply(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		command traits.TerraformCommandType
+		args    []string
+	}{
+		{
+			name:    "plan",
+			command: traits.TerraformCommandPlan,
+			args:    []string{"plan", "-input=false", "-no-color"},
+		},
+		{
+			name:    "apply",
+			command: traits.TerraformCommandApply,
+			args:    []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			executor := &recordingTerraformCommandExecutor{}
+			runner := NewLocalProcessRunnerWithExecutor(executor)
+
+			err := runner.Run(context.Background(), TerraformCommand{
+				WorkspacePath: "/tmp/megagega/runs/tenant_123/run_123",
+				WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+				Command:       tt.command,
+				ConfigJSON:    []byte(`{"enabled":true,"region":"us-east-1","replicas":3,"tags":{"env":"prod"},"zones":["us-east-1a","us-east-1b"]}`),
+			})
+			if err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+
+			want := []recordedTerraformCommand{
+				{
+					dir:  "/tmp/megagega/runs/tenant_123/run_123",
+					env:  []string{"TF_VAR_enabled=true", "TF_VAR_region=us-east-1", "TF_VAR_replicas=3", "TF_VAR_tags={\"env\":\"prod\"}", "TF_VAR_zones=[\"us-east-1a\",\"us-east-1b\"]"},
+					name: "terraform",
+					args: tt.args,
+				},
+			}
+			if !reflect.DeepEqual(executor.commands, want) {
+				t.Fatalf("commands = %#v, want %#v", executor.commands, want)
+			}
+		})
+	}
+}
+
 func TestLocalProcessRunnerSelectsExistingWorkspace(t *testing.T) {
 	t.Parallel()
 
@@ -201,9 +254,10 @@ type recordingTerraformCommandExecutor struct {
 	stderr   string
 }
 
-func (executor *recordingTerraformCommandExecutor) Run(_ context.Context, dir string, stdout io.Writer, stderr io.Writer, name string, args ...string) error {
+func (executor *recordingTerraformCommandExecutor) Run(_ context.Context, dir string, env []string, stdout io.Writer, stderr io.Writer, name string, args ...string) error {
 	executor.commands = append(executor.commands, recordedTerraformCommand{
 		dir:  dir,
+		env:  append([]string(nil), env...),
 		name: name,
 		args: append([]string(nil), args...),
 	})
@@ -227,6 +281,7 @@ func (executor *recordingTerraformCommandExecutor) Run(_ context.Context, dir st
 
 type recordedTerraformCommand struct {
 	dir  string
+	env  []string
 	name string
 	args []string
 }

@@ -71,6 +71,9 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 			if activityInput.WorkspaceName != input.WorkspaceName {
 				t.Fatalf("run terraform WorkspaceName = %q, want %q", activityInput.WorkspaceName, input.WorkspaceName)
 			}
+			if string(activityInput.ConfigJSON) != string(input.ConfigJSON) {
+				t.Fatalf("run terraform ConfigJSON = %s, want %s", activityInput.ConfigJSON, input.ConfigJSON)
+			}
 			events = append(events, "terraform:"+string(activityInput.Command))
 			return nil
 		})
@@ -354,6 +357,7 @@ func templateRunWorkflowInput(operation traits.OperationType) traits.TemplateRun
 		RepoOwner:       "acme",
 		RepoName:        "infra-templates",
 		RootPath:        "modules/vpc",
+		ConfigJSON:      []byte(`{"region":"us-east-1"}`),
 	}
 }
 
