@@ -463,7 +463,6 @@ type stackResponse struct {
 type stackTemplateResponse struct {
 	ID                            string         `json:"id"`
 	StackID                       string         `json:"stack_id"`
-	TemplateRevisionID            string         `json:"template_revision_id"`
 	ComponentKey                  string         `json:"component_key"`
 	SourceTemplateID              string         `json:"source_template_id"`
 	DesiredTemplateRevisionID     string         `json:"desired_template_revision_id"`
@@ -533,7 +532,6 @@ func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateR
 	response := stackTemplateResponse{
 		ID:                            string(stackTemplate.ID),
 		StackID:                       string(stackTemplate.StackID),
-		TemplateRevisionID:            string(stackTemplate.TemplateRevisionID),
 		ComponentKey:                  stackTemplate.ComponentKey,
 		SourceTemplateID:              string(stackTemplate.SourceTemplateID),
 		DesiredTemplateRevisionID:     string(stackTemplate.DesiredTemplateRevisionID),

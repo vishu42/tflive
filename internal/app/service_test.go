@@ -413,7 +413,6 @@ func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 		stackTemplate: traits.StackTemplate{
 			ID:                        traits.StackTemplateID("stack_template_123"),
 			StackID:                   traits.StackID("stack_123"),
-			TemplateRevisionID:        traits.TemplateRevisionID("template_123"),
 			SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
 			DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
 			DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
@@ -540,7 +539,6 @@ func TestUpdateStackTemplateConfigValidatesDesiredRevisionVariables(t *testing.T
 		stackTemplate: traits.StackTemplate{
 			ID:                        traits.StackTemplateID("stack_template_123"),
 			TenantID:                  traits.TenantID("tenant_123"),
-			TemplateRevisionID:        traits.TemplateRevisionID("template_rev_1"),
 			DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
 			Lifecycle:                 traits.StackTemplateActive,
 		},
@@ -573,6 +571,35 @@ func TestUpdateStackTemplateConfigValidatesDesiredRevisionVariables(t *testing.T
 	}
 	if string(updated.DesiredConfigJSON) != `{"region":"us-east-1"}` {
 		t.Fatalf("returned desired config = %s", updated.DesiredConfigJSON)
+	}
+}
+
+func TestUpdateStackTemplateConfigRejectsMissingDesiredRevision(t *testing.T) {
+	t.Parallel()
+
+	stackTemplates := &recordingStackTemplateRepository{
+		stackTemplate: traits.StackTemplate{
+			ID:        traits.StackTemplateID("stack_template_123"),
+			TenantID:  traits.TenantID("tenant_123"),
+			Lifecycle: traits.StackTemplateActive,
+		},
+	}
+	service := NewService(Service{
+		StackTemplates:    stackTemplates,
+		TemplateRevisions: &recordingTemplateRepository{},
+	})
+
+	_, err := service.UpdateStackTemplateConfig(context.Background(), UpdateStackTemplateConfigCommand{
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		ConfigJSON:      json.RawMessage(`{}`),
+		Actor:           traits.UserID("user_123"),
+	})
+	if !errors.Is(err, ErrStackTemplateConfigInvalid) {
+		t.Fatalf("error = %v, want ErrStackTemplateConfigInvalid", err)
+	}
+	if stackTemplates.gotConfigJSON != nil {
+		t.Fatalf("updated config = %s, want no update", stackTemplates.gotConfigJSON)
 	}
 }
 
@@ -727,16 +754,61 @@ func TestStartTemplateRunRejectsInactiveStackTemplate(t *testing.T) {
 	}
 }
 
+func TestStartTemplateRunRejectsMissingDesiredRevision(t *testing.T) {
+	t.Parallel()
+
+	stackTemplates := &recordingStackTemplateRepository{
+		stackTemplate: traits.StackTemplate{
+			ID:            traits.StackTemplateID("stack_template_123"),
+			SelectedRef:   "main",
+			WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+			Lifecycle:     traits.StackTemplateActive,
+		},
+	}
+	runs := &recordingTemplateRunRepository{}
+	workflows := &recordingWorkflowDispatcher{}
+
+	service := NewService(Service{
+		StackTemplates: stackTemplates,
+		TemplateRuns:   runs,
+		Workflows:      workflows,
+		TemplateRevisionMetadata: &recordingTemplateRepository{
+			template: traits.TemplateRevision{
+				ID:     traits.TemplateRevisionID("template_123"),
+				Status: traits.TemplateRevisionActive,
+			},
+		},
+		RunIDs: fixedTemplateRunIDGenerator{runID: traits.TemplateRunID("run_123")},
+		Clock:  fixedClock{now: time.Now()},
+	})
+
+	_, err := service.StartTemplateRun(context.Background(), StartTemplateRunCommand{
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationApply,
+		TriggerActor:    traits.UserID("user_123"),
+	})
+	if !errors.Is(err, ErrStackTemplateNotRunnable) {
+		t.Fatalf("error = %v, want ErrStackTemplateNotRunnable", err)
+	}
+	if runs.created.ID != "" {
+		t.Fatalf("created run ID = %q, want no persisted run", runs.created.ID)
+	}
+	if workflows.input.RunID != "" {
+		t.Fatalf("workflow run ID = %q, want no workflow dispatch", workflows.input.RunID)
+	}
+}
+
 func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
 	t.Parallel()
 
 	stackTemplates := &recordingStackTemplateRepository{
 		stackTemplate: traits.StackTemplate{
-			ID:                 traits.StackTemplateID("stack_template_123"),
-			TemplateRevisionID: traits.TemplateRevisionID("template_123"),
-			SelectedRef:        "main",
-			WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
-			Lifecycle:          traits.StackTemplateActive,
+			ID:                        traits.StackTemplateID("stack_template_123"),
+			DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+			SelectedRef:               "main",
+			WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
+			Lifecycle:                 traits.StackTemplateActive,
 		},
 	}
 	runs := &recordingTemplateRunRepository{}

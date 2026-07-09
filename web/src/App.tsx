@@ -1,9 +1,11 @@
 import {
+  ArrowUpCircle,
   CheckCircle2,
   CircleStop,
   Loader2,
   Play,
   RefreshCw,
+  Save,
   Send,
   ShieldCheck,
   SquareTerminal,
@@ -26,11 +28,15 @@ import {
   listTemplateRevisions,
   listTemplateRunLogs,
   registerTemplate,
-  startTemplateRun
+  startTemplateRun,
+  updateStackTemplateConfig,
+  upgradeStackTemplate
 } from "./api/client";
 import type { Stack, StackTemplate, TemplateRevision, TemplateRegistration, TemplateRun, TemplateRunLog, TemplateVariable } from "./api/types";
 import { isTerminalRegistrationStatus, isTerminalRunStatus, nextPollDelayMs } from "./polling";
 import {
+  canUpgradeStackTemplate,
+  configFromVariableValues,
   findSelectedStack,
   findSelectedStackTemplate,
   findSelectedTemplateRevision,
@@ -39,7 +45,9 @@ import {
   nextSelectedTemplateRevisionID,
   stackLabel,
   stackTemplateLabel,
-  templateRevisionLabel
+  templateRevisionLabel,
+  upsertStackTemplate,
+  variableValuesFromConfig
 } from "./workflowState";
 
 export default function App() {
@@ -75,6 +83,8 @@ export default function App() {
   const installedTemplate = findSelectedStackTemplate(stackTemplates, selectedStackTemplateID);
   const currentRun = selectedRunKind === "apply" ? applyRun : planRun;
   const canInstall = Boolean(selectedTemplateRevision?.status === "active" && stack);
+  const canSaveConfig = Boolean(installedTemplate && selectedTemplateRevision?.id === installedTemplate.desired_template_revision_id);
+  const canUpgrade = canUpgradeStackTemplate(installedTemplate, selectedTemplateRevision);
   const canPlan = Boolean(installedTemplate && !planRun);
   const canApply = Boolean(installedTemplate && planRun?.status === "completed" && !applyRun);
   const canApprove = applyRun?.status === "waiting_approval";
@@ -225,6 +235,13 @@ export default function App() {
   }, [registration?.status, registration?.template_revision_id, tenantID]);
 
   useEffect(() => {
+    if (!installedTemplate?.desired_template_revision_id) {
+      return;
+    }
+    setSelectedTemplateRevisionID(installedTemplate.desired_template_revision_id);
+  }, [installedTemplate?.id, installedTemplate?.desired_template_revision_id]);
+
+  useEffect(() => {
     if (!selectedTemplateRevision || selectedTemplateRevision.status !== "active") {
       setVariables([]);
       setVariableValues({});
@@ -239,7 +256,9 @@ export default function App() {
         }
         setVariables(nextVariables);
         setVariableValues((current) => {
-          const next = { ...current };
+          const next = installedTemplate
+            ? variableValuesFromConfig(installedTemplate.config, nextVariables)
+            : { ...current };
           for (const variable of nextVariables) {
             if (!(variable.name in next)) {
               next[variable.name] = "";
@@ -257,7 +276,7 @@ export default function App() {
     return () => {
       canceled = true;
     };
-  }, [selectedTemplateRevision?.id, selectedTemplateRevision?.status, tenantID]);
+  }, [selectedTemplateRevision?.id, selectedTemplateRevision?.status, tenantID, installedTemplate]);
 
   useEffect(() => {
     const run = currentRun;
@@ -307,6 +326,32 @@ export default function App() {
       }
     };
   }, [currentRun?.id, currentRun?.status, tenantID]);
+
+  useEffect(() => {
+    if (!applyRun || !selectedStackID || !isTerminalRunStatus(applyRun.status)) {
+      return;
+    }
+
+    let canceled = false;
+    getStack(tenantID, selectedStackID)
+      .then((view) => {
+        if (canceled) {
+          return;
+        }
+        setStack(view.stack);
+        setStackTemplates(view.templates);
+        setSelectedStackTemplateID((current) => nextSelectedStackTemplateID(view.templates, current || installedTemplate?.id || ""));
+      })
+      .catch((error) => {
+        if (!canceled) {
+          setErrorMessage(messageFromError(error));
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [applyRun?.id, applyRun?.status, installedTemplate?.id, selectedStackID, tenantID]);
 
   useEffect(() => {
     if (!currentRun) {
@@ -386,18 +431,47 @@ export default function App() {
     }
 
     await runAction("install", async () => {
-      const config = Object.fromEntries(
-        variables
-          .map((variable) => [variable.name, variableValues[variable.name] ?? ""])
-          .filter(([, value]) => String(value).trim() !== "")
-      );
+      const config = configFromVariableValues(variables, variableValues);
       const next = await addTemplateToStack(tenantID, stack.id, {
         template_revision_id: selectedTemplateRevision.id,
         selected_ref: selectedTemplateRevision.source_ref,
         config,
         actor
       });
-      setStackTemplates((current) => [next, ...current.filter((item) => item.id !== next.id)]);
+      setStackTemplates((current) => upsertStackTemplate(current, next));
+      setSelectedStackTemplateID(next.id);
+      resetRunState();
+    });
+  }
+
+  async function handleSaveStackTemplateConfig() {
+    if (!installedTemplate || !canSaveConfig) {
+      return;
+    }
+
+    await runAction("config", async () => {
+      const next = await updateStackTemplateConfig(tenantID, installedTemplate.id, {
+        config: configFromVariableValues(variables, variableValues),
+        actor
+      });
+      setStackTemplates((current) => upsertStackTemplate(current, next));
+      setSelectedStackTemplateID(next.id);
+      resetRunState();
+    });
+  }
+
+  async function handleUpgradeStackTemplate() {
+    if (!installedTemplate || !selectedTemplateRevision || !canUpgrade) {
+      return;
+    }
+
+    await runAction("upgrade", async () => {
+      const next = await upgradeStackTemplate(tenantID, installedTemplate.id, {
+        target_template_revision_id: selectedTemplateRevision.id,
+        config: configFromVariableValues(variables, variableValues),
+        actor
+      });
+      setStackTemplates((current) => upsertStackTemplate(current, next));
       setSelectedStackTemplateID(next.id);
       resetRunState();
     });
@@ -590,12 +664,30 @@ export default function App() {
                       type="button"
                     >
                       <span>{stackTemplateLabel(item)}</span>
-                      <small>{item.template_revision_id}</small>
+                      <small>{item.desired_template_revision_id}</small>
                     </button>
                   ))}
                 </div>
               )}
             </div>
+          </section>
+
+          <section className="panel">
+            <h2>Installed template</h2>
+            {installedTemplate ? (
+              <dl className="revision-grid">
+                <dt>Source</dt>
+                <dd>{installedTemplate.source_template_id || "-"}</dd>
+                <dt>Desired</dt>
+                <dd>{installedTemplate.desired_template_revision_id || "-"}</dd>
+                <dt>Applied</dt>
+                <dd>{installedTemplate.last_applied_template_revision_id || "-"}</dd>
+                <dt>Last run</dt>
+                <dd>{installedTemplate.last_applied_run_id || "-"}</dd>
+              </dl>
+            ) : (
+              <p className="muted">No stack template selected</p>
+            )}
           </section>
 
           <section className="panel wide">
@@ -610,17 +702,29 @@ export default function App() {
                     {variable.required ? " *" : ""}
                     <input
                       value={variableValues[variable.name] ?? ""}
-                      onChange={(event) => setVariableValues((current) => ({ ...current, [variable.name]: event.target.value }))}
+                      onChange={(event) => {
+                        setVariableValues((current) => ({ ...current, [variable.name]: event.target.value }))
+                      }}
                       placeholder={variable.type_expression || "value"}
                     />
                   </label>
                 ))}
               </div>
             )}
-            <button className="secondary-button" disabled={!canInstall || busyAction === "install"} onClick={handleInstallTemplate} type="button">
-              {busyAction === "install" ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
-              Install template
-            </button>
+            <div className="button-row form-actions">
+              <button className="secondary-button" disabled={!canInstall || busyAction === "install"} onClick={handleInstallTemplate} type="button">
+                {busyAction === "install" ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
+                Install template
+              </button>
+              <button className="secondary-button" disabled={!canSaveConfig || busyAction === "config"} onClick={handleSaveStackTemplateConfig} type="button">
+                {busyAction === "config" ? <Loader2 size={16} className="spin" /> : <Save size={16} />}
+                Save config
+              </button>
+              <button className="primary-button" disabled={!canUpgrade || busyAction === "upgrade"} onClick={handleUpgradeStackTemplate} type="button">
+                {busyAction === "upgrade" ? <Loader2 size={16} className="spin" /> : <ArrowUpCircle size={16} />}
+                Upgrade
+              </button>
+            </div>
             <StatusRow label="Installed template" value={installedTemplate?.workspace_name ?? "not installed"} />
           </section>
 
@@ -682,6 +786,10 @@ export default function App() {
               <dd>{(stack?.id ?? selectedStackID) || "-"}</dd>
               <dt>Stack template</dt>
               <dd>{installedTemplate?.id ?? "-"}</dd>
+              <dt>Desired revision</dt>
+              <dd>{installedTemplate?.desired_template_revision_id ?? "-"}</dd>
+              <dt>Applied revision</dt>
+              <dd>{installedTemplate?.last_applied_template_revision_id || "-"}</dd>
               <dt>Plan run</dt>
               <dd>{planRun?.id ?? "-"}</dd>
               <dt>Apply run</dt>

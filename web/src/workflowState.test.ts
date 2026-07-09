@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { Stack, StackTemplate, TemplateRevision } from "./api/types";
+import type { Stack, StackTemplate, TemplateRevision, TemplateVariable } from "./api/types";
 import {
+  canUpgradeStackTemplate,
+  configFromVariableValues,
   findSelectedStack,
   findSelectedStackTemplate,
   findSelectedTemplateRevision,
@@ -9,7 +11,9 @@ import {
   nextSelectedTemplateRevisionID,
   stackLabel,
   stackTemplateLabel,
-  templateRevisionLabel
+  templateRevisionLabel,
+  upsertStackTemplate,
+  variableValuesFromConfig
 } from "./workflowState";
 
 describe("workflow state helpers", () => {
@@ -71,6 +75,60 @@ describe("workflow state helpers", () => {
 
     expect(stackTemplateLabel(installedTemplate)).toBe("prod-web @ release-2026-07 (active)");
   });
+
+  it("allows upgrades only to a different active revision from the same source template", () => {
+    const installedTemplate = stackTemplate({
+      source_template_id: "source_template_vpc",
+      desired_template_revision_id: "template_rev_1"
+    });
+
+    expect(canUpgradeStackTemplate(installedTemplate, templateRevision({
+      id: "template_rev_2",
+      source_template_id: "source_template_vpc",
+      status: "active"
+    }))).toBe(true);
+    expect(canUpgradeStackTemplate(installedTemplate, templateRevision({
+      id: "template_rev_1",
+      source_template_id: "source_template_vpc",
+      status: "active"
+    }))).toBe(false);
+    expect(canUpgradeStackTemplate(installedTemplate, templateRevision({
+      id: "template_rev_3",
+      source_template_id: "source_template_db",
+      status: "active"
+    }))).toBe(false);
+    expect(canUpgradeStackTemplate(installedTemplate, templateRevision({
+      id: "template_rev_4",
+      source_template_id: "source_template_vpc",
+      status: "invalid"
+    }))).toBe(false);
+  });
+
+  it("maps stack template config to editable variable values and request config", () => {
+    const variables = [
+      templateVariable({ name: "region" }),
+      templateVariable({ name: "size" })
+    ];
+
+    expect(variableValuesFromConfig({ region: "us-east-1", size: 3, unused: true }, variables)).toEqual({
+      region: "us-east-1",
+      size: "3"
+    });
+    expect(configFromVariableValues(variables, {
+      region: " us-west-2 ",
+      size: "",
+      unused: "ignored"
+    })).toEqual({ region: "us-west-2" });
+  });
+
+  it("upserts refreshed stack templates without changing other installs", () => {
+    const firstTemplate = stackTemplate({ id: "stack_template_first", desired_template_revision_id: "template_old" });
+    const secondTemplate = stackTemplate({ id: "stack_template_second", desired_template_revision_id: "template_same" });
+    const updatedFirst = stackTemplate({ id: "stack_template_first", desired_template_revision_id: "template_new" });
+
+    expect(upsertStackTemplate([firstTemplate, secondTemplate], updatedFirst)).toEqual([updatedFirst, secondTemplate]);
+    expect(upsertStackTemplate([secondTemplate], updatedFirst)).toEqual([updatedFirst, secondTemplate]);
+  });
 });
 
 function stack(overrides: Partial<Stack>): Stack {
@@ -110,7 +168,6 @@ function stackTemplate(overrides: Partial<StackTemplate>): StackTemplate {
   return {
     id: "stack_template_123",
     stack_id: "stack_123",
-    template_revision_id: "template_123",
     component_key: "primary",
     source_template_id: "source_template_123",
     desired_template_revision_id: "template_123",
@@ -122,6 +179,20 @@ function stackTemplate(overrides: Partial<StackTemplate>): StackTemplate {
     last_applied_ref: "",
     created_by: "user_123",
     lifecycle: "active",
+    ...overrides
+  };
+}
+
+function templateVariable(overrides: Partial<TemplateVariable>): TemplateVariable {
+  return {
+    template_revision_id: "template_123",
+    name: "region",
+    type_expression: "string",
+    description: "",
+    required: true,
+    has_default: false,
+    sensitive: false,
+    has_validation: false,
     ...overrides
   };
 }

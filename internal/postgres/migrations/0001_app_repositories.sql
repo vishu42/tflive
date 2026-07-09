@@ -2,7 +2,6 @@ create table stack_templates (
 	id text primary key,
 	tenant_id text not null,
 	stack_id text not null,
-	template_revision_id text not null,
 	selected_ref text not null,
 	workspace_name text not null,
 	config_json jsonb not null default '{}'::jsonb,

@@ -270,8 +270,6 @@ type StackTemplate struct {
 	TenantID TenantID `json:"tenant_id"`
 	// StackID is the stack this component is installed into.
 	StackID StackID `json:"stack_id"`
-	// TemplateRevisionID is the install-time template revision.
-	TemplateRevisionID TemplateRevisionID `json:"template_revision_id"`
 	// ComponentKey is the human/stable key unique among active installs in a stack.
 	ComponentKey string `json:"component_key"`
 	// SourceTemplateID is the stable source identity shared by all revisions.

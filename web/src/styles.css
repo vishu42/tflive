@@ -171,6 +171,10 @@ button:disabled {
   margin-bottom: 14px;
 }
 
+.form-actions {
+  margin: 14px 0 0;
+}
+
 .run-tabs button,
 .phase-row button {
   min-height: 32px;
@@ -290,6 +294,27 @@ button:disabled {
   color: #66705f;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 0.75rem;
+}
+
+.revision-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 14px;
+  margin: 0;
+}
+
+.revision-grid dt {
+  color: #66705f;
+  font-size: 0.84rem;
+}
+
+.revision-grid dd {
+  min-width: 0;
+  margin: 0;
+  color: #202833;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
 }
 
 .alert,

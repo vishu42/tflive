@@ -389,7 +389,6 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 		ID:                        id,
 		TenantID:                  command.TenantID,
 		StackID:                   command.StackID,
-		TemplateRevisionID:        command.TemplateRevisionID,
 		ComponentKey:              componentKey(command.ComponentKey, id),
 		SourceTemplateID:          templateRevision.SourceTemplateID,
 		DesiredTemplateRevisionID: command.TemplateRevisionID,
@@ -424,7 +423,7 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	// or enforce those invariants with Postgres CHECK constraints.
 	desiredTemplateRevisionID := stackTemplate.DesiredTemplateRevisionID
 	if desiredTemplateRevisionID == "" {
-		desiredTemplateRevisionID = stackTemplate.TemplateRevisionID
+		return traits.TemplateRun{}, fmt.Errorf("%w: desired template revision is required", ErrStackTemplateNotRunnable)
 	}
 	desiredConfigJSON := stackTemplate.DesiredConfigJSON
 	if len(desiredConfigJSON) == 0 {
@@ -496,7 +495,7 @@ func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command U
 
 	desiredTemplateRevisionID := stackTemplate.DesiredTemplateRevisionID
 	if desiredTemplateRevisionID == "" {
-		desiredTemplateRevisionID = stackTemplate.TemplateRevisionID
+		return traits.StackTemplate{}, fmt.Errorf("%w: desired template revision is required", ErrStackTemplateConfigInvalid)
 	}
 	variables, err := service.TemplateRevisions.GetTemplateRevisionVariables(ctx, command.TenantID, desiredTemplateRevisionID)
 	if err != nil {

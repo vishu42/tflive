@@ -96,7 +96,6 @@ export interface Stack {
 export interface StackTemplate {
   id: string;
   stack_id: string;
-  template_revision_id: string;
   component_key: string;
   source_template_id: string;
   desired_template_revision_id: string;

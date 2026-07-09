@@ -424,7 +424,6 @@ func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.T
 			id,
 			tenant_id,
 			stack_id,
-			template_revision_id,
 			component_key,
 			source_template_id,
 			desired_template_revision_id,
@@ -477,16 +476,12 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 		componentKey = string(stackTemplate.ID)
 	}
 	desiredTemplateRevisionID := stackTemplate.DesiredTemplateRevisionID
-	if desiredTemplateRevisionID == "" {
-		desiredTemplateRevisionID = stackTemplate.TemplateRevisionID
-	}
 
 	result, err := store.pool.Exec(ctx, `
 		insert into stack_templates (
 			id,
 			tenant_id,
 			stack_id,
-			template_revision_id,
 			component_key,
 			source_template_id,
 			desired_template_revision_id,
@@ -501,7 +496,7 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 			created_by,
 			lifecycle
 		)
-		select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, $14, $15, $16, $17
+		select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16
 		where exists (
 			select 1
 			from stacks
@@ -512,7 +507,6 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 		stackTemplate.ID,
 		stackTemplate.TenantID,
 		stackTemplate.StackID,
-		stackTemplate.TemplateRevisionID,
 		componentKey,
 		stackTemplate.SourceTemplateID,
 		desiredTemplateRevisionID,
@@ -575,7 +569,6 @@ func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.Tenant
 			id,
 			tenant_id,
 			stack_id,
-			template_revision_id,
 			component_key,
 			source_template_id,
 			desired_template_revision_id,
@@ -613,7 +606,6 @@ func (store *Store) UpdateStackTemplateConfig(ctx context.Context, tenantID trai
 			id,
 			tenant_id,
 			stack_id,
-			template_revision_id,
 			component_key,
 			source_template_id,
 			desired_template_revision_id,
@@ -650,7 +642,6 @@ func (store *Store) UpdateStackTemplateDesiredRevision(ctx context.Context, tena
 			id,
 			tenant_id,
 			stack_id,
-			template_revision_id,
 			component_key,
 			source_template_id,
 			desired_template_revision_id,
@@ -1130,7 +1121,6 @@ func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, erro
 		&stackTemplate.ID,
 		&stackTemplate.TenantID,
 		&stackTemplate.StackID,
-		&stackTemplate.TemplateRevisionID,
 		&stackTemplate.ComponentKey,
 		&stackTemplate.SourceTemplateID,
 		&stackTemplate.DesiredTemplateRevisionID,

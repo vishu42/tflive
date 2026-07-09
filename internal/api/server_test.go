@@ -36,12 +36,12 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 	startedAt := time.Date(2026, 7, 3, 11, 30, 0, 0, time.UTC)
 	deps := newAPITestDependencies()
 	deps.stackTemplates.stackTemplate = traits.StackTemplate{
-		ID:                 traits.StackTemplateID("stack_template_123"),
-		StackID:            traits.StackID("stack_123"),
-		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
-		SelectedRef:        "main",
-		WorkspaceName:      "smoke-workspace",
-		Lifecycle:          traits.StackTemplateActive,
+		ID:                        traits.StackTemplateID("stack_template_123"),
+		StackID:                   traits.StackID("stack_123"),
+		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+		SelectedRef:               "main",
+		WorkspaceName:             "smoke-workspace",
+		Lifecycle:                 traits.StackTemplateActive,
 	}
 	deps.runID = traits.TemplateRunID("run_123")
 	deps.now = startedAt
@@ -320,14 +320,14 @@ func TestGetStackReturnsStackView(t *testing.T) {
 		},
 		Templates: []traits.StackTemplate{
 			{
-				ID:                 traits.StackTemplateID("stack_template_123"),
-				TenantID:           traits.TenantID("tenant_123"),
-				StackID:            traits.StackID("stack_123"),
-				TemplateRevisionID: traits.TemplateRevisionID("template_123"),
-				SelectedRef:        "main",
-				WorkspaceName:      "meg_acme_prod_late_123",
-				ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-				Lifecycle:          traits.StackTemplateActive,
+				ID:                        traits.StackTemplateID("stack_template_123"),
+				TenantID:                  traits.TenantID("tenant_123"),
+				StackID:                   traits.StackID("stack_123"),
+				DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+				SelectedRef:               "main",
+				WorkspaceName:             "meg_acme_prod_late_123",
+				ConfigJSON:                json.RawMessage(`{"region":"us-east-1"}`),
+				Lifecycle:                 traits.StackTemplateActive,
 			},
 		},
 	}
@@ -384,18 +384,22 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 		t.Fatalf("stack id = %q, want stack_123", deps.stackTemplateInstaller.created.StackID)
 	}
 
-	var body stackTemplateResponse
+	var body map[string]any
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.ID != "stack_template_a1b2c3d4" {
-		t.Fatalf("response id = %q, want stack_template_a1b2c3d4", body.ID)
+	if _, ok := body["template_revision_id"]; ok {
+		t.Fatalf("response should not include legacy template_revision_id: %#v", body)
 	}
-	if body.CreatedBy != "user_123" {
-		t.Fatalf("response created by = %q, want user_123", body.CreatedBy)
+	if body["id"] != "stack_template_a1b2c3d4" {
+		t.Fatalf("response id = %q, want stack_template_a1b2c3d4", body["id"])
 	}
-	if body.Config["region"] != "us-east-1" {
-		t.Fatalf("response config = %#v", body.Config)
+	if body["created_by"] != "user_123" {
+		t.Fatalf("response created by = %q, want user_123", body["created_by"])
+	}
+	config, ok := body["config"].(map[string]any)
+	if !ok || config["region"] != "us-east-1" {
+		t.Fatalf("response config = %#v", body["config"])
 	}
 }
 
@@ -406,7 +410,6 @@ func TestUpdateStackTemplateConfigCallsService(t *testing.T) {
 	deps.stackTemplates.stackTemplate = traits.StackTemplate{
 		ID:                        traits.StackTemplateID("stack_template_123"),
 		TenantID:                  traits.TenantID("tenant_123"),
-		TemplateRevisionID:        traits.TemplateRevisionID("template_rev_1"),
 		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
 		Lifecycle:                 traits.StackTemplateActive,
 	}

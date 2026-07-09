@@ -1,4 +1,4 @@
-import type { Stack, StackTemplate, TemplateRevision } from "./api/types";
+import type { Stack, StackTemplate, TemplateRevision, TemplateVariable } from "./api/types";
 
 type Identified = {
   id: string;
@@ -39,6 +39,43 @@ export function templateRevisionLabel(templateRevision: TemplateRevision): strin
 
 export function stackTemplateLabel(stackTemplate: StackTemplate): string {
   return `${stackTemplate.workspace_name} @ ${stackTemplate.selected_ref} (${stackTemplate.lifecycle})`;
+}
+
+export function canUpgradeStackTemplate(stackTemplate: StackTemplate | null, templateRevision: TemplateRevision | null): boolean {
+  if (!stackTemplate || !templateRevision || templateRevision.status !== "active") {
+    return false;
+  }
+  if (stackTemplate.desired_template_revision_id === templateRevision.id) {
+    return false;
+  }
+  return stackTemplate.source_template_id === templateRevision.source_template_id;
+}
+
+export function variableValuesFromConfig(config: Record<string, unknown>, variables: TemplateVariable[]): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const variable of variables) {
+    const value = config[variable.name];
+    values[variable.name] = value == null ? "" : String(value);
+  }
+  return values;
+}
+
+export function configFromVariableValues(variables: TemplateVariable[], values: Record<string, string>): Record<string, string> {
+  const config: Record<string, string> = {};
+  for (const variable of variables) {
+    const value = values[variable.name]?.trim() ?? "";
+    if (value !== "") {
+      config[variable.name] = value;
+    }
+  }
+  return config;
+}
+
+export function upsertStackTemplate(stackTemplates: StackTemplate[], stackTemplate: StackTemplate): StackTemplate[] {
+  if (stackTemplates.some((item) => item.id === stackTemplate.id)) {
+    return stackTemplates.map((item) => item.id === stackTemplate.id ? stackTemplate : item);
+  }
+  return [stackTemplate, ...stackTemplates];
 }
 
 function nextSelectedID<T extends Identified>(items: T[], selectedID: string): string {

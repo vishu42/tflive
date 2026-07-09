@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -111,6 +112,191 @@ func TestTemplateRevisionTablesUseRevisionNames(t *testing.T) {
 	}
 	if oldTableExists {
 		t.Fatal("old templates table still exists")
+	}
+}
+
+func TestTemplateSourceMigrationKeepsLegacyRevisionBackfillSQL(t *testing.T) {
+	t.Parallel()
+
+	migration, err := migrationFiles.ReadFile("migrations/0006_template_sources_and_revision_pointers.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	sql := string(migration)
+
+	if strings.Contains(sql, "chr(0)") {
+		t.Fatal("migration 0006 must not use chr(0); Postgres text does not permit NUL characters")
+	}
+
+	for _, snippet := range []string{
+		"alter table templates rename to template_revisions",
+		"alter table stack_templates rename column template_id to template_revision_id",
+		"source_template_id = tr.source_template_id",
+		"desired_template_revision_id = stack_templates.template_revision_id",
+		"last_applied_template_revision_id = case",
+	} {
+		if !strings.Contains(sql, snippet) {
+			t.Fatalf("migration 0006 is missing legacy backfill snippet %q", snippet)
+		}
+	}
+}
+
+func TestTemplateSourceMigrationBackfillsLegacyStackTemplateRevisionPointers(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	_, err := pool.Exec(ctx, `
+		create table schema_migrations (
+			version text primary key,
+			applied_at timestamptz not null default now()
+		);
+		create table template_revisions (
+			id text primary key,
+			tenant_id text not null,
+			repo_owner text not null,
+			repo_name text not null,
+			source_ref text not null,
+			resolved_commit_sha text not null,
+			root_path text not null,
+			name text not null,
+			description text not null default '',
+			tags_json jsonb not null default '[]'::jsonb,
+			status text not null,
+			created_at timestamptz not null default now()
+		);
+		create unique index template_revisions_source_identity_idx on template_revisions (
+			tenant_id,
+			repo_owner,
+			repo_name,
+			root_path,
+			resolved_commit_sha
+		);
+		create table stack_templates (
+			id text primary key,
+			tenant_id text not null,
+			stack_id text not null,
+			template_revision_id text not null,
+			selected_ref text not null,
+			workspace_name text not null,
+			config_json jsonb not null default '{}'::jsonb,
+			last_applied_run_id text not null default '',
+			last_applied_ref text not null default '',
+			last_applied_at timestamptz,
+			created_by text not null default '',
+			lifecycle text not null
+		);
+		create table template_runs (
+			id text primary key,
+			tenant_id text not null,
+			stack_template_id text not null,
+			operation text not null,
+			selected_ref text not null,
+			resolved_commit_sha text not null default '',
+			workspace_name text not null,
+			backend_type text not null default '',
+			backend_config_hash text not null default '',
+			status text not null,
+			trigger_actor text not null,
+			started_at timestamptz,
+			completed_at timestamptz,
+			error_summary text not null default '',
+			cancellation_requested_by text not null default '',
+			cancellation_reason text not null default '',
+			cancellation_requested_at timestamptz
+		);
+		insert into template_revisions (
+			id,
+			tenant_id,
+			repo_owner,
+			repo_name,
+			source_ref,
+			resolved_commit_sha,
+			root_path,
+			name,
+			status
+		) values (
+			'template_rev_1',
+			'tenant_123',
+			'acme',
+			'infra',
+			'main',
+			'sha-1',
+			'vpc',
+			'vpc',
+			'active'
+		);
+		insert into stack_templates (
+			id,
+			tenant_id,
+			stack_id,
+			template_revision_id,
+			selected_ref,
+			workspace_name,
+			config_json,
+			last_applied_run_id,
+			last_applied_ref,
+			lifecycle
+		) values (
+			'stack_template_123',
+			'tenant_123',
+			'stack_123',
+			'template_rev_1',
+			'main',
+			'meg_acme_primary',
+			'{"region":"us-east-1"}'::jsonb,
+			'run_123',
+			'main',
+			'active'
+		);
+	`)
+	if err != nil {
+		t.Fatalf("seed legacy schema: %v", err)
+	}
+
+	if err := applyMigration(ctx, pool, "0006_template_sources_and_revision_pointers", "migrations/0006_template_sources_and_revision_pointers.sql"); err != nil {
+		t.Fatalf("apply migration 0006: %v", err)
+	}
+
+	var sourceTemplateID traits.SourceTemplateID
+	var desiredTemplateRevisionID traits.TemplateRevisionID
+	var lastAppliedTemplateRevisionID traits.TemplateRevisionID
+	var desiredConfigJSON []byte
+	var componentKey string
+	err = pool.QueryRow(ctx, `
+		select
+			source_template_id,
+			desired_template_revision_id,
+			last_applied_template_revision_id,
+			desired_config_json,
+			component_key
+		from stack_templates
+		where id = 'stack_template_123'
+	`).Scan(
+		&sourceTemplateID,
+		&desiredTemplateRevisionID,
+		&lastAppliedTemplateRevisionID,
+		&desiredConfigJSON,
+		&componentKey,
+	)
+	if err != nil {
+		t.Fatalf("get migrated stack template: %v", err)
+	}
+	if sourceTemplateID == "" {
+		t.Fatal("source template ID was not backfilled")
+	}
+	if desiredTemplateRevisionID != traits.TemplateRevisionID("template_rev_1") {
+		t.Fatalf("desired template revision ID = %q, want template_rev_1", desiredTemplateRevisionID)
+	}
+	if lastAppliedTemplateRevisionID != traits.TemplateRevisionID("template_rev_1") {
+		t.Fatalf("last applied template revision ID = %q, want template_rev_1", lastAppliedTemplateRevisionID)
+	}
+	if string(desiredConfigJSON) != `{"region": "us-east-1"}` {
+		t.Fatalf("desired config JSON = %s, want region config", desiredConfigJSON)
+	}
+	if componentKey != "stack_template_123" {
+		t.Fatalf("component key = %q, want stack_template_123", componentKey)
 	}
 }
 
@@ -543,15 +729,15 @@ func TestCreateStackTemplateAndGetStackWithTemplates(t *testing.T) {
 	}
 
 	stackTemplate := traits.StackTemplate{
-		ID:                 traits.StackTemplateID("stack_template_123"),
-		TenantID:           traits.TenantID("tenant_123"),
-		StackID:            traits.StackID("stack_123"),
-		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
-		SelectedRef:        "main",
-		WorkspaceName:      "meg_acme_prod_late_123",
-		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-		CreatedBy:          traits.UserID("installer_123"),
-		Lifecycle:          traits.StackTemplateActive,
+		ID:                        traits.StackTemplateID("stack_template_123"),
+		TenantID:                  traits.TenantID("tenant_123"),
+		StackID:                   traits.StackID("stack_123"),
+		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+		SelectedRef:               "main",
+		WorkspaceName:             "meg_acme_prod_late_123",
+		ConfigJSON:                json.RawMessage(`{"region":"us-east-1"}`),
+		CreatedBy:                 traits.UserID("installer_123"),
+		Lifecycle:                 traits.StackTemplateActive,
 	}
 	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
 		t.Fatalf("CreateStackTemplate returned error: %v", err)
@@ -620,7 +806,6 @@ func TestCreateStackTemplateAllowsRepeatedSourceWithDistinctComponentKeys(t *tes
 		ID:                        traits.StackTemplateID("stack_template_primary"),
 		TenantID:                  tenantID,
 		StackID:                   stack.ID,
-		TemplateRevisionID:        template.ID,
 		SourceTemplateID:          sourceTemplateID,
 		DesiredTemplateRevisionID: template.ID,
 		ComponentKey:              "primary-vpc",
@@ -697,7 +882,6 @@ func TestCreateStackTemplateRejectsDuplicateActiveComponentKey(t *testing.T) {
 		ID:                        traits.StackTemplateID("stack_template_primary"),
 		TenantID:                  tenantID,
 		StackID:                   stack.ID,
-		TemplateRevisionID:        template.ID,
 		SourceTemplateID:          sourceTemplateID,
 		DesiredTemplateRevisionID: template.ID,
 		ComponentKey:              "primary-vpc",
@@ -741,7 +925,6 @@ func TestUpdateStackTemplateConfigPersistsDesiredConfig(t *testing.T) {
 		ID:                        traits.StackTemplateID("stack_template_123"),
 		TenantID:                  tenantID,
 		StackID:                   stack.ID,
-		TemplateRevisionID:        traits.TemplateRevisionID("template_rev_1"),
 		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
 		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
 		ComponentKey:              "primary-vpc",
@@ -790,7 +973,6 @@ func TestUpdateStackTemplateDesiredRevisionPersistsRevisionAndConfig(t *testing.
 		ID:                        traits.StackTemplateID("stack_template_123"),
 		TenantID:                  tenantID,
 		StackID:                   stack.ID,
-		TemplateRevisionID:        traits.TemplateRevisionID("template_rev_1"),
 		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
 		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
 		ComponentKey:              "primary-vpc",
@@ -833,22 +1015,28 @@ func TestGetStackTemplateReturnsTenantScopedRecord(t *testing.T) {
 			id,
 			tenant_id,
 			stack_id,
-			template_revision_id,
+			component_key,
+			source_template_id,
+			desired_template_revision_id,
 			selected_ref,
 			workspace_name,
 			config_json,
+			desired_config_json,
 			last_applied_run_id,
 			last_applied_ref,
 			last_applied_at,
 			lifecycle
-		) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)
+		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14)
 	`,
 		"stack_template_123",
 		"tenant_123",
 		"stack_123",
+		"primary-vpc",
+		"source_template_vpc",
 		"template_123",
 		"main",
 		"mtp_acme_prod_vpc_a13f9c",
+		`{"region":"us-east-1"}`,
 		`{"region":"us-east-1"}`,
 		"run_123",
 		"main",
@@ -870,8 +1058,8 @@ func TestGetStackTemplateReturnsTenantScopedRecord(t *testing.T) {
 	if stackTemplate.StackID != traits.StackID("stack_123") {
 		t.Fatalf("StackID = %q, want stack_123", stackTemplate.StackID)
 	}
-	if stackTemplate.TemplateRevisionID != traits.TemplateRevisionID("template_123") {
-		t.Fatalf("TemplateRevisionID = %q, want template_123", stackTemplate.TemplateRevisionID)
+	if stackTemplate.DesiredTemplateRevisionID != traits.TemplateRevisionID("template_123") {
+		t.Fatalf("DesiredTemplateRevisionID = %q, want template_123", stackTemplate.DesiredTemplateRevisionID)
 	}
 	if stackTemplate.SelectedRef != "main" {
 		t.Fatalf("SelectedRef = %q, want main", stackTemplate.SelectedRef)
@@ -1550,7 +1738,6 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 		ID:                        traits.StackTemplateID("stack_template_123"),
 		TenantID:                  traits.TenantID("tenant_123"),
 		StackID:                   traits.StackID("stack_123"),
-		TemplateRevisionID:        traits.TemplateRevisionID("template_123"),
 		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
 		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
 		SelectedRef:               "main",
