@@ -34,7 +34,8 @@ export function stackLabel(stack: Stack): string {
 
 export function templateRevisionLabel(templateRevision: TemplateRevision): string {
   const name = templateRevision.name.trim() || `${templateRevision.repo_owner}/${templateRevision.repo_name}`;
-  return `${name} @ ${templateRevision.source_ref}`;
+  const shortSHA = shortCommitSHA(templateRevision.resolved_commit_sha);
+  return shortSHA ? `${name} @ ${templateRevision.source_ref} · ${shortSHA}` : `${name} @ ${templateRevision.source_ref}`;
 }
 
 export function stackTemplateLabel(stackTemplate: StackTemplate): string {
@@ -76,6 +77,10 @@ export function upsertStackTemplate(stackTemplates: StackTemplate[], stackTempla
     return stackTemplates.map((item) => item.id === stackTemplate.id ? stackTemplate : item);
   }
   return [stackTemplate, ...stackTemplates];
+}
+
+function shortCommitSHA(commitSHA: string): string {
+  return commitSHA.trim().slice(0, 7);
 }
 
 function nextSelectedID<T extends Identified>(items: T[], selectedID: string): string {

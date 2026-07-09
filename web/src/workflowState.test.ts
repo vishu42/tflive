@@ -41,11 +41,12 @@ describe("workflow state helpers", () => {
       repo_owner: "acme",
       repo_name: "infra",
       source_ref: "main",
+      resolved_commit_sha: "abcdef1234567890",
       name: ""
     });
 
     expect(stackLabel(selectedStack)).toBe("Prod (prod)");
-    expect(templateRevisionLabel(selectedTemplateRevision)).toBe("acme/infra @ main");
+    expect(templateRevisionLabel(selectedTemplateRevision)).toBe("acme/infra @ main · abcdef1");
     expect(findSelectedTemplateRevision([selectedTemplateRevision], selectedTemplateRevision.id)).toEqual(selectedTemplateRevision);
   });
 
