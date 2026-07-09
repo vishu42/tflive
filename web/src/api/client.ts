@@ -4,7 +4,7 @@ import type {
   Stack,
   StackTemplate,
   StackView,
-  Template,
+  TemplateRevision,
   TemplateRegistration,
   TemplateRun,
   TemplateRunLog,
@@ -39,7 +39,7 @@ interface CreateStackRequest {
 }
 
 interface AddTemplateToStackRequest {
-  template_id: string;
+  template_revision_id: string;
   component_key?: string;
   selected_ref: string;
   config: Record<string, unknown>;
@@ -72,7 +72,7 @@ interface CancelRunRequest {
 }
 
 export function registerTemplate(tenantID: string, body: RegisterTemplateRequest): Promise<TemplateRegistration> {
-  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/templates`, {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/template-revisions`, {
     method: "POST",
     body: JSON.stringify(body)
   });
@@ -82,12 +82,12 @@ export function getTemplateRegistration(tenantID: string, registrationID: string
   return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/template-registrations/${encodeURIComponent(registrationID)}`);
 }
 
-export function getTemplateVariables(tenantID: string, templateID: string): Promise<TemplateVariable[]> {
-  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/templates/${encodeURIComponent(templateID)}/variables`);
+export function getTemplateRevisionVariables(tenantID: string, templateRevisionID: string): Promise<TemplateVariable[]> {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/template-revisions/${encodeURIComponent(templateRevisionID)}/variables`);
 }
 
-export function listTemplates(tenantID: string): Promise<Template[]> {
-  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/templates`);
+export function listTemplateRevisions(tenantID: string): Promise<TemplateRevision[]> {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/template-revisions`);
 }
 
 export function createStack(tenantID: string, body: CreateStackRequest): Promise<Stack> {

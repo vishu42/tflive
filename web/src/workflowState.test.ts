@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { Stack, StackTemplate, Template } from "./api/types";
+import type { Stack, StackTemplate, TemplateRevision } from "./api/types";
 import {
   findSelectedStack,
   findSelectedStackTemplate,
-  findSelectedTemplate,
+  findSelectedTemplateRevision,
   nextSelectedStackID,
   nextSelectedStackTemplateID,
-  nextSelectedTemplateID,
+  nextSelectedTemplateRevisionID,
   stackLabel,
   stackTemplateLabel,
-  templateLabel
+  templateRevisionLabel
 } from "./workflowState";
 
 describe("workflow state helpers", () => {
@@ -22,17 +22,17 @@ describe("workflow state helpers", () => {
     expect(findSelectedStack(stacks, createdStack.id)).toEqual(createdStack);
   });
 
-  it("falls back to the first hydrated stack and template when the current selection is absent", () => {
+  it("falls back to the first hydrated stack and template revision when the current selection is absent", () => {
     const stacks = [stack({ id: "stack_123", name: "Prod", slug: "prod" })];
-    const templates = [template({ id: "template_123", repo_name: "infra" })];
+    const templateRevisions = [templateRevision({ id: "template_123", repo_name: "infra" })];
 
     expect(nextSelectedStackID(stacks, "missing_stack")).toBe("stack_123");
-    expect(nextSelectedTemplateID(templates, "missing_template")).toBe("template_123");
+    expect(nextSelectedTemplateRevisionID(templateRevisions, "missing_template")).toBe("template_123");
   });
 
-  it("formats menu labels from persisted stack and template rows", () => {
+  it("formats menu labels from persisted stack and template revision rows", () => {
     const selectedStack = stack({ id: "stack_123", name: "Prod", slug: "prod" });
-    const selectedTemplate = template({
+    const selectedTemplateRevision = templateRevision({
       id: "template_123",
       repo_owner: "acme",
       repo_name: "infra",
@@ -41,8 +41,8 @@ describe("workflow state helpers", () => {
     });
 
     expect(stackLabel(selectedStack)).toBe("Prod (prod)");
-    expect(templateLabel(selectedTemplate)).toBe("acme/infra @ main");
-    expect(findSelectedTemplate([selectedTemplate], selectedTemplate.id)).toEqual(selectedTemplate);
+    expect(templateRevisionLabel(selectedTemplateRevision)).toBe("acme/infra @ main");
+    expect(findSelectedTemplateRevision([selectedTemplateRevision], selectedTemplateRevision.id)).toEqual(selectedTemplateRevision);
   });
 
   it("keeps the active stack template when it still belongs to the selected stack", () => {
@@ -87,7 +87,7 @@ function stack(overrides: Partial<Stack>): Stack {
   };
 }
 
-function template(overrides: Partial<Template>): Template {
+function templateRevision(overrides: Partial<TemplateRevision>): TemplateRevision {
   return {
     id: "template_123",
     tenant_id: "tenant_123",
@@ -110,11 +110,11 @@ function stackTemplate(overrides: Partial<StackTemplate>): StackTemplate {
   return {
     id: "stack_template_123",
     stack_id: "stack_123",
-    template_id: "template_123",
+    template_revision_id: "template_123",
     component_key: "primary",
     source_template_id: "source_template_123",
-    desired_template_id: "template_123",
-    last_applied_template_id: "",
+    desired_template_revision_id: "template_123",
+    last_applied_template_revision_id: "",
     selected_ref: "main",
     workspace_name: "prod-workspace",
     config: {},

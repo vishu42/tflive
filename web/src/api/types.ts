@@ -5,7 +5,7 @@ export type TemplateRegistrationStatus =
   | "invalid"
   | "failed";
 
-export type TemplateStatus =
+export type TemplateRevisionStatus =
   | "pending_validation"
   | "validating"
   | "active"
@@ -47,7 +47,7 @@ export interface TemplateRegistration {
   source_ref: string;
   root_path: string;
   status: TemplateRegistrationStatus;
-  template_id: string;
+  template_revision_id: string;
   resolved_commit_sha: string;
   requested_by: string;
   requested_at: string;
@@ -55,7 +55,7 @@ export interface TemplateRegistration {
   error_summary: string;
 }
 
-export interface Template {
+export interface TemplateRevision {
   id: string;
   tenant_id: string;
   source_template_id: string;
@@ -67,12 +67,12 @@ export interface Template {
   name: string;
   description: string;
   tags: string[];
-  status: TemplateStatus;
+  status: TemplateRevisionStatus;
   created_at: string;
 }
 
 export interface TemplateVariable {
-  template_id: string;
+  template_revision_id: string;
   name: string;
   type_expression: string;
   description: string;
@@ -96,11 +96,11 @@ export interface Stack {
 export interface StackTemplate {
   id: string;
   stack_id: string;
-  template_id: string;
+  template_revision_id: string;
   component_key: string;
   source_template_id: string;
-  desired_template_id: string;
-  last_applied_template_id: string;
+  desired_template_revision_id: string;
+  last_applied_template_revision_id: string;
   selected_ref: string;
   workspace_name: string;
   config: Record<string, unknown>;
@@ -120,7 +120,7 @@ export interface TemplateRun {
   id: string;
   tenant_id: string;
   stack_template_id: string;
-  template_id: string;
+  template_revision_id: string;
   source_template_id: string;
   operation: Operation;
   selected_ref: string;

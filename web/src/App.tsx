@@ -21,25 +21,25 @@ import {
   getTemplateRegistration,
   getTemplateRun,
   getTemplateRunLog,
-  getTemplateVariables,
+  getTemplateRevisionVariables,
   listStacks,
-  listTemplates,
+  listTemplateRevisions,
   listTemplateRunLogs,
   registerTemplate,
   startTemplateRun
 } from "./api/client";
-import type { Stack, StackTemplate, Template, TemplateRegistration, TemplateRun, TemplateRunLog, TemplateVariable } from "./api/types";
+import type { Stack, StackTemplate, TemplateRevision, TemplateRegistration, TemplateRun, TemplateRunLog, TemplateVariable } from "./api/types";
 import { isTerminalRegistrationStatus, isTerminalRunStatus, nextPollDelayMs } from "./polling";
 import {
   findSelectedStack,
   findSelectedStackTemplate,
-  findSelectedTemplate,
+  findSelectedTemplateRevision,
   nextSelectedStackID,
   nextSelectedStackTemplateID,
-  nextSelectedTemplateID,
+  nextSelectedTemplateRevisionID,
   stackLabel,
   stackTemplateLabel,
-  templateLabel
+  templateRevisionLabel
 } from "./workflowState";
 
 export default function App() {
@@ -50,8 +50,8 @@ export default function App() {
   const [sourceRef, setSourceRef] = useState("main");
   const [rootPath, setRootPath] = useState(".");
   const [registration, setRegistration] = useState<TemplateRegistration | null>(null);
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [selectedTemplateID, setSelectedTemplateID] = useState("");
+  const [templateRevisions, setTemplateRevisions] = useState<TemplateRevision[]>([]);
+  const [selectedTemplateRevisionID, setSelectedTemplateRevisionID] = useState("");
   const [variables, setVariables] = useState<TemplateVariable[]>([]);
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
   const [stackName, setStackName] = useState("Acme Prod");
@@ -70,11 +70,11 @@ export default function App() {
   const [busyAction, setBusyAction] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
-  const selectedTemplate = findSelectedTemplate(templates, selectedTemplateID);
+  const selectedTemplateRevision = findSelectedTemplateRevision(templateRevisions, selectedTemplateRevisionID);
   const selectedStack = findSelectedStack(stacks, selectedStackID);
   const installedTemplate = findSelectedStackTemplate(stackTemplates, selectedStackTemplateID);
   const currentRun = selectedRunKind === "apply" ? applyRun : planRun;
-  const canInstall = Boolean(selectedTemplate?.status === "active" && stack);
+  const canInstall = Boolean(selectedTemplateRevision?.status === "active" && stack);
   const canPlan = Boolean(installedTemplate && !planRun);
   const canApply = Boolean(installedTemplate && planRun?.status === "completed" && !applyRun);
   const canApprove = applyRun?.status === "waiting_approval";
@@ -84,9 +84,9 @@ export default function App() {
     let canceled = false;
 
     setStacks([]);
-    setTemplates([]);
+    setTemplateRevisions([]);
     setSelectedStackID("");
-    setSelectedTemplateID("");
+    setSelectedTemplateRevisionID("");
     setStack(null);
     setRegistration(null);
     setStackTemplates([]);
@@ -95,15 +95,15 @@ export default function App() {
     setVariableValues({});
     resetRunState();
 
-    Promise.all([listStacks(tenantID), listTemplates(tenantID)])
-      .then(([nextStacks, nextTemplates]) => {
+    Promise.all([listStacks(tenantID), listTemplateRevisions(tenantID)])
+      .then(([nextStacks, nextTemplateRevisions]) => {
         if (canceled) {
           return;
         }
         setStacks(nextStacks);
-        setTemplates(nextTemplates);
+        setTemplateRevisions(nextTemplateRevisions);
         setSelectedStackID(nextSelectedStackID(nextStacks, ""));
-        setSelectedTemplateID(nextSelectedTemplateID(nextTemplates, ""));
+        setSelectedTemplateRevisionID(nextSelectedTemplateRevisionID(nextTemplateRevisions, ""));
       })
       .catch((error) => {
         if (!canceled) {
@@ -200,18 +200,18 @@ export default function App() {
   }, [registration, tenantID]);
 
   useEffect(() => {
-    if (registration?.status !== "completed" || !registration.template_id) {
+    if (registration?.status !== "completed" || !registration.template_revision_id) {
       return;
     }
 
     let canceled = false;
-    listTemplates(tenantID)
-      .then((nextTemplates) => {
+    listTemplateRevisions(tenantID)
+      .then((nextTemplateRevisions) => {
         if (canceled) {
           return;
         }
-        setTemplates(nextTemplates);
-        setSelectedTemplateID(nextSelectedTemplateID(nextTemplates, registration.template_id));
+        setTemplateRevisions(nextTemplateRevisions);
+        setSelectedTemplateRevisionID(nextSelectedTemplateRevisionID(nextTemplateRevisions, registration.template_revision_id));
       })
       .catch((error) => {
         if (!canceled) {
@@ -222,17 +222,17 @@ export default function App() {
     return () => {
       canceled = true;
     };
-  }, [registration?.status, registration?.template_id, tenantID]);
+  }, [registration?.status, registration?.template_revision_id, tenantID]);
 
   useEffect(() => {
-    if (!selectedTemplate || selectedTemplate.status !== "active") {
+    if (!selectedTemplateRevision || selectedTemplateRevision.status !== "active") {
       setVariables([]);
       setVariableValues({});
       return;
     }
 
     let canceled = false;
-    getTemplateVariables(tenantID, selectedTemplate.id)
+    getTemplateRevisionVariables(tenantID, selectedTemplateRevision.id)
       .then((nextVariables) => {
         if (canceled) {
           return;
@@ -257,7 +257,7 @@ export default function App() {
     return () => {
       canceled = true;
     };
-  }, [selectedTemplate?.id, selectedTemplate?.status, tenantID]);
+  }, [selectedTemplateRevision?.id, selectedTemplateRevision?.status, tenantID]);
 
   useEffect(() => {
     const run = currentRun;
@@ -347,7 +347,7 @@ export default function App() {
         requested_by: actor
       });
       setRegistration(next);
-      setSelectedTemplateID("");
+      setSelectedTemplateRevisionID("");
       setVariables([]);
       setVariableValues({});
       resetRunState();
@@ -381,7 +381,7 @@ export default function App() {
   }
 
   async function handleInstallTemplate() {
-    if (!stack || !selectedTemplate) {
+    if (!stack || !selectedTemplateRevision) {
       return;
     }
 
@@ -392,8 +392,8 @@ export default function App() {
           .filter(([, value]) => String(value).trim() !== "")
       );
       const next = await addTemplateToStack(tenantID, stack.id, {
-        template_id: selectedTemplate.id,
-        selected_ref: selectedTemplate.source_ref,
+        template_revision_id: selectedTemplateRevision.id,
+        selected_ref: selectedTemplateRevision.source_ref,
         config,
         actor
       });
@@ -509,11 +509,11 @@ export default function App() {
             <h2>Template</h2>
             <label className="selector-label">
               Saved template
-              <select value={selectedTemplateID} onChange={(event) => setSelectedTemplateID(event.target.value)}>
+              <select value={selectedTemplateRevisionID} onChange={(event) => setSelectedTemplateRevisionID(event.target.value)}>
                 <option value="">Select template</option>
-                {templates.map((template) => (
-                  <option key={template.id} value={template.id}>
-                    {templateLabel(template)}
+                {templateRevisions.map((templateRevision) => (
+                  <option key={templateRevision.id} value={templateRevision.id}>
+                    {templateRevisionLabel(templateRevision)}
                   </option>
                 ))}
               </select>
@@ -540,7 +540,7 @@ export default function App() {
                 Register
               </button>
             </form>
-            <StatusRow label="Template" value={selectedTemplate?.status ?? "not selected"} />
+            <StatusRow label="Template revision" value={selectedTemplateRevision?.status ?? "not selected"} />
             <StatusRow label="Registration" value={registration?.status ?? "not started"} />
             {registration?.error_summary && <p className="error-text">{registration.error_summary}</p>}
           </section>
@@ -590,7 +590,7 @@ export default function App() {
                       type="button"
                     >
                       <span>{stackTemplateLabel(item)}</span>
-                      <small>{item.template_id}</small>
+                      <small>{item.template_revision_id}</small>
                     </button>
                   ))}
                 </div>
@@ -676,8 +676,8 @@ export default function App() {
             <dl className="id-grid">
               <dt>Registration</dt>
               <dd>{registration?.id ?? "-"}</dd>
-              <dt>Template</dt>
-              <dd>{selectedTemplate?.id ?? registration?.template_id ?? "-"}</dd>
+              <dt>Template revision</dt>
+              <dd>{selectedTemplateRevision?.id ?? registration?.template_revision_id ?? "-"}</dd>
               <dt>Stack</dt>
               <dd>{(stack?.id ?? selectedStackID) || "-"}</dd>
               <dt>Stack template</dt>

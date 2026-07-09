@@ -1,4 +1,4 @@
-import type { Stack, StackTemplate, Template } from "./api/types";
+import type { Stack, StackTemplate, TemplateRevision } from "./api/types";
 
 type Identified = {
   id: string;
@@ -8,8 +8,8 @@ export function nextSelectedStackID(stacks: Stack[], selectedStackID: string): s
   return nextSelectedID(stacks, selectedStackID);
 }
 
-export function nextSelectedTemplateID(templates: Template[], selectedTemplateID: string): string {
-  return nextSelectedID(templates, selectedTemplateID);
+export function nextSelectedTemplateRevisionID(templateRevisions: TemplateRevision[], selectedTemplateRevisionID: string): string {
+  return nextSelectedID(templateRevisions, selectedTemplateRevisionID);
 }
 
 export function nextSelectedStackTemplateID(stackTemplates: StackTemplate[], selectedStackTemplateID: string): string {
@@ -20,8 +20,8 @@ export function findSelectedStack(stacks: Stack[], selectedStackID: string): Sta
   return stacks.find((stack) => stack.id === selectedStackID) ?? null;
 }
 
-export function findSelectedTemplate(templates: Template[], selectedTemplateID: string): Template | null {
-  return templates.find((template) => template.id === selectedTemplateID) ?? null;
+export function findSelectedTemplateRevision(templateRevisions: TemplateRevision[], selectedTemplateRevisionID: string): TemplateRevision | null {
+  return templateRevisions.find((templateRevision) => templateRevision.id === selectedTemplateRevisionID) ?? null;
 }
 
 export function findSelectedStackTemplate(stackTemplates: StackTemplate[], selectedStackTemplateID: string): StackTemplate | null {
@@ -32,9 +32,9 @@ export function stackLabel(stack: Stack): string {
   return stack.slug ? `${stack.name} (${stack.slug})` : stack.name;
 }
 
-export function templateLabel(template: Template): string {
-  const name = template.name.trim() || `${template.repo_owner}/${template.repo_name}`;
-  return `${name} @ ${template.source_ref}`;
+export function templateRevisionLabel(templateRevision: TemplateRevision): string {
+  const name = templateRevision.name.trim() || `${templateRevision.repo_owner}/${templateRevision.repo_name}`;
+  return `${name} @ ${templateRevision.source_ref}`;
 }
 
 export function stackTemplateLabel(stackTemplate: StackTemplate): string {

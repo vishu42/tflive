@@ -7,7 +7,7 @@ import {
   createStack,
   getTemplateRunLog,
   listStacks,
-  listTemplates,
+  listTemplateRevisions,
   registerTemplate,
   startTemplateRun,
   updateStackTemplateConfig,
@@ -31,7 +31,7 @@ describe("api client", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/v1/tenants/tenant_123/templates",
+      "/v1/tenants/tenant_123/template-revisions",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
@@ -62,17 +62,17 @@ describe("api client", () => {
     );
   });
 
-  it("lists tenant stacks and templates", async () => {
+  it("lists tenant stacks and template revisions", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse([{ id: "stack_123" }]))
       .mockResolvedValueOnce(jsonResponse([{ id: "template_123" }]));
 
     const stacks = await listStacks("tenant_123");
-    const templates = await listTemplates("tenant_123");
+    const templateRevisions = await listTemplateRevisions("tenant_123");
 
     expect(stacks).toEqual([{ id: "stack_123" }]);
-    expect(templates).toEqual([{ id: "template_123" }]);
+    expect(templateRevisions).toEqual([{ id: "template_123" }]);
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/v1/tenants/tenant_123/stacks",
@@ -80,7 +80,7 @@ describe("api client", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/v1/tenants/tenant_123/templates",
+      "/v1/tenants/tenant_123/template-revisions",
       expect.objectContaining({ method: "GET" })
     );
   });
@@ -89,7 +89,7 @@ describe("api client", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: "stack_template_123" }));
 
     await addTemplateToStack("tenant_123", "stack_123", {
-      template_id: "template_123",
+      template_revision_id: "template_123",
       selected_ref: "main",
       config: { region: "us-east-1" },
       actor: "user_123"
@@ -97,7 +97,15 @@ describe("api client", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/v1/tenants/tenant_123/stacks/stack_123/templates",
-      expect.objectContaining({ method: "POST" })
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          template_revision_id: "template_123",
+          selected_ref: "main",
+          config: { region: "us-east-1" },
+          actor: "user_123"
+        })
+      })
     );
   });
 
