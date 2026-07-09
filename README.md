@@ -1,5 +1,8 @@
 # Megagega Terraform Platform
 
+> **Warning:** Megagega is not production ready. It is an MVP baseline intended
+> for local development, evaluation, and continued hardening.
+
 Megagega is a Terraform orchestration platform for composing infrastructure stacks from reusable Terraform templates. The MVP focuses on fast, UI-triggered Terraform operations, durable workflow orchestration, metadata persistence, live logs, and a clear isolation model.
 
 This document captures the current system design and product requirements.
