@@ -25,15 +25,15 @@ func NewServer(service *app.Service) *Server {
 	// Reports process liveness for probes and local smoke checks.
 	server.mux.HandleFunc("GET /healthz", server.handleHealth)
 
-	// Template registration routes.
+	// Template revision registration routes.
 	// Starts async registration for a public GitHub Terraform template source.
-	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/templates", server.handleRegisterTemplate)
-	// Lists registered template metadata for the tenant.
-	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/templates", server.handleListTemplates)
+	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/template-revisions", server.handleRegisterTemplate)
+	// Lists registered template revision metadata for the tenant.
+	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-revisions", server.handleListTemplateRevisions)
 	// Reads the current state of a template registration attempt.
 	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-registrations/{registration_id}", server.handleGetTemplateRegistration)
-	// Lists variables inferred from an immutable registered template.
-	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/templates/{template_id}/variables", server.handleGetTemplateVariables)
+	// Lists variables inferred from an immutable registered template revision.
+	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-revisions/{template_revision_id}/variables", server.handleGetTemplateRevisionVariables)
 
 	// Stack routes.
 	// Creates a logical infrastructure stack.
@@ -98,8 +98,8 @@ func (server *Server) handleRegisterTemplate(response http.ResponseWriter, reque
 	writeJSON(response, http.StatusAccepted, registration)
 }
 
-func (server *Server) handleListTemplates(response http.ResponseWriter, request *http.Request) {
-	templates, err := server.service.ListTemplates(request.Context(), app.ListTemplatesCommand{
+func (server *Server) handleListTemplateRevisions(response http.ResponseWriter, request *http.Request) {
+	templateRevisions, err := server.service.ListTemplateRevisions(request.Context(), app.ListTemplateRevisionsCommand{
 		TenantID: traits.TenantID(request.PathValue("tenant_id")),
 	})
 	if err != nil {
@@ -107,7 +107,7 @@ func (server *Server) handleListTemplates(response http.ResponseWriter, request 
 		return
 	}
 
-	writeJSON(response, http.StatusOK, templates)
+	writeJSON(response, http.StatusOK, templateRevisions)
 }
 
 func (server *Server) handleGetTemplateRegistration(response http.ResponseWriter, request *http.Request) {
@@ -123,10 +123,10 @@ func (server *Server) handleGetTemplateRegistration(response http.ResponseWriter
 	writeJSON(response, http.StatusOK, registration)
 }
 
-func (server *Server) handleGetTemplateVariables(response http.ResponseWriter, request *http.Request) {
-	variables, err := server.service.GetTemplateVariables(request.Context(), app.GetTemplateVariablesCommand{
-		TenantID:   traits.TenantID(request.PathValue("tenant_id")),
-		TemplateID: traits.TemplateID(request.PathValue("template_id")),
+func (server *Server) handleGetTemplateRevisionVariables(response http.ResponseWriter, request *http.Request) {
+	variables, err := server.service.GetTemplateRevisionVariables(request.Context(), app.GetTemplateRevisionVariablesCommand{
+		TenantID:           traits.TenantID(request.PathValue("tenant_id")),
+		TemplateRevisionID: traits.TemplateRevisionID(request.PathValue("template_revision_id")),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -206,13 +206,13 @@ func (server *Server) handleAddTemplateToStack(response http.ResponseWriter, req
 	}
 
 	stackTemplate, err := server.service.AddTemplateToStack(request.Context(), app.AddTemplateToStackCommand{
-		TenantID:     traits.TenantID(request.PathValue("tenant_id")),
-		StackID:      traits.StackID(request.PathValue("stack_id")),
-		TemplateID:   traits.TemplateID(body.TemplateID),
-		ComponentKey: body.ComponentKey,
-		SelectedRef:  body.SelectedRef,
-		ConfigJSON:   configJSON,
-		Actor:        traits.UserID(body.Actor),
+		TenantID:           traits.TenantID(request.PathValue("tenant_id")),
+		StackID:            traits.StackID(request.PathValue("stack_id")),
+		TemplateRevisionID: traits.TemplateRevisionID(body.TemplateRevisionID),
+		ComponentKey:       body.ComponentKey,
+		SelectedRef:        body.SelectedRef,
+		ConfigJSON:         configJSON,
+		Actor:              traits.UserID(body.Actor),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -265,11 +265,11 @@ func (server *Server) handleUpgradeStackTemplate(response http.ResponseWriter, r
 	}
 
 	stackTemplate, err := server.service.UpgradeStackTemplate(request.Context(), app.UpgradeStackTemplateCommand{
-		TenantID:         traits.TenantID(request.PathValue("tenant_id")),
-		StackTemplateID:  traits.StackTemplateID(request.PathValue("stack_template_id")),
-		TargetTemplateID: traits.TemplateID(body.TargetTemplateRevisionID),
-		ConfigJSON:       configJSON,
-		Actor:            traits.UserID(body.Actor),
+		TenantID:                 traits.TenantID(request.PathValue("tenant_id")),
+		StackTemplateID:          traits.StackTemplateID(request.PathValue("stack_template_id")),
+		TargetTemplateRevisionID: traits.TemplateRevisionID(body.TargetTemplateRevisionID),
+		ConfigJSON:               configJSON,
+		Actor:                    traits.UserID(body.Actor),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -412,11 +412,11 @@ type createStackRequest struct {
 }
 
 type addTemplateToStackRequest struct {
-	TemplateID   string         `json:"template_id"`
-	ComponentKey string         `json:"component_key"`
-	SelectedRef  string         `json:"selected_ref"`
-	Config       map[string]any `json:"config"`
-	Actor        string         `json:"actor"`
+	TemplateRevisionID string         `json:"template_revision_id"`
+	ComponentKey       string         `json:"component_key"`
+	SelectedRef        string         `json:"selected_ref"`
+	Config             map[string]any `json:"config"`
+	Actor              string         `json:"actor"`
 }
 
 type updateStackTemplateConfigRequest struct {
@@ -461,21 +461,21 @@ type stackResponse struct {
 }
 
 type stackTemplateResponse struct {
-	ID                    string         `json:"id"`
-	StackID               string         `json:"stack_id"`
-	TemplateID            string         `json:"template_id"`
-	ComponentKey          string         `json:"component_key"`
-	SourceTemplateID      string         `json:"source_template_id"`
-	DesiredTemplateID     string         `json:"desired_template_id"`
-	LastAppliedTemplateID string         `json:"last_applied_template_id"`
-	SelectedRef           string         `json:"selected_ref"`
-	WorkspaceName         string         `json:"workspace_name"`
-	Config                map[string]any `json:"config"`
-	LastAppliedRunID      string         `json:"last_applied_run_id"`
-	LastAppliedRef        string         `json:"last_applied_ref"`
-	LastAppliedAt         string         `json:"last_applied_at,omitempty"`
-	CreatedBy             string         `json:"created_by"`
-	Lifecycle             string         `json:"lifecycle"`
+	ID                            string         `json:"id"`
+	StackID                       string         `json:"stack_id"`
+	TemplateRevisionID            string         `json:"template_revision_id"`
+	ComponentKey                  string         `json:"component_key"`
+	SourceTemplateID              string         `json:"source_template_id"`
+	DesiredTemplateRevisionID     string         `json:"desired_template_revision_id"`
+	LastAppliedTemplateRevisionID string         `json:"last_applied_template_revision_id"`
+	SelectedRef                   string         `json:"selected_ref"`
+	WorkspaceName                 string         `json:"workspace_name"`
+	Config                        map[string]any `json:"config"`
+	LastAppliedRunID              string         `json:"last_applied_run_id"`
+	LastAppliedRef                string         `json:"last_applied_ref"`
+	LastAppliedAt                 string         `json:"last_applied_at,omitempty"`
+	CreatedBy                     string         `json:"created_by"`
+	Lifecycle                     string         `json:"lifecycle"`
 }
 
 type errorResponse struct {
@@ -531,20 +531,20 @@ func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateR
 	}
 
 	response := stackTemplateResponse{
-		ID:                    string(stackTemplate.ID),
-		StackID:               string(stackTemplate.StackID),
-		TemplateID:            string(stackTemplate.TemplateID),
-		ComponentKey:          stackTemplate.ComponentKey,
-		SourceTemplateID:      string(stackTemplate.SourceTemplateID),
-		DesiredTemplateID:     string(stackTemplate.DesiredTemplateID),
-		LastAppliedTemplateID: string(stackTemplate.LastAppliedTemplateID),
-		SelectedRef:           stackTemplate.SelectedRef,
-		WorkspaceName:         stackTemplate.WorkspaceName,
-		Config:                config,
-		LastAppliedRunID:      string(stackTemplate.LastAppliedRunID),
-		LastAppliedRef:        stackTemplate.LastAppliedRef,
-		CreatedBy:             string(stackTemplate.CreatedBy),
-		Lifecycle:             string(stackTemplate.Lifecycle),
+		ID:                            string(stackTemplate.ID),
+		StackID:                       string(stackTemplate.StackID),
+		TemplateRevisionID:            string(stackTemplate.TemplateRevisionID),
+		ComponentKey:                  stackTemplate.ComponentKey,
+		SourceTemplateID:              string(stackTemplate.SourceTemplateID),
+		DesiredTemplateRevisionID:     string(stackTemplate.DesiredTemplateRevisionID),
+		LastAppliedTemplateRevisionID: string(stackTemplate.LastAppliedTemplateRevisionID),
+		SelectedRef:                   stackTemplate.SelectedRef,
+		WorkspaceName:                 stackTemplate.WorkspaceName,
+		Config:                        config,
+		LastAppliedRunID:              string(stackTemplate.LastAppliedRunID),
+		LastAppliedRef:                stackTemplate.LastAppliedRef,
+		CreatedBy:                     string(stackTemplate.CreatedBy),
+		Lifecycle:                     string(stackTemplate.Lifecycle),
 	}
 	if !stackTemplate.LastAppliedAt.IsZero() {
 		response.LastAppliedAt = stackTemplate.LastAppliedAt.Format(time.RFC3339Nano)

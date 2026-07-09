@@ -36,12 +36,12 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 	startedAt := time.Date(2026, 7, 3, 11, 30, 0, 0, time.UTC)
 	deps := newAPITestDependencies()
 	deps.stackTemplates.stackTemplate = traits.StackTemplate{
-		ID:            traits.StackTemplateID("stack_template_123"),
-		StackID:       traits.StackID("stack_123"),
-		TemplateID:    traits.TemplateID("template_123"),
-		SelectedRef:   "main",
-		WorkspaceName: "smoke-workspace",
-		Lifecycle:     traits.StackTemplateActive,
+		ID:                 traits.StackTemplateID("stack_template_123"),
+		StackID:            traits.StackID("stack_123"),
+		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+		SelectedRef:        "main",
+		WorkspaceName:      "smoke-workspace",
+		Lifecycle:          traits.StackTemplateActive,
 	}
 	deps.runID = traits.TemplateRunID("run_123")
 	deps.now = startedAt
@@ -62,7 +62,7 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 		t.Fatalf("tenant id = %q", deps.stackTemplates.gotTenantID)
 	}
 	if deps.stackTemplates.gotID != traits.StackTemplateID("stack_template_123") {
-		t.Fatalf("stack template id = %q", deps.stackTemplates.gotID)
+		t.Fatalf("stack template revision id = %q", deps.stackTemplates.gotID)
 	}
 	if deps.templateRuns.created.Operation != traits.OperationPlan {
 		t.Fatalf("operation = %q", deps.templateRuns.created.Operation)
@@ -153,7 +153,7 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
-		"/v1/tenants/tenant_123/templates",
+		"/v1/tenants/tenant_123/template-revisions",
 		strings.NewReader(`{"repo_owner":"acme","repo_name":"infra-templates","source_ref":"v0.0.1","root_path":"modules/vpc","requested_by":"user_123"}`),
 	)
 
@@ -197,7 +197,7 @@ func TestRegisterTemplateRejectsInvalidJSON(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
-		"/v1/tenants/tenant_123/templates",
+		"/v1/tenants/tenant_123/template-revisions",
 		strings.NewReader(`{"repo_owner":`),
 	)
 
@@ -215,7 +215,7 @@ func TestRegisterTemplateMapsInvalidCommandToBadRequest(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
-		"/v1/tenants/tenant_123/templates",
+		"/v1/tenants/tenant_123/template-revisions",
 		strings.NewReader(`{"repo_owner":"acme","repo_name":"infra-templates","root_path":"modules/vpc","requested_by":"user_123"}`),
 	)
 
@@ -320,14 +320,14 @@ func TestGetStackReturnsStackView(t *testing.T) {
 		},
 		Templates: []traits.StackTemplate{
 			{
-				ID:            traits.StackTemplateID("stack_template_123"),
-				TenantID:      traits.TenantID("tenant_123"),
-				StackID:       traits.StackID("stack_123"),
-				TemplateID:    traits.TemplateID("template_123"),
-				SelectedRef:   "main",
-				WorkspaceName: "meg_acme_prod_late_123",
-				ConfigJSON:    json.RawMessage(`{"region":"us-east-1"}`),
-				Lifecycle:     traits.StackTemplateActive,
+				ID:                 traits.StackTemplateID("stack_template_123"),
+				TenantID:           traits.TenantID("tenant_123"),
+				StackID:            traits.StackID("stack_123"),
+				TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+				SelectedRef:        "main",
+				WorkspaceName:      "meg_acme_prod_late_123",
+				ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+				Lifecycle:          traits.StackTemplateActive,
 			},
 		},
 	}
@@ -364,7 +364,7 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 
 	deps := newAPITestDependencies()
 	deps.stacks.stack = traits.Stack{ID: traits.StackID("stack_123"), TenantID: traits.TenantID("tenant_123"), Slug: "acme-prod"}
-	deps.templates.template = traits.Template{ID: traits.TemplateID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateActive}
+	deps.templates.template = traits.TemplateRevision{ID: traits.TemplateRevisionID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateRevisionActive}
 	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
 	deps.stackTemplateID = traits.StackTemplateID("stack_template_a1b2c3d4")
 	server := NewServer(deps.service())
@@ -372,7 +372,7 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stacks/stack_123/templates",
-		strings.NewReader(`{"template_id":"template_123","selected_ref":"main","config":{"region":"us-east-1"},"actor":"user_123"}`),
+		strings.NewReader(`{"template_revision_id":"template_123","selected_ref":"main","config":{"region":"us-east-1"},"actor":"user_123"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -404,11 +404,11 @@ func TestUpdateStackTemplateConfigCallsService(t *testing.T) {
 
 	deps := newAPITestDependencies()
 	deps.stackTemplates.stackTemplate = traits.StackTemplate{
-		ID:                traits.StackTemplateID("stack_template_123"),
-		TenantID:          traits.TenantID("tenant_123"),
-		TemplateID:        traits.TemplateID("template_rev_1"),
-		DesiredTemplateID: traits.TemplateID("template_rev_1"),
-		Lifecycle:         traits.StackTemplateActive,
+		ID:                        traits.StackTemplateID("stack_template_123"),
+		TenantID:                  traits.TenantID("tenant_123"),
+		TemplateRevisionID:        traits.TemplateRevisionID("template_rev_1"),
+		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
+		Lifecycle:                 traits.StackTemplateActive,
 	}
 	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
 	server := NewServer(deps.service())
@@ -442,18 +442,18 @@ func TestUpgradeStackTemplateCallsService(t *testing.T) {
 
 	deps := newAPITestDependencies()
 	deps.stackTemplates.stackTemplate = traits.StackTemplate{
-		ID:                traits.StackTemplateID("stack_template_123"),
-		TenantID:          traits.TenantID("tenant_123"),
-		SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
-		DesiredTemplateID: traits.TemplateID("template_rev_1"),
-		DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
-		Lifecycle:         traits.StackTemplateActive,
+		ID:                        traits.StackTemplateID("stack_template_123"),
+		TenantID:                  traits.TenantID("tenant_123"),
+		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
+		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+		Lifecycle:                 traits.StackTemplateActive,
 	}
-	deps.templates.template = traits.Template{
-		ID:               traits.TemplateID("template_rev_2"),
+	deps.templates.template = traits.TemplateRevision{
+		ID:               traits.TemplateRevisionID("template_rev_2"),
 		TenantID:         traits.TenantID("tenant_123"),
 		SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
-		Status:           traits.TemplateActive,
+		Status:           traits.TemplateRevisionActive,
 	}
 	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
 	server := NewServer(deps.service())
@@ -469,16 +469,16 @@ func TestUpgradeStackTemplateCallsService(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if deps.stackTemplates.gotDesiredTemplateID != traits.TemplateID("template_rev_2") {
-		t.Fatalf("desired template update = %q, want template_rev_2", deps.stackTemplates.gotDesiredTemplateID)
+	if deps.stackTemplates.gotDesiredTemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
+		t.Fatalf("desired template revision update = %q, want template_rev_2", deps.stackTemplates.gotDesiredTemplateRevisionID)
 	}
 
 	var body stackTemplateResponse
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.DesiredTemplateID != "template_rev_2" {
-		t.Fatalf("desired template id = %q, want template_rev_2", body.DesiredTemplateID)
+	if body.DesiredTemplateRevisionID != "template_rev_2" {
+		t.Fatalf("desired template revision id = %q, want template_rev_2", body.DesiredTemplateRevisionID)
 	}
 	if body.Config["region"] != "us-east-1" {
 		t.Fatalf("response config = %#v", body.Config)
@@ -490,18 +490,18 @@ func TestUpgradeStackTemplateMapsMissingRequiredVariableToConflict(t *testing.T)
 
 	deps := newAPITestDependencies()
 	deps.stackTemplates.stackTemplate = traits.StackTemplate{
-		ID:                traits.StackTemplateID("stack_template_123"),
-		TenantID:          traits.TenantID("tenant_123"),
-		SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
-		DesiredTemplateID: traits.TemplateID("template_rev_1"),
-		DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
-		Lifecycle:         traits.StackTemplateActive,
+		ID:                        traits.StackTemplateID("stack_template_123"),
+		TenantID:                  traits.TenantID("tenant_123"),
+		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
+		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+		Lifecycle:                 traits.StackTemplateActive,
 	}
-	deps.templates.template = traits.Template{
-		ID:               traits.TemplateID("template_rev_2"),
+	deps.templates.template = traits.TemplateRevision{
+		ID:               traits.TemplateRevisionID("template_rev_2"),
 		TenantID:         traits.TenantID("tenant_123"),
 		SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
-		Status:           traits.TemplateActive,
+		Status:           traits.TemplateRevisionActive,
 	}
 	deps.templates.variables = []traits.TemplateVariable{
 		{Name: "region", Required: true},
@@ -532,11 +532,11 @@ func TestUpgradeStackTemplateMapsSourceMismatchToConflict(t *testing.T) {
 		SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
 		Lifecycle:        traits.StackTemplateActive,
 	}
-	deps.templates.template = traits.Template{
-		ID:               traits.TemplateID("template_rev_2"),
+	deps.templates.template = traits.TemplateRevision{
+		ID:               traits.TemplateRevisionID("template_rev_2"),
 		TenantID:         traits.TenantID("tenant_123"),
 		SourceTemplateID: traits.SourceTemplateID("source_template_db"),
-		Status:           traits.TemplateActive,
+		Status:           traits.TemplateRevisionActive,
 	}
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
@@ -630,14 +630,14 @@ func TestGetTemplateRegistrationReturnsRegistration(t *testing.T) {
 	}
 }
 
-func TestListTemplatesReturnsTenantTemplates(t *testing.T) {
+func TestListTemplateRevisionsReturnsTenantTemplateRevisions(t *testing.T) {
 	t.Parallel()
 
 	createdAt := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
 	deps := newAPITestDependencies()
-	deps.templates.templates = []traits.Template{
+	deps.templates.templates = []traits.TemplateRevision{
 		{
-			ID:                traits.TemplateID("template_123"),
+			ID:                traits.TemplateRevisionID("template_123"),
 			TenantID:          traits.TenantID("tenant_123"),
 			RepoOwner:         "acme",
 			RepoName:          "infra-templates",
@@ -646,13 +646,13 @@ func TestListTemplatesReturnsTenantTemplates(t *testing.T) {
 			RootPath:          ".",
 			Name:              "infra-templates",
 			Tags:              []string{"aws"},
-			Status:            traits.TemplateActive,
+			Status:            traits.TemplateRevisionActive,
 			CreatedAt:         createdAt,
 		},
 	}
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/templates", nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/template-revisions", nil)
 
 	server.ServeHTTP(response, request)
 
@@ -663,35 +663,35 @@ func TestListTemplatesReturnsTenantTemplates(t *testing.T) {
 		t.Fatalf("tenant list lookup = %q, want tenant_123", deps.templates.gotListTenantID)
 	}
 
-	var body []traits.Template
+	var body []traits.TemplateRevision
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if len(body) != 1 {
 		t.Fatalf("len(body) = %d, want 1", len(body))
 	}
-	if body[0].ID != traits.TemplateID("template_123") || body[0].Status != traits.TemplateActive {
-		t.Fatalf("template response = %#v", body[0])
+	if body[0].ID != traits.TemplateRevisionID("template_123") || body[0].Status != traits.TemplateRevisionActive {
+		t.Fatalf("template revision response = %#v", body[0])
 	}
 }
 
-func TestGetTemplateVariablesReturnsVariables(t *testing.T) {
+func TestGetTemplateRevisionVariablesReturnsVariables(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
 	deps.templates.variables = []traits.TemplateVariable{
 		{
-			TemplateID:     traits.TemplateID("template_123"),
-			Name:           "region",
-			TypeExpression: "string",
-			Required:       true,
+			TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+			Name:               "region",
+			TypeExpression:     "string",
+			Required:           true,
 		},
 	}
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
-		"/v1/tenants/tenant_123/templates/template_123/variables",
+		"/v1/tenants/tenant_123/template-revisions/template_123/variables",
 		nil,
 	)
 
@@ -700,8 +700,8 @@ func TestGetTemplateVariablesReturnsVariables(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if deps.templates.gotVariablesTemplateID != traits.TemplateID("template_123") {
-		t.Fatalf("template id = %q, want template_123", deps.templates.gotVariablesTemplateID)
+	if deps.templates.gotVariablesTemplateRevisionID != traits.TemplateRevisionID("template_123") {
+		t.Fatalf("template revision id = %q, want template_123", deps.templates.gotVariablesTemplateRevisionID)
 	}
 
 	var body []traits.TemplateVariable
@@ -1101,21 +1101,21 @@ func newAPITestDependencies() *apiTestDependencies {
 
 func (deps *apiTestDependencies) service() *app.Service {
 	return app.NewService(app.Service{
-		Stacks:                 &deps.stacks,
-		StackTemplates:         &deps.stackTemplates,
-		StackTemplateInstaller: &deps.stackTemplateInstaller,
-		TemplateRuns:           &deps.templateRuns,
-		TemplateRegistrations:  &deps.registrations,
-		TemplateMetadata:       &deps.templates,
-		Templates:              &deps.templates,
-		TemplateRunLogs:        &deps.logs,
-		TemplateRunLogMetadata: &deps.logMetadata,
-		Workflows:              &deps.workflows,
-		StackIDs:               fixedStackIDGenerator{id: deps.stackID},
-		StackTemplateIDs:       fixedStackTemplateIDGenerator{id: deps.stackTemplateID},
-		RunIDs:                 fixedTemplateRunIDGenerator{runID: deps.runID},
-		RegistrationIDs:        fixedTemplateRegistrationIDGenerator{id: deps.registrationID},
-		Clock:                  fixedClock{now: deps.now},
+		Stacks:                   &deps.stacks,
+		StackTemplates:           &deps.stackTemplates,
+		StackTemplateInstaller:   &deps.stackTemplateInstaller,
+		TemplateRuns:             &deps.templateRuns,
+		TemplateRegistrations:    &deps.registrations,
+		TemplateRevisionMetadata: &deps.templates,
+		TemplateRevisions:        &deps.templates,
+		TemplateRunLogs:          &deps.logs,
+		TemplateRunLogMetadata:   &deps.logMetadata,
+		Workflows:                &deps.workflows,
+		StackIDs:                 fixedStackIDGenerator{id: deps.stackID},
+		StackTemplateIDs:         fixedStackTemplateIDGenerator{id: deps.stackTemplateID},
+		RunIDs:                   fixedTemplateRunIDGenerator{runID: deps.runID},
+		RegistrationIDs:          fixedTemplateRegistrationIDGenerator{id: deps.registrationID},
+		Clock:                    fixedClock{now: deps.now},
 	})
 }
 
@@ -1168,12 +1168,12 @@ func (repository *recordingStackRepository) ListStacks(_ context.Context, tenant
 }
 
 type recordingStackTemplateRepository struct {
-	stackTemplate        traits.StackTemplate
-	gotTenantID          traits.TenantID
-	gotID                traits.StackTemplateID
-	gotConfigJSON        json.RawMessage
-	gotDesiredTemplateID traits.TemplateID
-	getErr               error
+	stackTemplate                traits.StackTemplate
+	gotTenantID                  traits.TenantID
+	gotID                        traits.StackTemplateID
+	gotConfigJSON                json.RawMessage
+	gotDesiredTemplateRevisionID traits.TemplateRevisionID
+	getErr                       error
 }
 
 func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error) {
@@ -1194,13 +1194,13 @@ func (repository *recordingStackTemplateRepository) UpdateStackTemplateConfig(_ 
 	return updated, nil
 }
 
-func (repository *recordingStackTemplateRepository) UpdateStackTemplateDesiredRevision(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateID traits.TemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {
+func (repository *recordingStackTemplateRepository) UpdateStackTemplateDesiredRevision(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateID traits.TemplateRevisionID, configJSON json.RawMessage) (traits.StackTemplate, error) {
 	repository.gotTenantID = tenantID
 	repository.gotID = id
-	repository.gotDesiredTemplateID = templateID
+	repository.gotDesiredTemplateRevisionID = templateID
 	repository.gotConfigJSON = configJSON
 	updated := repository.stackTemplate
-	updated.DesiredTemplateID = templateID
+	updated.DesiredTemplateRevisionID = templateID
 	updated.DesiredConfigJSON = configJSON
 	return updated, nil
 }
@@ -1346,27 +1346,27 @@ func (repository *recordingTemplateRegistrationRepository) RecordTemplateRegistr
 }
 
 type recordingTemplateRepository struct {
-	template               traits.Template
-	templates              []traits.Template
-	variables              []traits.TemplateVariable
-	gotTemplate            traits.Template
-	gotVariables           []traits.TemplateVariable
-	gotListTenantID        traits.TenantID
-	gotGetTemplateTenantID traits.TenantID
-	gotGetTemplateID       traits.TemplateID
-	gotVariablesTenantID   traits.TenantID
-	gotVariablesTemplateID traits.TemplateID
-	getTemplateErr         error
-	listErr                error
-	upsertErr              error
-	variablesErr           error
+	template                       traits.TemplateRevision
+	templates                      []traits.TemplateRevision
+	variables                      []traits.TemplateVariable
+	gotTemplate                    traits.TemplateRevision
+	gotVariables                   []traits.TemplateVariable
+	gotListTenantID                traits.TenantID
+	gotGetTemplateTenantID         traits.TenantID
+	gotGetTemplateRevisionID       traits.TemplateRevisionID
+	gotVariablesTenantID           traits.TenantID
+	gotVariablesTemplateRevisionID traits.TemplateRevisionID
+	getTemplateErr                 error
+	listErr                        error
+	upsertErr                      error
+	variablesErr                   error
 }
 
-func (repository *recordingTemplateRepository) UpsertTemplateWithVariables(_ context.Context, template traits.Template, variables []traits.TemplateVariable) (traits.Template, error) {
+func (repository *recordingTemplateRepository) UpsertTemplateRevisionWithVariables(_ context.Context, template traits.TemplateRevision, variables []traits.TemplateVariable) (traits.TemplateRevision, error) {
 	repository.gotTemplate = template
 	repository.gotVariables = variables
 	if repository.upsertErr != nil {
-		return traits.Template{}, repository.upsertErr
+		return traits.TemplateRevision{}, repository.upsertErr
 	}
 	if repository.template.ID != "" {
 		return repository.template, nil
@@ -1374,16 +1374,16 @@ func (repository *recordingTemplateRepository) UpsertTemplateWithVariables(_ con
 	return template, nil
 }
 
-func (repository *recordingTemplateRepository) GetTemplate(_ context.Context, tenantID traits.TenantID, templateID traits.TemplateID) (traits.Template, error) {
+func (repository *recordingTemplateRepository) GetTemplateRevision(_ context.Context, tenantID traits.TenantID, templateID traits.TemplateRevisionID) (traits.TemplateRevision, error) {
 	repository.gotGetTemplateTenantID = tenantID
-	repository.gotGetTemplateID = templateID
+	repository.gotGetTemplateRevisionID = templateID
 	if repository.getTemplateErr != nil {
-		return traits.Template{}, repository.getTemplateErr
+		return traits.TemplateRevision{}, repository.getTemplateErr
 	}
 	return repository.template, nil
 }
 
-func (repository *recordingTemplateRepository) ListTemplates(_ context.Context, tenantID traits.TenantID) ([]traits.Template, error) {
+func (repository *recordingTemplateRepository) ListTemplateRevisions(_ context.Context, tenantID traits.TenantID) ([]traits.TemplateRevision, error) {
 	repository.gotListTenantID = tenantID
 	if repository.listErr != nil {
 		return nil, repository.listErr
@@ -1391,9 +1391,9 @@ func (repository *recordingTemplateRepository) ListTemplates(_ context.Context, 
 	return repository.templates, nil
 }
 
-func (repository *recordingTemplateRepository) GetTemplateVariables(_ context.Context, tenantID traits.TenantID, templateID traits.TemplateID) ([]traits.TemplateVariable, error) {
+func (repository *recordingTemplateRepository) GetTemplateRevisionVariables(_ context.Context, tenantID traits.TenantID, templateID traits.TemplateRevisionID) ([]traits.TemplateVariable, error) {
 	repository.gotVariablesTenantID = tenantID
-	repository.gotVariablesTemplateID = templateID
+	repository.gotVariablesTemplateRevisionID = templateID
 	if repository.variablesErr != nil {
 		return nil, repository.variablesErr
 	}
