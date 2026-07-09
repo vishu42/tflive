@@ -32,9 +32,9 @@ func TestTemplateSyncWorkflowRecordsCompletedRegistration(t *testing.T) {
 				t.Fatalf("source ref = %q, want v0.0.1", activityInput.SourceRef)
 			}
 			return traits.TemplateSyncActivityOutput{
-				Status:            traits.TemplateRegistrationCompleted,
-				TemplateID:        traits.TemplateID("template_123"),
-				ResolvedCommitSHA: "abc123",
+				Status:             traits.TemplateRegistrationCompleted,
+				TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+				ResolvedCommitSHA:  "abc123",
 			}, nil
 		})
 

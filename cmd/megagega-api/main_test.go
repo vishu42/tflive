@@ -92,11 +92,11 @@ func TestRunWiresTemporalDispatcher(t *testing.T) {
 	if deps.service.TemplateRegistrations != deps.store {
 		t.Fatal("service TemplateRegistrations is not the store")
 	}
-	if deps.service.TemplateMetadata != deps.store {
-		t.Fatal("service TemplateMetadata is not the store")
+	if deps.service.TemplateRevisionMetadata != deps.store {
+		t.Fatal("service TemplateRevisionMetadata is not the store")
 	}
-	if deps.service.Templates != deps.store {
-		t.Fatal("service Templates is not the store")
+	if deps.service.TemplateRevisions != deps.store {
+		t.Fatal("service TemplateRevisions is not the store")
 	}
 	if deps.service.TemplateRunLogMetadata != deps.store {
 		t.Fatal("service TemplateRunLogMetadata is not the store")
@@ -426,7 +426,7 @@ func (recordingStore) UpdateStackTemplateConfig(context.Context, traits.TenantID
 	return traits.StackTemplate{}, nil
 }
 
-func (recordingStore) UpdateStackTemplateDesiredRevision(context.Context, traits.TenantID, traits.StackTemplateID, traits.TemplateID, json.RawMessage) (traits.StackTemplate, error) {
+func (recordingStore) UpdateStackTemplateDesiredRevision(context.Context, traits.TenantID, traits.StackTemplateID, traits.TemplateRevisionID, json.RawMessage) (traits.StackTemplate, error) {
 	return traits.StackTemplate{}, nil
 }
 
@@ -434,11 +434,11 @@ func (recordingStore) CreateStackTemplate(context.Context, traits.StackTemplate)
 	return nil
 }
 
-func (recordingStore) GetTemplate(context.Context, traits.TenantID, traits.TemplateID) (traits.Template, error) {
-	return traits.Template{}, nil
+func (recordingStore) GetTemplateRevision(context.Context, traits.TenantID, traits.TemplateRevisionID) (traits.TemplateRevision, error) {
+	return traits.TemplateRevision{}, nil
 }
 
-func (recordingStore) ListTemplates(context.Context, traits.TenantID) ([]traits.Template, error) {
+func (recordingStore) ListTemplateRevisions(context.Context, traits.TenantID) ([]traits.TemplateRevision, error) {
 	return nil, nil
 }
 
@@ -478,11 +478,11 @@ func (recordingStore) RecordTemplateRegistrationStatus(context.Context, traits.T
 	return nil
 }
 
-func (recordingStore) UpsertTemplateWithVariables(context.Context, traits.Template, []traits.TemplateVariable) (traits.Template, error) {
-	return traits.Template{}, nil
+func (recordingStore) UpsertTemplateRevisionWithVariables(context.Context, traits.TemplateRevision, []traits.TemplateVariable) (traits.TemplateRevision, error) {
+	return traits.TemplateRevision{}, nil
 }
 
-func (recordingStore) GetTemplateVariables(context.Context, traits.TenantID, traits.TemplateID) ([]traits.TemplateVariable, error) {
+func (recordingStore) GetTemplateRevisionVariables(context.Context, traits.TenantID, traits.TemplateRevisionID) ([]traits.TemplateVariable, error) {
 	return nil, nil
 }
 

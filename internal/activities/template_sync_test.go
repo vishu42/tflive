@@ -219,7 +219,7 @@ variable "password" {
 		t.Fatalf("error summary = %q", output.ErrorSummary)
 	}
 	if store.template.ID != "" {
-		t.Fatalf("template ID = %q, want no persisted template", store.template.ID)
+		t.Fatalf("template revision ID = %q, want no persisted template revision", store.template.ID)
 	}
 }
 
@@ -227,8 +227,8 @@ func TestSyncTemplateReturnsExistingImmutableTemplate(t *testing.T) {
 	t.Parallel()
 
 	store := &recordingTemplateSyncStore{
-		upsertTemplate: traits.Template{
-			ID:                traits.TemplateID("template_existing"),
+		upsertTemplate: traits.TemplateRevision{
+			ID:                traits.TemplateRevisionID("template_existing"),
 			TenantID:          traits.TenantID("tenant_123"),
 			ResolvedCommitSHA: "abc123",
 		},
@@ -260,17 +260,17 @@ func TestSyncTemplateReturnsExistingImmutableTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncTemplate returned error: %v", err)
 	}
-	if output.TemplateID != traits.TemplateID("template_existing") {
-		t.Fatalf("template ID = %q, want template_existing", output.TemplateID)
+	if output.TemplateRevisionID != traits.TemplateRevisionID("template_existing") {
+		t.Fatalf("template revision ID = %q, want template_existing", output.TemplateRevisionID)
 	}
 }
 
 type recordingTemplateSyncStore struct {
 	statusInput    traits.TemplateRegistrationStatusActivityInput
 	statusErr      error
-	template       traits.Template
+	template       traits.TemplateRevision
 	variables      []traits.TemplateVariable
-	upsertTemplate traits.Template
+	upsertTemplate traits.TemplateRevision
 	upsertErr      error
 }
 
@@ -282,11 +282,11 @@ func (store *recordingTemplateSyncStore) RecordTemplateRegistrationStatus(_ cont
 	return nil
 }
 
-func (store *recordingTemplateSyncStore) UpsertTemplateWithVariables(_ context.Context, template traits.Template, variables []traits.TemplateVariable) (traits.Template, error) {
+func (store *recordingTemplateSyncStore) UpsertTemplateRevisionWithVariables(_ context.Context, template traits.TemplateRevision, variables []traits.TemplateVariable) (traits.TemplateRevision, error) {
 	store.template = template
 	store.variables = variables
 	if store.upsertErr != nil {
-		return traits.Template{}, store.upsertErr
+		return traits.TemplateRevision{}, store.upsertErr
 	}
 	if store.upsertTemplate.ID != "" {
 		return store.upsertTemplate, nil

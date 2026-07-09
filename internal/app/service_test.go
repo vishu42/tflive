@@ -201,17 +201,17 @@ func TestListStacksPassesTenantAndNormalizesNilStacks(t *testing.T) {
 	}
 }
 
-func TestListTemplatesPassesTenantAndNormalizesNilTemplates(t *testing.T) {
+func TestListTemplateRevisionsPassesTenantAndNormalizesNilTemplateRevisions(t *testing.T) {
 	t.Parallel()
 
 	templates := &recordingTemplateRepository{templates: nil}
-	service := NewService(Service{Templates: templates})
+	service := NewService(Service{TemplateRevisions: templates})
 
-	got, err := service.ListTemplates(context.Background(), ListTemplatesCommand{
+	got, err := service.ListTemplateRevisions(context.Background(), ListTemplateRevisionsCommand{
 		TenantID: traits.TenantID("tenant_123"),
 	})
 	if err != nil {
-		t.Fatalf("ListTemplates returned error: %v", err)
+		t.Fatalf("ListTemplateRevisions returned error: %v", err)
 	}
 
 	if templates.gotListTenantID != traits.TenantID("tenant_123") {
@@ -237,12 +237,12 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 		},
 	}
 	templates := &recordingTemplateRepository{
-		template: traits.Template{
-			ID:               traits.TemplateID("template_123"),
+		template: traits.TemplateRevision{
+			ID:               traits.TemplateRevisionID("template_123"),
 			TenantID:         traits.TenantID("tenant_123"),
 			SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
 			SourceRef:        "main",
-			Status:           traits.TemplateActive,
+			Status:           traits.TemplateRevisionActive,
 		},
 		variables: []traits.TemplateVariable{
 			{Name: "region", Required: true},
@@ -251,28 +251,28 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	}
 	installer := &recordingStackTemplateInstaller{}
 	service := NewService(Service{
-		Stacks:                 stacks,
-		TemplateMetadata:       templates,
-		Templates:              templates,
-		StackTemplateInstaller: installer,
-		StackTemplateIDs:       fixedStackTemplateIDGenerator{id: traits.StackTemplateID("stack_template_a1b2c3d4")},
+		Stacks:                   stacks,
+		TemplateRevisionMetadata: templates,
+		TemplateRevisions:        templates,
+		StackTemplateInstaller:   installer,
+		StackTemplateIDs:         fixedStackTemplateIDGenerator{id: traits.StackTemplateID("stack_template_a1b2c3d4")},
 	})
 
 	stackTemplate, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{
-		TenantID:     traits.TenantID("tenant_123"),
-		StackID:      traits.StackID("stack_123"),
-		TemplateID:   traits.TemplateID("template_123"),
-		ComponentKey: "primary-vpc",
-		SelectedRef:  "main",
-		ConfigJSON:   json.RawMessage(`{"region":"us-east-1"}`),
-		Actor:        traits.UserID("user_123"),
+		TenantID:           traits.TenantID("tenant_123"),
+		StackID:            traits.StackID("stack_123"),
+		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+		ComponentKey:       "primary-vpc",
+		SelectedRef:        "main",
+		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+		Actor:              traits.UserID("user_123"),
 	})
 	if err != nil {
 		t.Fatalf("AddTemplateToStack returned error: %v", err)
 	}
 
 	if stackTemplate.ID != traits.StackTemplateID("stack_template_a1b2c3d4") {
-		t.Fatalf("stack template ID = %q, want stack_template_a1b2c3d4", stackTemplate.ID)
+		t.Fatalf("stack template revision ID = %q, want stack_template_a1b2c3d4", stackTemplate.ID)
 	}
 	if stackTemplate.TenantID != traits.TenantID("tenant_123") {
 		t.Fatalf("tenant ID = %q, want tenant_123", stackTemplate.TenantID)
@@ -292,8 +292,8 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	if stackTemplate.SourceTemplateID != traits.SourceTemplateID("source_template_vpc") {
 		t.Fatalf("source template ID = %q, want source_template_vpc", stackTemplate.SourceTemplateID)
 	}
-	if stackTemplate.DesiredTemplateID != traits.TemplateID("template_123") {
-		t.Fatalf("desired template ID = %q, want template_123", stackTemplate.DesiredTemplateID)
+	if stackTemplate.DesiredTemplateRevisionID != traits.TemplateRevisionID("template_123") {
+		t.Fatalf("desired template revision ID = %q, want template_123", stackTemplate.DesiredTemplateRevisionID)
 	}
 	if string(stackTemplate.DesiredConfigJSON) != `{"region":"us-east-1"}` {
 		t.Fatalf("desired config json = %s", stackTemplate.DesiredConfigJSON)
@@ -307,8 +307,8 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	if installer.created.SourceTemplateID != traits.SourceTemplateID("source_template_vpc") {
 		t.Fatalf("persisted source template ID = %q, want source_template_vpc", installer.created.SourceTemplateID)
 	}
-	if installer.created.DesiredTemplateID != traits.TemplateID("template_123") {
-		t.Fatalf("persisted desired template ID = %q, want template_123", installer.created.DesiredTemplateID)
+	if installer.created.DesiredTemplateRevisionID != traits.TemplateRevisionID("template_123") {
+		t.Fatalf("persisted desired template revision ID = %q, want template_123", installer.created.DesiredTemplateRevisionID)
 	}
 	if string(installer.created.DesiredConfigJSON) != `{"region":"us-east-1"}` {
 		t.Fatalf("persisted desired config json = %s", installer.created.DesiredConfigJSON)
@@ -322,10 +322,10 @@ func TestAddTemplateToStackRejectsMissingRequiredVariable(t *testing.T) {
 		Stacks: &recordingStackRepository{
 			stack: traits.Stack{ID: traits.StackID("stack_123"), TenantID: traits.TenantID("tenant_123"), Slug: "acme-prod"},
 		},
-		TemplateMetadata: &recordingTemplateRepository{
-			template: traits.Template{ID: traits.TemplateID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateActive},
+		TemplateRevisionMetadata: &recordingTemplateRepository{
+			template: traits.TemplateRevision{ID: traits.TemplateRevisionID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateRevisionActive},
 		},
-		Templates: &recordingTemplateRepository{
+		TemplateRevisions: &recordingTemplateRepository{
 			variables: []traits.TemplateVariable{{Name: "region", Required: true}},
 		},
 		StackTemplateInstaller: &recordingStackTemplateInstaller{},
@@ -333,12 +333,12 @@ func TestAddTemplateToStackRejectsMissingRequiredVariable(t *testing.T) {
 	})
 
 	_, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{
-		TenantID:    traits.TenantID("tenant_123"),
-		StackID:     traits.StackID("stack_123"),
-		TemplateID:  traits.TemplateID("template_123"),
-		SelectedRef: "main",
-		ConfigJSON:  json.RawMessage(`{}`),
-		Actor:       traits.UserID("user_123"),
+		TenantID:           traits.TenantID("tenant_123"),
+		StackID:            traits.StackID("stack_123"),
+		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+		SelectedRef:        "main",
+		ConfigJSON:         json.RawMessage(`{}`),
+		Actor:              traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrStackTemplateConfigInvalid) {
 		t.Fatalf("error = %v, want ErrStackTemplateConfigInvalid", err)
@@ -352,10 +352,10 @@ func TestAddTemplateToStackRejectsUnknownVariable(t *testing.T) {
 		Stacks: &recordingStackRepository{
 			stack: traits.Stack{ID: traits.StackID("stack_123"), TenantID: traits.TenantID("tenant_123"), Slug: "acme-prod"},
 		},
-		TemplateMetadata: &recordingTemplateRepository{
-			template: traits.Template{ID: traits.TemplateID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateActive},
+		TemplateRevisionMetadata: &recordingTemplateRepository{
+			template: traits.TemplateRevision{ID: traits.TemplateRevisionID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateRevisionActive},
 		},
-		Templates: &recordingTemplateRepository{
+		TemplateRevisions: &recordingTemplateRepository{
 			variables: []traits.TemplateVariable{{Name: "region", Required: true}},
 		},
 		StackTemplateInstaller: &recordingStackTemplateInstaller{},
@@ -363,12 +363,12 @@ func TestAddTemplateToStackRejectsUnknownVariable(t *testing.T) {
 	})
 
 	_, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{
-		TenantID:    traits.TenantID("tenant_123"),
-		StackID:     traits.StackID("stack_123"),
-		TemplateID:  traits.TemplateID("template_123"),
-		SelectedRef: "main",
-		ConfigJSON:  json.RawMessage(`{"region":"us-east-1","extra":"nope"}`),
-		Actor:       traits.UserID("user_123"),
+		TenantID:           traits.TenantID("tenant_123"),
+		StackID:            traits.StackID("stack_123"),
+		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+		SelectedRef:        "main",
+		ConfigJSON:         json.RawMessage(`{"region":"us-east-1","extra":"nope"}`),
+		Actor:              traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrStackTemplateConfigInvalid) {
 		t.Fatalf("error = %v, want ErrStackTemplateConfigInvalid", err)
@@ -382,21 +382,21 @@ func TestAddTemplateToStackRejectsInactiveTemplate(t *testing.T) {
 		Stacks: &recordingStackRepository{
 			stack: traits.Stack{ID: traits.StackID("stack_123"), TenantID: traits.TenantID("tenant_123"), Slug: "acme-prod"},
 		},
-		TemplateMetadata: &recordingTemplateRepository{
-			template: traits.Template{ID: traits.TemplateID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateInvalid},
+		TemplateRevisionMetadata: &recordingTemplateRepository{
+			template: traits.TemplateRevision{ID: traits.TemplateRevisionID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateRevisionInvalid},
 		},
-		Templates:              &recordingTemplateRepository{},
+		TemplateRevisions:      &recordingTemplateRepository{},
 		StackTemplateInstaller: &recordingStackTemplateInstaller{},
 		StackTemplateIDs:       fixedStackTemplateIDGenerator{id: traits.StackTemplateID("stack_template_a1b2c3d4")},
 	})
 
 	_, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{
-		TenantID:    traits.TenantID("tenant_123"),
-		StackID:     traits.StackID("stack_123"),
-		TemplateID:  traits.TemplateID("template_123"),
-		SelectedRef: "main",
-		ConfigJSON:  json.RawMessage(`{}`),
-		Actor:       traits.UserID("user_123"),
+		TenantID:           traits.TenantID("tenant_123"),
+		StackID:            traits.StackID("stack_123"),
+		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+		SelectedRef:        "main",
+		ConfigJSON:         json.RawMessage(`{}`),
+		Actor:              traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrTemplateNotInstallable) {
 		t.Fatalf("error = %v, want ErrTemplateNotInstallable", err)
@@ -411,39 +411,39 @@ func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 
 	stackTemplates := &recordingStackTemplateRepository{
 		stackTemplate: traits.StackTemplate{
-			ID:                traits.StackTemplateID("stack_template_123"),
-			StackID:           traits.StackID("stack_123"),
-			TemplateID:        traits.TemplateID("template_123"),
-			SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
-			DesiredTemplateID: traits.TemplateID("template_rev_2"),
-			DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
-			SelectedRef:       "main",
-			WorkspaceName:     "mtp_acme_prod_vpc_a13f9c",
-			Lifecycle:         traits.StackTemplateActive,
+			ID:                        traits.StackTemplateID("stack_template_123"),
+			StackID:                   traits.StackID("stack_123"),
+			TemplateRevisionID:        traits.TemplateRevisionID("template_123"),
+			SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
+			DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
+			DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+			SelectedRef:               "main",
+			WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
+			Lifecycle:                 traits.StackTemplateActive,
 		},
 	}
 	templates := &recordingTemplateRepository{
-		template: traits.Template{
-			ID:                traits.TemplateID("template_rev_2"),
+		template: traits.TemplateRevision{
+			ID:                traits.TemplateRevisionID("template_rev_2"),
 			TenantID:          traits.TenantID("tenant_123"),
 			SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
 			RepoOwner:         "acme",
 			RepoName:          "infra-templates",
 			ResolvedCommitSHA: "sha-2",
 			RootPath:          "modules/vpc",
-			Status:            traits.TemplateActive,
+			Status:            traits.TemplateRevisionActive,
 		},
 	}
 	runs := &recordingTemplateRunRepository{}
 	workflows := &recordingWorkflowDispatcher{}
 
 	service := NewService(Service{
-		StackTemplates:   stackTemplates,
-		TemplateRuns:     runs,
-		TemplateMetadata: templates,
-		Workflows:        workflows,
-		RunIDs:           fixedTemplateRunIDGenerator{runID: traits.TemplateRunID("run_123")},
-		Clock:            fixedClock{now: now},
+		StackTemplates:           stackTemplates,
+		TemplateRuns:             runs,
+		TemplateRevisionMetadata: templates,
+		Workflows:                workflows,
+		RunIDs:                   fixedTemplateRunIDGenerator{runID: traits.TemplateRunID("run_123")},
+		Clock:                    fixedClock{now: now},
 	})
 
 	run, err := service.StartTemplateRun(ctx, StartTemplateRunCommand{
@@ -472,8 +472,8 @@ func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 		t.Fatalf("run.SelectedRef = %q, want main", run.SelectedRef)
 	}
 
-	if run.TemplateID != traits.TemplateID("template_rev_2") {
-		t.Fatalf("run.TemplateID = %q, want template_rev_2", run.TemplateID)
+	if run.TemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
+		t.Fatalf("run.TemplateRevisionID = %q, want template_rev_2", run.TemplateRevisionID)
 	}
 
 	if run.SourceTemplateID != traits.SourceTemplateID("source_template_vpc") {
@@ -516,8 +516,8 @@ func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 		t.Fatalf("template lookup tenant = %q, want tenant_123", templates.gotGetTemplateTenantID)
 	}
 
-	if templates.gotGetTemplateID != traits.TemplateID("template_rev_2") {
-		t.Fatalf("template lookup ID = %q, want template_rev_2", templates.gotGetTemplateID)
+	if templates.gotGetTemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
+		t.Fatalf("template revision lookup ID = %q, want template_rev_2", templates.gotGetTemplateRevisionID)
 	}
 
 	if workflows.input.RepoOwner != "acme" {
@@ -538,11 +538,11 @@ func TestUpdateStackTemplateConfigValidatesDesiredRevisionVariables(t *testing.T
 
 	stackTemplates := &recordingStackTemplateRepository{
 		stackTemplate: traits.StackTemplate{
-			ID:                traits.StackTemplateID("stack_template_123"),
-			TenantID:          traits.TenantID("tenant_123"),
-			TemplateID:        traits.TemplateID("template_rev_1"),
-			DesiredTemplateID: traits.TemplateID("template_rev_2"),
-			Lifecycle:         traits.StackTemplateActive,
+			ID:                        traits.StackTemplateID("stack_template_123"),
+			TenantID:                  traits.TenantID("tenant_123"),
+			TemplateRevisionID:        traits.TemplateRevisionID("template_rev_1"),
+			DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
+			Lifecycle:                 traits.StackTemplateActive,
 		},
 	}
 	templates := &recordingTemplateRepository{
@@ -551,8 +551,8 @@ func TestUpdateStackTemplateConfigValidatesDesiredRevisionVariables(t *testing.T
 		},
 	}
 	service := NewService(Service{
-		StackTemplates: stackTemplates,
-		Templates:      templates,
+		StackTemplates:    stackTemplates,
+		TemplateRevisions: templates,
 	})
 
 	updated, err := service.UpdateStackTemplateConfig(context.Background(), UpdateStackTemplateConfigCommand{
@@ -565,8 +565,8 @@ func TestUpdateStackTemplateConfigValidatesDesiredRevisionVariables(t *testing.T
 		t.Fatalf("UpdateStackTemplateConfig returned error: %v", err)
 	}
 
-	if templates.gotVariablesTemplateID != traits.TemplateID("template_rev_2") {
-		t.Fatalf("variables template ID = %q, want template_rev_2", templates.gotVariablesTemplateID)
+	if templates.gotVariablesTemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
+		t.Fatalf("variables template revision ID = %q, want template_rev_2", templates.gotVariablesTemplateRevisionID)
 	}
 	if string(stackTemplates.gotConfigJSON) != `{"region":"us-east-1"}` {
 		t.Fatalf("updated config = %s", stackTemplates.gotConfigJSON)
@@ -581,20 +581,20 @@ func TestUpgradeStackTemplateCarriesForwardCompatibleConfig(t *testing.T) {
 
 	stackTemplates := &recordingStackTemplateRepository{
 		stackTemplate: traits.StackTemplate{
-			ID:                traits.StackTemplateID("stack_template_123"),
-			TenantID:          traits.TenantID("tenant_123"),
-			SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
-			DesiredTemplateID: traits.TemplateID("template_rev_1"),
-			DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1","removed":"old"}`),
-			Lifecycle:         traits.StackTemplateActive,
+			ID:                        traits.StackTemplateID("stack_template_123"),
+			TenantID:                  traits.TenantID("tenant_123"),
+			SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
+			DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
+			DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1","removed":"old"}`),
+			Lifecycle:                 traits.StackTemplateActive,
 		},
 	}
 	templates := &recordingTemplateRepository{
-		template: traits.Template{
-			ID:               traits.TemplateID("template_rev_2"),
+		template: traits.TemplateRevision{
+			ID:               traits.TemplateRevisionID("template_rev_2"),
 			TenantID:         traits.TenantID("tenant_123"),
 			SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
-			Status:           traits.TemplateActive,
+			Status:           traits.TemplateRevisionActive,
 		},
 		variables: []traits.TemplateVariable{
 			{Name: "region", Required: true},
@@ -602,29 +602,29 @@ func TestUpgradeStackTemplateCarriesForwardCompatibleConfig(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		StackTemplates:   stackTemplates,
-		TemplateMetadata: templates,
-		Templates:        templates,
+		StackTemplates:           stackTemplates,
+		TemplateRevisionMetadata: templates,
+		TemplateRevisions:        templates,
 	})
 
 	updated, err := service.UpgradeStackTemplate(context.Background(), UpgradeStackTemplateCommand{
-		TenantID:         traits.TenantID("tenant_123"),
-		StackTemplateID:  traits.StackTemplateID("stack_template_123"),
-		TargetTemplateID: traits.TemplateID("template_rev_2"),
-		Actor:            traits.UserID("user_123"),
+		TenantID:                 traits.TenantID("tenant_123"),
+		StackTemplateID:          traits.StackTemplateID("stack_template_123"),
+		TargetTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
+		Actor:                    traits.UserID("user_123"),
 	})
 	if err != nil {
 		t.Fatalf("UpgradeStackTemplate returned error: %v", err)
 	}
 
-	if stackTemplates.gotDesiredTemplateID != traits.TemplateID("template_rev_2") {
-		t.Fatalf("updated desired template ID = %q, want template_rev_2", stackTemplates.gotDesiredTemplateID)
+	if stackTemplates.gotDesiredTemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
+		t.Fatalf("updated desired template revision ID = %q, want template_rev_2", stackTemplates.gotDesiredTemplateRevisionID)
 	}
 	if string(stackTemplates.gotConfigJSON) != `{"region":"us-east-1"}` {
 		t.Fatalf("carried config = %s, want region only", stackTemplates.gotConfigJSON)
 	}
-	if updated.DesiredTemplateID != traits.TemplateID("template_rev_2") {
-		t.Fatalf("returned desired template ID = %q, want template_rev_2", updated.DesiredTemplateID)
+	if updated.DesiredTemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
+		t.Fatalf("returned desired template revision ID = %q, want template_rev_2", updated.DesiredTemplateRevisionID)
 	}
 }
 
@@ -640,24 +640,24 @@ func TestUpgradeStackTemplateRejectsDifferentSourceTemplate(t *testing.T) {
 		},
 	}
 	templates := &recordingTemplateRepository{
-		template: traits.Template{
-			ID:               traits.TemplateID("template_rev_2"),
+		template: traits.TemplateRevision{
+			ID:               traits.TemplateRevisionID("template_rev_2"),
 			TenantID:         traits.TenantID("tenant_123"),
 			SourceTemplateID: traits.SourceTemplateID("source_template_db"),
-			Status:           traits.TemplateActive,
+			Status:           traits.TemplateRevisionActive,
 		},
 	}
 	service := NewService(Service{
-		StackTemplates:   stackTemplates,
-		TemplateMetadata: templates,
-		Templates:        templates,
+		StackTemplates:           stackTemplates,
+		TemplateRevisionMetadata: templates,
+		TemplateRevisions:        templates,
 	})
 
 	_, err := service.UpgradeStackTemplate(context.Background(), UpgradeStackTemplateCommand{
-		TenantID:         traits.TenantID("tenant_123"),
-		StackTemplateID:  traits.StackTemplateID("stack_template_123"),
-		TargetTemplateID: traits.TemplateID("template_rev_2"),
-		Actor:            traits.UserID("user_123"),
+		TenantID:                 traits.TenantID("tenant_123"),
+		StackTemplateID:          traits.StackTemplateID("stack_template_123"),
+		TargetTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
+		Actor:                    traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrStackTemplateUpgradeInvalid) {
 		t.Fatalf("error = %v, want ErrStackTemplateUpgradeInvalid", err)
@@ -732,25 +732,25 @@ func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
 
 	stackTemplates := &recordingStackTemplateRepository{
 		stackTemplate: traits.StackTemplate{
-			ID:            traits.StackTemplateID("stack_template_123"),
-			TemplateID:    traits.TemplateID("template_123"),
-			SelectedRef:   "main",
-			WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-			Lifecycle:     traits.StackTemplateActive,
+			ID:                 traits.StackTemplateID("stack_template_123"),
+			TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+			SelectedRef:        "main",
+			WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
+			Lifecycle:          traits.StackTemplateActive,
 		},
 	}
 	runs := &recordingTemplateRunRepository{}
 	service := NewService(Service{
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
-		TemplateMetadata: &recordingTemplateRepository{
-			template: traits.Template{
-				ID:        traits.TemplateID("template_123"),
+		TemplateRevisionMetadata: &recordingTemplateRepository{
+			template: traits.TemplateRevision{
+				ID:        traits.TemplateRevisionID("template_123"),
 				TenantID:  traits.TenantID("tenant_123"),
 				RepoOwner: "acme",
 				RepoName:  "infra-templates",
 				RootPath:  ".",
-				Status:    traits.TemplateActive,
+				Status:    traits.TemplateRevisionActive,
 			},
 		},
 		Workflows: &recordingWorkflowDispatcher{},
@@ -1111,27 +1111,27 @@ func TestGetTemplateRegistrationReturnsTenantScopedRegistration(t *testing.T) {
 	}
 }
 
-func TestGetTemplateVariablesReturnsTenantScopedVariables(t *testing.T) {
+func TestGetTemplateRevisionVariablesReturnsTenantScopedVariables(t *testing.T) {
 	t.Parallel()
 
 	templates := &recordingTemplateRepository{
 		variables: []traits.TemplateVariable{
 			{
-				TemplateID:     traits.TemplateID("template_123"),
-				Name:           "region",
-				TypeExpression: "string",
-				Required:       true,
+				TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+				Name:               "region",
+				TypeExpression:     "string",
+				Required:           true,
 			},
 		},
 	}
-	service := NewService(Service{Templates: templates})
+	service := NewService(Service{TemplateRevisions: templates})
 
-	variables, err := service.GetTemplateVariables(context.Background(), GetTemplateVariablesCommand{
-		TenantID:   traits.TenantID("tenant_123"),
-		TemplateID: traits.TemplateID("template_123"),
+	variables, err := service.GetTemplateRevisionVariables(context.Background(), GetTemplateRevisionVariablesCommand{
+		TenantID:           traits.TenantID("tenant_123"),
+		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
 	})
 	if err != nil {
-		t.Fatalf("GetTemplateVariables returned error: %v", err)
+		t.Fatalf("GetTemplateRevisionVariables returned error: %v", err)
 	}
 
 	if len(variables) != 1 {
@@ -1352,11 +1352,11 @@ func TestListTemplateRunLogsChecksRunOwnershipBeforeListingMetadata(t *testing.T
 }
 
 type recordingStackTemplateRepository struct {
-	stackTemplate        traits.StackTemplate
-	gotTenantID          traits.TenantID
-	gotID                traits.StackTemplateID
-	gotConfigJSON        json.RawMessage
-	gotDesiredTemplateID traits.TemplateID
+	stackTemplate                traits.StackTemplate
+	gotTenantID                  traits.TenantID
+	gotID                        traits.StackTemplateID
+	gotConfigJSON                json.RawMessage
+	gotDesiredTemplateRevisionID traits.TemplateRevisionID
 }
 
 func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error) {
@@ -1374,13 +1374,13 @@ func (repository *recordingStackTemplateRepository) UpdateStackTemplateConfig(_ 
 	return updated, nil
 }
 
-func (repository *recordingStackTemplateRepository) UpdateStackTemplateDesiredRevision(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateID traits.TemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {
+func (repository *recordingStackTemplateRepository) UpdateStackTemplateDesiredRevision(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateRevisionID traits.TemplateRevisionID, configJSON json.RawMessage) (traits.StackTemplate, error) {
 	repository.gotTenantID = tenantID
 	repository.gotID = id
-	repository.gotDesiredTemplateID = templateID
+	repository.gotDesiredTemplateRevisionID = templateRevisionID
 	repository.gotConfigJSON = configJSON
 	updated := repository.stackTemplate
-	updated.DesiredTemplateID = templateID
+	updated.DesiredTemplateRevisionID = templateRevisionID
 	updated.DesiredConfigJSON = configJSON
 	return updated, nil
 }
@@ -1563,27 +1563,27 @@ func (repository *recordingTemplateRegistrationRepository) RecordTemplateRegistr
 }
 
 type recordingTemplateRepository struct {
-	template               traits.Template
-	templates              []traits.Template
-	variables              []traits.TemplateVariable
-	gotTemplate            traits.Template
-	gotVariables           []traits.TemplateVariable
-	gotListTenantID        traits.TenantID
-	gotGetTemplateTenantID traits.TenantID
-	gotGetTemplateID       traits.TemplateID
-	gotVariablesTenantID   traits.TenantID
-	gotVariablesTemplateID traits.TemplateID
-	getTemplateErr         error
-	listErr                error
-	upsertErr              error
-	variablesErr           error
+	template                       traits.TemplateRevision
+	templates                      []traits.TemplateRevision
+	variables                      []traits.TemplateVariable
+	gotTemplate                    traits.TemplateRevision
+	gotVariables                   []traits.TemplateVariable
+	gotListTenantID                traits.TenantID
+	gotGetTemplateTenantID         traits.TenantID
+	gotGetTemplateRevisionID       traits.TemplateRevisionID
+	gotVariablesTenantID           traits.TenantID
+	gotVariablesTemplateRevisionID traits.TemplateRevisionID
+	getTemplateErr                 error
+	listErr                        error
+	upsertErr                      error
+	variablesErr                   error
 }
 
-func (repository *recordingTemplateRepository) UpsertTemplateWithVariables(_ context.Context, template traits.Template, variables []traits.TemplateVariable) (traits.Template, error) {
+func (repository *recordingTemplateRepository) UpsertTemplateRevisionWithVariables(_ context.Context, template traits.TemplateRevision, variables []traits.TemplateVariable) (traits.TemplateRevision, error) {
 	repository.gotTemplate = template
 	repository.gotVariables = variables
 	if repository.upsertErr != nil {
-		return traits.Template{}, repository.upsertErr
+		return traits.TemplateRevision{}, repository.upsertErr
 	}
 	if repository.template.ID != "" {
 		return repository.template, nil
@@ -1591,16 +1591,16 @@ func (repository *recordingTemplateRepository) UpsertTemplateWithVariables(_ con
 	return template, nil
 }
 
-func (repository *recordingTemplateRepository) GetTemplate(_ context.Context, tenantID traits.TenantID, templateID traits.TemplateID) (traits.Template, error) {
+func (repository *recordingTemplateRepository) GetTemplateRevision(_ context.Context, tenantID traits.TenantID, templateRevisionID traits.TemplateRevisionID) (traits.TemplateRevision, error) {
 	repository.gotGetTemplateTenantID = tenantID
-	repository.gotGetTemplateID = templateID
+	repository.gotGetTemplateRevisionID = templateRevisionID
 	if repository.getTemplateErr != nil {
-		return traits.Template{}, repository.getTemplateErr
+		return traits.TemplateRevision{}, repository.getTemplateErr
 	}
 	return repository.template, nil
 }
 
-func (repository *recordingTemplateRepository) ListTemplates(_ context.Context, tenantID traits.TenantID) ([]traits.Template, error) {
+func (repository *recordingTemplateRepository) ListTemplateRevisions(_ context.Context, tenantID traits.TenantID) ([]traits.TemplateRevision, error) {
 	repository.gotListTenantID = tenantID
 	if repository.listErr != nil {
 		return nil, repository.listErr
@@ -1608,9 +1608,9 @@ func (repository *recordingTemplateRepository) ListTemplates(_ context.Context, 
 	return repository.templates, nil
 }
 
-func (repository *recordingTemplateRepository) GetTemplateVariables(_ context.Context, tenantID traits.TenantID, templateID traits.TemplateID) ([]traits.TemplateVariable, error) {
+func (repository *recordingTemplateRepository) GetTemplateRevisionVariables(_ context.Context, tenantID traits.TenantID, templateRevisionID traits.TemplateRevisionID) ([]traits.TemplateVariable, error) {
 	repository.gotVariablesTenantID = tenantID
-	repository.gotVariablesTemplateID = templateID
+	repository.gotVariablesTemplateRevisionID = templateRevisionID
 	if repository.variablesErr != nil {
 		return nil, repository.variablesErr
 	}

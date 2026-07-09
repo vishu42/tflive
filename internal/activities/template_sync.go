@@ -22,7 +22,7 @@ import (
 
 type TemplateSyncStore interface {
 	RecordTemplateRegistrationStatus(context.Context, traits.TemplateRegistrationStatusActivityInput) error
-	UpsertTemplateWithVariables(context.Context, traits.Template, []traits.TemplateVariable) (traits.Template, error)
+	UpsertTemplateRevisionWithVariables(context.Context, traits.TemplateRevision, []traits.TemplateVariable) (traits.TemplateRevision, error)
 }
 
 type TemplateSyncActivities struct {
@@ -103,8 +103,8 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 	}
 
 	sourceTemplateID := deterministicSourceTemplateID(input, rootPath)
-	templateID := deterministicTemplateID(input, rootPath, resolvedSHA)
-	variables, err := inferTemplateVariables(templateRoot, templateID)
+	templateRevisionID := deterministicTemplateRevisionID(input, rootPath, resolvedSHA)
+	variables, err := inferTemplateVariables(templateRoot, templateRevisionID)
 	if err != nil {
 		return invalidTemplateSyncOutput("infer template variables: %v", err), nil
 	}
@@ -112,8 +112,8 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 		return invalidTemplateSyncOutput("sensitive variables are not supported: %s", strings.Join(sensitive, ", ")), nil
 	}
 
-	template := traits.Template{
-		ID:                templateID,
+	templateRevision := traits.TemplateRevision{
+		ID:                templateRevisionID,
 		TenantID:          input.TenantID,
 		SourceTemplateID:  sourceTemplateID,
 		RepoOwner:         input.RepoOwner,
@@ -124,18 +124,18 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 		Name:              metadata.Name,
 		Description:       metadata.Description,
 		Tags:              metadata.Tags,
-		Status:            traits.TemplateActive,
+		Status:            traits.TemplateRevisionActive,
 		CreatedAt:         time.Now().UTC(),
 	}
-	persisted, err := activities.store.UpsertTemplateWithVariables(ctx, template, variables)
+	persisted, err := activities.store.UpsertTemplateRevisionWithVariables(ctx, templateRevision, variables)
 	if err != nil {
-		return traits.TemplateSyncActivityOutput{}, fmt.Errorf("persist synced template: %w", err)
+		return traits.TemplateSyncActivityOutput{}, fmt.Errorf("persist synced template revision: %w", err)
 	}
 
 	return traits.TemplateSyncActivityOutput{
-		Status:            traits.TemplateRegistrationCompleted,
-		TemplateID:        persisted.ID,
-		ResolvedCommitSHA: persisted.ResolvedCommitSHA,
+		Status:             traits.TemplateRegistrationCompleted,
+		TemplateRevisionID: persisted.ID,
+		ResolvedCommitSHA:  persisted.ResolvedCommitSHA,
 	}, nil
 }
 
@@ -234,7 +234,7 @@ func cleanTags(tags []string) []string {
 	return cleaned
 }
 
-func inferTemplateVariables(root string, templateID traits.TemplateID) ([]traits.TemplateVariable, error) {
+func inferTemplateVariables(root string, templateRevisionID traits.TemplateRevisionID) ([]traits.TemplateVariable, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
@@ -261,7 +261,7 @@ func inferTemplateVariables(root string, templateID traits.TemplateID) ([]traits
 			return nil, fmt.Errorf("%s: %s", entry.Name(), diags.Error())
 		}
 		for _, block := range content.Blocks {
-			variable, err := parseVariableBlock(block, source, templateID)
+			variable, err := parseVariableBlock(block, source, templateRevisionID)
 			if err != nil {
 				return nil, fmt.Errorf("%s variable %q: %w", entry.Name(), block.Labels[0], err)
 			}
@@ -304,7 +304,7 @@ func variableBlockSchema() *hcl.BodySchema {
 	}
 }
 
-func parseVariableBlock(block *hcl.Block, source []byte, templateID traits.TemplateID) (traits.TemplateVariable, error) {
+func parseVariableBlock(block *hcl.Block, source []byte, templateRevisionID traits.TemplateRevisionID) (traits.TemplateVariable, error) {
 	name := block.Labels[0]
 	content, _, diags := block.Body.PartialContent(variableBlockSchema())
 	if diags.HasErrors() {
@@ -312,9 +312,9 @@ func parseVariableBlock(block *hcl.Block, source []byte, templateID traits.Templ
 	}
 
 	variable := traits.TemplateVariable{
-		TemplateID: templateID,
-		Name:       name,
-		Required:   true,
+		TemplateRevisionID: templateRevisionID,
+		Name:               name,
+		Required:           true,
 	}
 	if attr, ok := content.Attributes["type"]; ok {
 		variable.TypeExpression = strings.TrimSpace(string(attr.Expr.Range().SliceBytes(source)))
@@ -379,7 +379,7 @@ func sensitiveVariableNames(variables []traits.TemplateVariable) []string {
 	return names
 }
 
-func deterministicTemplateID(input traits.TemplateSyncActivityInput, rootPath string, resolvedSHA string) traits.TemplateID {
+func deterministicTemplateRevisionID(input traits.TemplateSyncActivityInput, rootPath string, resolvedSHA string) traits.TemplateRevisionID {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
 		string(input.TenantID),
 		input.RepoOwner,
@@ -387,7 +387,7 @@ func deterministicTemplateID(input traits.TemplateSyncActivityInput, rootPath st
 		rootPath,
 		resolvedSHA,
 	}, "\x00")))
-	return traits.TemplateID("template_" + hex.EncodeToString(sum[:16]))
+	return traits.TemplateRevisionID("template_" + hex.EncodeToString(sum[:16]))
 }
 
 func deterministicSourceTemplateID(input traits.TemplateSyncActivityInput, rootPath string) traits.SourceTemplateID {

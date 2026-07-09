@@ -395,8 +395,8 @@ func (store *recordingWorkerStore) RecordTemplateRegistrationStatus(context.Cont
 	return nil
 }
 
-func (store *recordingWorkerStore) UpsertTemplateWithVariables(context.Context, traits.Template, []traits.TemplateVariable) (traits.Template, error) {
-	return traits.Template{}, nil
+func (store *recordingWorkerStore) UpsertTemplateRevisionWithVariables(context.Context, traits.TemplateRevision, []traits.TemplateVariable) (traits.TemplateRevision, error) {
+	return traits.TemplateRevision{}, nil
 }
 
 func (store *recordingWorkerStore) RecordTemplateRunLog(context.Context, traits.TemplateRunLog) error {

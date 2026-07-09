@@ -40,7 +40,7 @@ type StackRepository interface {
 type StackTemplateRepository interface {
 	GetStackTemplate(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error)
 	UpdateStackTemplateConfig(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID, configJSON json.RawMessage) (traits.StackTemplate, error)
-	UpdateStackTemplateDesiredRevision(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateID traits.TemplateID, configJSON json.RawMessage) (traits.StackTemplate, error)
+	UpdateStackTemplateDesiredRevision(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateRevisionID traits.TemplateRevisionID, configJSON json.RawMessage) (traits.StackTemplate, error)
 }
 
 // TemplateRunRepository persists TemplateRun records and run decisions.
@@ -60,16 +60,16 @@ type TemplateRegistrationRepository interface {
 	RecordTemplateRegistrationStatus(ctx context.Context, input traits.TemplateRegistrationStatusActivityInput) error
 }
 
-// TemplateRepository persists immutable template metadata and inferred variables.
-type TemplateRepository interface {
-	UpsertTemplateWithVariables(ctx context.Context, template traits.Template, variables []traits.TemplateVariable) (traits.Template, error)
-	ListTemplates(ctx context.Context, tenantID traits.TenantID) ([]traits.Template, error)
-	GetTemplateVariables(ctx context.Context, tenantID traits.TenantID, templateID traits.TemplateID) ([]traits.TemplateVariable, error)
+// TemplateRevisionRepository persists immutable template metadata and inferred variables.
+type TemplateRevisionRepository interface {
+	UpsertTemplateRevisionWithVariables(ctx context.Context, templateRevision traits.TemplateRevision, variables []traits.TemplateVariable) (traits.TemplateRevision, error)
+	ListTemplateRevisions(ctx context.Context, tenantID traits.TenantID) ([]traits.TemplateRevision, error)
+	GetTemplateRevisionVariables(ctx context.Context, tenantID traits.TenantID, templateRevisionID traits.TemplateRevisionID) ([]traits.TemplateVariable, error)
 }
 
-// TemplateMetadataRepository reads immutable template metadata.
-type TemplateMetadataRepository interface {
-	GetTemplate(ctx context.Context, tenantID traits.TenantID, templateID traits.TemplateID) (traits.Template, error)
+// TemplateRevisionMetadataRepository reads immutable template metadata.
+type TemplateRevisionMetadataRepository interface {
+	GetTemplateRevision(ctx context.Context, tenantID traits.TenantID, templateRevisionID traits.TemplateRevisionID) (traits.TemplateRevision, error)
 }
 
 // TemplateRunLogReader reads persisted log bodies for tenant-owned TemplateRuns.
@@ -123,21 +123,21 @@ type Clock interface {
 
 // Service owns app use cases and the dependencies wired by cmd packages.
 type Service struct {
-	Stacks                 StackRepository
-	StackTemplates         StackTemplateRepository
-	TemplateRuns           TemplateRunRepository
-	TemplateRegistrations  TemplateRegistrationRepository
-	TemplateMetadata       TemplateMetadataRepository
-	Templates              TemplateRepository
-	StackTemplateInstaller StackTemplateInstaller
-	TemplateRunLogs        TemplateRunLogReader
-	TemplateRunLogMetadata TemplateRunLogRepository
-	Workflows              WorkflowDispatcher
-	StackIDs               StackIDGenerator
-	StackTemplateIDs       StackTemplateIDGenerator
-	RunIDs                 TemplateRunIDGenerator
-	RegistrationIDs        TemplateRegistrationIDGenerator
-	Clock                  Clock
+	Stacks                   StackRepository
+	StackTemplates           StackTemplateRepository
+	TemplateRuns             TemplateRunRepository
+	TemplateRegistrations    TemplateRegistrationRepository
+	TemplateRevisionMetadata TemplateRevisionMetadataRepository
+	TemplateRevisions        TemplateRevisionRepository
+	StackTemplateInstaller   StackTemplateInstaller
+	TemplateRunLogs          TemplateRunLogReader
+	TemplateRunLogMetadata   TemplateRunLogRepository
+	Workflows                WorkflowDispatcher
+	StackIDs                 StackIDGenerator
+	StackTemplateIDs         StackTemplateIDGenerator
+	RunIDs                   TemplateRunIDGenerator
+	RegistrationIDs          TemplateRegistrationIDGenerator
+	Clock                    Clock
 }
 
 // NewService creates a Service from app-owned dependencies.
@@ -193,14 +193,14 @@ type StackView struct {
 
 // AddTemplateToStackCommand asks the app to install one template into a stack.
 type AddTemplateToStackCommand struct {
-	TenantID      traits.TenantID
-	StackID       traits.StackID
-	TemplateID    traits.TemplateID
-	ComponentKey  string
-	SelectedRef   string
-	WorkspaceName string
-	ConfigJSON    json.RawMessage
-	Actor         traits.UserID
+	TenantID           traits.TenantID
+	StackID            traits.StackID
+	TemplateRevisionID traits.TemplateRevisionID
+	ComponentKey       string
+	SelectedRef        string
+	WorkspaceName      string
+	ConfigJSON         json.RawMessage
+	Actor              traits.UserID
 }
 
 // StartTemplateRunCommand asks the app to start one Terraform operation.
@@ -221,11 +221,11 @@ type UpdateStackTemplateConfigCommand struct {
 
 // UpgradeStackTemplateCommand asks the app to point one install at another revision.
 type UpgradeStackTemplateCommand struct {
-	TenantID         traits.TenantID
-	StackTemplateID  traits.StackTemplateID
-	TargetTemplateID traits.TemplateID
-	ConfigJSON       json.RawMessage
-	Actor            traits.UserID
+	TenantID                 traits.TenantID
+	StackTemplateID          traits.StackTemplateID
+	TargetTemplateRevisionID traits.TemplateRevisionID
+	ConfigJSON               json.RawMessage
+	Actor                    traits.UserID
 }
 
 // ApproveRunCommand asks the app to approve a waiting run.
@@ -254,8 +254,8 @@ type ListStacksCommand struct {
 	TenantID traits.TenantID
 }
 
-// ListTemplatesCommand asks the app to list tenant-owned registered templates.
-type ListTemplatesCommand struct {
+// ListTemplateRevisionsCommand asks the app to list tenant-owned registered template revisions.
+type ListTemplateRevisionsCommand struct {
 	TenantID traits.TenantID
 }
 
@@ -284,10 +284,10 @@ type GetTemplateRegistrationCommand struct {
 	RegistrationID traits.TemplateRegistrationID
 }
 
-// GetTemplateVariablesCommand asks the app to read inferred variables for one tenant-owned template.
-type GetTemplateVariablesCommand struct {
-	TenantID   traits.TenantID
-	TemplateID traits.TemplateID
+// GetTemplateRevisionVariablesCommand asks the app to read inferred variables for one tenant-owned template revision.
+type GetTemplateRevisionVariablesCommand struct {
+	TenantID           traits.TenantID
+	TemplateRevisionID traits.TemplateRevisionID
 }
 
 // RegisterTemplate creates a pending registration attempt and dispatches its sync workflow.
@@ -367,17 +367,17 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 		return traits.StackTemplate{}, fmt.Errorf("get stack: %w", err)
 	}
 
-	template, err := service.TemplateMetadata.GetTemplate(ctx, command.TenantID, command.TemplateID)
+	templateRevision, err := service.TemplateRevisionMetadata.GetTemplateRevision(ctx, command.TenantID, command.TemplateRevisionID)
 	if err != nil {
-		return traits.StackTemplate{}, fmt.Errorf("get template: %w", err)
+		return traits.StackTemplate{}, fmt.Errorf("get template revision: %w", err)
 	}
-	if template.Status != traits.TemplateActive {
-		return traits.StackTemplate{}, fmt.Errorf("%w: status is %q", ErrTemplateNotInstallable, template.Status)
+	if templateRevision.Status != traits.TemplateRevisionActive {
+		return traits.StackTemplate{}, fmt.Errorf("%w: status is %q", ErrTemplateNotInstallable, templateRevision.Status)
 	}
 
-	variables, err := service.Templates.GetTemplateVariables(ctx, command.TenantID, command.TemplateID)
+	variables, err := service.TemplateRevisions.GetTemplateRevisionVariables(ctx, command.TenantID, command.TemplateRevisionID)
 	if err != nil {
-		return traits.StackTemplate{}, fmt.Errorf("get template variables: %w", err)
+		return traits.StackTemplate{}, fmt.Errorf("get template revision variables: %w", err)
 	}
 	configJSON, err := validateTemplateConfig(command.ConfigJSON, variables)
 	if err != nil {
@@ -386,19 +386,19 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 
 	id := service.StackTemplateIDs.NewStackTemplateID()
 	stackTemplate := traits.StackTemplate{
-		ID:                id,
-		TenantID:          command.TenantID,
-		StackID:           command.StackID,
-		TemplateID:        command.TemplateID,
-		ComponentKey:      componentKey(command.ComponentKey, id),
-		SourceTemplateID:  template.SourceTemplateID,
-		DesiredTemplateID: command.TemplateID,
-		SelectedRef:       strings.TrimSpace(command.SelectedRef),
-		WorkspaceName:     workspaceName(stack.Slug, id),
-		ConfigJSON:        configJSON,
-		DesiredConfigJSON: configJSON,
-		CreatedBy:         command.Actor,
-		Lifecycle:         traits.StackTemplateActive,
+		ID:                        id,
+		TenantID:                  command.TenantID,
+		StackID:                   command.StackID,
+		TemplateRevisionID:        command.TemplateRevisionID,
+		ComponentKey:              componentKey(command.ComponentKey, id),
+		SourceTemplateID:          templateRevision.SourceTemplateID,
+		DesiredTemplateRevisionID: command.TemplateRevisionID,
+		SelectedRef:               strings.TrimSpace(command.SelectedRef),
+		WorkspaceName:             workspaceName(stack.Slug, id),
+		ConfigJSON:                configJSON,
+		DesiredConfigJSON:         configJSON,
+		CreatedBy:                 command.Actor,
+		Lifecycle:                 traits.StackTemplateActive,
 	}
 
 	if err := service.StackTemplateInstaller.CreateStackTemplate(ctx, stackTemplate); err != nil {
@@ -422,38 +422,38 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	}
 	// TODO: Reject active StackTemplate records with missing SelectedRef or WorkspaceName,
 	// or enforce those invariants with Postgres CHECK constraints.
-	desiredTemplateID := stackTemplate.DesiredTemplateID
-	if desiredTemplateID == "" {
-		desiredTemplateID = stackTemplate.TemplateID
+	desiredTemplateRevisionID := stackTemplate.DesiredTemplateRevisionID
+	if desiredTemplateRevisionID == "" {
+		desiredTemplateRevisionID = stackTemplate.TemplateRevisionID
 	}
 	desiredConfigJSON := stackTemplate.DesiredConfigJSON
 	if len(desiredConfigJSON) == 0 {
 		desiredConfigJSON = stackTemplate.ConfigJSON
 	}
 
-	template, err := service.TemplateMetadata.GetTemplate(ctx, command.TenantID, desiredTemplateID)
+	templateRevision, err := service.TemplateRevisionMetadata.GetTemplateRevision(ctx, command.TenantID, desiredTemplateRevisionID)
 	if err != nil {
-		return traits.TemplateRun{}, fmt.Errorf("get template metadata: %w", err)
+		return traits.TemplateRun{}, fmt.Errorf("get template revision metadata: %w", err)
 	}
 	sourceTemplateID := stackTemplate.SourceTemplateID
 	if sourceTemplateID == "" {
-		sourceTemplateID = template.SourceTemplateID
+		sourceTemplateID = templateRevision.SourceTemplateID
 	}
 
 	run := traits.TemplateRun{
-		ID:                service.RunIDs.NewTemplateRunID(),
-		TenantID:          command.TenantID,
-		StackTemplateID:   command.StackTemplateID,
-		TemplateID:        desiredTemplateID,
-		SourceTemplateID:  sourceTemplateID,
-		Operation:         command.Operation,
-		SelectedRef:       stackTemplate.SelectedRef,
-		ResolvedCommitSHA: template.ResolvedCommitSHA,
-		WorkspaceName:     stackTemplate.WorkspaceName,
-		ConfigJSON:        desiredConfigJSON,
-		Status:            traits.TemplateRunQueued,
-		TriggerActor:      command.TriggerActor,
-		StartedAt:         service.Clock.Now(),
+		ID:                 service.RunIDs.NewTemplateRunID(),
+		TenantID:           command.TenantID,
+		StackTemplateID:    command.StackTemplateID,
+		TemplateRevisionID: desiredTemplateRevisionID,
+		SourceTemplateID:   sourceTemplateID,
+		Operation:          command.Operation,
+		SelectedRef:        stackTemplate.SelectedRef,
+		ResolvedCommitSHA:  templateRevision.ResolvedCommitSHA,
+		WorkspaceName:      stackTemplate.WorkspaceName,
+		ConfigJSON:         desiredConfigJSON,
+		Status:             traits.TemplateRunQueued,
+		TriggerActor:       command.TriggerActor,
+		StartedAt:          service.Clock.Now(),
 	}
 
 	if err := service.TemplateRuns.CreateTemplateRun(ctx, run); err != nil {
@@ -469,9 +469,9 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 		Operation:       run.Operation,
 		SelectedRef:     run.SelectedRef,
 		WorkspaceName:   run.WorkspaceName,
-		RepoOwner:       template.RepoOwner,
-		RepoName:        template.RepoName,
-		RootPath:        template.RootPath,
+		RepoOwner:       templateRevision.RepoOwner,
+		RepoName:        templateRevision.RepoName,
+		RootPath:        templateRevision.RootPath,
 	}
 	if err := service.Workflows.StartTemplateRun(ctx, input); err != nil {
 		return traits.TemplateRun{}, fmt.Errorf("start template run workflow: %w", err)
@@ -494,13 +494,13 @@ func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command U
 		return traits.StackTemplate{}, fmt.Errorf("%w: lifecycle is %q", ErrStackTemplateUpgradeInvalid, stackTemplate.Lifecycle)
 	}
 
-	desiredTemplateID := stackTemplate.DesiredTemplateID
-	if desiredTemplateID == "" {
-		desiredTemplateID = stackTemplate.TemplateID
+	desiredTemplateRevisionID := stackTemplate.DesiredTemplateRevisionID
+	if desiredTemplateRevisionID == "" {
+		desiredTemplateRevisionID = stackTemplate.TemplateRevisionID
 	}
-	variables, err := service.Templates.GetTemplateVariables(ctx, command.TenantID, desiredTemplateID)
+	variables, err := service.TemplateRevisions.GetTemplateRevisionVariables(ctx, command.TenantID, desiredTemplateRevisionID)
 	if err != nil {
-		return traits.StackTemplate{}, fmt.Errorf("get template variables: %w", err)
+		return traits.StackTemplate{}, fmt.Errorf("get template revision variables: %w", err)
 	}
 	configJSON, err := validateTemplateConfig(command.ConfigJSON, variables)
 	if err != nil {
@@ -528,20 +528,20 @@ func (service *Service) UpgradeStackTemplate(ctx context.Context, command Upgrad
 		return traits.StackTemplate{}, fmt.Errorf("%w: lifecycle is %q", ErrStackTemplateUpgradeInvalid, stackTemplate.Lifecycle)
 	}
 
-	target, err := service.TemplateMetadata.GetTemplate(ctx, command.TenantID, command.TargetTemplateID)
+	targetRevision, err := service.TemplateRevisionMetadata.GetTemplateRevision(ctx, command.TenantID, command.TargetTemplateRevisionID)
 	if err != nil {
-		return traits.StackTemplate{}, fmt.Errorf("get target template: %w", err)
+		return traits.StackTemplate{}, fmt.Errorf("get target template revision: %w", err)
 	}
-	if target.Status != traits.TemplateActive {
-		return traits.StackTemplate{}, fmt.Errorf("%w: status is %q", ErrTemplateNotInstallable, target.Status)
+	if targetRevision.Status != traits.TemplateRevisionActive {
+		return traits.StackTemplate{}, fmt.Errorf("%w: status is %q", ErrTemplateNotInstallable, targetRevision.Status)
 	}
-	if stackTemplate.SourceTemplateID != "" && target.SourceTemplateID != "" && stackTemplate.SourceTemplateID != target.SourceTemplateID {
+	if stackTemplate.SourceTemplateID != "" && targetRevision.SourceTemplateID != "" && stackTemplate.SourceTemplateID != targetRevision.SourceTemplateID {
 		return traits.StackTemplate{}, fmt.Errorf("%w: source template mismatch", ErrStackTemplateUpgradeInvalid)
 	}
 
-	variables, err := service.Templates.GetTemplateVariables(ctx, command.TenantID, command.TargetTemplateID)
+	variables, err := service.TemplateRevisions.GetTemplateRevisionVariables(ctx, command.TenantID, command.TargetTemplateRevisionID)
 	if err != nil {
-		return traits.StackTemplate{}, fmt.Errorf("get target template variables: %w", err)
+		return traits.StackTemplate{}, fmt.Errorf("get target template revision variables: %w", err)
 	}
 	configJSON := command.ConfigJSON
 	if len(configJSON) == 0 {
@@ -555,7 +555,7 @@ func (service *Service) UpgradeStackTemplate(ctx context.Context, command Upgrad
 		return traits.StackTemplate{}, err
 	}
 
-	updated, err := service.StackTemplates.UpdateStackTemplateDesiredRevision(ctx, command.TenantID, command.StackTemplateID, target.ID, configJSON)
+	updated, err := service.StackTemplates.UpdateStackTemplateDesiredRevision(ctx, command.TenantID, command.StackTemplateID, targetRevision.ID, configJSON)
 	if err != nil {
 		return traits.StackTemplate{}, fmt.Errorf("update stack template desired revision: %w", err)
 	}
@@ -594,20 +594,20 @@ func (service *Service) ListStacks(ctx context.Context, command ListStacksComman
 	return stacks, nil
 }
 
-// ListTemplates returns tenant-owned registered templates ordered for UI selection.
-func (service *Service) ListTemplates(ctx context.Context, command ListTemplatesCommand) ([]traits.Template, error) {
-	if err := validateListTemplatesCommand(command); err != nil {
+// ListTemplateRevisions returns tenant-owned registered template revisions ordered for UI selection.
+func (service *Service) ListTemplateRevisions(ctx context.Context, command ListTemplateRevisionsCommand) ([]traits.TemplateRevision, error) {
+	if err := validateListTemplateRevisionsCommand(command); err != nil {
 		return nil, err
 	}
 
-	templates, err := service.Templates.ListTemplates(ctx, command.TenantID)
+	templateRevisions, err := service.TemplateRevisions.ListTemplateRevisions(ctx, command.TenantID)
 	if err != nil {
-		return nil, fmt.Errorf("list templates: %w", err)
+		return nil, fmt.Errorf("list template revisions: %w", err)
 	}
-	if templates == nil {
-		return []traits.Template{}, nil
+	if templateRevisions == nil {
+		return []traits.TemplateRevision{}, nil
 	}
-	return templates, nil
+	return templateRevisions, nil
 }
 
 // GetTemplateRegistration returns one tenant-owned registration attempt.
@@ -624,15 +624,15 @@ func (service *Service) GetTemplateRegistration(ctx context.Context, command Get
 	return registration, nil
 }
 
-// GetTemplateVariables returns inferred variables for one tenant-owned template.
-func (service *Service) GetTemplateVariables(ctx context.Context, command GetTemplateVariablesCommand) ([]traits.TemplateVariable, error) {
-	if err := validateGetTemplateVariablesCommand(command); err != nil {
+// GetTemplateRevisionVariables returns inferred variables for one tenant-owned template revision.
+func (service *Service) GetTemplateRevisionVariables(ctx context.Context, command GetTemplateRevisionVariablesCommand) ([]traits.TemplateVariable, error) {
+	if err := validateGetTemplateRevisionVariablesCommand(command); err != nil {
 		return nil, err
 	}
 
-	variables, err := service.Templates.GetTemplateVariables(ctx, command.TenantID, command.TemplateID)
+	variables, err := service.TemplateRevisions.GetTemplateRevisionVariables(ctx, command.TenantID, command.TemplateRevisionID)
 	if err != nil {
-		return nil, fmt.Errorf("get template variables: %w", err)
+		return nil, fmt.Errorf("get template revision variables: %w", err)
 	}
 	if variables == nil {
 		return []traits.TemplateVariable{}, nil
@@ -807,7 +807,7 @@ func validateListStacksCommand(command ListStacksCommand) error {
 	return nil
 }
 
-func validateListTemplatesCommand(command ListTemplatesCommand) error {
+func validateListTemplateRevisionsCommand(command ListTemplateRevisionsCommand) error {
 	if command.TenantID == "" {
 		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
 	}
@@ -820,8 +820,8 @@ func validateAddTemplateToStackCommand(command AddTemplateToStackCommand) error 
 		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
 	case command.StackID == "":
 		return fmt.Errorf("%w: stack id is required", ErrInvalidCommand)
-	case command.TemplateID == "":
-		return fmt.Errorf("%w: template id is required", ErrInvalidCommand)
+	case command.TemplateRevisionID == "":
+		return fmt.Errorf("%w: template revision id is required", ErrInvalidCommand)
 	case strings.TrimSpace(command.SelectedRef) == "":
 		return fmt.Errorf("%w: selected ref is required", ErrInvalidCommand)
 	case command.Actor == "":
@@ -867,8 +867,8 @@ func validateUpgradeStackTemplateCommand(command UpgradeStackTemplateCommand) er
 		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
 	case command.StackTemplateID == "":
 		return fmt.Errorf("%w: stack template id is required", ErrInvalidCommand)
-	case command.TargetTemplateID == "":
-		return fmt.Errorf("%w: target template id is required", ErrInvalidCommand)
+	case command.TargetTemplateRevisionID == "":
+		return fmt.Errorf("%w: target template revision id is required", ErrInvalidCommand)
 	case command.Actor == "":
 		return fmt.Errorf("%w: actor is required", ErrInvalidCommand)
 	default:
@@ -932,12 +932,12 @@ func validateGetTemplateRegistrationCommand(command GetTemplateRegistrationComma
 	}
 }
 
-func validateGetTemplateVariablesCommand(command GetTemplateVariablesCommand) error {
+func validateGetTemplateRevisionVariablesCommand(command GetTemplateRevisionVariablesCommand) error {
 	switch {
 	case command.TenantID == "":
 		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
-	case command.TemplateID == "":
-		return fmt.Errorf("%w: template id is required", ErrInvalidCommand)
+	case command.TemplateRevisionID == "":
+		return fmt.Errorf("%w: template revision id is required", ErrInvalidCommand)
 	default:
 		return nil
 	}

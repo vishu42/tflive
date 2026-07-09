@@ -39,10 +39,10 @@ func TemplateSyncWorkflow(ctx workflow.Context, input traits.TemplateSyncWorkflo
 		status = traits.TemplateRegistrationCompleted
 	}
 	return run.recordStatus(traits.TemplateRegistrationStatusActivityInput{
-		Status:            status,
-		TemplateID:        output.TemplateID,
-		ResolvedCommitSHA: output.ResolvedCommitSHA,
-		ErrorSummary:      output.ErrorSummary,
+		Status:             status,
+		TemplateRevisionID: output.TemplateRevisionID,
+		ResolvedCommitSHA:  output.ResolvedCommitSHA,
+		ErrorSummary:       output.ErrorSummary,
 	})
 }
 
