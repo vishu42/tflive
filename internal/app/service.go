@@ -406,7 +406,8 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 	return stackTemplate, nil
 }
 
-// StartTemplateRun creates a queued run and dispatches its workflow.
+// StartTemplateRun creates a queued run. The repository persists its workflow
+// dispatch intent atomically for an asynchronous dispatcher to process.
 func (service *Service) StartTemplateRun(ctx context.Context, command StartTemplateRunCommand) (traits.TemplateRun, error) {
 	if err := validateStartTemplateRunCommand(command); err != nil {
 		return traits.TemplateRun{}, err
@@ -457,24 +458,6 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 
 	if err := service.TemplateRuns.CreateTemplateRun(ctx, run); err != nil {
 		return traits.TemplateRun{}, fmt.Errorf("create template run: %w", err)
-	}
-
-	// TODO: Decide whether StartTemplateRun should write an outbox record with the run
-	// so Temporal dispatch can be retried if this client call fails after persistence.
-	input := traits.TemplateRunWorkflowInput{
-		RunID:           run.ID,
-		TenantID:        run.TenantID,
-		StackTemplateID: run.StackTemplateID,
-		Operation:       run.Operation,
-		SelectedRef:     run.SelectedRef,
-		WorkspaceName:   run.WorkspaceName,
-		RepoOwner:       templateRevision.RepoOwner,
-		RepoName:        templateRevision.RepoName,
-		RootPath:        templateRevision.RootPath,
-		ConfigJSON:      run.ConfigJSON,
-	}
-	if err := service.Workflows.StartTemplateRun(ctx, input); err != nil {
-		return traits.TemplateRun{}, fmt.Errorf("start template run workflow: %w", err)
 	}
 
 	return run, nil

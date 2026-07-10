@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/vishu42/megagega/internal/traits"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 )
 
@@ -37,8 +38,10 @@ func (dispatcher *Dispatcher) StartTemplateRun(ctx context.Context, input traits
 	_, err := dispatcher.client.ExecuteWorkflow(
 		ctx,
 		client.StartWorkflowOptions{
-			ID:        templateRunWorkflowID(input.TenantID, input.RunID),
-			TaskQueue: dispatcher.taskQueue,
+			ID:                       templateRunWorkflowID(input.TenantID, input.RunID),
+			TaskQueue:                dispatcher.taskQueue,
+			WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+			WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
 		},
 		traits.TemplateRunWorkflowName,
 		input)
