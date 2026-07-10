@@ -17,7 +17,7 @@ UI -> API -> Postgres (product state + workflow outbox)
                   Outbox Dispatcher -> Temporal -> Workers -> OpenTofu
 ```
 
-Template-run creation atomically persists the run and workflow-start intent, while the worker-hosted dispatcher delivers that intent to Temporal. See [Architecture and product model](docs/architecture.md) for leases, retries, idempotency, workflows, and component responsibilities.
+Template-run creation atomically commits the run and workflow-start intent in Postgres. The worker-hosted dispatcher delivers that intent at least once, while deterministic Temporal workflow IDs make repeated starts idempotent. See [Architecture and product model](docs/architecture.md) for leases, retries, workflows, and component responsibilities.
 
 ## Local Development
 
