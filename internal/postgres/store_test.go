@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/megagega/internal/app"
+	"github.com/vishu42/megagega/internal/dispatch"
 	"github.com/vishu42/megagega/internal/traits"
 )
 
@@ -26,6 +27,7 @@ var (
 	_ app.TemplateRunRepository              = (*Store)(nil)
 	_ app.TemplateRegistrationRepository     = (*Store)(nil)
 	_ app.TemplateRevisionRepository         = (*Store)(nil)
+	_ dispatch.Outbox                        = (*Store)(nil)
 	_ interface {
 		RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error
 	} = (*Store)(nil)
@@ -54,6 +56,7 @@ func TestMigrateAppliesSchema(t *testing.T) {
 		"template_revisions",
 		"template_registrations",
 		"template_variables",
+		"workflow_outbox",
 	} {
 		table := table
 		t.Run(table, func(t *testing.T) {
@@ -75,6 +78,33 @@ func TestMigrateAppliesSchema(t *testing.T) {
 				t.Fatalf("expected table %q to exist", table)
 			}
 		})
+	}
+}
+
+func TestWorkflowOutboxMigrationDefinesDurablePendingQueue(t *testing.T) {
+	t.Parallel()
+
+	migration, err := migrationFiles.ReadFile("migrations/0007_workflow_outbox.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	sql := strings.ToLower(string(migration))
+
+	for _, snippet := range []string{
+		"create table workflow_outbox",
+		"event_type text not null",
+		"aggregate_id text not null references template_runs",
+		"available_at timestamptz not null",
+		"claimed_until timestamptz",
+		"processed_at timestamptz",
+		"where processed_at is null",
+		"insert into workflow_outbox",
+		"from template_runs",
+		"where status = 'queued'",
+	} {
+		if !strings.Contains(sql, snippet) {
+			t.Fatalf("migration 0007 is missing durable outbox snippet %q", snippet)
+		}
 	}
 }
 
@@ -1128,6 +1158,15 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 	store := NewStore(pool)
 	startedAt := time.Date(2026, 7, 2, 9, 30, 0, 123456000, time.UTC)
 	completedAt := time.Date(2026, 7, 2, 9, 45, 0, 123456000, time.UTC)
+	_, err := pool.Exec(ctx, `
+		insert into template_revisions (
+			id, tenant_id, repo_owner, repo_name, source_ref,
+			resolved_commit_sha, root_path, name, status
+		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, "template_rev_2", "tenant_123", "acme", "infra-templates", "main", "abc123", "modules/vpc", "VPC", "active")
+	if err != nil {
+		t.Fatalf("seed template revision: %v", err)
+	}
 
 	run := traits.TemplateRun{
 		ID:                 traits.TemplateRunID("run_123"),
@@ -1154,7 +1193,7 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 	}
 
 	var got traits.TemplateRun
-	err := pool.QueryRow(ctx, `
+	err = pool.QueryRow(ctx, `
 		select
 			id,
 			tenant_id,
@@ -1220,6 +1259,57 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 	}
 	if !got.CompletedAt.Equal(run.CompletedAt) {
 		t.Fatalf("CompletedAt = %v, want %v", got.CompletedAt, run.CompletedAt)
+	}
+
+	var outboxID string
+	var eventType string
+	var aggregateID traits.TemplateRunID
+	err = pool.QueryRow(ctx, `
+		select id, event_type, aggregate_id
+		from workflow_outbox
+		where aggregate_id = $1
+	`, run.ID).Scan(&outboxID, &eventType, &aggregateID)
+	if err != nil {
+		t.Fatalf("read workflow outbox: %v", err)
+	}
+	if outboxID != "template-run/tenant_123/run_123" {
+		t.Fatalf("outbox ID = %q, want template-run/tenant_123/run_123", outboxID)
+	}
+	if eventType != "start_template_run" {
+		t.Fatalf("event type = %q, want start_template_run", eventType)
+	}
+	if aggregateID != run.ID {
+		t.Fatalf("aggregate ID = %q, want %q", aggregateID, run.ID)
+	}
+
+	claimAt := time.Now().Add(time.Minute)
+	entry, found, err := store.ClaimTemplateRun(ctx, claimAt, claimAt.Add(30*time.Second))
+	if err != nil {
+		t.Fatalf("ClaimTemplateRun returned error: %v", err)
+	}
+	if !found {
+		t.Fatal("ClaimTemplateRun found = false, want true")
+	}
+	if entry.ID != outboxID || entry.Input.RunID != run.ID || entry.Input.RepoOwner != "acme" || entry.Input.RootPath != "modules/vpc" {
+		t.Fatalf("claimed entry = %#v", entry)
+	}
+
+	retryAt := claimAt.Add(time.Minute)
+	if err := store.RetryTemplateRun(ctx, entry.ID, retryAt, "temporal unavailable"); err != nil {
+		t.Fatalf("RetryTemplateRun returned error: %v", err)
+	}
+	if _, found, err := store.ClaimTemplateRun(ctx, retryAt.Add(-time.Second), retryAt); err != nil || found {
+		t.Fatalf("claim before retry: found = %v, error = %v", found, err)
+	}
+	entry, found, err = store.ClaimTemplateRun(ctx, retryAt, retryAt.Add(30*time.Second))
+	if err != nil || !found {
+		t.Fatalf("claim at retry: found = %v, error = %v", found, err)
+	}
+	if err := store.CompleteTemplateRun(ctx, entry.ID); err != nil {
+		t.Fatalf("CompleteTemplateRun returned error: %v", err)
+	}
+	if _, found, err := store.ClaimTemplateRun(ctx, retryAt.Add(time.Minute), retryAt.Add(2*time.Minute)); err != nil || found {
+		t.Fatalf("claim completed entry: found = %v, error = %v", found, err)
 	}
 }
 

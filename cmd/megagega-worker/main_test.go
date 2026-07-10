@@ -7,10 +7,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vishu42/megagega/internal/activities"
 	"github.com/vishu42/megagega/internal/artifacts"
 	"github.com/vishu42/megagega/internal/config"
+	"github.com/vishu42/megagega/internal/dispatch"
 	"github.com/vishu42/megagega/internal/temporal"
 	"github.com/vishu42/megagega/internal/traits"
 	"github.com/vishu42/megagega/internal/workflows"
@@ -108,6 +110,12 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	}
 	if !deps.worker.ran {
 		t.Fatal("worker was not run")
+	}
+	if !deps.outboxDispatcher.ran {
+		t.Fatal("workflow outbox dispatcher was not run")
+	}
+	if !deps.outboxDispatcher.stopped {
+		t.Fatal("workflow outbox dispatcher was not stopped with the worker")
 	}
 	if !deps.temporalClient.closed {
 		t.Fatal("temporal client was not closed")
@@ -262,16 +270,20 @@ type recordingWorkerDependencies struct {
 	logStore             recordingWorkerLogStore
 	logMetadataRecorder  artifacts.LogMetadataRecorder
 	dialErr              error
+	outboxDispatcher     *recordingOutboxDispatcher
+	workflowStarter      *recordingWorkflowStarter
 }
 
 func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 	t.Helper()
 
 	deps := &recordingWorkerDependencies{
-		temporalClient: &recordingWorkerTemporalClient{},
-		worker:         &recordingTemporalWorker{},
-		pool:           &recordingWorkerPostgresPool{},
-		store:          &recordingWorkerStore{},
+		temporalClient:   &recordingWorkerTemporalClient{},
+		worker:           &recordingTemporalWorker{},
+		pool:             &recordingWorkerPostgresPool{},
+		store:            &recordingWorkerStore{},
+		outboxDispatcher: &recordingOutboxDispatcher{},
+		workflowStarter:  &recordingWorkflowStarter{},
 	}
 	deps.workerDependencies = workerDependencies{
 		newPostgresPool: func(_ context.Context, databaseURL string) (postgresPool, error) {
@@ -304,6 +316,24 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			}
 			deps.workerTaskQueue = taskQueue
 			return deps.worker
+		},
+		newWorkflowStarter: func(temporalClient client.Client, taskQueue string) dispatch.WorkflowStarter {
+			if temporalClient != deps.temporalClient {
+				t.Fatalf("newWorkflowStarter temporalClient = %p, want %p", temporalClient, deps.temporalClient)
+			}
+			if taskQueue != "terraform-runs-dev" && taskQueue != config.DefaultTemporalTaskQueue {
+				t.Fatalf("newWorkflowStarter task queue = %q", taskQueue)
+			}
+			return deps.workflowStarter
+		},
+		newOutboxDispatcher: func(outbox dispatch.Outbox, starter dispatch.WorkflowStarter) outboxDispatcher {
+			if outbox != deps.store {
+				t.Fatalf("newOutboxDispatcher outbox = %p, want store %p", outbox, deps.store)
+			}
+			if starter != deps.workflowStarter {
+				t.Fatalf("newOutboxDispatcher starter = %p, want %p", starter, deps.workflowStarter)
+			}
+			return deps.outboxDispatcher
 		},
 		registerWorkflow: func(worker temporalWorker) {
 			if worker != deps.worker {
@@ -401,6 +431,35 @@ func (store *recordingWorkerStore) UpsertTemplateRevisionWithVariables(context.C
 
 func (store *recordingWorkerStore) RecordTemplateRunLog(context.Context, traits.TemplateRunLog) error {
 	return nil
+}
+
+func (store *recordingWorkerStore) ClaimTemplateRun(context.Context, time.Time, time.Time) (dispatch.Entry, bool, error) {
+	return dispatch.Entry{}, false, nil
+}
+
+func (store *recordingWorkerStore) CompleteTemplateRun(context.Context, string) error {
+	return nil
+}
+
+func (store *recordingWorkerStore) RetryTemplateRun(context.Context, string, time.Time, string) error {
+	return nil
+}
+
+type recordingWorkflowStarter struct{}
+
+func (*recordingWorkflowStarter) StartTemplateRun(context.Context, traits.TemplateRunWorkflowInput) error {
+	return nil
+}
+
+type recordingOutboxDispatcher struct {
+	ran     bool
+	stopped bool
+}
+
+func (dispatcher *recordingOutboxDispatcher) Run(ctx context.Context) {
+	dispatcher.ran = true
+	<-ctx.Done()
+	dispatcher.stopped = true
 }
 
 type recordingWorkerLogStore struct{}

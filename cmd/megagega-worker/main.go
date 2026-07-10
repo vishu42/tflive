@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/megagega/internal/activities"
 	"github.com/vishu42/megagega/internal/artifacts"
 	"github.com/vishu42/megagega/internal/config"
+	"github.com/vishu42/megagega/internal/dispatch"
 	"github.com/vishu42/megagega/internal/postgres"
 	"github.com/vishu42/megagega/internal/temporal"
 	"github.com/vishu42/megagega/internal/traits"
@@ -35,6 +37,11 @@ type workerStore interface {
 	activities.StatusRecorder
 	activities.TemplateSyncStore
 	artifacts.LogMetadataRecorder
+	dispatch.Outbox
+}
+
+type outboxDispatcher interface {
+	Run(context.Context)
 }
 
 type workerDependencies struct {
@@ -48,6 +55,10 @@ type workerDependencies struct {
 	dialTemporal func(context.Context, temporal.Config) (client.Client, error)
 	// newWorker creates the Temporal worker bound to the configured task queue.
 	newWorker func(client.Client, string) temporalWorker
+	// newWorkflowStarter creates the idempotent Temporal workflow starter used by the outbox.
+	newWorkflowStarter func(client.Client, string) dispatch.WorkflowStarter
+	// newOutboxDispatcher builds the durable Postgres-to-Temporal dispatch loop.
+	newOutboxDispatcher func(dispatch.Outbox, dispatch.WorkflowStarter) outboxDispatcher
 	// registerWorkflow attaches the workflow implementations this process can execute.
 	registerWorkflow func(temporalWorker)
 	// registerActivities attaches activity handlers and their shared dependencies to the worker.
@@ -86,6 +97,12 @@ func defaultWorkerDependencies() workerDependencies {
 		dialTemporal: temporal.Dial,
 		newWorker: func(temporalClient client.Client, taskQueue string) temporalWorker {
 			return temporalworker.New(temporalClient, taskQueue, temporalworker.Options{})
+		},
+		newWorkflowStarter: func(temporalClient client.Client, taskQueue string) dispatch.WorkflowStarter {
+			return temporal.NewDispatcher(temporalClient, taskQueue)
+		},
+		newOutboxDispatcher: func(outbox dispatch.Outbox, starter dispatch.WorkflowStarter) outboxDispatcher {
+			return dispatch.NewDispatcher(outbox, starter, dispatch.Options{})
 		},
 		registerWorkflow: func(worker temporalWorker) {
 			worker.RegisterWorkflowWithOptions(workflows.TemplateRunWorkflow, workflow.RegisterOptions{
@@ -174,9 +191,22 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 	worker := deps.newWorker(temporalClient, cfg.TemporalTaskQueue)
 	deps.registerWorkflow(worker)
 	deps.registerActivities(worker, store, cfg.WorkerRunRoot, logStore)
+	workflowStarter := deps.newWorkflowStarter(temporalClient, cfg.TemporalTaskQueue)
+	outbox := deps.newOutboxDispatcher(store, workflowStarter)
 
-	if err := worker.Run(deps.interruptCh()); err != nil {
-		return fmt.Errorf("run worker: %w", err)
+	dispatchCtx, cancelDispatch := context.WithCancel(ctx)
+	var dispatchGroup sync.WaitGroup
+	dispatchGroup.Add(1)
+	go func() {
+		defer dispatchGroup.Done()
+		outbox.Run(dispatchCtx)
+	}()
+
+	workerErr := worker.Run(deps.interruptCh())
+	cancelDispatch()
+	dispatchGroup.Wait()
+	if workerErr != nil {
+		return fmt.Errorf("run worker: %w", workerErr)
 	}
 
 	return nil

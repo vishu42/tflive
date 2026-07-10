@@ -9,6 +9,7 @@ import (
 
 	"github.com/vishu42/megagega/internal/app"
 	"github.com/vishu42/megagega/internal/traits"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 )
 
@@ -37,6 +38,12 @@ func TestStartTemplateRunExecutesWorkflow(t *testing.T) {
 	}
 	if workflowClient.executeOptions.TaskQueue != "terraform-runs" {
 		t.Fatalf("task queue = %q", workflowClient.executeOptions.TaskQueue)
+	}
+	if workflowClient.executeOptions.WorkflowIDReusePolicy != enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE {
+		t.Fatalf("workflow ID reuse policy = %v, want reject duplicate", workflowClient.executeOptions.WorkflowIDReusePolicy)
+	}
+	if workflowClient.executeOptions.WorkflowIDConflictPolicy != enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING {
+		t.Fatalf("workflow ID conflict policy = %v, want use existing", workflowClient.executeOptions.WorkflowIDConflictPolicy)
 	}
 	if workflowClient.executeWorkflow != traits.TemplateRunWorkflowName {
 		t.Fatalf("workflow name = %#v", workflowClient.executeWorkflow)

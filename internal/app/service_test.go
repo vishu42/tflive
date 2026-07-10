@@ -403,7 +403,7 @@ func TestAddTemplateToStackRejectsInactiveTemplate(t *testing.T) {
 	}
 }
 
-func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
+func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -499,20 +499,8 @@ func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 		t.Fatalf("created run ID = %q, want %q", runs.created.ID, run.ID)
 	}
 
-	if workflows.input.RunID != run.ID {
-		t.Fatalf("workflow run ID = %q, want %q", workflows.input.RunID, run.ID)
-	}
-
-	if workflows.input.Operation != traits.OperationApply {
-		t.Fatalf("workflow operation = %q, want %q", workflows.input.Operation, traits.OperationApply)
-	}
-
-	if workflows.input.SelectedRef != "main" {
-		t.Fatalf("workflow selected ref = %q, want main", workflows.input.SelectedRef)
-	}
-
-	if string(workflows.input.ConfigJSON) != `{"region":"us-east-1"}` {
-		t.Fatalf("workflow config JSON = %s", workflows.input.ConfigJSON)
+	if workflows.startTemplateRunCalls != 0 {
+		t.Fatalf("workflow dispatch calls = %d, want 0", workflows.startTemplateRunCalls)
 	}
 
 	if templates.gotGetTemplateTenantID != traits.TenantID("tenant_123") {
@@ -523,17 +511,6 @@ func TestStartTemplateRunCreatesRunAndDispatchesWorkflow(t *testing.T) {
 		t.Fatalf("template revision lookup ID = %q, want template_rev_2", templates.gotGetTemplateRevisionID)
 	}
 
-	if workflows.input.RepoOwner != "acme" {
-		t.Fatalf("workflow repo owner = %q, want acme", workflows.input.RepoOwner)
-	}
-
-	if workflows.input.RepoName != "infra-templates" {
-		t.Fatalf("workflow repo name = %q, want infra-templates", workflows.input.RepoName)
-	}
-
-	if workflows.input.RootPath != "modules/vpc" {
-		t.Fatalf("workflow root path = %q, want modules/vpc", workflows.input.RootPath)
-	}
 }
 
 func TestUpdateStackTemplateConfigValidatesDesiredRevisionVariables(t *testing.T) {
@@ -1694,15 +1671,17 @@ func (repository *recordingTemplateRepository) GetTemplateRevisionVariables(_ co
 }
 
 type recordingWorkflowDispatcher struct {
-	input          traits.TemplateRunWorkflowInput
-	syncInput      traits.TemplateSyncWorkflowInput
-	approvalRunID  traits.TemplateRunID
-	approvalSignal traits.ApprovalSignal
-	cancelRunID    traits.TemplateRunID
-	cancelSignal   traits.CancelSignal
+	input                 traits.TemplateRunWorkflowInput
+	startTemplateRunCalls int
+	syncInput             traits.TemplateSyncWorkflowInput
+	approvalRunID         traits.TemplateRunID
+	approvalSignal        traits.ApprovalSignal
+	cancelRunID           traits.TemplateRunID
+	cancelSignal          traits.CancelSignal
 }
 
 func (dispatcher *recordingWorkflowDispatcher) StartTemplateRun(_ context.Context, input traits.TemplateRunWorkflowInput) error {
+	dispatcher.startTemplateRunCalls++
 	dispatcher.input = input
 	return nil
 }

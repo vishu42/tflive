@@ -36,39 +36,36 @@ The MVP uses Temporal OSS as the durable workflow engine, Postgres as the applic
 
 The architecture also defines a pluggable `EventBus` interface for system events, live log fanout, and future pub/sub needs. The MVP can start with a no-op, in-memory, or simple local implementation, then swap in Redis, NATS JetStream, Kafka, or another broker without changing API or workflow semantics.
 
-The API does not call workers directly. The API creates product records in Postgres, starts or signals Temporal workflows, and serves UI state/log endpoints. Worker pods poll Temporal task queues and run Terraform activities.
+The API does not call workers directly. For a template run, it atomically writes the queued run and a durable workflow-start intent to Postgres, then returns. A dispatcher hosted by the existing worker process claims that intent and starts the Temporal workflow. The API still starts template-sync workflows and sends approval or cancellation signals directly to Temporal. Worker pods poll Temporal task queues and run Terraform activities.
 
 ```text
- +------------+        +-------------+        +----------------+
- |            |        |             |        |                |
- |    UI      +------->+ API Server  +------->+ Temporal       |
- |            |        |             |        | Server         |
- +-----+------+        +------+------+        +-------+--------+
-       ^                      |                       ^
-       | state/log APIs       |                       |
-       |                      v                       |
-       |              +-------+------+                |
-       |              | App Postgres |                |
-       +--------------+ metadata     |                |
-                      +--------------+                |
-                                                      |
-                                      +---------------+---------------+
-                                      |                               |
-                                      v                               v
-                              +-------+--------+              +-------+-------+
-                              | Temporal Task  |              | Worker Pods   |
-                              | Queue          |              | terraform-runs|
-                              +-------+--------+              +-------+-------+
-                                      ^                               |
-                                      | workers poll Temporal         |
-                                      | server APIs                   |
-                                      +-------------------------------+
-                                                      |
-                                                      v
-                                            +---------+---------+
-                                            | LocalProcess      |
-                                            | Terraform Runner  |
-                                            +---------+---------+
+ +------------+        +-------------+       signals/sync       +----------------+
+ |            |        |             +------------------------->+                |
+ |    UI      +------->+ API Server  |                          | Temporal       |
+ |            |        |             |                          | Server         |
+ +-----+------+        +------+------+                          +-------+--------+
+       ^                      |                                         ^
+       | state/log APIs       | run + outbox (one transaction)         |
+       |                      v                                         |
+       |              +------------------+                               |
+       +--------------+ App Postgres     |                               |
+                      | product state    |                               |
+                      | workflow_outbox  |                               |
+                      +--------+---------+                               |
+                               | claim with lease                        |
+                               v                                        |
+                      +-------+------------------------------------------+------+
+                      | Worker Process                                         |
+                      |                                                        |
+                      | Outbox Dispatcher -- start workflow -------------------+
+                      | Temporal Worker  <--- workflow/activity task polling ---+
+                      +------------------------------+-------------------------+
+                                                     |
+                                                     v
+                                           +---------+---------+
+                                           | LocalProcess      |
+                                           | Terraform Runner  |
+                                           +---------+---------+
                                                       |
                    +----------------+-----------------+------------------+
                    |                |                                    |
@@ -184,7 +181,8 @@ The API server is responsible for:
 - Validating requests.
 - Using mock user identity for MVP.
 - Creating and reading product records in Postgres.
-- Starting Temporal workflows.
+- Atomically creating queued template runs and their Postgres workflow-outbox entries.
+- Starting template-sync workflows directly in Temporal.
 - Sending approval/cancel signals to Temporal workflows.
 - Serving UI-facing run, stack, template, and log endpoints.
 - Exposing live log streams to the UI.
@@ -210,6 +208,8 @@ plan | apply | destroy
 ### Workers
 
 Workers are Go processes that poll Temporal and execute workflow activities.
+
+The same process also runs the workflow-outbox dispatcher. Multiple worker replicas can safely host dispatchers because claims use short Postgres leases and `FOR UPDATE SKIP LOCKED`; no database transaction remains open during the Temporal RPC.
 
 For MVP, workers use a local process runner:
 
@@ -267,6 +267,7 @@ internal/
   api/
   auth/
   postgres/
+  dispatch/
   temporal/
   workflows/
   activities/
@@ -284,12 +285,13 @@ internal/
 Package ownership:
 
 - `cmd/megagega-api`: API server boot, config loading, dependency wiring, and HTTP server startup.
-- `cmd/megagega-worker`: worker boot, config loading, Temporal worker registration, and activity dependency wiring.
+- `cmd/megagega-worker`: worker boot, config loading, Temporal worker registration, outbox-dispatch lifecycle, and activity dependency wiring.
 - `internal/traits`: shared product and workflow traits, including IDs, statuses, operation types, validation helpers, entities such as `Tenant`, `Template`, `Stack`, `StackTemplate`, `TemplateRun`, `StackRun`, and `CredentialSet`, plus Temporal workflow payloads, signal names, query names, and constants. Keep this package focused on stable cross-boundary data contracts; concrete behavior and side effects belong in the packages that own them.
 - `internal/app`: application use cases such as creating stacks, registering templates, adding templates to stacks, starting runs, approving runs, canceling runs, listing runs, and fetching log metadata. This package owns use-case interfaces for persistence, workflow dispatch, events, locks, artifacts, and secrets; concrete adapters implement those interfaces outside `app`.
 - `internal/api`: HTTP handlers, request and response DTOs, routing, SSE endpoints, API validation, and mapping API input into app commands.
 - `internal/auth`: mock identity for MVP, tenant/user context extraction, and the future authentication boundary.
-- `internal/postgres`: Postgres repositories, transactions, SQL queries, persistence models, and migration helper code.
+- `internal/postgres`: Postgres repositories, transactions, SQL queries, persistence models, workflow-outbox operations, and migration helper code.
+- `internal/dispatch`: broker-free Postgres-to-Temporal dispatch loop. It leases pending workflow-start intents, invokes the narrow workflow starter interface, marks successful entries complete, and schedules failed entries for retry.
 - `internal/temporal`: Temporal client adapter that implements `app` workflow-dispatch interfaces and is wired in `cmd`. API and app code should depend on interfaces, not on this adapter package directly.
 - `internal/workflows`: deterministic Temporal workflow definitions such as `TemplateRunWorkflow`, `TemplateSyncWorkflow`, and future `StackRunWorkflow`.
 - `internal/activities`: Temporal activities that perform side effects such as cloning repositories, parsing templates, acquiring locks, running the OpenTofu CLI for Terraform-compatible operations, persisting logs, and writing activity events.
@@ -343,6 +345,8 @@ cmd/megagega-api                 |                   cmd/megagega-worker
 internal/auth
 tenant/user context
 ```
+
+The worker composition path additionally wires `internal/postgres` as the durable outbox, `internal/dispatch` as the claim/retry loop, and `internal/temporal` as the workflow starter. These packages meet through narrow interfaces assembled in `cmd/megagega-worker`.
 
 ## Template Model
 
@@ -582,6 +586,35 @@ During template registration or execution, the worker generates a short-lived Gi
 
 Selected refs are resolved to immutable commit SHAs during template sync and every run. A `TemplateRun` stores both the user-selected ref and the resolved commit SHA. For apply operations, the post-approval apply uses the same resolved commit SHA that produced the displayed plan unless the user starts a new run.
 
+## Reliable Template Run Dispatch
+
+Starting a template run uses a transactional outbox instead of an API-side Postgres/Temporal dual write:
+
+```text
+API request
+  -> Postgres transaction
+       -> insert queued template_runs row
+       -> insert workflow_outbox row
+  -> commit and return
+
+Worker outbox dispatcher
+  -> lease one pending row
+  -> start the Temporal workflow
+  -> mark the row processed, or schedule a retry
+```
+
+The outbox ID and Temporal workflow ID are both deterministic:
+
+```text
+template-run/{tenant_id}/{run_id}
+```
+
+Temporal is configured to use an existing running execution and reject a duplicate completed execution. Consequently, dispatch is at least once but workflow creation is idempotent: a worker can safely retry after a timeout, crash, or successful Temporal start followed by a failed Postgres completion update.
+
+Dispatchers poll Postgres for eligible rows, claim with `FOR UPDATE SKIP LOCKED`, and store a short lease before calling Temporal. The claim transaction ends before the network call. A failed start clears the lease and defers the next attempt; an abandoned lease becomes claimable after it expires. This lets multiple worker replicas drain the same table without a separate message broker or a long-running database transaction.
+
+Migration `0007_workflow_outbox.sql` also backfills existing queued template runs. Replaying a run that was already submitted to Temporal is safe because it targets the same deterministic workflow ID.
+
 ## TemplateRun Workflow
 
 `TemplateRunWorkflow` is the main execution workflow.
@@ -769,6 +802,7 @@ Postgres stores product metadata and queryable state:
 - approvals
 - activity events
 - log metadata
+- durable workflow-outbox entries and their dispatch state
 
 Run records should capture the selected template ref, resolved commit SHA, operation type, trigger source, trigger actor, workspace name, backend identity metadata, lifecycle status, started/completed timestamps, and error summary.
 
