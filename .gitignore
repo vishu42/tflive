@@ -1,4 +1,5 @@
 .env
+.worktrees/
 web/node_modules/
 web/dist/
 tmp
