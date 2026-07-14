@@ -103,25 +103,38 @@ func (c *Client) doJSON(
 	expectedStatuses []int,
 	out any,
 ) error {
+	_, err := c.doJSONStatus(ctx, method, segments, query, body, expectedStatuses, out)
+	return err
+}
+
+func (c *Client) doJSONStatus(
+	ctx context.Context,
+	method string,
+	segments []string,
+	query url.Values,
+	body any,
+	expectedStatuses []int,
+	out any,
+) (int, error) {
 	if c.accessToken == "" {
-		return fmt.Errorf("Keycloak Admin API request requires authentication")
+		return 0, fmt.Errorf("Keycloak Admin API request requires authentication")
 	}
 	endpoint, err := c.endpoint(segments, query)
 	if err != nil {
-		return fmt.Errorf("build Keycloak Admin API endpoint: %w", err)
+		return 0, fmt.Errorf("build Keycloak Admin API endpoint: %w", err)
 	}
 
 	var bodyReader io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("encode Keycloak Admin API request: %w", err)
+			return 0, fmt.Errorf("encode Keycloak Admin API request: %w", err)
 		}
 		bodyReader = bytes.NewReader(encoded)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, endpoint.String(), bodyReader)
 	if err != nil {
-		return fmt.Errorf("build Keycloak Admin API request: %w", err)
+		return 0, fmt.Errorf("build Keycloak Admin API request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.accessToken)
 	if body != nil {
@@ -131,12 +144,12 @@ func (c *Client) doJSON(
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("Keycloak Admin API %s %s: %w", method, endpoint.EscapedPath(), err)
+		return 0, fmt.Errorf("Keycloak Admin API %s %s: %w", method, endpoint.EscapedPath(), err)
 	}
 	defer resp.Body.Close()
 	if !containsStatus(expectedStatuses, resp.StatusCode) {
 		responseBody, _ := readBounded(resp.Body, maxErrorBody)
-		return fmt.Errorf(
+		return resp.StatusCode, fmt.Errorf(
 			"Keycloak Admin API %s %s: unexpected HTTP %d: %s",
 			method,
 			endpoint.EscapedPath(),
@@ -144,22 +157,22 @@ func (c *Client) doJSON(
 			redactSecrets(strings.TrimSpace(string(responseBody)), c.secrets),
 		)
 	}
-	if out == nil || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusCreated {
+	if out == nil || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusCreated || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxSuccessBody))
-		return nil
+		return resp.StatusCode, nil
 	}
 
 	responseBody, truncated, err := readBoundedWithTruncation(resp.Body, maxSuccessBody)
 	if err != nil {
-		return fmt.Errorf("read response from %s %s: %w", method, endpoint.EscapedPath(), err)
+		return resp.StatusCode, fmt.Errorf("read response from %s %s: %w", method, endpoint.EscapedPath(), err)
 	}
 	if truncated {
-		return fmt.Errorf("read response from %s %s: response exceeds %d bytes", method, endpoint.EscapedPath(), maxSuccessBody)
+		return resp.StatusCode, fmt.Errorf("read response from %s %s: response exceeds %d bytes", method, endpoint.EscapedPath(), maxSuccessBody)
 	}
 	if err := json.Unmarshal(responseBody, out); err != nil {
-		return fmt.Errorf("decode response from %s %s: %w", method, endpoint.EscapedPath(), err)
+		return resp.StatusCode, fmt.Errorf("decode response from %s %s: %w", method, endpoint.EscapedPath(), err)
 	}
-	return nil
+	return resp.StatusCode, nil
 }
 
 func (c *Client) endpoint(segments []string, query url.Values) (*url.URL, error) {
