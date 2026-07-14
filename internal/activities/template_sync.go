@@ -14,8 +14,8 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
-	"github.com/vishu42/megagega/internal/runner"
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/runner"
+	"github.com/vishu42/tflive/internal/traits"
 	"github.com/zclconf/go-cty/cty"
 	"gopkg.in/yaml.v3"
 )
@@ -71,7 +71,7 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 		return invalidTemplateSyncOutput("%v", err), nil
 	}
 
-	workspace, err := os.MkdirTemp(activities.tempRoot, "megagega-template-sync-*")
+	workspace, err := os.MkdirTemp(activities.tempRoot, "tflive-template-sync-*")
 	if err != nil {
 		return traits.TemplateSyncActivityOutput{}, fmt.Errorf("create template sync workspace: %w", err)
 	}

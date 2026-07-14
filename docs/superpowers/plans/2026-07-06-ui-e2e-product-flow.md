@@ -47,8 +47,8 @@ Modify:
 - `internal/postgres/store_test.go` - add migration and repository tests for stacks and installed templates.
 - `internal/api/server.go` - add stack routes, request/response structs, and error mapping.
 - `internal/api/server_test.go` - add API handler tests and extend test dependencies.
-- `cmd/megagega-api/main.go` - wire stack repository interfaces into `app.Service`.
-- `cmd/megagega-api/main_test.go` - assert stack dependencies are wired.
+- `cmd/tflive-api/main.go` - wire stack repository interfaces into `app.Service`.
+- `cmd/tflive-api/main_test.go` - assert stack dependencies are wired.
 
 ## Scope Note
 
@@ -1115,7 +1115,7 @@ Run:
 go test ./internal/postgres -run 'TestMigrateAppliesSchema|TestCreateAndGetStack|TestCreateStackReturnsDuplicateSlugConflict|TestGetTemplateReturnsTenantScopedTemplate|TestCreateStackTemplateAndGetStackWithTemplates' -count=1
 ```
 
-Expected with `MEGAGEGA_POSTGRES_TEST_DSN` unset: SKIP for integration tests after compile succeeds. Expected with the DSN set before implementation: build fails because repository methods and migration are missing.
+Expected with `tflive_POSTGRES_TEST_DSN` unset: SKIP for integration tests after compile succeeds. Expected with the DSN set before implementation: build fails because repository methods and migration are missing.
 
 - [ ] **Step 3: Add the stacks migration**
 
@@ -1427,7 +1427,7 @@ Run:
 go test ./internal/postgres -count=1
 ```
 
-Expected without `MEGAGEGA_POSTGRES_TEST_DSN`: PASS with integration tests skipped. Expected with DSN set: PASS.
+Expected without `tflive_POSTGRES_TEST_DSN`: PASS with integration tests skipped. Expected with DSN set: PASS.
 
 - [ ] **Step 6: Commit Postgres stack persistence**
 
@@ -1853,12 +1853,12 @@ git commit -m "feat: add stack api routes"
 ### Task 5: Wire Stack Dependencies In The API Command
 
 **Files:**
-- Modify: `cmd/megagega-api/main.go`
-- Modify: `cmd/megagega-api/main_test.go`
+- Modify: `cmd/tflive-api/main.go`
+- Modify: `cmd/tflive-api/main_test.go`
 
 - [ ] **Step 1: Write failing wiring assertions**
 
-In `cmd/megagega-api/main_test.go`, add assertions to `TestRunWiresTemporalDispatcher`:
+In `cmd/tflive-api/main_test.go`, add assertions to `TestRunWiresTemporalDispatcher`:
 
 ```go
 if deps.service.Stacks != deps.store {
@@ -1901,14 +1901,14 @@ func (recordingStore) GetTemplate(context.Context, traits.TenantID, traits.Templ
 Run:
 
 ```bash
-go test ./cmd/megagega-api -run TestRunWiresTemporalDispatcher -count=1
+go test ./cmd/tflive-api -run TestRunWiresTemporalDispatcher -count=1
 ```
 
 Expected: FAIL because `appRepositories` and service wiring do not include stack dependencies and template metadata reads.
 
 - [ ] **Step 3: Wire the dependencies**
 
-In `cmd/megagega-api/main.go`, extend `appRepositories`:
+In `cmd/tflive-api/main.go`, extend `appRepositories`:
 
 ```go
 type appRepositories interface {
@@ -1945,7 +1945,7 @@ service, err := deps.newService(app.Service{
 Run:
 
 ```bash
-go test ./cmd/megagega-api -count=1
+go test ./cmd/tflive-api -count=1
 ```
 
 Expected: PASS.
@@ -1965,7 +1965,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add cmd/megagega-api/main.go cmd/megagega-api/main_test.go
+git add cmd/tflive-api/main.go cmd/tflive-api/main_test.go
 git commit -m "feat: wire stack api dependencies"
 ```
 
@@ -1999,7 +1999,7 @@ Create `web/package.json`:
 
 ```json
 {
-  "name": "megagega-web",
+  "name": "tflive-web",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -2098,7 +2098,7 @@ Create `web/index.html`:
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Megagega</title>
+    <title>tflive</title>
   </head>
   <body>
     <div id="root"></div>
@@ -2131,7 +2131,7 @@ export default function App() {
       <section className="workspace">
         <header className="workspace-header">
           <div>
-            <p className="eyebrow">Megagega</p>
+            <p className="eyebrow">tflive</p>
             <h1>Terraform workflow console</h1>
           </div>
           <div className="runtime-fields">
@@ -3185,7 +3185,7 @@ return (
     <section className="workspace">
       <header className="workspace-header">
         <div>
-          <p className="eyebrow">Megagega</p>
+          <p className="eyebrow">tflive</p>
           <h1>Terraform workflow console</h1>
         </div>
         <div className="runtime-fields">
@@ -3558,17 +3558,17 @@ docker compose up app-postgres temporal-postgres temporal temporal-ui
 Start the API with the same environment used by local smoke tests:
 
 ```bash
-DATABASE_URL='postgres://megagega:megagega@localhost:55432/megagega_test?sslmode=disable' \
+DATABASE_URL='postgres://tflive:tflive@localhost:55432/tflive_test?sslmode=disable' \
 TEMPORAL_ADDRESS='localhost:7233' \
-go run ./cmd/megagega-api
+go run ./cmd/tflive-api
 ```
 
 Start the worker in another shell:
 
 ```bash
-DATABASE_URL='postgres://megagega:megagega@localhost:55432/megagega_test?sslmode=disable' \
+DATABASE_URL='postgres://tflive:tflive@localhost:55432/tflive_test?sslmode=disable' \
 TEMPORAL_ADDRESS='localhost:7233' \
-go run ./cmd/megagega-worker
+go run ./cmd/tflive-worker
 ```
 
 Start the UI:
@@ -3653,9 +3653,9 @@ Expected: Postgres and Temporal services become healthy. Keep this process runni
 In a second shell, run:
 
 ```bash
-DATABASE_URL='postgres://megagega:megagega@localhost:55432/megagega_test?sslmode=disable' \
+DATABASE_URL='postgres://tflive:tflive@localhost:55432/tflive_test?sslmode=disable' \
 TEMPORAL_ADDRESS='localhost:7233' \
-go run ./cmd/megagega-api
+go run ./cmd/tflive-api
 ```
 
 Expected: logs include `api listening on`.
@@ -3665,9 +3665,9 @@ Expected: logs include `api listening on`.
 In a third shell, run:
 
 ```bash
-DATABASE_URL='postgres://megagega:megagega@localhost:55432/megagega_test?sslmode=disable' \
+DATABASE_URL='postgres://tflive:tflive@localhost:55432/tflive_test?sslmode=disable' \
 TEMPORAL_ADDRESS='localhost:7233' \
-go run ./cmd/megagega-worker
+go run ./cmd/tflive-worker
 ```
 
 Expected: process stays running and polls Temporal.

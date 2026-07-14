@@ -13,9 +13,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/vishu42/megagega/internal/app"
-	"github.com/vishu42/megagega/internal/dispatch"
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/dispatch"
+	"github.com/vishu42/tflive/internal/traits"
 )
 
 func (store *Store) CreateTemplateRegistration(ctx context.Context, registration traits.TemplateRegistration) error {

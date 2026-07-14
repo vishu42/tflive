@@ -4,7 +4,7 @@
 
 **Goal:** Replace the oversized root README with a concise onboarding guide and preserve the detailed product/system design in `docs/architecture.md`.
 
-**Architecture:** The root README becomes the stable entry point for understanding and running Megagega. `docs/architecture.md` becomes the single detailed current-state architecture reference; historical implementation specs and plans remain under `docs/superpowers/`.
+**Architecture:** The root README becomes the stable entry point for understanding and running tflive. `docs/architecture.md` becomes the single detailed current-state architecture reference; historical implementation specs and plans remain under `docs/superpowers/`.
 
 **Tech Stack:** GitHub-flavored Markdown, Go project commands, relative repository links.
 
@@ -33,9 +33,9 @@
 Start `docs/architecture.md` with:
 
 ```markdown
-# Megagega Architecture
+# tflive Architecture
 
-This document describes Megagega's current MVP product model, system architecture, execution workflows, persistence boundaries, security posture, and deferred design topics. For setup and local development, see the [project README](../README.md).
+This document describes tflive's current MVP product model, system architecture, execution workflows, persistence boundaries, security posture, and deferred design topics. For setup and local development, see the [project README](../README.md).
 ```
 
 - [ ] **Step 2: Move the detailed design sections into the document**
@@ -123,8 +123,8 @@ Move the existing dependency, API, worker, and UI commands under `Local Developm
 
 ```bash
 docker compose up app-postgres temporal-postgres temporal temporal-ui minio minio-init
-go run ./cmd/megagega-api
-go run ./cmd/megagega-worker
+go run ./cmd/tflive-api
+go run ./cmd/tflive-worker
 cd web
 npm install
 npm run dev

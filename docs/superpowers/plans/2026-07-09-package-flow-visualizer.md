@@ -375,7 +375,7 @@ Expected: command exits 0 and creates `pkgflow.html`.
 Run:
 
 ```bash
-rtk rg -n "github.com/vishu42/megagega/internal/app|id=\"graph\"|Package Flow" pkgflow.html
+rtk rg -n "github.com/vishu42/tflive/internal/app|id=\"graph\"|Package Flow" pkgflow.html
 ```
 
 Expected: finds all three strings.

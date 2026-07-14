@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/workflow"
 )
 

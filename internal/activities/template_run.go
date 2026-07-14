@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/vishu42/megagega/internal/logsink"
-	"github.com/vishu42/megagega/internal/runner"
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/logsink"
+	"github.com/vishu42/tflive/internal/runner"
+	"github.com/vishu42/tflive/internal/traits"
 )
 
 type StatusRecorder interface {

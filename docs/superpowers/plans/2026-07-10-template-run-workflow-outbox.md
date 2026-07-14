@@ -124,8 +124,8 @@ Expected: PASS.
 **Files:**
 - Modify: `internal/app/service.go`
 - Test: `internal/app/service_test.go`
-- Modify: `cmd/megagega-worker/main.go`
-- Test: `cmd/megagega-worker/main_test.go`
+- Modify: `cmd/tflive-worker/main.go`
+- Test: `cmd/tflive-worker/main_test.go`
 
 **Interfaces:**
 - Consumes: `dispatch.NewDispatcher`, `workerStore` implementing `dispatch.Outbox`.
@@ -137,7 +137,7 @@ Change the application test to require that `StartTemplateRun` persists the run 
 
 - [ ] **Step 2: Run focused tests and confirm RED**
 
-Run: `go test ./internal/app ./cmd/megagega-worker -count=1`
+Run: `go test ./internal/app ./cmd/tflive-worker -count=1`
 
 Expected: failure because the API still calls Temporal and the worker does not start the dispatcher.
 
@@ -147,7 +147,7 @@ Remove the direct Temporal start from `Service.StartTemplateRun`. Extend `worker
 
 - [ ] **Step 4: Run focused tests and confirm GREEN**
 
-Run: `go test ./internal/app ./cmd/megagega-worker -count=1`
+Run: `go test ./internal/app ./cmd/tflive-worker -count=1`
 
 Expected: PASS.
 
@@ -162,7 +162,7 @@ Expected: PASS.
 
 - [ ] **Step 1: Format Go sources**
 
-Run: `gofmt -w internal/dispatch/*.go internal/postgres/*.go internal/app/*.go internal/temporal/*.go cmd/megagega-worker/*.go`
+Run: `gofmt -w internal/dispatch/*.go internal/postgres/*.go internal/app/*.go internal/temporal/*.go cmd/tflive-worker/*.go`
 
 - [ ] **Step 2: Run the full test suite**
 

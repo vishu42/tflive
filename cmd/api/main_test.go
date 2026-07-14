@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vishu42/megagega/internal/app"
-	"github.com/vishu42/megagega/internal/config"
-	"github.com/vishu42/megagega/internal/temporal"
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/temporal"
+	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/client"
 )
 
@@ -68,8 +68,8 @@ func TestRunWiresTemporalDispatcher(t *testing.T) {
 	if deps.temporalConfig.Address != "localhost:7233" {
 		t.Fatalf("temporal address = %q, want localhost:7233", deps.temporalConfig.Address)
 	}
-	if deps.temporalConfig.Namespace != "megagega" {
-		t.Fatalf("temporal namespace = %q, want megagega", deps.temporalConfig.Namespace)
+	if deps.temporalConfig.Namespace != "tflive" {
+		t.Fatalf("temporal namespace = %q, want tflive", deps.temporalConfig.Namespace)
 	}
 	if deps.dispatcherTaskQueue != "terraform-runs-dev" {
 		t.Fatalf("dispatcher task queue = %q, want terraform-runs-dev", deps.dispatcherTaskQueue)
@@ -104,8 +104,8 @@ func TestRunWiresTemporalDispatcher(t *testing.T) {
 	if deps.artifactStoreConfig.Kind != config.ArtifactStoreFilesystem {
 		t.Fatalf("artifact store kind = %q, want filesystem", deps.artifactStoreConfig.Kind)
 	}
-	if deps.artifactStoreConfig.FilesystemRoot != "/var/lib/megagega/artifacts" {
-		t.Fatalf("artifact store root = %q, want /var/lib/megagega/artifacts", deps.artifactStoreConfig.FilesystemRoot)
+	if deps.artifactStoreConfig.FilesystemRoot != "/var/lib/tflive/artifacts" {
+		t.Fatalf("artifact store root = %q, want /var/lib/tflive/artifacts", deps.artifactStoreConfig.FilesystemRoot)
 	}
 	if deps.service.TemplateRunLogs != deps.logReader {
 		t.Fatal("service TemplateRunLogs is not the configured log reader")
@@ -181,9 +181,9 @@ func TestRunWrapsWireServiceFailure(t *testing.T) {
 func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
 	t.Parallel()
 
-	dsn := os.Getenv("MEGAGEGA_POSTGRES_TEST_DSN")
+	dsn := os.Getenv("tflive_POSTGRES_TEST_DSN")
 	if dsn == "" {
-		t.Skip("MEGAGEGA_POSTGRES_TEST_DSN is not set")
+		t.Skip("tflive_POSTGRES_TEST_DSN is not set")
 	}
 
 	temporalClient := &recordingTemporalClient{}
@@ -282,15 +282,15 @@ func apiTestEnv(key string) string {
 	case "TEMPORAL_ADDRESS":
 		return "localhost:7233"
 	case "TEMPORAL_NAMESPACE":
-		return "megagega"
+		return "tflive"
 	case "TEMPORAL_TASK_QUEUE":
 		return "terraform-runs-dev"
 	case "WORKER_RUN_ROOT":
-		return "/var/lib/megagega/runs"
+		return "/var/lib/tflive/runs"
 	case "ARTIFACT_STORE_KIND":
 		return "filesystem"
 	case "ARTIFACT_STORE_FILESYSTEM_ROOT":
-		return "/var/lib/megagega/artifacts"
+		return "/var/lib/tflive/artifacts"
 	default:
 		return ""
 	}

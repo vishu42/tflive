@@ -41,16 +41,16 @@ Install uses the selected stack and selected template, so rows already present i
 `docker-compose.yaml` adds:
 
 - `minio`, exposing API port `9000` and console port `9001`.
-- `minio-init`, a one-shot MinIO client container that creates the `megagega-artifacts` bucket.
+- `minio-init`, a one-shot MinIO client container that creates the `tflive-artifacts` bucket.
 
 Local env config points the existing S3 artifact adapter at MinIO:
 
 - `ARTIFACT_STORE_KIND=s3`
-- `S3_BUCKET=megagega-artifacts`
+- `S3_BUCKET=tflive-artifacts`
 - `S3_REGION=us-east-1`
 - `S3_ENDPOINT=http://localhost:9000`
-- `S3_ACCESS_KEY_ID=megagega`
-- `S3_SECRET_ACCESS_KEY=megagega-secret`
+- `S3_ACCESS_KEY_ID=tflive`
+- `S3_SECRET_ACCESS_KEY=tflive-secret`
 - `S3_FORCE_PATH_STYLE=true`
 
 ## Testing

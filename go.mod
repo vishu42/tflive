@@ -1,4 +1,4 @@
-module github.com/vishu42/megagega
+module github.com/vishu42/tflive
 
 go 1.24.0
 
@@ -9,6 +9,7 @@ require (
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/stretchr/testify v1.10.0
 	github.com/zclconf/go-cty v1.16.3
+	go.temporal.io/api v1.62.12
 	go.temporal.io/sdk v1.45.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -31,7 +32,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	go.temporal.io/api v1.62.12 // indirect
 	golang.org/x/crypto v0.47.0 // indirect
 	golang.org/x/mod v0.31.0 // indirect
 	golang.org/x/net v0.49.0 // indirect

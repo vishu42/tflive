@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vishu42/megagega/internal/runner"
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/runner"
+	"github.com/vishu42/tflive/internal/traits"
 )
 
 func TestRecordTemplateRunStatusDelegatesToRecorder(t *testing.T) {
@@ -194,7 +194,7 @@ func TestRunTerraformDelegatesToRunner(t *testing.T) {
 	input := traits.RunTerraformActivityInput{
 		RunID:         traits.TemplateRunID("run_123"),
 		TenantID:      traits.TenantID("tenant_123"),
-		WorkspacePath: "/tmp/megagega/runs/tenant_123/run_123",
+		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 		Command:       traits.TerraformCommandPlan,
 	}
@@ -322,7 +322,7 @@ func TestRunTerraformWrapsRunnerError(t *testing.T) {
 	err := activities.RunTerraform(context.Background(), traits.RunTerraformActivityInput{
 		RunID:         traits.TemplateRunID("run_123"),
 		TenantID:      traits.TenantID("tenant_123"),
-		WorkspacePath: "/tmp/megagega/runs/tenant_123/run_123",
+		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 		Command:       traits.TerraformCommandApply,
 	})

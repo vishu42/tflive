@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/traits"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 )

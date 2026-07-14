@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/vishu42/megagega/internal/api"
-	"github.com/vishu42/megagega/internal/app"
-	"github.com/vishu42/megagega/internal/artifacts"
-	"github.com/vishu42/megagega/internal/config"
-	"github.com/vishu42/megagega/internal/postgres"
-	"github.com/vishu42/megagega/internal/temporal"
+	"github.com/vishu42/tflive/internal/api"
+	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/artifacts"
+	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/postgres"
+	"github.com/vishu42/tflive/internal/temporal"
 	"go.temporal.io/sdk/client"
 )
 

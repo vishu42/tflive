@@ -30,7 +30,7 @@
 - `internal/activities/template_sync_test.go` owns sync activity assertions.
 - `internal/api/server.go` owns routes and JSON request/response names.
 - `internal/api/server_test.go` owns HTTP contract coverage.
-- `cmd/megagega-api/main_test.go` owns end-to-end wiring fakes.
+- `cmd/tflive-api/main_test.go` owns end-to-end wiring fakes.
 - `web/src/api/types.ts`, `web/src/api/client.ts`, and `web/src/api/client.test.ts` own frontend API contracts.
 - `web/src/App.tsx`, `web/src/workflowState.ts`, and `web/src/workflowState.test.ts` own UI state names and labels.
 
@@ -220,7 +220,7 @@ git commit -m "refactor: rename template revision storage"
 - Modify: `internal/app/service_test.go`
 - Modify: `internal/activities/template_sync.go`
 - Modify: `internal/activities/template_sync_test.go`
-- Modify: `cmd/megagega-api/main_test.go`
+- Modify: `cmd/tflive-api/main_test.go`
 
 **Interfaces:**
 - Consumes: repository methods from Task 2.
@@ -228,7 +228,7 @@ git commit -m "refactor: rename template revision storage"
 
 - [ ] **Step 1: Update app and activity tests**
 
-In `internal/app/service_test.go`, `internal/activities/template_sync_test.go`, and `cmd/megagega-api/main_test.go`:
+In `internal/app/service_test.go`, `internal/activities/template_sync_test.go`, and `cmd/tflive-api/main_test.go`:
 
 - Rename fake repository methods to `GetTemplateRevision`, `ListTemplateRevisions`, `GetTemplateRevisionVariables`, and `UpsertTemplateRevisionWithVariables`.
 - Rename command fields:
@@ -242,7 +242,7 @@ In `internal/app/service_test.go`, `internal/activities/template_sync_test.go`, 
 Run:
 
 ```bash
-go test ./internal/app ./internal/activities ./cmd/megagega-api -count=1
+go test ./internal/app ./internal/activities ./cmd/tflive-api -count=1
 ```
 
 Expected: FAIL to compile because service/activity production code still uses old names.
@@ -273,7 +273,7 @@ In `internal/activities/template_sync.go`:
 Run:
 
 ```bash
-go test ./internal/app ./internal/activities ./cmd/megagega-api -count=1
+go test ./internal/app ./internal/activities ./cmd/tflive-api -count=1
 ```
 
 Expected: PASS.
@@ -283,7 +283,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add internal/app/service.go internal/app/service_test.go internal/activities/template_sync.go internal/activities/template_sync_test.go cmd/megagega-api/main_test.go
+git add internal/app/service.go internal/app/service_test.go internal/activities/template_sync.go internal/activities/template_sync_test.go cmd/tflive-api/main_test.go
 git commit -m "refactor: rename template revision app contracts"
 ```
 

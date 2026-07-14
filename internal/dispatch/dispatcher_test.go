@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/traits"
 )
 
 func TestDispatchOnceCompletesSuccessfullyStartedWorkflow(t *testing.T) {

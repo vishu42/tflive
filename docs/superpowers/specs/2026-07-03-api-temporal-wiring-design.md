@@ -10,7 +10,7 @@ This slice includes:
 
 - Extending `internal/config.APIConfig` with Temporal API dispatch settings.
 - Loading Temporal environment variables for API startup.
-- Dialing Temporal from `cmd/megagega-api`.
+- Dialing Temporal from `cmd/tflive-api`.
 - Constructing `temporal.NewDispatcher` with the configured task queue.
 - Passing the dispatcher into `app.NewService`.
 - Unit tests for config loading and startup wiring seams.
@@ -49,7 +49,7 @@ Missing required values return an error wrapping `config.ErrInvalidConfig`, matc
 
 ## API Startup Wiring
 
-`cmd/megagega-api` remains the composition root. Startup will:
+`cmd/tflive-api` remains the composition root. Startup will:
 
 1. Load `APIConfig`.
 2. Create and ping a Postgres pool.
@@ -72,7 +72,7 @@ The API startup helper still returns after successful composition. This mirrors 
 
 ## Test Seam
 
-Startup tests should not require a live Temporal server. `cmd/megagega-api` will introduce a small unexported dependency seam for tests:
+Startup tests should not require a live Temporal server. `cmd/tflive-api` will introduce a small unexported dependency seam for tests:
 
 ```go
 type apiDependencies struct {
@@ -87,7 +87,7 @@ type apiDependencies struct {
 
 The exact helper names can vary, but the intent is fixed: production `run(ctx, getenv)` uses real pgx, Postgres migrations, `temporal.Dial`, and `temporal.NewDispatcher`; unit tests can inject fakes to verify startup sequencing and service wiring without network access.
 
-The seam should stay inside `cmd/megagega-api`. It is not a new public API and should not spread into `internal/app`.
+The seam should stay inside `cmd/tflive-api`. It is not a new public API and should not spread into `internal/app`.
 
 ## Errors
 
@@ -125,7 +125,7 @@ API command unit tests cover:
 - Startup wires the dispatcher into `app.NewService`.
 - Temporal dial failure is wrapped with `dial temporal`.
 
-The existing Postgres integration test should use the startup dependency seam with a fake Temporal dialer. It should continue to require only `MEGAGEGA_POSTGRES_TEST_DSN` and should not require a live Temporal server.
+The existing Postgres integration test should use the startup dependency seam with a fake Temporal dialer. It should continue to require only `tflive_POSTGRES_TEST_DSN` and should not require a live Temporal server.
 
 ## Dependencies
 

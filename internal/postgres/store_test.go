@@ -14,9 +14,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/vishu42/megagega/internal/app"
-	"github.com/vishu42/megagega/internal/dispatch"
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/dispatch"
+	"github.com/vishu42/tflive/internal/traits"
 )
 
 var (
@@ -1988,9 +1988,9 @@ func seedTemplateRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run 
 func openTestPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
 
-	dsn := os.Getenv("MEGAGEGA_POSTGRES_TEST_DSN")
+	dsn := os.Getenv("tflive_POSTGRES_TEST_DSN")
 	if dsn == "" {
-		t.Skip("MEGAGEGA_POSTGRES_TEST_DSN is not set")
+		t.Skip("tflive_POSTGRES_TEST_DSN is not set")
 	}
 
 	admin, err := pgxpool.New(ctx, dsn)
@@ -1999,7 +1999,7 @@ func openTestPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	}
 	t.Cleanup(admin.Close)
 
-	schema := fmt.Sprintf("megagega_test_%d_%d", time.Now().UnixNano(), atomic.AddUint64(&testSchemaCounter, 1))
+	schema := fmt.Sprintf("tflive_test_%d_%d", time.Now().UnixNano(), atomic.AddUint64(&testSchemaCounter, 1))
 	quotedSchema := pgx.Identifier{schema}.Sanitize()
 	if _, err := admin.Exec(ctx, "create schema "+quotedSchema); err != nil {
 		t.Fatalf("create test schema: %v", err)

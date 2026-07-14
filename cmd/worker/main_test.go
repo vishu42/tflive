@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vishu42/megagega/internal/activities"
-	"github.com/vishu42/megagega/internal/artifacts"
-	"github.com/vishu42/megagega/internal/config"
-	"github.com/vishu42/megagega/internal/dispatch"
-	"github.com/vishu42/megagega/internal/temporal"
-	"github.com/vishu42/megagega/internal/traits"
-	"github.com/vishu42/megagega/internal/workflows"
+	"github.com/vishu42/tflive/internal/activities"
+	"github.com/vishu42/tflive/internal/artifacts"
+	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/dispatch"
+	"github.com/vishu42/tflive/internal/temporal"
+	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/workflows"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/workflow"
@@ -66,8 +66,8 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if deps.temporalConfig.Address != "localhost:7233" {
 		t.Fatalf("temporal address = %q, want localhost:7233", deps.temporalConfig.Address)
 	}
-	if deps.temporalConfig.Namespace != "megagega" {
-		t.Fatalf("temporal namespace = %q, want megagega", deps.temporalConfig.Namespace)
+	if deps.temporalConfig.Namespace != "tflive" {
+		t.Fatalf("temporal namespace = %q, want tflive", deps.temporalConfig.Namespace)
 	}
 	if deps.workerTaskQueue != "terraform-runs-dev" {
 		t.Fatalf("worker task queue = %q, want terraform-runs-dev", deps.workerTaskQueue)
@@ -93,14 +93,14 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if !deps.activityStoreIsWired {
 		t.Fatal("activity was not wired with the Postgres store")
 	}
-	if deps.activityRunRoot != "/tmp/megagega-worker-test" {
-		t.Fatalf("activity run root = %q, want /tmp/megagega-worker-test", deps.activityRunRoot)
+	if deps.activityRunRoot != "/tmp/tflive-worker-test" {
+		t.Fatalf("activity run root = %q, want /tmp/tflive-worker-test", deps.activityRunRoot)
 	}
 	if deps.artifactStoreConfig.Kind != config.ArtifactStoreFilesystem {
 		t.Fatalf("artifact store kind = %q, want filesystem", deps.artifactStoreConfig.Kind)
 	}
-	if deps.artifactStoreConfig.FilesystemRoot != "/tmp/megagega-worker-artifacts" {
-		t.Fatalf("artifact store root = %q, want /tmp/megagega-worker-artifacts", deps.artifactStoreConfig.FilesystemRoot)
+	if deps.artifactStoreConfig.FilesystemRoot != "/tmp/tflive-worker-artifacts" {
+		t.Fatalf("artifact store root = %q, want /tmp/tflive-worker-artifacts", deps.artifactStoreConfig.FilesystemRoot)
 	}
 	if deps.activityLogStore != deps.logStore {
 		t.Fatal("activity log store was not wired")
@@ -240,15 +240,15 @@ func workerTestEnv(key string) string {
 	case "TEMPORAL_ADDRESS":
 		return "localhost:7233"
 	case "TEMPORAL_NAMESPACE":
-		return "megagega"
+		return "tflive"
 	case "TEMPORAL_TASK_QUEUE":
 		return "terraform-runs-dev"
 	case "WORKER_RUN_ROOT":
-		return "/tmp/megagega-worker-test"
+		return "/tmp/tflive-worker-test"
 	case "ARTIFACT_STORE_KIND":
 		return "filesystem"
 	case "ARTIFACT_STORE_FILESYSTEM_ROOT":
-		return "/tmp/megagega-worker-artifacts"
+		return "/tmp/tflive-worker-artifacts"
 	default:
 		return ""
 	}
