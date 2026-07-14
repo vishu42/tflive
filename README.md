@@ -30,9 +30,21 @@ UI:  http://localhost:5173
 
 Start backend dependencies:
 
+On a clean checkout, copy the explicitly local-development environment example
+once, then start the complete dependency stack:
+
 ```bash
-docker compose up app-postgres temporal-postgres temporal temporal-ui minio minio-init
+cp .env.example .env
+docker compose up app-postgres keycloak-postgres keycloak openfga-postgres openfga-migrate openfga temporal-postgres temporal temporal-ui minio minio-init
 ```
+
+Keycloak is available at `http://localhost:8082`. The bootstrap administrator
+credentials come from `.env` and are for local development only. AUTH-003
+provisions the tflive realm after Keycloak is healthy.
+
+The OpenFGA HTTP API is available at `http://localhost:8083`, and its gRPC API
+is available at `localhost:8084`. AUTH-004 provisions the tflive store and
+authorization model after OpenFGA is healthy.
 
 The local MinIO API is available at `http://localhost:9000`, and the console is
 available at `http://localhost:9001`. Credentials and the bucket name are loaded
