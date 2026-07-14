@@ -16,6 +16,94 @@ services:
       timeout: 5s
       retries: 10
 
+  keycloak-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${KEYCLOAK_DB_USER:?set KEYCLOAK_DB_USER in .env}
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD in .env}
+      POSTGRES_DB: ${KEYCLOAK_DB_NAME:?set KEYCLOAK_DB_NAME in .env}
+    volumes:
+      - keycloak-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KEYCLOAK_DB_USER:?set KEYCLOAK_DB_USER in .env} -d ${KEYCLOAK_DB_NAME:?set KEYCLOAK_DB_NAME in .env}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6.3
+    command: start-dev
+    depends_on:
+      keycloak-postgres:
+        condition: service_healthy
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-postgres:5432/${KEYCLOAK_DB_NAME:?set KEYCLOAK_DB_NAME in .env}
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USER:?set KEYCLOAK_DB_USER in .env}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD in .env}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:?set KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME in .env}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD:?set KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD in .env}
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+    ports:
+      - "8082:8080"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          { printf 'HEAD /health/ready HTTP/1.0\r\n\r\n' >&0;
+          grep 'HTTP/1.0 200'; } 0<>/dev/tcp/localhost/9000
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+  openfga-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${OPENFGA_DB_USER:?set OPENFGA_DB_USER in .env}
+      POSTGRES_PASSWORD: ${OPENFGA_DB_PASSWORD:?set OPENFGA_DB_PASSWORD in .env}
+      POSTGRES_DB: ${OPENFGA_DB_NAME:?set OPENFGA_DB_NAME in .env}
+    volumes:
+      - openfga-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${OPENFGA_DB_USER:?set OPENFGA_DB_USER in .env} -d ${OPENFGA_DB_NAME:?set OPENFGA_DB_NAME in .env}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  openfga-migrate:
+    image: openfga/openfga:v1.15.1
+    command: migrate
+    depends_on:
+      openfga-postgres:
+        condition: service_healthy
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: postgres://${OPENFGA_DB_USER:?set OPENFGA_DB_USER in .env}:${OPENFGA_DB_PASSWORD:?set OPENFGA_DB_PASSWORD in .env}@openfga-postgres:5432/${OPENFGA_DB_NAME:?set OPENFGA_DB_NAME in .env}?sslmode=disable
+    restart: "no"
+
+  openfga:
+    image: openfga/openfga:v1.15.1
+    command: run
+    depends_on:
+      openfga-migrate:
+        condition: service_completed_successfully
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: postgres://${OPENFGA_DB_USER:?set OPENFGA_DB_USER in .env}:${OPENFGA_DB_PASSWORD:?set OPENFGA_DB_PASSWORD in .env}@openfga-postgres:5432/${OPENFGA_DB_NAME:?set OPENFGA_DB_NAME in .env}?sslmode=disable
+      OPENFGA_LOG_FORMAT: json
+      OPENFGA_PLAYGROUND_ENABLED: "false"
+    ports:
+      - "8083:8080"
+      - "8084:8081"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/grpc_health_probe", "-addr=localhost:8081"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
   temporal-postgres:
     image: postgres:16-alpine
     environment:
@@ -80,5 +168,7 @@ services:
 
 volumes:
   app-postgres-data:
+  keycloak-postgres-data:
+  openfga-postgres-data:
   temporal-postgres-data:
   minio-data:
