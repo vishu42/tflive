@@ -179,7 +179,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/client"
 )
 
@@ -267,7 +267,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/client"
 )
 
@@ -347,8 +347,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/vishu42/megagega/internal/app"
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/client"
 )
 
@@ -521,7 +521,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/client"
 )
 
@@ -634,8 +634,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vishu42/megagega/internal/app"
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/client"
 )
 
@@ -868,7 +868,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/client"
 )
 
@@ -1002,7 +1002,7 @@ Run:
 go test ./...
 ```
 
-Expected: PASS for all packages. Postgres integration tests skip when `MEGAGEGA_POSTGRES_TEST_DSN` is not set.
+Expected: PASS for all packages. Postgres integration tests skip when `tflive_POSTGRES_TEST_DSN` is not set.
 
 - [ ] **Step 4: Check git status**
 

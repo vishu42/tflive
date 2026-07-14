@@ -48,13 +48,13 @@
 **Files:**
 - Modify: `internal/api/server.go`
 - Modify: `internal/api/server_test.go`
-- Modify: `cmd/megagega-api/main.go`
-- Modify: `cmd/megagega-api/main_test.go`
+- Modify: `cmd/tflive-api/main.go`
+- Modify: `cmd/tflive-api/main_test.go`
 
 - [ ] Write failing API tests for run JSON, log text, invalid phase, and missing resources.
-- [ ] Run `go test ./internal/api ./cmd/megagega-api` and confirm tests fail.
+- [ ] Run `go test ./internal/api ./cmd/tflive-api` and confirm tests fail.
 - [ ] Add routes, handlers, response mapping, and wire the local log reader from API config run root.
-- [ ] Run `go test ./internal/api ./cmd/megagega-api` and confirm tests pass.
+- [ ] Run `go test ./internal/api ./cmd/tflive-api` and confirm tests pass.
 
 ### Task 5: Full Verification
 

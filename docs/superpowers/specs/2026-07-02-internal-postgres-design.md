@@ -75,7 +75,7 @@ Missing reads use `postgres.ErrNotFound`. Unexpected database failures are wrapp
 
 ## Testing
 
-Tests will follow TDD. Integration tests will be gated by `MEGAGEGA_POSTGRES_TEST_DSN`; when the variable is absent, tests that require a real Postgres instance will skip. Compile-time interface assertions will always run.
+Tests will follow TDD. Integration tests will be gated by `tflive_POSTGRES_TEST_DSN`; when the variable is absent, tests that require a real Postgres instance will skip. Compile-time interface assertions will always run.
 
 The test suite will cover:
 

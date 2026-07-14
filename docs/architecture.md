@@ -1,6 +1,6 @@
-# Megagega Architecture
+# tflive Architecture
 
-This document describes Megagega's current MVP product model, system architecture, execution workflows, persistence boundaries, security posture, and deferred design topics. For setup and local development, see the [project README](../README.md).
+This document describes tflive's current MVP product model, system architecture, execution workflows, persistence boundaries, security posture, and deferred design topics. For setup and local development, see the [project README](../README.md).
 
 ## Goals
 
@@ -205,8 +205,8 @@ The Go implementation should keep product concepts, application use cases, adapt
 
 ```text
 cmd/
-  megagega-api/
-  megagega-worker/
+  tflive-api/
+  tflive-worker/
 
 internal/
   traits/
@@ -231,8 +231,8 @@ internal/
 
 Package ownership:
 
-- `cmd/megagega-api`: API server boot, config loading, dependency wiring, and HTTP server startup.
-- `cmd/megagega-worker`: worker boot, config loading, Temporal worker registration, outbox-dispatch lifecycle, and activity dependency wiring.
+- `cmd/tflive-api`: API server boot, config loading, dependency wiring, and HTTP server startup.
+- `cmd/tflive-worker`: worker boot, config loading, Temporal worker registration, outbox-dispatch lifecycle, and activity dependency wiring.
 - `internal/traits`: shared product and workflow traits, including IDs, statuses, operation types, validation helpers, entities such as `Tenant`, `Template`, `Stack`, `StackTemplate`, `TemplateRun`, `StackRun`, and `CredentialSet`, plus Temporal workflow payloads, signal names, query names, and constants. Keep this package focused on stable cross-boundary data contracts; concrete behavior and side effects belong in the packages that own them.
 - `internal/app`: application use cases such as creating stacks, registering templates, adding templates to stacks, starting runs, approving runs, canceling runs, listing runs, and fetching log metadata. This package owns use-case interfaces for persistence, workflow dispatch, events, locks, artifacts, and secrets; concrete adapters implement those interfaces outside `app`.
 - `internal/api`: HTTP handlers, request and response DTOs, routing, SSE endpoints, API validation, and mapping API input into app commands.
@@ -265,7 +265,7 @@ Package dataflow:
                       +----------+-----------+
                                  ^
                                  |
-cmd/megagega-api                 |                   cmd/megagega-worker
+cmd/tflive-api                 |                   cmd/tflive-worker
   config + wiring                |                     config + wiring
         |                        |                           |
         v                        |                           v
@@ -293,7 +293,7 @@ internal/auth
 tenant/user context
 ```
 
-The worker composition path additionally wires `internal/postgres` as the durable outbox, `internal/dispatch` as the claim/retry loop, and `internal/temporal` as the workflow starter. These packages meet through narrow interfaces assembled in `cmd/megagega-worker`.
+The worker composition path additionally wires `internal/postgres` as the durable outbox, `internal/dispatch` as the claim/retry loop, and `internal/temporal` as the workflow starter. These packages meet through narrow interfaces assembled in `cmd/tflive-worker`.
 
 ## Template Model
 
@@ -452,7 +452,7 @@ backend owned by user/template
 workspace owned by platform
 ```
 
-MVP templates should use workspace-compatible remote backends. Backend state locking is required where the selected backend supports it, because the platform lock prevents concurrent Megagega runs but does not replace Terraform's backend-level state lock.
+MVP templates should use workspace-compatible remote backends. Backend state locking is required where the selected backend supports it, because the platform lock prevents concurrent tflive runs but does not replace Terraform's backend-level state lock.
 
 Unsupported or risky backend configurations should fail validation or receive an explicit warning before execution. Examples include:
 

@@ -70,8 +70,8 @@ Expected: PASS.
 **Files:**
 - Modify: `internal/api/server.go`
 - Modify: `internal/api/server_test.go`
-- Modify: `cmd/megagega-api/main.go`
-- Modify: `cmd/megagega-api/main_test.go`
+- Modify: `cmd/tflive-api/main.go`
+- Modify: `cmd/tflive-api/main_test.go`
 
 - [ ] **Step 1: Write failing API tests**
 
@@ -86,7 +86,7 @@ Add tests for:
 Run:
 
 ```bash
-go test ./internal/api ./cmd/megagega-api
+go test ./internal/api ./cmd/tflive-api
 ```
 
 Expected: FAIL because routes and wiring do not exist.
@@ -116,7 +116,7 @@ Extend `appRepositories` with `TemplateRegistrationRepository` and `TemplateRepo
 Run:
 
 ```bash
-go test ./internal/api ./cmd/megagega-api
+go test ./internal/api ./cmd/tflive-api
 ```
 
 Expected: PASS.
@@ -168,7 +168,7 @@ Run:
 go test ./internal/postgres
 ```
 
-Expected: PASS, skipping real Postgres integration tests when `MEGAGEGA_POSTGRES_TEST_DSN` is unset.
+Expected: PASS, skipping real Postgres integration tests when `tflive_POSTGRES_TEST_DSN` is unset.
 
 ### Task 4: Temporal Dispatcher And Workflow
 
@@ -289,8 +289,8 @@ Expected: PASS.
 ### Task 6: Worker Wiring
 
 **Files:**
-- Modify: `cmd/megagega-worker/main.go`
-- Modify: `cmd/megagega-worker/main_test.go`
+- Modify: `cmd/tflive-worker/main.go`
+- Modify: `cmd/tflive-worker/main_test.go`
 
 - [ ] **Step 1: Write failing worker wiring tests**
 
@@ -299,7 +299,7 @@ Assert that the worker registers `TemplateSyncWorkflow`, `SyncTemplate`, and `Re
 Run:
 
 ```bash
-go test ./cmd/megagega-worker
+go test ./cmd/tflive-worker
 ```
 
 Expected: FAIL because worker wiring only registers template run workflow and activities.
@@ -316,7 +316,7 @@ Register `workflows.TemplateSyncWorkflow` with `traits.TemplateSyncWorkflowName`
 Run:
 
 ```bash
-go test ./cmd/megagega-worker
+go test ./cmd/tflive-worker
 ```
 
 Expected: PASS.
@@ -331,7 +331,7 @@ Expected: PASS.
 Run:
 
 ```bash
-gofmt -w internal/traits/traits.go internal/traits/traits_test.go internal/app/service.go internal/app/service_test.go internal/api/server.go internal/api/server_test.go internal/postgres/repositories.go internal/postgres/store_test.go internal/temporal/dispatcher.go internal/temporal/dispatcher_test.go internal/workflows/template_sync.go internal/workflows/template_sync_workflow_test.go internal/activities/template_sync.go internal/activities/template_sync_test.go cmd/megagega-api/main.go cmd/megagega-api/main_test.go cmd/megagega-worker/main.go cmd/megagega-worker/main_test.go
+gofmt -w internal/traits/traits.go internal/traits/traits_test.go internal/app/service.go internal/app/service_test.go internal/api/server.go internal/api/server_test.go internal/postgres/repositories.go internal/postgres/store_test.go internal/temporal/dispatcher.go internal/temporal/dispatcher_test.go internal/workflows/template_sync.go internal/workflows/template_sync_workflow_test.go internal/activities/template_sync.go internal/activities/template_sync_test.go cmd/tflive-api/main.go cmd/tflive-api/main_test.go cmd/tflive-worker/main.go cmd/tflive-worker/main_test.go
 ```
 
 Expected: command exits 0.

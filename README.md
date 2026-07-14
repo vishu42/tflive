@@ -1,12 +1,12 @@
-# Megagega Terraform Platform
+# tflive Terraform Platform
 
 > [!WARNING]
-> Megagega is not production ready. It is an MVP baseline intended for local
+> tflive is not production ready. It is an MVP baseline intended for local
 > development, evaluation, and continued hardening.
 
 ## Overview
 
-Megagega composes infrastructure stacks from reusable Terraform templates, uses Temporal for durable orchestration and Postgres for product state, persists logs and artifacts, and runs OpenTofu operations in worker processes.
+tflive composes infrastructure stacks from reusable Terraform templates, uses Temporal for durable orchestration and Postgres for product state, persists logs and artifacts, and runs OpenTofu operations in worker processes.
 
 ## Architecture
 
@@ -44,7 +44,7 @@ Start the API with the local environment:
 set -a
 source .env
 set +a
-go run ./cmd/megagega-api
+go run ./cmd/tflive-api
 ```
 
 Start the worker in another shell:
@@ -53,7 +53,7 @@ Start the worker in another shell:
 set -a
 source .env
 set +a
-go run ./cmd/megagega-worker
+go run ./cmd/tflive-worker
 ```
 
 Start the UI:

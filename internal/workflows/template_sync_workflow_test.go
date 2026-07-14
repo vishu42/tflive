@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/mock"
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
 )

@@ -17,17 +17,17 @@ func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 		case "TEMPORAL_ADDRESS":
 			return " localhost:7233 "
 		case "TEMPORAL_NAMESPACE":
-			return " megagega "
+			return " tflive "
 		case "TEMPORAL_TASK_QUEUE":
 			return " terraform-runs-dev "
 		case "WORKER_RUN_ROOT":
-			return " /var/lib/megagega/runs "
+			return " /var/lib/tflive/runs "
 		case "ARTIFACT_STORE_KIND":
 			return " s3 "
 		case "ARTIFACT_STORE_FILESYSTEM_ROOT":
-			return " /var/lib/megagega/artifacts "
+			return " /var/lib/tflive/artifacts "
 		case "S3_BUCKET":
-			return " megagega-artifacts "
+			return " tflive-artifacts "
 		case "S3_REGION":
 			return " us-east-1 "
 		case "S3_ENDPOINT":
@@ -55,14 +55,14 @@ func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 	if cfg.TemporalAddress != "localhost:7233" {
 		t.Fatalf("TemporalAddress = %q", cfg.TemporalAddress)
 	}
-	if cfg.TemporalNamespace != "megagega" {
+	if cfg.TemporalNamespace != "tflive" {
 		t.Fatalf("TemporalNamespace = %q", cfg.TemporalNamespace)
 	}
 	if cfg.TemporalTaskQueue != "terraform-runs-dev" {
 		t.Fatalf("TemporalTaskQueue = %q", cfg.TemporalTaskQueue)
 	}
-	if cfg.WorkerRunRoot != "/var/lib/megagega/runs" {
-		t.Fatalf("WorkerRunRoot = %q, want /var/lib/megagega/runs", cfg.WorkerRunRoot)
+	if cfg.WorkerRunRoot != "/var/lib/tflive/runs" {
+		t.Fatalf("WorkerRunRoot = %q, want /var/lib/tflive/runs", cfg.WorkerRunRoot)
 	}
 	assertArtifactStoreConfig(t, cfg.ArtifactStore)
 }
@@ -142,17 +142,17 @@ func TestLoadWorkerConfigReadsWorkerSettings(t *testing.T) {
 		case "TEMPORAL_ADDRESS":
 			return " localhost:7233 "
 		case "TEMPORAL_NAMESPACE":
-			return " megagega "
+			return " tflive "
 		case "TEMPORAL_TASK_QUEUE":
 			return " terraform-runs-dev "
 		case "WORKER_RUN_ROOT":
-			return " /var/lib/megagega/runs "
+			return " /var/lib/tflive/runs "
 		case "ARTIFACT_STORE_KIND":
 			return " s3 "
 		case "ARTIFACT_STORE_FILESYSTEM_ROOT":
-			return " /var/lib/megagega/artifacts "
+			return " /var/lib/tflive/artifacts "
 		case "S3_BUCKET":
-			return " megagega-artifacts "
+			return " tflive-artifacts "
 		case "S3_REGION":
 			return " us-east-1 "
 		case "S3_ENDPOINT":
@@ -177,14 +177,14 @@ func TestLoadWorkerConfigReadsWorkerSettings(t *testing.T) {
 	if cfg.TemporalAddress != "localhost:7233" {
 		t.Fatalf("TemporalAddress = %q", cfg.TemporalAddress)
 	}
-	if cfg.TemporalNamespace != "megagega" {
+	if cfg.TemporalNamespace != "tflive" {
 		t.Fatalf("TemporalNamespace = %q", cfg.TemporalNamespace)
 	}
 	if cfg.TemporalTaskQueue != "terraform-runs-dev" {
 		t.Fatalf("TemporalTaskQueue = %q, want terraform-runs-dev", cfg.TemporalTaskQueue)
 	}
-	if cfg.WorkerRunRoot != "/var/lib/megagega/runs" {
-		t.Fatalf("WorkerRunRoot = %q, want /var/lib/megagega/runs", cfg.WorkerRunRoot)
+	if cfg.WorkerRunRoot != "/var/lib/tflive/runs" {
+		t.Fatalf("WorkerRunRoot = %q, want /var/lib/tflive/runs", cfg.WorkerRunRoot)
 	}
 	assertArtifactStoreConfig(t, cfg.ArtifactStore)
 }
@@ -274,11 +274,11 @@ func assertArtifactStoreConfig(t *testing.T, cfg ArtifactStoreConfig) {
 	if cfg.Kind != ArtifactStoreS3 {
 		t.Fatalf("ArtifactStore.Kind = %q, want %q", cfg.Kind, ArtifactStoreS3)
 	}
-	if cfg.FilesystemRoot != "/var/lib/megagega/artifacts" {
-		t.Fatalf("ArtifactStore.FilesystemRoot = %q, want /var/lib/megagega/artifacts", cfg.FilesystemRoot)
+	if cfg.FilesystemRoot != "/var/lib/tflive/artifacts" {
+		t.Fatalf("ArtifactStore.FilesystemRoot = %q, want /var/lib/tflive/artifacts", cfg.FilesystemRoot)
 	}
-	if cfg.S3.Bucket != "megagega-artifacts" {
-		t.Fatalf("S3.Bucket = %q, want megagega-artifacts", cfg.S3.Bucket)
+	if cfg.S3.Bucket != "tflive-artifacts" {
+		t.Fatalf("S3.Bucket = %q, want tflive-artifacts", cfg.S3.Bucket)
 	}
 	if cfg.S3.Region != "us-east-1" {
 		t.Fatalf("S3.Region = %q, want us-east-1", cfg.S3.Region)

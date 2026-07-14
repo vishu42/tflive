@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/traits"
 )
 
 func TestLogKeyScopesByTenantRunAndPhase(t *testing.T) {
@@ -140,7 +140,7 @@ func TestS3StorePutsAndGetsObject(t *testing.T) {
 
 	transport := &recordingRoundTripper{}
 	store, err := NewS3Store(S3Config{
-		Bucket:          "megagega-artifacts",
+		Bucket:          "tflive-artifacts",
 		Region:          "us-east-1",
 		Endpoint:        "https://s3.test.local",
 		AccessKeyID:     "access-key",
@@ -158,8 +158,8 @@ func TestS3StorePutsAndGetsObject(t *testing.T) {
 	}
 
 	putRequest := transport.requests[0]
-	if putRequest.URL.Path != "/megagega-artifacts/"+key {
-		t.Fatalf("put path = %q, want /megagega-artifacts/%s", putRequest.URL.Path, key)
+	if putRequest.URL.Path != "/tflive-artifacts/"+key {
+		t.Fatalf("put path = %q, want /tflive-artifacts/%s", putRequest.URL.Path, key)
 	}
 	if !strings.Contains(putRequest.Header.Get("Authorization"), "AWS4-HMAC-SHA256") {
 		t.Fatalf("Authorization = %q, want SigV4 scheme", putRequest.Header.Get("Authorization"))
@@ -209,7 +209,7 @@ func (transport *recordingRoundTripper) RoundTrip(request *http.Request) (*http.
 			Request:    request,
 		}, nil
 	case http.MethodGet:
-		if request.URL.Path != "/megagega-artifacts/tenants/tenant_123/runs/run_123/logs/plan.log" {
+		if request.URL.Path != "/tflive-artifacts/tenants/tenant_123/runs/run_123/logs/plan.log" {
 			return nil, fmt.Errorf("get path = %q", request.URL.Path)
 		}
 		return &http.Response{

@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/traits"
 )
 
 const logContentType = "text/plain; charset=utf-8"

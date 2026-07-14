@@ -3,7 +3,7 @@ package artifacts
 import (
 	"fmt"
 
-	"github.com/vishu42/megagega/internal/config"
+	"github.com/vishu42/tflive/internal/config"
 )
 
 func NewObjectStore(cfg config.ArtifactStoreConfig) (ObjectStore, error) {

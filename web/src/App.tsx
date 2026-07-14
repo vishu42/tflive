@@ -562,7 +562,7 @@ export default function App() {
       <section className="workspace">
         <header className="workspace-header">
           <div>
-            <p className="eyebrow">Megagega</p>
+            <p className="eyebrow">tflive</p>
             <h1>Terraform workflow console</h1>
           </div>
           <div className="runtime-fields">

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/mock"
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
 )
@@ -26,7 +26,7 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 				t.Fatalf("prepare workspace TenantID = %q, want %q", activityInput.TenantID, input.TenantID)
 			}
 			events = append(events, "prepare_workspace")
-			return traits.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/megagega/runs/tenant_123/run_123"}, nil
+			return traits.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123"}, nil
 		})
 	env.OnActivity(traits.FetchSourceActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, activityInput traits.FetchSourceActivityInput) (traits.FetchSourceActivityOutput, error) {
@@ -36,7 +36,7 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 			if activityInput.TenantID != input.TenantID {
 				t.Fatalf("fetch source TenantID = %q, want %q", activityInput.TenantID, input.TenantID)
 			}
-			if activityInput.WorkspacePath != "/tmp/megagega/runs/tenant_123/run_123" {
+			if activityInput.WorkspacePath != "/tmp/tflive/runs/tenant_123/run_123" {
 				t.Fatalf("fetch source WorkspacePath = %q", activityInput.WorkspacePath)
 			}
 			if activityInput.RepoOwner != input.RepoOwner {
@@ -52,7 +52,7 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 				t.Fatalf("fetch source RootPath = %q, want %q", activityInput.RootPath, input.RootPath)
 			}
 			events = append(events, "fetch_source")
-			return traits.FetchSourceActivityOutput{TerraformPath: "/tmp/megagega/runs/tenant_123/run_123/source/modules/vpc"}, nil
+			return traits.FetchSourceActivityOutput{TerraformPath: "/tmp/tflive/runs/tenant_123/run_123/source/modules/vpc"}, nil
 		})
 	env.OnActivity(traits.RunTerraformActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, activityInput traits.RunTerraformActivityInput) error {
@@ -62,10 +62,10 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 			if activityInput.TenantID != input.TenantID {
 				t.Fatalf("run terraform TenantID = %q, want %q", activityInput.TenantID, input.TenantID)
 			}
-			if activityInput.WorkspacePath != "/tmp/megagega/runs/tenant_123/run_123" {
+			if activityInput.WorkspacePath != "/tmp/tflive/runs/tenant_123/run_123" {
 				t.Fatalf("run terraform WorkspacePath = %q", activityInput.WorkspacePath)
 			}
-			if activityInput.TerraformPath != "/tmp/megagega/runs/tenant_123/run_123/source/modules/vpc" {
+			if activityInput.TerraformPath != "/tmp/tflive/runs/tenant_123/run_123/source/modules/vpc" {
 				t.Fatalf("run terraform TerraformPath = %q", activityInput.TerraformPath)
 			}
 			if activityInput.WorkspaceName != input.WorkspaceName {
@@ -326,14 +326,14 @@ func mockPrepareWorkspace(t *testing.T, env *testsuite.TestWorkflowEnvironment) 
 	t.Helper()
 
 	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
-		Return(traits.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/megagega/runs/tenant_123/run_123"}, nil)
+		Return(traits.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123"}, nil)
 }
 
 func mockFetchSource(t *testing.T, env *testsuite.TestWorkflowEnvironment) {
 	t.Helper()
 
 	env.OnActivity(traits.FetchSourceActivityName, mock.Anything, mock.Anything).
-		Return(traits.FetchSourceActivityOutput{TerraformPath: "/tmp/megagega/runs/tenant_123/run_123/source/modules/vpc"}, nil)
+		Return(traits.FetchSourceActivityOutput{TerraformPath: "/tmp/tflive/runs/tenant_123/run_123/source/modules/vpc"}, nil)
 }
 
 func mockRunTerraform(t *testing.T, env *testsuite.TestWorkflowEnvironment, commands *[]traits.TerraformCommandType) {

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Wire `cmd/megagega-api` to construct the app service with the Temporal workflow dispatcher.
+**Goal:** Wire `cmd/tflive-api` to construct the app service with the Temporal workflow dispatcher.
 
-**Architecture:** `internal/config` owns API environment loading, including Temporal address and task queue defaults. `cmd/megagega-api` remains the composition root and gains a private dependency seam so tests can verify Postgres plus Temporal wiring without dialing real services. The real `run(ctx, os.Getenv)` path still uses pgx, Postgres migrations, `temporal.Dial`, and `temporal.NewDispatcher`.
+**Architecture:** `internal/config` owns API environment loading, including Temporal address and task queue defaults. `cmd/tflive-api` remains the composition root and gains a private dependency seam so tests can verify Postgres plus Temporal wiring without dialing real services. The real `run(ctx, os.Getenv)` path still uses pgx, Postgres migrations, `temporal.Dial`, and `temporal.NewDispatcher`.
 
 **Tech Stack:** Go 1.24, `pgxpool`, existing `internal/postgres`, existing `internal/temporal`, standard `testing`.
 
@@ -14,8 +14,8 @@
 
 - Modify `internal/config/config.go`: extend `APIConfig`, add `DefaultTemporalTaskQueue`, load and validate Temporal settings.
 - Modify `internal/config/config_test.go`: cover Temporal config loading, missing address, and default task queue.
-- Modify `cmd/megagega-api/main.go`: add private startup dependency seam, dial Temporal, build dispatcher, wire `app.Service.Workflows`.
-- Modify `cmd/megagega-api/main_test.go`: test config failure, Temporal dial parameters, task queue wiring, service wiring, Temporal dial errors, and the Postgres integration test with fake Temporal.
+- Modify `cmd/tflive-api/main.go`: add private startup dependency seam, dial Temporal, build dispatcher, wire `app.Service.Workflows`.
+- Modify `cmd/tflive-api/main_test.go`: test config failure, Temporal dial parameters, task queue wiring, service wiring, Temporal dial errors, and the Postgres integration test with fake Temporal.
 
 ### Task 1: Extend API Config With Temporal Settings
 
@@ -45,7 +45,7 @@ func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 		case "TEMPORAL_ADDRESS":
 			return " localhost:7233 "
 		case "TEMPORAL_NAMESPACE":
-			return " megagega "
+			return " tflive "
 		case "TEMPORAL_TASK_QUEUE":
 			return " terraform-runs-dev "
 		default:
@@ -62,7 +62,7 @@ func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 	if cfg.TemporalAddress != "localhost:7233" {
 		t.Fatalf("TemporalAddress = %q", cfg.TemporalAddress)
 	}
-	if cfg.TemporalNamespace != "megagega" {
+	if cfg.TemporalNamespace != "tflive" {
 		t.Fatalf("TemporalNamespace = %q", cfg.TemporalNamespace)
 	}
 	if cfg.TemporalTaskQueue != "terraform-runs-dev" {
@@ -204,12 +204,12 @@ Expected: commit succeeds with only config files staged.
 ### Task 2: Add API Startup Dependency Seam And Temporal Wiring
 
 **Files:**
-- Modify: `cmd/megagega-api/main_test.go`
-- Modify: `cmd/megagega-api/main.go`
+- Modify: `cmd/tflive-api/main_test.go`
+- Modify: `cmd/tflive-api/main.go`
 
 - [ ] **Step 1: Replace API command tests with wiring coverage**
 
-Replace `cmd/megagega-api/main_test.go` with:
+Replace `cmd/tflive-api/main_test.go` with:
 
 ```go
 package main
@@ -221,10 +221,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vishu42/megagega/internal/app"
-	"github.com/vishu42/megagega/internal/config"
-	"github.com/vishu42/megagega/internal/traits"
-	"github.com/vishu42/megagega/internal/temporal"
+	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/temporal"
 	"go.temporal.io/sdk/client"
 )
 
@@ -277,7 +277,7 @@ func TestRunWiresTemporalDispatcher(t *testing.T) {
 	if deps.temporalConfig.Address != "localhost:7233" {
 		t.Fatalf("temporal address = %q", deps.temporalConfig.Address)
 	}
-	if deps.temporalConfig.Namespace != "megagega" {
+	if deps.temporalConfig.Namespace != "tflive" {
 		t.Fatalf("temporal namespace = %q", deps.temporalConfig.Namespace)
 	}
 	if deps.dispatcherTaskQueue != "terraform-runs-dev" {
@@ -358,9 +358,9 @@ func TestRunWrapsWireServiceFailure(t *testing.T) {
 func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
 	t.Parallel()
 
-	dsn := os.Getenv("MEGAGEGA_POSTGRES_TEST_DSN")
+	dsn := os.Getenv("tflive_POSTGRES_TEST_DSN")
 	if dsn == "" {
-		t.Skip("MEGAGEGA_POSTGRES_TEST_DSN is not set")
+		t.Skip("tflive_POSTGRES_TEST_DSN is not set")
 	}
 
 	deps := defaultAPIDependencies()
@@ -397,7 +397,7 @@ func apiTestEnv(key string) string {
 	case "TEMPORAL_ADDRESS":
 		return "localhost:7233"
 	case "TEMPORAL_NAMESPACE":
-		return "megagega"
+		return "tflive"
 	case "TEMPORAL_TASK_QUEUE":
 		return "terraform-runs-dev"
 	default:
@@ -533,14 +533,14 @@ func (recordingWorkflowDispatcher) CancelTemplateRun(context.Context, traits.Ten
 Run:
 
 ```bash
-go test ./cmd/megagega-api
+go test ./cmd/tflive-api
 ```
 
 Expected: FAIL because `runWithDependencies`, `apiDependencies`, `postgresPool`, and `appRepositories` are undefined, and `run` does not require Temporal config yet.
 
 - [ ] **Step 3: Replace API command startup implementation**
 
-Replace `cmd/megagega-api/main.go` with:
+Replace `cmd/tflive-api/main.go` with:
 
 ```go
 package main
@@ -552,10 +552,10 @@ import (
 	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/vishu42/megagega/internal/app"
-	"github.com/vishu42/megagega/internal/config"
-	"github.com/vishu42/megagega/internal/postgres"
-	"github.com/vishu42/megagega/internal/temporal"
+	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/postgres"
+	"github.com/vishu42/tflive/internal/temporal"
 	"go.temporal.io/sdk/client"
 )
 
@@ -669,17 +669,17 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 Run:
 
 ```bash
-go test ./cmd/megagega-api
+go test ./cmd/tflive-api
 ```
 
-Expected: PASS, with `TestRunMigratesRealPostgresWhenDSNIsSet` skipped when `MEGAGEGA_POSTGRES_TEST_DSN` is absent.
+Expected: PASS, with `TestRunMigratesRealPostgresWhenDSNIsSet` skipped when `tflive_POSTGRES_TEST_DSN` is absent.
 
 - [ ] **Step 5: Commit the API startup wiring slice**
 
 Run:
 
 ```bash
-git add cmd/megagega-api/main.go cmd/megagega-api/main_test.go
+git add cmd/tflive-api/main.go cmd/tflive-api/main_test.go
 git commit -m "feat: wire api temporal dispatcher"
 ```
 
@@ -695,7 +695,7 @@ Expected: commit succeeds with only API command files staged.
 Run:
 
 ```bash
-gofmt -w internal/config cmd/megagega-api
+gofmt -w internal/config cmd/tflive-api
 ```
 
 Expected: no output.
@@ -705,7 +705,7 @@ Expected: no output.
 Run:
 
 ```bash
-go test ./internal/config ./cmd/megagega-api
+go test ./internal/config ./cmd/tflive-api
 ```
 
 Expected: PASS.
@@ -718,7 +718,7 @@ Run:
 go test ./...
 ```
 
-Expected: PASS. Postgres integration tests skip unless `MEGAGEGA_POSTGRES_TEST_DSN` is set.
+Expected: PASS. Postgres integration tests skip unless `tflive_POSTGRES_TEST_DSN` is set.
 
 - [ ] **Step 4: Check module tidiness**
 

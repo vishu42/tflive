@@ -25,10 +25,10 @@
 **Files:**
 - Modify: `internal/config/config.go`
 - Modify: `internal/config/config_test.go`
-- Modify: `cmd/megagega-api/main.go`
-- Modify: `cmd/megagega-api/main_test.go`
-- Modify: `cmd/megagega-worker/main.go`
-- Modify: `cmd/megagega-worker/main_test.go`
+- Modify: `cmd/tflive-api/main.go`
+- Modify: `cmd/tflive-api/main_test.go`
+- Modify: `cmd/tflive-worker/main.go`
+- Modify: `cmd/tflive-worker/main_test.go`
 
 - [ ] Add artifact-store config tests.
 - [ ] Wire both API and worker to the same object-store factory.

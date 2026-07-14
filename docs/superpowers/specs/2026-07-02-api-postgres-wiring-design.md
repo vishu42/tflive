@@ -16,7 +16,7 @@ The loader accepts a `getenv` function so command startup can be tested without 
 
 ## API Startup Wiring
 
-`cmd/megagega-api` owns startup composition:
+`cmd/tflive-api` owns startup composition:
 
 - Load `APIConfig`.
 - Parse and create a `pgxpool.Pool`.
@@ -41,4 +41,4 @@ Unit tests cover:
 
 Integration tests cover:
 
-- With `MEGAGEGA_POSTGRES_TEST_DSN`, API startup connects to the real Postgres container and applies migrations.
+- With `tflive_POSTGRES_TEST_DSN`, API startup connects to the real Postgres container and applies migrations.

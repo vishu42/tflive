@@ -14,7 +14,7 @@ This slice includes:
 - Stable workflow ID construction for template runs.
 - Unit tests around workflow start and signal dispatch behavior.
 
-This slice does not include worker registration helpers, `cmd/megagega-worker` wiring, workflow implementations, activity implementations, API startup wiring, or integration tests against a live Temporal server. Those belong in later slices once `internal/workflows` and `internal/activities` contain real executable behavior.
+This slice does not include worker registration helpers, `cmd/tflive-worker` wiring, workflow implementations, activity implementations, API startup wiring, or integration tests against a live Temporal server. Those belong in later slices once `internal/workflows` and `internal/activities` contain real executable behavior.
 
 ## Package Shape
 

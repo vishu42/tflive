@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Add the first real product UI for Megagega and the missing backend stack APIs required to test the product end to end from the browser. The UI should prove the main MVP loop: register a Terraform template, inspect inferred variables, create a stack, install the template with variable values, run `plan`, run `apply`, approve the apply, and inspect run status and logs.
+Add the first real product UI for tflive and the missing backend stack APIs required to test the product end to end from the browser. The UI should prove the main MVP loop: register a Terraform template, inspect inferred variables, create a stack, install the template with variable values, run `plan`, run `apply`, approve the apply, and inspect run status and logs.
 
 This is intentionally a workflow console, not a full dashboard. It should make the core product loop usable without manual database seeding while leaving room for stack lists, template catalogs, live log streaming, auth, and richer dashboards later.
 

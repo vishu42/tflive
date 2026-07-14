@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/vishu42/megagega/internal/app"
-	"github.com/vishu42/megagega/internal/traits"
+	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/traits"
 )
 
 type Server struct {

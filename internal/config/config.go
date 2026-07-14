@@ -9,8 +9,8 @@ import (
 const (
 	DefaultHTTPAddress                 = ":8081"
 	DefaultTemporalTaskQueue           = "terraform-runs"
-	DefaultWorkerRunRoot               = "/tmp/megagega/runs"
-	DefaultArtifactStoreFilesystemRoot = "/tmp/megagega/artifacts"
+	DefaultWorkerRunRoot               = "/tmp/tflive/runs"
+	DefaultArtifactStoreFilesystemRoot = "/tmp/tflive/artifacts"
 )
 
 var ErrInvalidConfig = errors.New("invalid config")

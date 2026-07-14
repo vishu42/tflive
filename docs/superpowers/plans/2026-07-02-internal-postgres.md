@@ -4,7 +4,7 @@
 
 **Goal:** Build the first pgx-backed Postgres adapter for the current `internal/app` repository interfaces.
 
-**Architecture:** `internal/postgres.Store` wraps a `pgxpool.Pool` and implements the app-owned persistence ports. SQL migrations are embedded in the package and applied by `Migrate`. Integration tests use `MEGAGEGA_POSTGRES_TEST_DSN` and skip without a live database.
+**Architecture:** `internal/postgres.Store` wraps a `pgxpool.Pool` and implements the app-owned persistence ports. SQL migrations are embedded in the package and applied by `Migrate`. Integration tests use `tflive_POSTGRES_TEST_DSN` and skip without a live database.
 
 **Tech Stack:** Go 1.24, `github.com/jackc/pgx/v5`, `pgxpool`, embedded SQL migrations, standard `testing`.
 
@@ -34,7 +34,7 @@ Add this to `internal/postgres/store_test.go`:
 ```go
 package postgres
 
-import "github.com/vishu42/megagega/internal/app"
+import "github.com/vishu42/tflive/internal/app"
 
 var (
 	_ app.StackTemplateRepository = (*Store)(nil)
@@ -93,7 +93,7 @@ Expected: FAIL because `Store` does not implement the app repository methods yet
 
 - [ ] **Step 1: Write migration test**
 
-Add DSN-gated helpers and `TestMigrateAppliesSchema` to `internal/postgres/store_test.go`. The test should open `MEGAGEGA_POSTGRES_TEST_DSN`, create a unique schema, run `Migrate`, and verify all three tables exist.
+Add DSN-gated helpers and `TestMigrateAppliesSchema` to `internal/postgres/store_test.go`. The test should open `tflive_POSTGRES_TEST_DSN`, create a unique schema, run `Migrate`, and verify all three tables exist.
 
 - [ ] **Step 2: Run test to verify it fails**
 
