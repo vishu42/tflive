@@ -1,0 +1,17 @@
+FROM golang:1.24.1-alpine3.21 AS build
+
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY internal/keycloak ./internal/keycloak
+COPY cmd/keycloak-provisioner ./cmd/keycloak-provisioner
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/keycloak-provisioner ./cmd/keycloak-provisioner
+
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S keycloak-provisioner \
+    && adduser -S -D -H -G keycloak-provisioner keycloak-provisioner
+COPY --from=build /out/keycloak-provisioner /usr/local/bin/keycloak-provisioner
+
+USER keycloak-provisioner
+ENTRYPOINT ["/usr/local/bin/keycloak-provisioner"]

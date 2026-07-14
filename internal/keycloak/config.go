@@ -19,18 +19,21 @@ const (
 // Config contains the complete desired state and credentials needed for one
 // Keycloak provisioning run. Secret fields must never be logged.
 type Config struct {
-	AdminURL              *url.URL
-	AdminRealm            string
-	AdminUsername         string
-	AdminPassword         string
-	Realm                 string
-	WebClientID           string
-	APIClientID           string
-	RedirectURIs          []string
-	WebOrigins            []string
-	PlatformAdminUsername string
-	PlatformAdminPassword string
-	HTTPTimeout           time.Duration
+	AdminURL               *url.URL
+	AdminRealm             string
+	AdminUsername          string
+	AdminPassword          string
+	Realm                  string
+	WebClientID            string
+	APIClientID            string
+	RedirectURIs           []string
+	WebOrigins             []string
+	PlatformAdminUsername  string
+	PlatformAdminPassword  string
+	PlatformAdminEmail     string
+	PlatformAdminFirstName string
+	PlatformAdminLastName  string
+	HTTPTimeout            time.Duration
 }
 
 // LoadConfig reads and validates Keycloak provisioning configuration.
@@ -71,6 +74,18 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if strings.EqualFold(adminUsername, platformUsername) {
 		return Config{}, fmt.Errorf("invalid Keycloak config: KEYCLOAK_PLATFORM_ADMIN_USERNAME must identify a different user than KEYCLOAK_ADMIN_USERNAME")
 	}
+	platformEmail, err := required(getenv, "KEYCLOAK_PLATFORM_ADMIN_EMAIL")
+	if err != nil {
+		return Config{}, err
+	}
+	platformFirstName, err := required(getenv, "KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME")
+	if err != nil {
+		return Config{}, err
+	}
+	platformLastName, err := required(getenv, "KEYCLOAK_PLATFORM_ADMIN_LAST_NAME")
+	if err != nil {
+		return Config{}, err
+	}
 
 	redirectURIs, err := parseBrowserURLs("KEYCLOAK_WEB_REDIRECT_URIS", redirectsRaw, false)
 	if err != nil {
@@ -93,18 +108,21 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 
 	return Config{
-		AdminURL:              adminURL,
-		AdminRealm:            valueOrDefault(getenv("KEYCLOAK_ADMIN_REALM"), defaultAdminRealm),
-		AdminUsername:         adminUsername,
-		AdminPassword:         adminPassword,
-		Realm:                 valueOrDefault(getenv("KEYCLOAK_REALM"), defaultRealm),
-		WebClientID:           valueOrDefault(getenv("KEYCLOAK_WEB_CLIENT_ID"), defaultWebClient),
-		APIClientID:           valueOrDefault(getenv("KEYCLOAK_API_CLIENT_ID"), defaultAPIClient),
-		RedirectURIs:          redirectURIs,
-		WebOrigins:            webOrigins,
-		PlatformAdminUsername: platformUsername,
-		PlatformAdminPassword: platformPassword,
-		HTTPTimeout:           timeout,
+		AdminURL:               adminURL,
+		AdminRealm:             valueOrDefault(getenv("KEYCLOAK_ADMIN_REALM"), defaultAdminRealm),
+		AdminUsername:          adminUsername,
+		AdminPassword:          adminPassword,
+		Realm:                  valueOrDefault(getenv("KEYCLOAK_REALM"), defaultRealm),
+		WebClientID:            valueOrDefault(getenv("KEYCLOAK_WEB_CLIENT_ID"), defaultWebClient),
+		APIClientID:            valueOrDefault(getenv("KEYCLOAK_API_CLIENT_ID"), defaultAPIClient),
+		RedirectURIs:           redirectURIs,
+		WebOrigins:             webOrigins,
+		PlatformAdminUsername:  platformUsername,
+		PlatformAdminPassword:  platformPassword,
+		PlatformAdminEmail:     platformEmail,
+		PlatformAdminFirstName: platformFirstName,
+		PlatformAdminLastName:  platformLastName,
+		HTTPTimeout:            timeout,
 	}, nil
 }
 

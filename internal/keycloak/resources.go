@@ -221,8 +221,12 @@ func (c *Client) EnsureUser(ctx context.Context, realm string, spec UserSpec) (R
 	}
 	if !found {
 		create := map[string]any{
-			"username": spec.Username,
-			"enabled":  spec.Enabled,
+			"username":      spec.Username,
+			"email":         spec.Email,
+			"firstName":     spec.FirstName,
+			"lastName":      spec.LastName,
+			"enabled":       spec.Enabled,
+			"emailVerified": spec.EmailVerified,
 			"credentials": []map[string]any{{
 				"type":      "password",
 				"value":     spec.Password,
@@ -248,7 +252,11 @@ func (c *Client) EnsureUser(ctx context.Context, realm string, spec UserSpec) (R
 	}
 	delete(resource, "credentials")
 	resource["username"] = spec.Username
+	resource["email"] = spec.Email
+	resource["firstName"] = spec.FirstName
+	resource["lastName"] = spec.LastName
 	resource["enabled"] = spec.Enabled
+	resource["emailVerified"] = spec.EmailVerified
 	if err := c.doJSON(ctx, http.MethodPut, segments, nil, resource, []int{http.StatusNoContent}, nil); err != nil {
 		return ResourceRef{}, err
 	}

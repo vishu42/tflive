@@ -169,6 +169,9 @@ func TestEnsureUserSetsPasswordOnlyWhenCreatingUser(t *testing.T) {
 			if _, ok := user["credentials"]; ok {
 				t.Fatal("user update must not contain credentials")
 			}
+			if user["email"] != "tflive-platform-admin@local.test" || user["firstName"] != "tflive" || user["lastName"] != "Platform Administrator" || user["emailVerified"] != true {
+				t.Fatalf("user profile = %#v", user)
+			}
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.NotFound(w, r)
@@ -177,7 +180,10 @@ func TestEnsureUserSetsPasswordOnlyWhenCreatingUser(t *testing.T) {
 	defer server.Close()
 
 	client := authenticatedClientForServer(t, server.URL)
-	spec := UserSpec{Username: "tflive-platform-admin", Password: "platform-local-only-secret", Enabled: true}
+	spec := UserSpec{
+		Username: "tflive-platform-admin", Password: "platform-local-only-secret", Enabled: true,
+		Email: "tflive-platform-admin@local.test", FirstName: "tflive", LastName: "Platform Administrator", EmailVerified: true,
+	}
 	for run := 1; run <= 2; run++ {
 		if _, err := client.EnsureUser(context.Background(), "tflive", spec); err != nil {
 			t.Fatalf("EnsureUser() run %d error = %v", run, err)

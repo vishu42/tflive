@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,6 +29,7 @@ function hasVolume(value, sourceName) {
 
 const keycloakPostgres = service("keycloak-postgres");
 const keycloak = service("keycloak");
+const keycloakProvision = service("keycloak-provision");
 const openfgaPostgres = service("openfga-postgres");
 const openfgaMigrate = service("openfga-migrate");
 const openfga = service("openfga");
@@ -42,6 +43,19 @@ assert.equal(openfga.image, "openfga/openfga:v1.15.1");
 assert.ok(keycloakPostgres.healthcheck, "Keycloak Postgres needs a health check");
 assert.ok(keycloak.healthcheck?.test?.join(" ").includes("/health/ready"));
 assert.equal(keycloak.depends_on?.["keycloak-postgres"]?.condition, "service_healthy");
+assert.equal(keycloakProvision.depends_on?.keycloak?.condition, "service_healthy");
+assert.equal(keycloakProvision.restart, "no");
+assert.equal(keycloakProvision.build?.dockerfile, "Dockerfile.keycloak-provisioner");
+assert.deepEqual(keycloakProvision.ports ?? [], []);
+assert.equal(keycloakProvision.environment?.KEYCLOAK_ADMIN_URL, "http://keycloak:8080");
+assert.equal(
+  keycloakProvision.environment?.KEYCLOAK_WEB_REDIRECT_URIS,
+  "http://localhost:5173/,http://127.0.0.1:5173/",
+);
+assert.equal(
+  keycloakProvision.environment?.KEYCLOAK_WEB_ORIGINS,
+  "http://localhost:5173,http://127.0.0.1:5173",
+);
 assert.ok(openfgaPostgres.healthcheck, "OpenFGA Postgres needs a health check");
 assert.equal(openfgaMigrate.depends_on?.["openfga-postgres"]?.condition, "service_healthy");
 assert.equal(openfga.depends_on?.["openfga-migrate"]?.condition, "service_completed_successfully");
@@ -58,11 +72,23 @@ for (const name of [
   "KEYCLOAK_DB_PASSWORD",
   "KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME",
   "KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD",
+  "KEYCLOAK_PLATFORM_ADMIN_USERNAME",
+  "KEYCLOAK_PLATFORM_ADMIN_PASSWORD",
+  "KEYCLOAK_PLATFORM_ADMIN_EMAIL",
+  "KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME",
+  "KEYCLOAK_PLATFORM_ADMIN_LAST_NAME",
   "OPENFGA_DB_NAME",
   "OPENFGA_DB_USER",
   "OPENFGA_DB_PASSWORD",
 ]) {
   assert.match(source, new RegExp(`\\$\\{${name}:\\?`), `${name} must be required`);
 }
+
+const provisionerDockerfile = resolve(root, "Dockerfile.keycloak-provisioner");
+assert.ok(existsSync(provisionerDockerfile), "missing provisioner Dockerfile");
+const provisionerImage = readFileSync(provisionerDockerfile, "utf8");
+assert.match(provisionerImage, /^FROM golang:1\.24\.1-alpine3\.21 AS build/m);
+assert.match(provisionerImage, /^FROM alpine:3\.21$/m);
+assert.match(provisionerImage, /^USER keycloak-provisioner$/m);
 
 console.log("authentication Compose contract verified");

@@ -41,6 +41,10 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 	if got, want := backend.createdUsers, 1; got != want {
 		t.Fatalf("created users = %d, want %d", got, want)
 	}
+	platformUser := backend.users[cfg.PlatformAdminUsername]
+	if platformUser.Email != cfg.PlatformAdminEmail || platformUser.FirstName != cfg.PlatformAdminFirstName || platformUser.LastName != cfg.PlatformAdminLastName || !platformUser.EmailVerified {
+		t.Fatalf("platform user profile = %#v", platformUser)
+	}
 
 	realm := backend.realms[cfg.Realm]
 	if !realm.Enabled || realm.AccessTokenLifespan != 300 || realm.SSLRequired != "external" || realm.RegistrationAllowed {

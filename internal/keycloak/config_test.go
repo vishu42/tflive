@@ -35,6 +35,9 @@ func TestLoadConfigReadsValidLocalSettings(t *testing.T) {
 	if got, want := cfg.WebOrigins, []string{"http://localhost:5173", "http://127.0.0.1:5173"}; !equalStrings(got, want) {
 		t.Fatalf("WebOrigins = %#v, want %#v", got, want)
 	}
+	if cfg.PlatformAdminEmail != "tflive-platform-admin@local.test" || cfg.PlatformAdminFirstName != "tflive" || cfg.PlatformAdminLastName != "Platform Administrator" {
+		t.Fatalf("platform admin profile = email %q, first %q, last %q", cfg.PlatformAdminEmail, cfg.PlatformAdminFirstName, cfg.PlatformAdminLastName)
+	}
 	if got, want := cfg.HTTPTimeout, 10*time.Second; got != want {
 		t.Fatalf("HTTPTimeout = %s, want %s", got, want)
 	}
@@ -77,6 +80,9 @@ func TestLoadConfigRequiresRuntimeSecretsAndEndpoints(t *testing.T) {
 		"KEYCLOAK_WEB_ORIGINS",
 		"KEYCLOAK_PLATFORM_ADMIN_USERNAME",
 		"KEYCLOAK_PLATFORM_ADMIN_PASSWORD",
+		"KEYCLOAK_PLATFORM_ADMIN_EMAIL",
+		"KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME",
+		"KEYCLOAK_PLATFORM_ADMIN_LAST_NAME",
 	}
 	for _, name := range required {
 		name := name
@@ -144,18 +150,21 @@ func TestLoadConfigRequiresDistinctAdminUsers(t *testing.T) {
 
 func validConfigEnv() map[string]string {
 	return map[string]string{
-		"KEYCLOAK_ADMIN_URL":               "http://keycloak:8080/",
-		"KEYCLOAK_ADMIN_REALM":             "master",
-		"KEYCLOAK_ADMIN_USERNAME":          "tflive-admin",
-		"KEYCLOAK_ADMIN_PASSWORD":          "master-local-only-secret",
-		"KEYCLOAK_REALM":                   "tflive",
-		"KEYCLOAK_WEB_CLIENT_ID":           "tflive-web",
-		"KEYCLOAK_API_CLIENT_ID":           "tflive-api",
-		"KEYCLOAK_WEB_REDIRECT_URIS":       "http://localhost:5173/, http://127.0.0.1:5173/",
-		"KEYCLOAK_WEB_ORIGINS":             "http://localhost:5173, http://127.0.0.1:5173",
-		"KEYCLOAK_PLATFORM_ADMIN_USERNAME": "tflive-platform-admin",
-		"KEYCLOAK_PLATFORM_ADMIN_PASSWORD": "platform-local-only-secret",
-		"KEYCLOAK_HTTP_TIMEOUT":            "10s",
+		"KEYCLOAK_ADMIN_URL":                 "http://keycloak:8080/",
+		"KEYCLOAK_ADMIN_REALM":               "master",
+		"KEYCLOAK_ADMIN_USERNAME":            "tflive-admin",
+		"KEYCLOAK_ADMIN_PASSWORD":            "master-local-only-secret",
+		"KEYCLOAK_REALM":                     "tflive",
+		"KEYCLOAK_WEB_CLIENT_ID":             "tflive-web",
+		"KEYCLOAK_API_CLIENT_ID":             "tflive-api",
+		"KEYCLOAK_WEB_REDIRECT_URIS":         "http://localhost:5173/, http://127.0.0.1:5173/",
+		"KEYCLOAK_WEB_ORIGINS":               "http://localhost:5173, http://127.0.0.1:5173",
+		"KEYCLOAK_PLATFORM_ADMIN_USERNAME":   "tflive-platform-admin",
+		"KEYCLOAK_PLATFORM_ADMIN_PASSWORD":   "platform-local-only-secret",
+		"KEYCLOAK_PLATFORM_ADMIN_EMAIL":      "tflive-platform-admin@local.test",
+		"KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME": "tflive",
+		"KEYCLOAK_PLATFORM_ADMIN_LAST_NAME":  "Platform Administrator",
+		"KEYCLOAK_HTTP_TIMEOUT":              "10s",
 	}
 }
 

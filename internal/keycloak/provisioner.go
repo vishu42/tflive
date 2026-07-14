@@ -67,9 +67,13 @@ type ProtocolMapperSpec struct {
 }
 
 type UserSpec struct {
-	Username string
-	Password string
-	Enabled  bool
+	Username      string
+	Password      string
+	Email         string
+	FirstName     string
+	LastName      string
+	Enabled       bool
+	EmailVerified bool
 }
 
 type ResourceRef struct {
@@ -214,9 +218,13 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 	}
 
 	platformUser, err := backend.EnsureUser(ctx, cfg.Realm, UserSpec{
-		Username: cfg.PlatformAdminUsername,
-		Password: cfg.PlatformAdminPassword,
-		Enabled:  true,
+		Username:      cfg.PlatformAdminUsername,
+		Password:      cfg.PlatformAdminPassword,
+		Email:         cfg.PlatformAdminEmail,
+		FirstName:     cfg.PlatformAdminFirstName,
+		LastName:      cfg.PlatformAdminLastName,
+		Enabled:       true,
+		EmailVerified: true,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("ensure bootstrap platform administrator: %w", err)
