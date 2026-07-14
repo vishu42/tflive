@@ -1,5 +1,9 @@
 # tflive Architecture
 
+The authentication and authorization trust boundaries, identity propagation,
+role semantics, failure contracts, and threat model are defined in the
+[Authentication and Authorization Security Architecture](superpowers/specs/2026-07-14-authn-authz-security-architecture-design.md).
+
 This document describes tflive's current MVP product model, system architecture, execution workflows, persistence boundaries, security posture, and deferred design topics. For setup and local development, see the [project README](../README.md).
 
 ## Goals
