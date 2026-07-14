@@ -1,0 +1,145 @@
+# Keycloak Authentication
+
+This document defines the Keycloak realm and identity resources provisioned for
+tflive. The broader trust model and authorization invariants remain in the
+[authentication and authorization security architecture](superpowers/specs/2026-07-14-authn-authz-security-architecture-design.md).
+
+## Local Realm
+
+Docker Compose runs Keycloak 26.6.3 at `http://localhost:8082` and executes the
+`keycloak-provision` one-shot service after Keycloak reports healthy. The
+service reconciles named resources through the Keycloak Admin REST API and
+exits non-zero if any operation or effective-token postcondition fails.
+
+The local issuer is:
+
+```text
+http://localhost:8082/realms/tflive
+```
+
+The realm has a 300-second access-token lifespan, is enabled, does not permit
+self-registration, and uses Keycloak's `external` SSL policy. Local loopback
+HTTP exists only for development; production uses one canonical HTTPS issuer.
+
+## OIDC Clients and Claims
+
+| Resource | Configuration |
+|---|---|
+| `tflive-web` | Public OpenID Connect client; Authorization Code flow enabled; PKCE S256 required; implicit, password, device, CIBA, service-account, and standard token-exchange grants disabled |
+| `tflive-api` | Bearer-only OpenID Connect client used as the API audience |
+| `tflive-api-audience` | Default client scope on `tflive-web` with a hardcoded `tflive-api` access-token audience mapper |
+| `roles` | Built-in default client scope explicitly linked to `tflive-web`; realm roles remain in `realm_access.roles` |
+
+The local browser allowlist contains exact entries only:
+
+```text
+Redirect URIs:
+  http://localhost:5173/
+  http://127.0.0.1:5173/
+
+Web origins:
+  http://localhost:5173
+  http://127.0.0.1:5173
+```
+
+Wildcard redirects and origins are rejected by provisioner configuration
+validation. Plain HTTP browser endpoints are accepted only for loopback hosts.
+User information, queries, and fragments are also rejected in configured URLs.
+
+An access token for the initial platform administrator is verified during every
+provisioning run to contain:
+
+```json
+{
+  "aud": ["tflive-api"],
+  "realm_access": {
+    "roles": ["platform-admin"]
+  }
+}
+```
+
+Keycloak can serialize a single audience as either a string or an array. tflive
+provisioning accepts both representations when enforcing the postcondition.
+
+## Global Roles
+
+| Role | Meaning |
+|---|---|
+| `platform-admin` | Administer tflive and bypass ordinary stack checks, but never authentication, tenant validation, audit requirements, last-owner protection, dependency fail-closed behavior, or self-approval prevention |
+| `stack-creator` | Create a stack and become its initial OpenFGA owner |
+
+These are realm roles and appear in `realm_access.roles`. Per-stack roles never
+belong in Keycloak; AUTH-004 provisions those relationships in OpenFGA.
+
+## Administrator Boundary
+
+Two different identities serve different purposes:
+
+1. The master-realm bootstrap administrator is supplied to Keycloak itself and
+   is used by the one-shot provisioner. Its credentials are not shared for
+   daily platform administration.
+2. The initial tflive platform administrator is a user inside the `tflive`
+   realm. It receives the `platform-admin` realm role and only these
+   `realm-management` client roles: `query-users`, `view-users`,
+   `manage-users`, and `view-realm`.
+
+The tflive administrator can use the dedicated console at
+`http://localhost:8082/admin/tflive/console/` to find and manage tflive users
+and assign the fixed global roles. It does not receive the broad `realm-admin`
+composite and cannot administer the master realm.
+
+Keycloak 26's default user profile requires email, first name, and last name for
+normal realm users. Provisioning reconciles those attributes and marks the
+trusted bootstrap email as verified so the initial administrator is immediately
+usable. The password is set only when the user is first created; later reruns do
+not overwrite an operator-rotated password.
+
+## Runtime Configuration
+
+The provisioner requires these values. Local-only examples live in
+`.env.example`; production supplies them through its secret/config delivery
+system and must not reuse the examples.
+
+| Variable | Sensitive | Purpose |
+|---|---:|---|
+| `KEYCLOAK_ADMIN_URL` | No | Admin API base URL; Compose fixes it to `http://keycloak:8080` |
+| `KEYCLOAK_ADMIN_REALM` | No | Bootstrap administrator realm; defaults to `master` |
+| `KEYCLOAK_ADMIN_USERNAME` | Yes | Master bootstrap administrator username |
+| `KEYCLOAK_ADMIN_PASSWORD` | Yes | Master bootstrap administrator password |
+| `KEYCLOAK_REALM` | No | Product realm; defaults to `tflive` |
+| `KEYCLOAK_WEB_CLIENT_ID` | No | Browser client; defaults to `tflive-web` |
+| `KEYCLOAK_API_CLIENT_ID` | No | API audience client; defaults to `tflive-api` |
+| `KEYCLOAK_WEB_REDIRECT_URIS` | No | Comma-separated exact redirects |
+| `KEYCLOAK_WEB_ORIGINS` | No | Comma-separated exact browser origins |
+| `KEYCLOAK_PLATFORM_ADMIN_USERNAME` | Yes | Initial tflive platform administrator username |
+| `KEYCLOAK_PLATFORM_ADMIN_PASSWORD` | Yes | Initial password, used only when creating the user |
+| `KEYCLOAK_PLATFORM_ADMIN_EMAIL` | No | Required trusted bootstrap profile email |
+| `KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME` | No | Required bootstrap profile first name |
+| `KEYCLOAK_PLATFORM_ADMIN_LAST_NAME` | No | Required bootstrap profile last name |
+| `KEYCLOAK_HTTP_TIMEOUT` | No | Per-client HTTP timeout; defaults to 10 seconds |
+
+Configured passwords and in-memory admin tokens are redacted from surfaced
+errors and never written to successful logs.
+
+## Operation and Reruns
+
+Start or reconcile the realm with:
+
+```bash
+docker compose --env-file .env up --build keycloak-provision
+```
+
+A successful run exits `0` after checking the effective access token. Re-run
+the same command after configuration changes. The provisioner looks up realms,
+clients, roles, scopes, mappers, and users by their immutable names, creates
+missing resources, and repairs fields owned by tflive without discarding
+unrelated operator-managed representation fields.
+
+To prove idempotence locally:
+
+```bash
+docker compose --env-file .env up --build --force-recreate keycloak-provision
+```
+
+Duplicate exact client IDs, usernames, client-scope names, or mapper names fail
+the run instead of making an arbitrary choice.

@@ -35,12 +35,15 @@ once, then start the complete dependency stack:
 
 ```bash
 cp .env.example .env
-docker compose up app-postgres keycloak-postgres keycloak openfga-postgres openfga-migrate openfga temporal-postgres temporal temporal-ui minio minio-init
+docker compose up app-postgres keycloak-postgres keycloak keycloak-provision openfga-postgres openfga-migrate openfga temporal-postgres temporal temporal-ui minio minio-init
 ```
 
-Keycloak is available at `http://localhost:8082`. The bootstrap administrator
-credentials come from `.env` and are for local development only. AUTH-003
-provisions the tflive realm after Keycloak is healthy.
+Keycloak is available at `http://localhost:8082`. The one-shot
+`keycloak-provision` service creates or reconciles the `tflive` realm after
+Keycloak is healthy and must exit with code `0`. Both the master bootstrap and
+tflive platform-administrator credentials come from `.env` and are for local
+development only. See [Keycloak authentication](docs/authentication.md) for
+the exact clients, claims, roles, administrator boundary, and safe reruns.
 
 The OpenFGA HTTP API is available at `http://localhost:8083`, and its gRPC API
 is available at `localhost:8084`. AUTH-004 provisions the tflive store and
@@ -96,4 +99,5 @@ web/                  Vite UI
 ## Documentation
 
 - [Architecture and product model](docs/architecture.md)
+- [Keycloak authentication](docs/authentication.md)
 - [Transactional workflow-outbox design](docs/superpowers/specs/2026-07-10-template-run-workflow-outbox-design.md)
