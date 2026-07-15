@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const maxResponseBody = 64 << 10
@@ -28,14 +29,20 @@ type ModelRecord struct {
 type Client struct {
 	baseURL *url.URL
 	token   string
+	timeout time.Duration
 	http    *http.Client
 }
 
 func NewClient(cfg Config) *Client {
+	timeout := cfg.HTTPTimeout
+	if timeout <= 0 {
+		timeout = defaultHTTPTimeout
+	}
 	return &Client{
 		baseURL: cfg.APIURL,
 		token:   cfg.APIToken,
-		http:    &http.Client{Timeout: cfg.HTTPTimeout},
+		timeout: timeout,
+		http:    &http.Client{Timeout: timeout},
 	}
 }
 
@@ -206,7 +213,9 @@ func (client *Client) doJSON(ctx context.Context, method string, endpoint *url.U
 		}
 		body = bytes.NewReader(encoded)
 	}
-	request, err := http.NewRequestWithContext(ctx, method, endpoint.String(), body)
+	requestContext, cancel := context.WithTimeout(ctx, client.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestContext, method, endpoint.String(), body)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
