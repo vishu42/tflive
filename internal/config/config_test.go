@@ -8,7 +8,7 @@ import (
 func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := LoadAPIConfig(func(key string) string {
+	cfg, err := LoadAPIConfig(withValidSecurity(func(key string) string {
 		switch key {
 		case "DATABASE_URL":
 			return " postgres://user:pass@localhost:5432/db?sslmode=disable "
@@ -41,7 +41,7 @@ func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 		default:
 			return ""
 		}
-	})
+	}))
 	if err != nil {
 		t.Fatalf("LoadAPIConfig returned error: %v", err)
 	}
@@ -64,13 +64,16 @@ func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 	if cfg.WorkerRunRoot != "/var/lib/tflive/runs" {
 		t.Fatalf("WorkerRunRoot = %q, want /var/lib/tflive/runs", cfg.WorkerRunRoot)
 	}
+	if cfg.Security.TenantID != "tenant_123" {
+		t.Fatalf("Security.TenantID = %q, want tenant_123", cfg.Security.TenantID)
+	}
 	assertArtifactStoreConfig(t, cfg.ArtifactStore)
 }
 
 func TestLoadAPIConfigDefaultsTemporalTaskQueue(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := LoadAPIConfig(func(key string) string {
+	cfg, err := LoadAPIConfig(withValidSecurity(func(key string) string {
 		switch key {
 		case "DATABASE_URL":
 			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
@@ -79,7 +82,7 @@ func TestLoadAPIConfigDefaultsTemporalTaskQueue(t *testing.T) {
 		default:
 			return ""
 		}
-	})
+	}))
 	if err != nil {
 		t.Fatalf("LoadAPIConfig returned error: %v", err)
 	}
@@ -107,12 +110,12 @@ func TestLoadAPIConfigDefaultsTemporalTaskQueue(t *testing.T) {
 func TestLoadAPIConfigRequiresDatabaseURL(t *testing.T) {
 	t.Parallel()
 
-	_, err := LoadAPIConfig(func(key string) string {
+	_, err := LoadAPIConfig(withValidSecurity(func(key string) string {
 		if key == "TEMPORAL_ADDRESS" {
 			return "localhost:7233"
 		}
 		return ""
-	})
+	}))
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("error = %v, want ErrInvalidConfig", err)
 	}
@@ -121,12 +124,12 @@ func TestLoadAPIConfigRequiresDatabaseURL(t *testing.T) {
 func TestLoadAPIConfigRequiresTemporalAddress(t *testing.T) {
 	t.Parallel()
 
-	_, err := LoadAPIConfig(func(key string) string {
+	_, err := LoadAPIConfig(withValidSecurity(func(key string) string {
 		if key == "DATABASE_URL" {
 			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
 		}
 		return ""
-	})
+	}))
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("error = %v, want ErrInvalidConfig", err)
 	}
@@ -251,7 +254,7 @@ func TestLoadWorkerConfigRequiresDatabaseURL(t *testing.T) {
 func TestLoadAPIConfigRejectsInvalidArtifactStoreKind(t *testing.T) {
 	t.Parallel()
 
-	_, err := LoadAPIConfig(func(key string) string {
+	_, err := LoadAPIConfig(withValidSecurity(func(key string) string {
 		switch key {
 		case "DATABASE_URL":
 			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
@@ -262,7 +265,7 @@ func TestLoadAPIConfigRejectsInvalidArtifactStoreKind(t *testing.T) {
 		default:
 			return ""
 		}
-	})
+	}))
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("error = %v, want ErrInvalidConfig", err)
 	}
@@ -294,5 +297,15 @@ func assertArtifactStoreConfig(t *testing.T, cfg ArtifactStoreConfig) {
 	}
 	if !cfg.S3.ForcePathStyle {
 		t.Fatal("S3.ForcePathStyle = false, want true")
+	}
+}
+
+func withValidSecurity(getenv func(string) string) func(string) string {
+	security := validSecurityValues()
+	return func(name string) string {
+		if value, ok := security[name]; ok {
+			return value
+		}
+		return getenv(name)
 	}
 }
