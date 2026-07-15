@@ -31,10 +31,35 @@ UI:  http://localhost:5173
 Start backend dependencies:
 
 On a clean checkout, copy the explicitly local-development environment example
-once, then start the complete dependency stack:
+once:
 
 ```bash
 cp .env.example .env
+```
+
+Provision OpenFGA in two phases. Bootstrap prints two environment assignments;
+copy those lines into `.env` as text, and do not execute or evaluate the
+bootstrap output directly:
+
+```bash
+docker compose --env-file .env.example up -d openfga-postgres openfga-migrate openfga
+docker compose --env-file .env.example run --rm openfga-provision bootstrap
+# Copy OPENFGA_STORE_ID and OPENFGA_MODEL_ID from stdout into .env.
+docker compose run --rm openfga-provision verify
+```
+
+Run only one bootstrap at a time because OpenFGA store names are not unique.
+Bootstrap fails closed if the `tflive` store name or semantic model match is
+ambiguous, and it can be retried safely after a partial store-only or model-only
+failure. Verify uses the exact `OPENFGA_STORE_ID` and `OPENFGA_MODEL_ID` copied
+into `.env`; it never mutates OpenFGA and never substitutes the latest model.
+The API will later consume these same explicit IDs. See
+[Authentication and authorization](docs/authentication.md) for the role matrix,
+immutable-model update procedure, and recovery details.
+
+After verify succeeds, start the complete dependency stack:
+
+```bash
 docker compose up app-postgres keycloak-postgres keycloak keycloak-provision openfga-postgres openfga-migrate openfga temporal-postgres temporal temporal-ui minio minio-init
 ```
 
@@ -99,5 +124,5 @@ web/                  Vite UI
 ## Documentation
 
 - [Architecture and product model](docs/architecture.md)
-- [Keycloak authentication](docs/authentication.md)
+- [Authentication and authorization](docs/authentication.md)
 - [Transactional workflow-outbox design](docs/superpowers/specs/2026-07-10-template-run-workflow-outbox-design.md)

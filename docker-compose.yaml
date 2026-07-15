@@ -129,6 +129,23 @@ services:
       retries: 12
       start_period: 10s
 
+  openfga-provision:
+    build:
+      context: .
+      dockerfile: Dockerfile.openfga-provisioner
+    command: ["verify"]
+    depends_on:
+      openfga:
+        condition: service_healthy
+    environment:
+      OPENFGA_API_URL: http://openfga:8080
+      OPENFGA_STORE_NAME: tflive
+      OPENFGA_STORE_ID: ${OPENFGA_STORE_ID:-}
+      OPENFGA_MODEL_ID: ${OPENFGA_MODEL_ID:-}
+      OPENFGA_HTTP_TIMEOUT: ${OPENFGA_HTTP_TIMEOUT:-10s}
+      OPENFGA_API_TOKEN: ${OPENFGA_API_TOKEN:-}
+    restart: "no"
+
   temporal-postgres:
     image: postgres:16-alpine
     environment:

@@ -1,7 +1,8 @@
-# Keycloak Authentication
+# Authentication and Authorization
 
 This document defines the Keycloak realm and identity resources provisioned for
-tflive. The broader trust model and authorization invariants remain in the
+tflive and the OpenFGA model used for per-stack authorization. The broader
+trust model and authorization invariants remain in the
 [authentication and authorization security architecture](superpowers/specs/2026-07-14-authn-authz-security-architecture-design.md).
 
 ## Local Realm
@@ -92,7 +93,7 @@ Keycloak 26's default user profile requires email, first name, and last name for
 normal realm users. Provisioning reconciles those attributes and marks the
 trusted bootstrap email as verified so the initial administrator is immediately
 usable. The password is set only when the user is first created; later reruns do
-not overwrite an operator-rotated password.
+not overwrite a password rotated by a deployment administrator.
 
 ## Runtime Configuration
 
@@ -133,7 +134,7 @@ A successful run exits `0` after checking the effective access token. Re-run
 the same command after configuration changes. The provisioner looks up realms,
 clients, roles, scopes, mappers, and users by their immutable names, creates
 missing resources, and repairs fields owned by tflive without discarding
-unrelated operator-managed representation fields.
+unrelated representation fields managed by a deployment administrator.
 
 To prove idempotence locally:
 
@@ -143,3 +144,68 @@ docker compose --env-file .env up --build --force-recreate keycloak-provision
 
 Duplicate exact client IDs, usernames, client-scope names, or mapper names fail
 the run instead of making an arbitrary choice.
+
+## OpenFGA Stack Authorization
+
+The model defines `user` and `stack` types. Only the four direct stack roles can
+be assigned to a user; the permission relations are derived and cannot be
+assigned directly.
+
+### Role and Permission Matrix
+
+| Direct stack role | `can_view` | `can_operate` | `can_approve` | `can_manage_access` | Meaning |
+|---|---:|---:|---:|---:|---|
+| `owner` | Allowed | Allowed | Allowed | Allowed | View, operate, approve, and manage access |
+| `operator` | Allowed | Allowed | Denied | Denied | View and operate |
+| `approver` | Allowed | Denied | Allowed | Denied | View and approve |
+| `viewer` | Allowed | Denied | Denied | Denied | View only |
+
+The derived relations are exactly:
+
+- `can_view = owner or operator or approver or viewer`
+- `can_operate = owner or operator`
+- `can_approve = owner or approver`
+- `can_manage_access = owner`
+
+`operator` always means the per-stack OpenFGA role in this repository. The
+person or pipeline that configures and deploys the services is the deployment
+administrator.
+
+### Provisioning and Verification
+
+On a clean checkout, initialize OpenFGA with the two-phase workflow:
+
+```bash
+docker compose --env-file .env.example up -d openfga-postgres openfga-migrate openfga
+docker compose --env-file .env.example run --rm openfga-provision bootstrap
+# Copy OPENFGA_STORE_ID and OPENFGA_MODEL_ID from stdout into .env.
+docker compose run --rm openfga-provision verify
+```
+
+The provisioner's standard output contains only these two assignments:
+
+```text
+OPENFGA_STORE_ID=<store ID>
+OPENFGA_MODEL_ID=<authorization model ID>
+```
+
+The deployment administrator copies both assignment lines into environment
+configuration as text; the bootstrap output must not be executed or evaluated
+directly.
+Bootstrap discovers only the uniquely named `tflive` store and reuses exactly
+one semantic match for the repository model. Duplicate `tflive` store names or
+duplicate semantic model matches fail closed rather than selecting an arbitrary
+resource.
+
+Bootstrap must be serialized because OpenFGA store names are not unique. If a
+run fails after creating only the store, or after creating the model but before
+the IDs are recorded, rerun the same bootstrap command: it safely reuses the
+unique completed resource and finishes the missing work. A model definition
+change creates a new immutable model ID; the deployment administrator must
+explicitly update `OPENFGA_MODEL_ID` in environment configuration.
+
+Verify fetches the exact `OPENFGA_STORE_ID` and `OPENFGA_MODEL_ID`, compares the
+exact stored model with the repository model, and never writes or otherwise
+mutates OpenFGA. It never discovers or substitutes a latest model. The API will
+later use the same explicit IDs, so verification and runtime authorization
+remain pinned to the environment configuration.
