@@ -64,13 +64,24 @@ assert.ok(openfga.healthcheck?.test?.join(" ").includes("grpc_health_probe"));
 assert.equal(openfgaProvision.depends_on?.openfga?.condition, "service_healthy");
 assert.equal(openfgaProvision.restart, "no");
 assert.equal(openfgaProvision.build?.dockerfile, "Dockerfile.openfga-provisioner");
+assert.equal(resolve(root, openfgaProvision.build?.context ?? "__missing__"), root);
 assert.deepEqual(openfgaProvision.ports ?? [], []);
 assert.deepEqual(openfgaProvision.command, ["verify"]);
 assert.equal(openfgaProvision.environment?.OPENFGA_API_URL, "http://openfga:8080");
 assert.equal(openfgaProvision.environment?.OPENFGA_STORE_NAME, "tflive");
 assert.equal(openfgaProvision.environment?.OPENFGA_STORE_ID, "");
 assert.equal(openfgaProvision.environment?.OPENFGA_MODEL_ID, "");
+assert.equal(openfgaProvision.environment?.OPENFGA_API_TOKEN, "");
 assert.equal(openfgaProvision.environment?.OPENFGA_HTTP_TIMEOUT, "10s");
+
+for (const token of [
+  "${OPENFGA_STORE_ID:-}",
+  "${OPENFGA_MODEL_ID:-}",
+  "${OPENFGA_API_TOKEN:-}",
+  "${OPENFGA_HTTP_TIMEOUT:-10s}",
+]) {
+  assert.ok(source.includes(token), `${token} must remain explicit`);
+}
 
 assert.ok(hasVolume(keycloakPostgres, "keycloak-postgres-data"));
 assert.ok(hasVolume(openfgaPostgres, "openfga-postgres-data"));
@@ -106,7 +117,35 @@ const openfgaProvisionerDockerfile = resolve(root, "Dockerfile.openfga-provision
 assert.ok(existsSync(openfgaProvisionerDockerfile), "missing OpenFGA provisioner Dockerfile");
 const openfgaProvisionerImage = readFileSync(openfgaProvisionerDockerfile, "utf8");
 assert.match(openfgaProvisionerImage, /^FROM golang:1\.24\.1-alpine3\.21 AS build/m);
+assert.match(openfgaProvisionerImage, /^COPY go\.mod go\.sum \.\/$/m);
+assert.match(openfgaProvisionerImage, /^COPY openfga \.\/openfga$/m);
+assert.match(openfgaProvisionerImage, /^COPY internal\/openfga \.\/internal\/openfga$/m);
+assert.match(
+  openfgaProvisionerImage,
+  /^COPY cmd\/openfga-provisioner \.\/cmd\/openfga-provisioner$/m,
+);
+assert.match(openfgaProvisionerImage, /^RUN CGO_ENABLED=0 go build /m);
+assert.match(openfgaProvisionerImage, /^RUN [^\n]* -trimpath(?: |$)/m);
+assert.match(openfgaProvisionerImage, /^RUN [^\n]* -ldflags="-s -w"(?: |$)/m);
+assert.match(
+  openfgaProvisionerImage,
+  /^RUN [^\n]* -o \/out\/openfga-provisioner \.\/cmd\/openfga-provisioner$/m,
+);
 assert.match(openfgaProvisionerImage, /^FROM alpine:3\.21$/m);
+assert.match(openfgaProvisionerImage, /^RUN apk add --no-cache ca-certificates \\$/m);
+assert.match(openfgaProvisionerImage, /^[ \t]*&& addgroup -S openfga-provisioner \\$/m);
+assert.match(
+  openfgaProvisionerImage,
+  /^[ \t]*&& adduser -S -D -H -G openfga-provisioner openfga-provisioner$/m,
+);
+assert.match(
+  openfgaProvisionerImage,
+  /^COPY --from=build \/out\/openfga-provisioner \/usr\/local\/bin\/openfga-provisioner$/m,
+);
 assert.match(openfgaProvisionerImage, /^USER openfga-provisioner$/m);
+assert.match(
+  openfgaProvisionerImage,
+  /^ENTRYPOINT \["\/usr\/local\/bin\/openfga-provisioner"\]$/m,
+);
 
 console.log("authentication Compose contract verified");
