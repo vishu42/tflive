@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -49,8 +50,13 @@ type apiDependencies struct {
 
 func main() {
 	if err := run(context.Background(), os.Getenv); err != nil {
-		log.Fatal(err)
+		writeStartupError(os.Stderr, err)
+		os.Exit(1)
 	}
+}
+
+func writeStartupError(writer io.Writer, err error) {
+	log.New(writer, "", log.LstdFlags).Printf("tflive API failed: %v", err)
 }
 
 func defaultAPIDependencies() apiDependencies {

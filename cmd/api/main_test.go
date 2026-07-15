@@ -23,28 +23,74 @@ import (
 func TestRunRequiresDatabaseURL(t *testing.T) {
 	t.Parallel()
 
-	err := run(context.Background(), func(key string) string {
-		if key == "TEMPORAL_ADDRESS" {
-			return "localhost:7233"
-		}
-		return ""
-	})
-	if !errors.Is(err, config.ErrInvalidConfig) {
-		t.Fatalf("error = %v, want ErrInvalidConfig", err)
+	values := apiTestValues()
+	delete(values, "DATABASE_URL")
+	err := run(context.Background(), apiTestGetenv(values))
+	if !errors.Is(err, config.ErrInvalidConfig) || err == nil || !strings.Contains(err.Error(), "DATABASE_URL is required") {
+		t.Fatalf("error = %v, want DATABASE_URL ErrInvalidConfig", err)
 	}
 }
 
 func TestRunRequiresTemporalAddress(t *testing.T) {
 	t.Parallel()
 
-	err := run(context.Background(), func(key string) string {
-		if key == "DATABASE_URL" {
-			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
-		}
-		return ""
-	})
+	values := apiTestValues()
+	delete(values, "TEMPORAL_ADDRESS")
+	err := run(context.Background(), apiTestGetenv(values))
+	if !errors.Is(err, config.ErrInvalidConfig) || err == nil || !strings.Contains(err.Error(), "TEMPORAL_ADDRESS is required") {
+		t.Fatalf("error = %v, want TEMPORAL_ADDRESS ErrInvalidConfig", err)
+	}
+}
+
+func TestRunRejectsSecurityConfigBeforeDependencies(t *testing.T) {
+	t.Parallel()
+
+	values := apiTestValues()
+	delete(values, "TFLIVE_TENANT_ID")
+	postgresCalled := false
+	deps := apiDependencies{
+		newPostgresPool: func(context.Context, string) (postgresPool, error) {
+			postgresCalled = true
+			return nil, nil
+		},
+	}
+
+	err := runWithDependencies(context.Background(), apiTestGetenv(values), deps)
+	if !errors.Is(err, config.ErrInvalidConfig) || err == nil || !strings.Contains(err.Error(), "TFLIVE_TENANT_ID is required") {
+		t.Fatalf("error = %v, want tenant ErrInvalidConfig", err)
+	}
+	if postgresCalled {
+		t.Fatal("Postgres initialization ran after invalid security configuration")
+	}
+}
+
+func TestWriteStartupErrorDoesNotLeakSecuritySecrets(t *testing.T) {
+	t.Parallel()
+
+	values := apiTestValues()
+	values["TFLIVE_ENVIRONMENT"] = "production"
+	values["OIDC_ISSUER_URL"] = "https://client:oidc-client-secret-sentinel@id.example.com/realms/tflive"
+	values["OPENFGA_API_URL"] = "https://openfga.example.com"
+	values["OPENFGA_API_TOKEN"] = "openfga-api-token-sentinel"
+	values["KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD"] = "bootstrap-password-sentinel"
+
+	err := runWithDependencies(context.Background(), apiTestGetenv(values), apiDependencies{})
 	if !errors.Is(err, config.ErrInvalidConfig) {
 		t.Fatalf("error = %v, want ErrInvalidConfig", err)
+	}
+	var output bytes.Buffer
+	writeStartupError(&output, err)
+	for _, secret := range []string{
+		"oidc-client-secret-sentinel",
+		"openfga-api-token-sentinel",
+		"bootstrap-password-sentinel",
+	} {
+		if strings.Contains(output.String(), secret) {
+			t.Fatalf("startup log leaked %q: %s", secret, output.String())
+		}
+	}
+	if !strings.Contains(output.String(), "OIDC_ISSUER_URL must not include user information") {
+		t.Fatalf("startup log = %q", output.String())
 	}
 }
 
@@ -128,16 +174,9 @@ func TestRunUsesDefaultTemporalTaskQueue(t *testing.T) {
 	t.Parallel()
 
 	deps := newRecordingAPIDependencies(t)
-	err := runWithDependencies(context.Background(), func(key string) string {
-		switch key {
-		case "DATABASE_URL":
-			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
-		case "TEMPORAL_ADDRESS":
-			return "localhost:7233"
-		default:
-			return ""
-		}
-	}, deps.apiDependencies)
+	values := apiTestValues()
+	delete(values, "TEMPORAL_TASK_QUEUE")
+	err := runWithDependencies(context.Background(), apiTestGetenv(values), deps.apiDependencies)
 	if err != nil {
 		t.Fatalf("runWithDependencies returned error: %v", err)
 	}
@@ -195,16 +234,9 @@ func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
 		return recordingWorkflowDispatcher{}
 	}
 
-	err := runWithDependencies(context.Background(), func(key string) string {
-		switch key {
-		case "DATABASE_URL":
-			return dsn
-		case "TEMPORAL_ADDRESS":
-			return "localhost:7233"
-		default:
-			return ""
-		}
-	}, deps)
+	values := apiTestValues()
+	values["DATABASE_URL"] = dsn
+	err := runWithDependencies(context.Background(), apiTestGetenv(values), deps)
 	if err != nil {
 		t.Fatalf("runWithDependencies returned error: %v", err)
 	}
@@ -273,27 +305,34 @@ func (buffer *startupLogBuffer) String() string {
 	return buffer.logs.String()
 }
 
-func apiTestEnv(key string) string {
-	switch key {
-	case "DATABASE_URL":
-		return "postgres://user:pass@localhost:5432/db?sslmode=disable"
-	case "HTTP_ADDRESS":
-		return ":9090"
-	case "TEMPORAL_ADDRESS":
-		return "localhost:7233"
-	case "TEMPORAL_NAMESPACE":
-		return "tflive"
-	case "TEMPORAL_TASK_QUEUE":
-		return "terraform-runs-dev"
-	case "WORKER_RUN_ROOT":
-		return "/var/lib/tflive/runs"
-	case "ARTIFACT_STORE_KIND":
-		return "filesystem"
-	case "ARTIFACT_STORE_FILESYSTEM_ROOT":
-		return "/var/lib/tflive/artifacts"
-	default:
-		return ""
+func apiTestValues() map[string]string {
+	return map[string]string{
+		"DATABASE_URL":                   "postgres://user:pass@localhost:5432/db?sslmode=disable",
+		"HTTP_ADDRESS":                   ":9090",
+		"TEMPORAL_ADDRESS":               "localhost:7233",
+		"TEMPORAL_NAMESPACE":             "tflive",
+		"TEMPORAL_TASK_QUEUE":            "terraform-runs-dev",
+		"WORKER_RUN_ROOT":                "/var/lib/tflive/runs",
+		"ARTIFACT_STORE_KIND":            "filesystem",
+		"ARTIFACT_STORE_FILESYSTEM_ROOT": "/var/lib/tflive/artifacts",
+		"TFLIVE_ENVIRONMENT":             "development",
+		"TFLIVE_TENANT_ID":               "tenant_123",
+		"OIDC_ISSUER_URL":                "http://localhost:8082/realms/tflive",
+		"OIDC_AUDIENCE":                  "tflive-api",
+		"OPENFGA_API_URL":                "http://localhost:8080",
+		"OPENFGA_STORE_ID":               "store-id",
+		"OPENFGA_MODEL_ID":               "model-id",
+		"OPENFGA_API_TOKEN":              "",
+		"OPENFGA_HTTP_TIMEOUT":           "10s",
 	}
+}
+
+func apiTestEnv(name string) string {
+	return apiTestValues()[name]
+}
+
+func apiTestGetenv(values map[string]string) func(string) string {
+	return func(name string) string { return values[name] }
 }
 
 type recordingAPIDependencies struct {
