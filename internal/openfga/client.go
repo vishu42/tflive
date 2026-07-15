@@ -229,6 +229,10 @@ func (client *Client) doJSON(ctx context.Context, method string, endpoint *url.U
 	}
 	if !containsStatus(accepted, response.StatusCode) {
 		safe := redact(string(data), client.token)
+		if len(safe) > maxResponseBody {
+			safe = safe[:maxResponseBody]
+			truncated = true
+		}
 		if truncated {
 			safe += " [TRUNCATED]"
 		}

@@ -87,6 +87,32 @@ func TestClientBoundsAndRedactsServerErrors(t *testing.T) {
 	}
 }
 
+func TestClientBoundsErrorsAfterRedactionExpansion(t *testing.T) {
+	t.Parallel()
+
+	secret := "z"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, strings.Repeat(secret, maxResponseBody+1), http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := testClient(t, server.URL, secret)
+	_, err := client.GetStore(context.Background(), "store-id")
+	if err == nil {
+		t.Fatal("GetStore() error = nil")
+	}
+	message := err.Error()
+	if strings.Contains(message, secret) {
+		t.Fatal("error leaked token")
+	}
+	if !strings.Contains(message, "[REDACTED]") || !strings.Contains(message, "[TRUNCATED]") {
+		t.Fatal("error did not preserve redaction and truncation markers")
+	}
+	if len(message) > 70000 {
+		t.Fatalf("error was not bounded after redaction: length=%d", len(message))
+	}
+}
+
 func TestClientRejectsMalformedJSONAndHonorsCancellation(t *testing.T) {
 	t.Parallel()
 
