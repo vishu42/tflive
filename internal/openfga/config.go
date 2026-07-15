@@ -34,16 +34,16 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if apiURL.Scheme != "http" && apiURL.Scheme != "https" {
 		return Config{}, fmt.Errorf("OPENFGA_API_URL scheme must be http or https")
 	}
-	if apiURL.Host == "" {
+	if apiURL.Hostname() == "" {
 		return Config{}, fmt.Errorf("OPENFGA_API_URL must include a host")
 	}
 	if apiURL.User != nil {
 		return Config{}, fmt.Errorf("OPENFGA_API_URL must not include user information")
 	}
-	if apiURL.RawQuery != "" {
+	if apiURL.RawQuery != "" || apiURL.ForceQuery {
 		return Config{}, fmt.Errorf("OPENFGA_API_URL must not include a query")
 	}
-	if apiURL.Fragment != "" {
+	if apiURL.Fragment != "" || strings.Contains(rawURL, "#") {
 		return Config{}, fmt.Errorf("OPENFGA_API_URL must not include a fragment")
 	}
 
@@ -69,8 +69,8 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	return Config{
 		APIURL:      apiURL,
 		StoreName:   storeName,
-		StoreID:     strings.TrimSpace(getenv("OPENFGA_STORE_ID")),
-		ModelID:     strings.TrimSpace(getenv("OPENFGA_MODEL_ID")),
+		StoreID:     getenv("OPENFGA_STORE_ID"),
+		ModelID:     getenv("OPENFGA_MODEL_ID"),
 		APIToken:    getenv("OPENFGA_API_TOKEN"),
 		HTTPTimeout: timeout,
 	}, nil
