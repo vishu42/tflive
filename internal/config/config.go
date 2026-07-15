@@ -23,6 +23,7 @@ type APIConfig struct {
 	TemporalTaskQueue string
 	WorkerRunRoot     string
 	ArtifactStore     ArtifactStoreConfig
+	Security          SecurityConfig
 }
 
 type WorkerConfig struct {
@@ -57,6 +58,10 @@ type S3Config struct {
 }
 
 func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
+	security, err := loadSecurityConfig(getenv)
+	if err != nil {
+		return APIConfig{}, err
+	}
 	artifactStore, err := loadArtifactStoreConfig(getenv)
 	if err != nil {
 		return APIConfig{}, err
@@ -70,6 +75,7 @@ func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
 		TemporalTaskQueue: strings.TrimSpace(getenv("TEMPORAL_TASK_QUEUE")),
 		WorkerRunRoot:     strings.TrimSpace(getenv("WORKER_RUN_ROOT")),
 		ArtifactStore:     artifactStore,
+		Security:          security,
 	}
 	if cfg.HTTPAddress == "" {
 		cfg.HTTPAddress = DefaultHTTPAddress

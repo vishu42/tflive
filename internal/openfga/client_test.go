@@ -3,7 +3,9 @@ package openfga
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -143,6 +145,99 @@ func testClient(t *testing.T, rawURL, token string) *Client {
 	return NewClient(Config{
 		APIURL: parsed, APIToken: token, HTTPTimeout: time.Second,
 	})
+}
+
+func TestClientAddsConfiguredRequestDeadline(t *testing.T) {
+	client := testClient(t, "http://openfga.test", "")
+	client.timeout = 75 * time.Millisecond
+	client.http.Timeout = client.timeout
+	var gotDeadline time.Time
+	client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var ok bool
+		gotDeadline, ok = request.Context().Deadline()
+		if !ok {
+			return nil, fmt.Errorf("request context has no deadline")
+		}
+		return storeResponse(request), nil
+	})
+
+	started := time.Now()
+	if _, err := client.GetStore(context.Background(), "store-id"); err != nil {
+		t.Fatal(err)
+	}
+	if !gotDeadline.After(started) || gotDeadline.After(started.Add(client.timeout+25*time.Millisecond)) {
+		t.Fatalf("request deadline = %s, started = %s, timeout = %s", gotDeadline, started, client.timeout)
+	}
+}
+
+func TestClientPreservesEarlierCallerDeadline(t *testing.T) {
+	client := testClient(t, "http://openfga.test", "")
+	client.timeout = time.Second
+	client.http.Timeout = client.timeout
+	var gotDeadline time.Time
+	client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var ok bool
+		gotDeadline, ok = request.Context().Deadline()
+		if !ok {
+			return nil, fmt.Errorf("request context has no deadline")
+		}
+		return storeResponse(request), nil
+	})
+
+	parentDeadline := time.Now().Add(100 * time.Millisecond)
+	ctx, cancel := context.WithDeadline(context.Background(), parentDeadline)
+	defer cancel()
+	if _, err := client.GetStore(ctx, "store-id"); err != nil {
+		t.Fatal(err)
+	}
+	if gotDeadline.After(parentDeadline.Add(5 * time.Millisecond)) {
+		t.Fatalf("request deadline %s extended parent deadline %s", gotDeadline, parentDeadline)
+	}
+}
+
+func TestClientDefaultsNonPositiveTimeout(t *testing.T) {
+	parsed, err := url.Parse("http://openfga.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient(Config{APIURL: parsed})
+	if client.timeout != defaultHTTPTimeout {
+		t.Fatalf("client timeout = %s, want %s", client.timeout, defaultHTTPTimeout)
+	}
+	if client.http.Timeout != defaultHTTPTimeout {
+		t.Fatalf("HTTP timeout = %s, want %s", client.http.Timeout, defaultHTTPTimeout)
+	}
+}
+
+func TestClientDeadlineCancellationSurfaces(t *testing.T) {
+	client := testClient(t, "http://openfga.test", "")
+	client.timeout = 10 * time.Millisecond
+	client.http.Timeout = client.timeout
+	client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})
+
+	_, err := client.GetStore(context.Background(), "store-id")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context deadline exceeded", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
+}
+
+func storeResponse(request *http.Request) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"store-id","name":"tflive"}`)),
+		Request:    request,
+	}
 }
 
 func TestClientStoreAndModelEndpointContracts(t *testing.T) {
