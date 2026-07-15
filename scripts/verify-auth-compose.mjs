@@ -117,13 +117,17 @@ const openfgaProvisionerDockerfile = resolve(root, "Dockerfile.openfga-provision
 assert.ok(existsSync(openfgaProvisionerDockerfile), "missing OpenFGA provisioner Dockerfile");
 const openfgaProvisionerImage = readFileSync(openfgaProvisionerDockerfile, "utf8");
 assert.match(openfgaProvisionerImage, /^FROM golang:1\.24\.1-alpine3\.21 AS build/m);
-assert.match(openfgaProvisionerImage, /^COPY go\.mod go\.sum \.\/$/m);
-assert.match(openfgaProvisionerImage, /^COPY openfga \.\/openfga$/m);
-assert.match(openfgaProvisionerImage, /^COPY internal\/openfga \.\/internal\/openfga$/m);
-assert.match(
-  openfgaProvisionerImage,
-  /^COPY cmd\/openfga-provisioner \.\/cmd\/openfga-provisioner$/m,
-);
+const runtimeStageMarker = /^FROM alpine:3\.21$/m;
+assert.match(openfgaProvisionerImage, runtimeStageMarker);
+const [openfgaProvisionerBuildStage] = openfgaProvisionerImage.split(runtimeStageMarker);
+const openfgaProvisionerBuildCopies =
+  openfgaProvisionerBuildStage.match(/^COPY[ \t]+.*$/gm) ?? [];
+assert.deepEqual(openfgaProvisionerBuildCopies, [
+  "COPY go.mod go.sum ./",
+  "COPY openfga ./openfga",
+  "COPY internal/openfga ./internal/openfga",
+  "COPY cmd/openfga-provisioner ./cmd/openfga-provisioner",
+]);
 assert.match(openfgaProvisionerImage, /^RUN CGO_ENABLED=0 go build /m);
 assert.match(openfgaProvisionerImage, /^RUN [^\n]* -trimpath(?: |$)/m);
 assert.match(openfgaProvisionerImage, /^RUN [^\n]* -ldflags="-s -w"(?: |$)/m);
@@ -131,7 +135,6 @@ assert.match(
   openfgaProvisionerImage,
   /^RUN [^\n]* -o \/out\/openfga-provisioner \.\/cmd\/openfga-provisioner$/m,
 );
-assert.match(openfgaProvisionerImage, /^FROM alpine:3\.21$/m);
 assert.match(openfgaProvisionerImage, /^RUN apk add --no-cache ca-certificates \\$/m);
 assert.match(openfgaProvisionerImage, /^[ \t]*&& addgroup -S openfga-provisioner \\$/m);
 assert.match(
