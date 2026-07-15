@@ -89,7 +89,7 @@ func CanonicalJSON(model AuthorizationModel) ([]byte, error) {
 	for index := range normalized.TypeDefinitions {
 		definition := &normalized.TypeDefinitions[index]
 		for name, rewrite := range definition.Relations {
-			canonical, err := canonicalRawJSON(rewrite)
+			canonical, err := canonicalRelationRewriteJSON(rewrite)
 			if err != nil {
 				return nil, fmt.Errorf("canonicalize %s#%s: %w", definition.Type, name, err)
 			}
@@ -124,6 +124,33 @@ func ModelsEqual(left, right AuthorizationModel) (bool, error) {
 		return false, err
 	}
 	return bytes.Equal(leftJSON, rightJSON), nil
+}
+
+func canonicalRelationRewriteJSON(raw json.RawMessage) (json.RawMessage, error) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	normalizeComputedUsersetDefaults(value)
+	return json.Marshal(value)
+}
+
+func normalizeComputedUsersetDefaults(value any) {
+	switch current := value.(type) {
+	case map[string]any:
+		if computedUserset, ok := current["computedUserset"].(map[string]any); ok {
+			if object, ok := computedUserset["object"].(string); ok && object == "" {
+				delete(computedUserset, "object")
+			}
+		}
+		for _, child := range current {
+			normalizeComputedUsersetDefaults(child)
+		}
+	case []any:
+		for _, child := range current {
+			normalizeComputedUsersetDefaults(child)
+		}
+	}
 }
 
 func canonicalRawJSON(raw json.RawMessage) (json.RawMessage, error) {

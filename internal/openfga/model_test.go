@@ -2,6 +2,7 @@ package openfga
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -80,6 +81,49 @@ func TestModelsEqualDetectsPermissionRewriteChanges(t *testing.T) {
 	}
 	if equal {
 		t.Fatal("security-relevant rewrite change compared equal")
+	}
+}
+
+func TestModelsEqualNormalizesComputedUsersetObject(t *testing.T) {
+	desired, err := ParseAuthorizationModel([]byte(`{
+		"schema_version":"1.1",
+		"type_definitions":[{
+			"type":"stack",
+			"relations":{"can_view":{"union":{"child":[{"computedUserset":{"relation":"viewer"}}]}}}
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		object    string
+		wantEqual bool
+	}{
+		{name: "empty OpenFGA default", object: "", wantEqual: true},
+		{name: "nonempty object", object: "stack:other", wantEqual: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual, err := ParseAuthorizationModel([]byte(`{
+				"schema_version":"1.1",
+				"type_definitions":[{
+					"type":"stack",
+					"relations":{"can_view":{"union":{"child":[{"computedUserset":{"object":` + fmt.Sprintf("%q", test.object) + `,"relation":"viewer"}}]}}}
+				}]
+			}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			equal, err := ModelsEqual(desired, actual)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if equal != test.wantEqual {
+				t.Fatalf("ModelsEqual() = %t, want %t", equal, test.wantEqual)
+			}
+		})
 	}
 }
 
