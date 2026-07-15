@@ -33,6 +33,7 @@ const keycloakProvision = service("keycloak-provision");
 const openfgaPostgres = service("openfga-postgres");
 const openfgaMigrate = service("openfga-migrate");
 const openfga = service("openfga");
+const openfgaProvision = service("openfga-provision");
 
 assert.equal(keycloakPostgres.image, "postgres:16-alpine");
 assert.equal(keycloak.image, "quay.io/keycloak/keycloak:26.6.3");
@@ -60,6 +61,27 @@ assert.ok(openfgaPostgres.healthcheck, "OpenFGA Postgres needs a health check");
 assert.equal(openfgaMigrate.depends_on?.["openfga-postgres"]?.condition, "service_healthy");
 assert.equal(openfga.depends_on?.["openfga-migrate"]?.condition, "service_completed_successfully");
 assert.ok(openfga.healthcheck?.test?.join(" ").includes("grpc_health_probe"));
+assert.equal(openfgaProvision.depends_on?.openfga?.condition, "service_healthy");
+assert.equal(openfgaProvision.restart, "no");
+assert.equal(openfgaProvision.build?.dockerfile, "Dockerfile.openfga-provisioner");
+assert.equal(resolve(root, openfgaProvision.build?.context ?? "__missing__"), root);
+assert.deepEqual(openfgaProvision.ports ?? [], []);
+assert.deepEqual(openfgaProvision.command, ["verify"]);
+assert.equal(openfgaProvision.environment?.OPENFGA_API_URL, "http://openfga:8080");
+assert.equal(openfgaProvision.environment?.OPENFGA_STORE_NAME, "tflive");
+assert.equal(openfgaProvision.environment?.OPENFGA_STORE_ID, "");
+assert.equal(openfgaProvision.environment?.OPENFGA_MODEL_ID, "");
+assert.equal(openfgaProvision.environment?.OPENFGA_API_TOKEN, "");
+assert.equal(openfgaProvision.environment?.OPENFGA_HTTP_TIMEOUT, "10s");
+
+for (const token of [
+  "${OPENFGA_STORE_ID:-}",
+  "${OPENFGA_MODEL_ID:-}",
+  "${OPENFGA_API_TOKEN:-}",
+  "${OPENFGA_HTTP_TIMEOUT:-10s}",
+]) {
+  assert.ok(source.includes(token), `${token} must remain explicit`);
+}
 
 assert.ok(hasVolume(keycloakPostgres, "keycloak-postgres-data"));
 assert.ok(hasVolume(openfgaPostgres, "openfga-postgres-data"));
@@ -90,5 +112,43 @@ const provisionerImage = readFileSync(provisionerDockerfile, "utf8");
 assert.match(provisionerImage, /^FROM golang:1\.24\.1-alpine3\.21 AS build/m);
 assert.match(provisionerImage, /^FROM alpine:3\.21$/m);
 assert.match(provisionerImage, /^USER keycloak-provisioner$/m);
+
+const openfgaProvisionerDockerfile = resolve(root, "Dockerfile.openfga-provisioner");
+assert.ok(existsSync(openfgaProvisionerDockerfile), "missing OpenFGA provisioner Dockerfile");
+const openfgaProvisionerImage = readFileSync(openfgaProvisionerDockerfile, "utf8");
+assert.match(openfgaProvisionerImage, /^FROM golang:1\.24\.1-alpine3\.21 AS build/m);
+const runtimeStageMarker = /^FROM alpine:3\.21$/m;
+assert.match(openfgaProvisionerImage, runtimeStageMarker);
+const [openfgaProvisionerBuildStage] = openfgaProvisionerImage.split(runtimeStageMarker);
+const openfgaProvisionerBuildCopies =
+  openfgaProvisionerBuildStage.match(/^COPY[ \t]+.*$/gm) ?? [];
+assert.deepEqual(openfgaProvisionerBuildCopies, [
+  "COPY go.mod go.sum ./",
+  "COPY openfga ./openfga",
+  "COPY internal/openfga ./internal/openfga",
+  "COPY cmd/openfga-provisioner ./cmd/openfga-provisioner",
+]);
+assert.match(openfgaProvisionerImage, /^RUN CGO_ENABLED=0 go build /m);
+assert.match(openfgaProvisionerImage, /^RUN [^\n]* -trimpath(?: |$)/m);
+assert.match(openfgaProvisionerImage, /^RUN [^\n]* -ldflags="-s -w"(?: |$)/m);
+assert.match(
+  openfgaProvisionerImage,
+  /^RUN [^\n]* -o \/out\/openfga-provisioner \.\/cmd\/openfga-provisioner$/m,
+);
+assert.match(openfgaProvisionerImage, /^RUN apk add --no-cache ca-certificates \\$/m);
+assert.match(openfgaProvisionerImage, /^[ \t]*&& addgroup -S openfga-provisioner \\$/m);
+assert.match(
+  openfgaProvisionerImage,
+  /^[ \t]*&& adduser -S -D -H -G openfga-provisioner openfga-provisioner$/m,
+);
+assert.match(
+  openfgaProvisionerImage,
+  /^COPY --from=build \/out\/openfga-provisioner \/usr\/local\/bin\/openfga-provisioner$/m,
+);
+assert.match(openfgaProvisionerImage, /^USER openfga-provisioner$/m);
+assert.match(
+  openfgaProvisionerImage,
+  /^ENTRYPOINT \["\/usr\/local\/bin\/openfga-provisioner"\]$/m,
+);
 
 console.log("authentication Compose contract verified");

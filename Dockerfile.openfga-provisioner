@@ -1,0 +1,18 @@
+FROM golang:1.24.1-alpine3.21 AS build
+
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY openfga ./openfga
+COPY internal/openfga ./internal/openfga
+COPY cmd/openfga-provisioner ./cmd/openfga-provisioner
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/openfga-provisioner ./cmd/openfga-provisioner
+
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S openfga-provisioner \
+    && adduser -S -D -H -G openfga-provisioner openfga-provisioner
+COPY --from=build /out/openfga-provisioner /usr/local/bin/openfga-provisioner
+
+USER openfga-provisioner
+ENTRYPOINT ["/usr/local/bin/openfga-provisioner"]
