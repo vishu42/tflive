@@ -33,6 +33,7 @@ const keycloakProvision = service("keycloak-provision");
 const openfgaPostgres = service("openfga-postgres");
 const openfgaMigrate = service("openfga-migrate");
 const openfga = service("openfga");
+const openfgaProvision = service("openfga-provision");
 
 assert.equal(keycloakPostgres.image, "postgres:16-alpine");
 assert.equal(keycloak.image, "quay.io/keycloak/keycloak:26.6.3");
@@ -60,6 +61,16 @@ assert.ok(openfgaPostgres.healthcheck, "OpenFGA Postgres needs a health check");
 assert.equal(openfgaMigrate.depends_on?.["openfga-postgres"]?.condition, "service_healthy");
 assert.equal(openfga.depends_on?.["openfga-migrate"]?.condition, "service_completed_successfully");
 assert.ok(openfga.healthcheck?.test?.join(" ").includes("grpc_health_probe"));
+assert.equal(openfgaProvision.depends_on?.openfga?.condition, "service_healthy");
+assert.equal(openfgaProvision.restart, "no");
+assert.equal(openfgaProvision.build?.dockerfile, "Dockerfile.openfga-provisioner");
+assert.deepEqual(openfgaProvision.ports ?? [], []);
+assert.deepEqual(openfgaProvision.command, ["verify"]);
+assert.equal(openfgaProvision.environment?.OPENFGA_API_URL, "http://openfga:8080");
+assert.equal(openfgaProvision.environment?.OPENFGA_STORE_NAME, "tflive");
+assert.equal(openfgaProvision.environment?.OPENFGA_STORE_ID, "");
+assert.equal(openfgaProvision.environment?.OPENFGA_MODEL_ID, "");
+assert.equal(openfgaProvision.environment?.OPENFGA_HTTP_TIMEOUT, "10s");
 
 assert.ok(hasVolume(keycloakPostgres, "keycloak-postgres-data"));
 assert.ok(hasVolume(openfgaPostgres, "openfga-postgres-data"));
@@ -90,5 +101,12 @@ const provisionerImage = readFileSync(provisionerDockerfile, "utf8");
 assert.match(provisionerImage, /^FROM golang:1\.24\.1-alpine3\.21 AS build/m);
 assert.match(provisionerImage, /^FROM alpine:3\.21$/m);
 assert.match(provisionerImage, /^USER keycloak-provisioner$/m);
+
+const openfgaProvisionerDockerfile = resolve(root, "Dockerfile.openfga-provisioner");
+assert.ok(existsSync(openfgaProvisionerDockerfile), "missing OpenFGA provisioner Dockerfile");
+const openfgaProvisionerImage = readFileSync(openfgaProvisionerDockerfile, "utf8");
+assert.match(openfgaProvisionerImage, /^FROM golang:1\.24\.1-alpine3\.21 AS build/m);
+assert.match(openfgaProvisionerImage, /^FROM alpine:3\.21$/m);
+assert.match(openfgaProvisionerImage, /^USER openfga-provisioner$/m);
 
 console.log("authentication Compose contract verified");
