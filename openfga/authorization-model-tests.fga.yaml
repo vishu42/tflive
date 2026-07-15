@@ -1,0 +1,53 @@
+name: tflive stack authorization
+model_file: ./authorization-model.json
+tuples:
+  - user: user:owner
+    relation: owner
+    object: stack:example
+  - user: user:operator
+    relation: operator
+    object: stack:example
+  - user: user:approver
+    relation: approver
+    object: stack:example
+  - user: user:viewer
+    relation: viewer
+    object: stack:example
+tests:
+  - name: every role permission combination
+    check:
+      - user: user:owner
+        object: stack:example
+        assertions:
+          can_view: true
+          can_operate: true
+          can_approve: true
+          can_manage_access: true
+      - user: user:operator
+        object: stack:example
+        assertions:
+          can_view: true
+          can_operate: true
+          can_approve: false
+          can_manage_access: false
+      - user: user:approver
+        object: stack:example
+        assertions:
+          can_view: true
+          can_operate: false
+          can_approve: true
+          can_manage_access: false
+      - user: user:viewer
+        object: stack:example
+        assertions:
+          can_view: true
+          can_operate: false
+          can_approve: false
+          can_manage_access: false
+      - user: user:unrelated
+        object: stack:example
+        assertions:
+          can_view: false
+          can_operate: false
+          can_approve: false
+          can_manage_access: false
