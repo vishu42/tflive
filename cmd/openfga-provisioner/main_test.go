@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -75,17 +76,31 @@ func TestRunRejectsUnknownOperationAndInvalidModel(t *testing.T) {
 	}
 }
 
-func TestRunPreservesCancellationAndRedactsExecutionFailure(t *testing.T) {
+func TestRunPreservesCancellationAndDeadlineIdentityWhileRedactingExecutionFailure(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	secretErr := fmt.Errorf("backend echoed secret-token: %w", context.Canceled)
-	err := run(ctx, []string{"bootstrap"}, commandEnv(false), openfgamodel.AuthorizationModelJSON(), func(context.Context, string, openfga.Config, openfga.AuthorizationModel) (openfga.Result, error) {
-		return openfga.Result{}, secretErr
-	}, &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "context canceled") || !strings.Contains(err.Error(), "[REDACTED]") || strings.Contains(err.Error(), "secret-token") {
-		t.Fatalf("run() error = %v", err)
+	for _, test := range []struct {
+		name    string
+		cause   error
+		message string
+	}{
+		{name: "cancellation", cause: context.Canceled, message: "context canceled"},
+		{name: "deadline", cause: context.DeadlineExceeded, message: "context deadline exceeded"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			secretErr := fmt.Errorf("backend echoed secret-token: %w", test.cause)
+			err := run(context.Background(), []string{"bootstrap"}, commandEnv(false), openfgamodel.AuthorizationModelJSON(), func(context.Context, string, openfga.Config, openfga.AuthorizationModel) (openfga.Result, error) {
+				return openfga.Result{}, secretErr
+			}, &bytes.Buffer{}, &bytes.Buffer{})
+			if !errors.Is(err, test.cause) {
+				t.Fatalf("errors.Is(run() error, %v) = false; error = %v", test.cause, err)
+			}
+			if err == nil || !strings.Contains(err.Error(), test.message) || !strings.Contains(err.Error(), "[REDACTED]") || strings.Contains(err.Error(), "secret-token") {
+				t.Fatalf("run() error = %v", err)
+			}
+		})
 	}
 }
 

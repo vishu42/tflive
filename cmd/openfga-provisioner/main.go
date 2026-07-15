@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -15,6 +16,19 @@ import (
 )
 
 type executeFunc func(context.Context, string, openfga.Config, openfga.AuthorizationModel) (openfga.Result, error)
+
+type sanitizedExecutionError struct {
+	message string
+	cause   error
+}
+
+func (e sanitizedExecutionError) Error() string {
+	return e.message
+}
+
+func (e sanitizedExecutionError) Is(target error) bool {
+	return errors.Is(e.cause, target)
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -43,7 +57,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, modelJS
 	}
 	result, err := execute(ctx, operation, cfg, model)
 	if err != nil {
-		return fmt.Errorf("%s OpenFGA: %s", operation, redact(err.Error(), cfg.APIToken))
+		return sanitizedExecutionError{
+			message: fmt.Sprintf("%s OpenFGA: %s", operation, redact(err.Error(), cfg.APIToken)),
+			cause:   err,
+		}
 	}
 	if _, err := fmt.Fprintf(stdout, "OPENFGA_STORE_ID=%s\nOPENFGA_MODEL_ID=%s\n", result.StoreID, result.ModelID); err != nil {
 		return fmt.Errorf("write OpenFGA environment assignments: %w", err)
