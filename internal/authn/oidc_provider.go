@@ -16,7 +16,10 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwk"
 )
 
-var errProviderResponseTooLarge = errors.New("provider response exceeds size limit")
+var (
+	errProviderResponseTooLarge = errors.New("provider response exceeds size limit")
+	errRefreshCooldown          = errors.New("oidc refresh cooldown")
+)
 
 type discoveryDocument struct {
 	Issuer  string `json:"issuer"`
@@ -108,6 +111,9 @@ func NewOIDCVerifier(ctx context.Context, cfg OIDCVerifierConfig) (*OIDCVerifier
 }
 
 func (v *OIDCVerifier) Close(ctx context.Context) error {
+	v.refreshMu.Lock()
+	defer v.refreshMu.Unlock()
+
 	v.mu.Lock()
 	keys := v.keys
 	v.keys = nil
@@ -119,30 +125,60 @@ func (v *OIDCVerifier) Close(ctx context.Context) error {
 	return keys.cache.Shutdown(ctx)
 }
 
-func (v *OIDCVerifier) keyFor(_ context.Context, kid string, algorithm jwa.SignatureAlgorithm) (any, error) {
-	v.mu.RLock()
-	keys := v.keys
-	v.mu.RUnlock()
-	if keys == nil || keys.set == nil {
-		return nil, ErrVerifierUnavailable
+func (v *OIDCVerifier) keyFor(ctx context.Context, kid string, algorithm jwa.SignatureAlgorithm) (any, error) {
+	publicKey, found, err := v.cachedKeyFor(kid, algorithm)
+	if err != nil {
+		return nil, err
 	}
-	if kid == "" {
-		return nil, ErrInvalidToken
+	if found {
+		return publicKey, nil
 	}
 
-	keyIDs := make(map[string]struct{}, keys.set.Len())
+	refreshErr := v.refreshKeys(ctx, true)
+	publicKey, found, err = v.cachedKeyFor(kid, algorithm)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		return publicKey, nil
+	}
+	if errors.Is(refreshErr, errRefreshCooldown) {
+		return nil, ErrVerifierUnavailable
+	}
+	if refreshErr != nil {
+		return nil, ErrVerifierUnavailable
+	}
+	return nil, ErrInvalidToken
+}
+
+func (v *OIDCVerifier) cachedKeyFor(kid string, algorithm jwa.SignatureAlgorithm) (any, bool, error) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	keys := v.keys
+	if keys == nil || keys.set == nil {
+		return nil, false, ErrVerifierUnavailable
+	}
+	if kid == "" {
+		return nil, false, ErrInvalidToken
+	}
+
+	setLength := keys.set.Len()
+	if setLength < 0 {
+		return nil, false, ErrVerifierUnavailable
+	}
+	keyIDs := make(map[string]struct{}, setLength)
 	var selected jwk.Key
-	for index := 0; index < keys.set.Len(); index++ {
+	for index := 0; index < setLength; index++ {
 		key, ok := keys.set.Key(index)
 		if !ok {
-			return nil, ErrVerifierUnavailable
+			return nil, false, ErrVerifierUnavailable
 		}
 		keyID, ok := key.KeyID()
 		if !ok || keyID == "" {
 			continue
 		}
 		if _, duplicate := keyIDs[keyID]; duplicate {
-			return nil, ErrInvalidToken
+			return nil, false, ErrInvalidToken
 		}
 		keyIDs[keyID] = struct{}{}
 		if keyID == kid {
@@ -150,20 +186,143 @@ func (v *OIDCVerifier) keyFor(_ context.Context, kid string, algorithm jwa.Signa
 		}
 	}
 	if selected == nil {
-		return nil, ErrInvalidToken
+		return nil, false, nil
 	}
 	if usage, present := selected.KeyUsage(); present && usage != "sig" {
-		return nil, ErrInvalidToken
+		return nil, false, ErrInvalidToken
 	}
 	if configuredAlgorithm, present := selected.Algorithm(); present && configuredAlgorithm.String() != algorithm.String() {
-		return nil, ErrInvalidToken
+		return nil, false, ErrInvalidToken
 	}
 
 	var publicKey any
 	if err := jwk.Export(selected, &publicKey); err != nil || publicKey == nil {
-		return nil, ErrInvalidToken
+		return nil, false, ErrInvalidToken
 	}
-	return publicKey, nil
+	return publicKey, true, nil
+}
+
+func (v *OIDCVerifier) refreshKeys(ctx context.Context, force bool) error {
+	v.refreshMu.Lock()
+	defer v.refreshMu.Unlock()
+
+	if force {
+		now := v.cfg.Clock()
+		if !v.refreshedAt.IsZero() && now.Sub(v.refreshedAt) < v.cfg.RefreshCooldown {
+			return errRefreshCooldown
+		}
+		v.refreshedAt = now
+	}
+
+	if err := v.refreshDiscoveryIfDue(ctx); err != nil {
+		return err
+	}
+
+	v.mu.RLock()
+	keys := v.keys
+	v.mu.RUnlock()
+	if keys == nil || keys.cache == nil || keys.set == nil {
+		return errors.New("OIDC key cache is unavailable")
+	}
+
+	set, err := keys.cache.Refresh(ctx, keys.url)
+	if err != nil {
+		return err
+	}
+	if hasDuplicateKeyIDs(set) {
+		return errors.New("OIDC JWKS contains duplicate key IDs")
+	}
+	return nil
+}
+
+func (v *OIDCVerifier) refreshDiscoveryIfDue(ctx context.Context) error {
+	now := v.cfg.Clock()
+	v.mu.RLock()
+	discovered := v.discovered
+	v.mu.RUnlock()
+	if now.Sub(discovered) < v.cfg.DiscoveryTTL {
+		return nil
+	}
+
+	discovery, err := fetchDiscovery(ctx, v.cfg.IssuerURL, v.cfg.HTTPClient)
+	if err != nil {
+		return err
+	}
+	if discovery.Issuer != v.cfg.IssuerURL.String() {
+		return errors.New("OIDC discovery issuer mismatch")
+	}
+	jwksURL, err := validJWKSURL(discovery.JWKSURI)
+	if err != nil {
+		return err
+	}
+
+	v.mu.RLock()
+	current := v.keys
+	v.mu.RUnlock()
+	if current == nil {
+		return errors.New("OIDC key cache is unavailable")
+	}
+	if current.url != jwksURL {
+		if err := v.replaceKeyCache(ctx, jwksURL); err != nil {
+			return err
+		}
+	}
+
+	v.mu.Lock()
+	v.discovery = discovery
+	v.discovered = now
+	v.mu.Unlock()
+	return nil
+}
+
+func (v *OIDCVerifier) replaceKeyCache(ctx context.Context, jwksURI string) error {
+	registrationCtx, cancelRegistration := context.WithCancel(ctx)
+	defer cancelRegistration()
+
+	cache, err := jwk.NewCache(ctx, httprc.NewClient(
+		httprc.WithErrorSink(errsink.NewFunc(func(context.Context, error) {
+			cancelRegistration()
+		})),
+	))
+	if err != nil {
+		return err
+	}
+	keepCache := false
+	defer func() {
+		if !keepCache {
+			_ = cache.Shutdown(context.Background())
+		}
+	}()
+
+	cacheClient := hardenedProviderClient(v.cfg.HTTPClient, cancelRegistration)
+	if err := cache.Register(
+		registrationCtx,
+		jwksURI,
+		jwk.WithHTTPClient(cacheClient),
+		jwk.WithMinInterval(v.cfg.JWKSMinRefreshInterval),
+		jwk.WithMaxInterval(v.cfg.JWKSMaxRefreshInterval),
+	); err != nil {
+		return err
+	}
+	set, err := cache.CachedSet(jwksURI)
+	if err != nil {
+		return err
+	}
+	if hasDuplicateKeyIDs(set) {
+		return errors.New("OIDC JWKS contains duplicate key IDs")
+	}
+
+	newKeys := &keyCache{url: jwksURI, cache: cache, set: set}
+	v.mu.Lock()
+	oldKeys := v.keys
+	v.keys = newKeys
+	v.mu.Unlock()
+	keepCache = true
+
+	if oldKeys != nil && oldKeys.cache != nil {
+		return oldKeys.cache.Shutdown(context.Background())
+	}
+	return nil
 }
 
 func validOIDCVerifierConfig(cfg OIDCVerifierConfig) bool {

@@ -29,6 +29,35 @@ func (v *OIDCVerifier) Verify(ctx context.Context, raw string) (VerifiedToken, e
 	}
 	payload, err := jws.Verify([]byte(raw), jws.WithKey(algorithm, key), jws.WithCompact())
 	if err != nil {
+		return v.retryAfterSignatureFailure(ctx, raw, keyID, algorithm)
+	}
+	return v.validatedToken(payload)
+}
+
+func (v *OIDCVerifier) retryAfterSignatureFailure(ctx context.Context, raw, keyID string, algorithm jwa.SignatureAlgorithm) (VerifiedToken, error) {
+	refreshErr := v.refreshKeys(ctx, true)
+	key, found, keyErr := v.cachedKeyFor(keyID, algorithm)
+	if keyErr != nil {
+		return VerifiedToken{}, keyErr
+	}
+	if !found {
+		if errors.Is(refreshErr, errRefreshCooldown) {
+			return VerifiedToken{}, ErrVerifierUnavailable
+		}
+		if refreshErr != nil {
+			return VerifiedToken{}, ErrVerifierUnavailable
+		}
+		return VerifiedToken{}, ErrInvalidToken
+	}
+	if refreshErr != nil && !errors.Is(refreshErr, errRefreshCooldown) {
+		return VerifiedToken{}, ErrVerifierUnavailable
+	}
+
+	payload, err := jws.Verify([]byte(raw), jws.WithKey(algorithm, key), jws.WithCompact())
+	if err != nil {
+		if errors.Is(refreshErr, errRefreshCooldown) {
+			return VerifiedToken{}, ErrVerifierUnavailable
+		}
 		return VerifiedToken{}, ErrInvalidToken
 	}
 	return v.validatedToken(payload)
@@ -77,10 +106,13 @@ func allowedHeader(header jws.Headers) (jwa.SignatureAlgorithm, string, bool) {
 }
 
 func (v *OIDCVerifier) validatedToken(payload []byte) (VerifiedToken, error) {
+	v.mu.RLock()
+	issuer := v.discovery.Issuer
+	v.mu.RUnlock()
 	token, err := jwt.Parse(
 		payload,
 		jwt.WithVerify(false),
-		jwt.WithIssuer(v.discovery.Issuer),
+		jwt.WithIssuer(issuer),
 		jwt.WithAudience(v.cfg.Audience),
 		jwt.WithRequiredClaim(jwt.ExpirationKey),
 		jwt.WithRequiredClaim(jwt.NotBeforeKey),

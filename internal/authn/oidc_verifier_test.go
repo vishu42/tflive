@@ -267,6 +267,146 @@ func TestOIDCVerifierVerifiesStringAudience(t *testing.T) {
 	}
 }
 
+func TestOIDCVerifierUsesCachedKeyWithoutRepeatedJWKSFetch(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", nil)
+	for range 2 {
+		if _, err := v.Verify(context.Background(), raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, jwks := s.requestCounts()
+	if jwks != 1 {
+		t.Fatalf("JWKS requests = %d, want 1", jwks)
+	}
+}
+
+func TestOIDCVerifierRefreshesJWKSForRotatedKey(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	s.addRSAKey(t, "key-b")
+	s.publish("key-a", "key-b")
+	if _, err := v.Verify(context.Background(), s.sign(t, "key-b", nil)); err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	_, jwks := s.requestCounts()
+	if jwks != 2 {
+		t.Fatalf("JWKS requests = %d, want 2", jwks)
+	}
+}
+
+func TestOIDCVerifierRefreshesJWKSAfterSameKIDSignatureRotation(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	if _, err := v.Verify(context.Background(), s.sign(t, "key-a", nil)); err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	_, jwks := s.requestCounts()
+	if jwks != 2 {
+		t.Fatalf("JWKS requests = %d, want 2", jwks)
+	}
+}
+
+func TestOIDCVerifierCoordinatesConcurrentUnknownKIDRefresh(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	s.addRSAKey(t, "key-b")
+	s.publish("key-a", "key-b")
+	raw := s.sign(t, "key-b", nil)
+	start, errs := make(chan struct{}), make(chan error, 16)
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := v.Verify(context.Background(), raw)
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Verify() error = %v", err)
+		}
+	}
+	_, jwks := s.requestCounts()
+	if jwks != 2 {
+		t.Fatalf("JWKS requests = %d, want 2", jwks)
+	}
+}
+
+func TestOIDCVerifierUsesFreshCachedKeyDuringProviderOutage(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	s.setUnavailable("keycloak-down")
+	if _, err := v.Verify(context.Background(), s.sign(t, "key-a", nil)); err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	_, jwks := s.requestCounts()
+	if jwks != 1 {
+		t.Fatalf("JWKS requests = %d, want 1", jwks)
+	}
+}
+
+func TestOIDCVerifierReturnsUnavailableWhenNoUsableKeyCanBeFetched(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	s.addRSAKey(t, "key-b")
+	s.setUnavailable("keycloak-down")
+	_, err = v.Verify(context.Background(), s.sign(t, "key-b", nil))
+	if !errors.Is(err, ErrVerifierUnavailable) {
+		t.Fatalf("Verify() error = %v", err)
+	}
+}
+
 func TestOIDCVerifierValidatedTokenRejectsMissingNotBefore(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	tok := jwt.New()
