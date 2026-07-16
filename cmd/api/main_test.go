@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/temporal"
 	"github.com/vishu42/tflive/internal/traits"
@@ -406,6 +407,9 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 			}
 			return app.NewService(service), nil
 		},
+		newVerifier: func(context.Context, authn.OIDCVerifierConfig) (tokenVerifier, error) {
+			return testTokenVerifier{}, nil
+		},
 		listenAndServe: func(_ context.Context, address string, handler http.Handler) error {
 			deps.serverAddress = address
 			deps.serverHandler = handler
@@ -414,6 +418,14 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 	}
 	return deps
 }
+
+type testTokenVerifier struct{}
+
+func (testTokenVerifier) Verify(context.Context, string) (authn.VerifiedToken, error) {
+	return authn.VerifiedToken{Subject: "test-user"}, nil
+}
+
+func (testTokenVerifier) Close(context.Context) error { return nil }
 
 type recordingPostgresPool struct {
 	databaseURL string
