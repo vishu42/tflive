@@ -154,8 +154,8 @@ provisioner administrator tokens are not API runtime credentials.
 
 The API accepts compact bearer access tokens for the configured issuer and
 `OIDC_AUDIENCE`. It does not accept ID tokens or opaque tokens. Signature,
-issuer, audience, expiry, present not-before, subject, and bearer type checks
-complete before identity data is returned.
+issuer, audience, expiry, optional not-before (when present), subject, and
+bearer type checks complete before identity data is returned.
 
 Keycloak discovery and JWKS signing keys are cached. A new or replaced signing
 key triggers one bounded refresh, so routine key rotation does not require an

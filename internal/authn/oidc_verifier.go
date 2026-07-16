@@ -118,7 +118,6 @@ func (v *OIDCVerifier) validatedToken(payload []byte) (VerifiedToken, error) {
 		jwt.WithIssuer(issuer),
 		jwt.WithAudience(v.cfg.Audience),
 		jwt.WithRequiredClaim(jwt.ExpirationKey),
-		jwt.WithRequiredClaim(jwt.NotBeforeKey),
 		jwt.WithClock(jwt.ClockFunc(v.cfg.Clock)),
 		jwt.WithAcceptableSkew(clockSkew),
 	)

@@ -98,7 +98,9 @@ func NewOIDCVerifier(ctx context.Context, cfg OIDCVerifierConfig) (*OIDCVerifier
 	if err != nil || hasDuplicateKeyIDs(set) {
 		return nil, ErrVerifierUnavailable
 	}
-	freshUntil, err := jwksFreshUntil(cfg.Clock(), cache, jwksURL)
+	freshUntil, err := jwksFreshUntil(
+		cfg.Clock(), cache, jwksURL, cfg.JWKSMinRefreshInterval, cfg.JWKSMaxRefreshInterval,
+	)
 	if err != nil {
 		return nil, ErrVerifierUnavailable
 	}
@@ -245,7 +247,9 @@ func (v *OIDCVerifier) refreshKeys(ctx context.Context, force bool) error {
 	if hasDuplicateKeyIDs(set) {
 		return errors.New("OIDC JWKS contains duplicate key IDs")
 	}
-	freshUntil, err := jwksFreshUntil(v.cfg.Clock(), keys.cache, keys.url)
+	freshUntil, err := jwksFreshUntil(
+		v.cfg.Clock(), keys.cache, keys.url, v.cfg.JWKSMinRefreshInterval, v.cfg.JWKSMaxRefreshInterval,
+	)
 	if err != nil {
 		return err
 	}
@@ -333,7 +337,9 @@ func (v *OIDCVerifier) replaceKeyCache(ctx context.Context, jwksURI string) erro
 	if hasDuplicateKeyIDs(set) {
 		return errors.New("OIDC JWKS contains duplicate key IDs")
 	}
-	freshUntil, err := jwksFreshUntil(v.cfg.Clock(), cache, jwksURI)
+	freshUntil, err := jwksFreshUntil(
+		v.cfg.Clock(), cache, jwksURI, v.cfg.JWKSMinRefreshInterval, v.cfg.JWKSMaxRefreshInterval,
+	)
 	if err != nil {
 		return err
 	}
@@ -351,17 +357,17 @@ func (v *OIDCVerifier) replaceKeyCache(ctx context.Context, jwksURI string) erro
 	return nil
 }
 
-func jwksFreshUntil(now time.Time, cache *jwk.Cache, jwksURI string) (time.Time, error) {
+func jwksFreshUntil(now time.Time, cache *jwk.Cache, jwksURI string, minimum, maximum time.Duration) (time.Time, error) {
 	resource, err := cache.LookupResource(context.Background(), jwksURI)
 	if err != nil {
 		return time.Time{}, err
 	}
 	lifetime := resource.Next().Sub(time.Now())
-	if lifetime < defaultJWKSMinRefreshInterval {
-		lifetime = defaultJWKSMinRefreshInterval
+	if lifetime < minimum {
+		lifetime = minimum
 	}
-	if lifetime > defaultJWKSMaxRefreshInterval {
-		lifetime = defaultJWKSMaxRefreshInterval
+	if lifetime > maximum {
+		lifetime = maximum
 	}
 	return now.Add(lifetime), nil
 }

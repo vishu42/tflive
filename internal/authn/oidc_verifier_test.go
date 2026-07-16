@@ -386,6 +386,7 @@ func TestOIDCVerifierCoordinatesConcurrentUnknownKIDRefresh(t *testing.T) {
 			t.Fatalf("Verify() error = %v", err)
 		}
 	}
+
 	_, jwks := s.requestCounts()
 	if jwks != 2 {
 		t.Fatalf("JWKS requests = %d, want 2", jwks)
@@ -398,6 +399,8 @@ func TestOIDCVerifierUsesFreshCachedKeyDuringProviderOutage(t *testing.T) {
 	s.publish("key-a")
 	now := time.Now().UTC().Truncate(time.Second)
 	cfg := s.config(now)
+	cfg.JWKSMinRefreshInterval = 10 * time.Second
+	cfg.JWKSMaxRefreshInterval = 20 * time.Second
 	cfg.Clock = func() time.Time {
 		return now
 	}
@@ -407,7 +410,7 @@ func TestOIDCVerifierUsesFreshCachedKeyDuringProviderOutage(t *testing.T) {
 	}
 	defer v.Close(context.Background())
 
-	now = now.Add(30 * time.Second)
+	now = now.Add(9 * time.Second)
 	s.setUnavailable("keycloak-down")
 	if _, err := v.Verify(context.Background(), s.sign(t, "key-a", nil)); err != nil {
 		t.Fatalf("Verify() error = %v", err)
@@ -424,6 +427,8 @@ func TestOIDCVerifierRejectsExpiredCachedKeyDuringProviderOutage(t *testing.T) {
 	s.publish("key-a")
 	now := time.Now().UTC().Truncate(time.Second)
 	cfg := s.config(now)
+	cfg.JWKSMinRefreshInterval = 10 * time.Second
+	cfg.JWKSMaxRefreshInterval = 20 * time.Second
 	cfg.Clock = func() time.Time {
 		return now
 	}
@@ -433,10 +438,10 @@ func TestOIDCVerifierRejectsExpiredCachedKeyDuringProviderOutage(t *testing.T) {
 	}
 	defer v.Close(context.Background())
 
-	now = now.Add(defaultJWKSMinRefreshInterval + time.Second)
+	now = now.Add(11 * time.Second)
 	s.setUnavailable("keycloak-down")
 	_, err = v.Verify(context.Background(), s.sign(t, "key-a", nil))
-	if !errors.Is(err, ErrVerifierUnavailable) {
+	if err != ErrVerifierUnavailable {
 		t.Fatalf("Verify() error = %v, want ErrVerifierUnavailable", err)
 	}
 	_, jwks := s.requestCounts()
@@ -463,7 +468,7 @@ func TestOIDCVerifierReturnsUnavailableWhenNoUsableKeyCanBeFetched(t *testing.T)
 	}
 }
 
-func TestOIDCVerifierValidatedTokenRejectsMissingNotBefore(t *testing.T) {
+func TestOIDCVerifierValidatedTokenAllowsMissingNotBefore(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	tok := jwt.New()
 	_ = tok.Set(jwt.IssuerKey, "https://issuer.example")
@@ -485,9 +490,12 @@ func TestOIDCVerifierValidatedTokenRejectsMissingNotBefore(t *testing.T) {
 		},
 		discovery: discoveryDocument{Issuer: "https://issuer.example"},
 	}
-	_, err = v.validatedToken(payload)
-	if err != ErrInvalidToken {
-		t.Fatalf("validatedToken() error = %v, want ErrInvalidToken", err)
+	got, err := v.validatedToken(payload)
+	if err != nil {
+		t.Fatalf("validatedToken() error = %v", err)
+	}
+	if got.Subject != "user-123" {
+		t.Fatalf("validatedToken().Subject = %q, want user-123", got.Subject)
 	}
 }
 
@@ -584,14 +592,6 @@ func TestOIDCVerifierRejectsInvalidTokens(t *testing.T) {
 			raw: func(t *testing.T, s *oidcTestServer) string {
 				return s.sign(t, "key-a", func(tok jwt.Token) {
 					_ = tok.Set(jwt.NotBeforeKey, now.Add(clockSkew+time.Second))
-				})
-			},
-		},
-		{
-			name: "missing not before",
-			raw: func(t *testing.T, s *oidcTestServer) string {
-				return s.sign(t, "key-a", func(tok jwt.Token) {
-					_ = tok.Remove(jwt.NotBeforeKey)
 				})
 			},
 		},
@@ -705,6 +705,18 @@ func TestOIDCVerifierRedactsTokenAndProviderDetails(t *testing.T) {
 				t.Fatalf("Verify() leaked %q in error %q", secret, err)
 			}
 		}
+	}
+	s.addRSAKey(t, "key-b")
+	_, err = v.Verify(context.Background(), s.sign(t, "key-b", nil))
+	if err != ErrVerifierUnavailable {
+		t.Fatalf("Verify() error = %v, want ErrVerifierUnavailable", err)
+	}
+	if strings.Contains(err.Error(), fixtureResponse) {
+		t.Fatalf("Verify() leaked %q in error %q", fixtureResponse, err)
+	}
+	_, jwks := s.requestCounts()
+	if jwks != 2 {
+		t.Fatalf("JWKS requests = %d, want 2", jwks)
 	}
 }
 
