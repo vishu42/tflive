@@ -245,6 +245,29 @@ func TestOIDCVerifierVerifiesValidAccessTokenAndExtractsIdentity(t *testing.T) {
 	}
 }
 
+func TestOIDCVerifierErrorsAreExactlySafeCategories(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	_, err = v.Verify(context.Background(), "not-a-jwt")
+	if !errors.Is(err, ErrInvalidToken) || err.Error() != "invalid access token" {
+		t.Fatalf("invalid error = %v", err)
+	}
+
+	s.addRSAKey(t, "key-b")
+	s.setUnavailable("provider-detail")
+	_, err = v.Verify(context.Background(), s.sign(t, "key-b", nil))
+	if !errors.Is(err, ErrVerifierUnavailable) || err.Error() != "token verifier unavailable" {
+		t.Fatalf("unavailable error = %v", err)
+	}
+}
+
 func TestOIDCVerifierVerifiesStringAudience(t *testing.T) {
 	s := newOIDCTestServer(t)
 	s.addRSAKey(t, "key-a")

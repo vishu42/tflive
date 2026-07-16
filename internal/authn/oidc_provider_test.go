@@ -75,6 +75,20 @@ func TestNewOIDCVerifierRejectsUnavailableAndOversizedProviderResponses(t *testi
 	}
 }
 
+func TestOIDCVerifierRejectsProviderBodyWithoutLeakingIt(t *testing.T) {
+	body := "provider-private-detail-" + strings.Repeat("x", 20_000)
+	s := newOIDCTestServer(t)
+	s.setUnavailable(body)
+
+	_, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if !errors.Is(err, ErrVerifierUnavailable) {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(err.Error(), "provider-private-detail") {
+		t.Fatalf("error leaked body: %q", err)
+	}
+}
+
 func TestNewOIDCVerifierRejectsOversizedSuccessfulProviderResponses(t *testing.T) {
 	for _, response := range []struct {
 		name  string
