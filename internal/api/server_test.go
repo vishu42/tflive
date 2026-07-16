@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,16 @@ import (
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/traits"
 )
+
+const apiKeycloakSubject = "6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91"
+
+func authenticatedRequest(method, target string, body io.Reader) *http.Request {
+	request := httptest.NewRequest(method, target, body)
+	ctx := authn.ContextWithPrincipal(request.Context(), authn.Principal{
+		Subject: apiKeycloakSubject,
+	})
+	return request.WithContext(ctx)
+}
 
 func TestHealthzReturnsOK(t *testing.T) {
 	t.Parallel()
@@ -72,10 +83,10 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 	deps.now = startedAt
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/runs",
-		strings.NewReader(`{"operation":"plan","trigger_actor":"user_123"}`),
+		strings.NewReader(`{"operation":"plan"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -92,8 +103,8 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 	if deps.templateRuns.created.Operation != traits.OperationPlan {
 		t.Fatalf("operation = %q", deps.templateRuns.created.Operation)
 	}
-	if deps.templateRuns.created.TriggerActor != traits.UserID("user_123") {
-		t.Fatalf("trigger actor = %q", deps.templateRuns.created.TriggerActor)
+	if deps.templateRuns.created.TriggerActor != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("trigger actor = %q, want %q", deps.templateRuns.created.TriggerActor, apiKeycloakSubject)
 	}
 
 	var body traits.TemplateRun
@@ -116,7 +127,7 @@ func TestStartTemplateRunRejectsInvalidJSON(t *testing.T) {
 
 	server := NewServer(newAPITestDependencies().service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/runs",
 		strings.NewReader(`{"operation":`),
@@ -134,10 +145,10 @@ func TestStartTemplateRunMapsInvalidCommandToBadRequest(t *testing.T) {
 
 	server := NewServer(newAPITestDependencies().service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/runs",
-		strings.NewReader(`{"operation":"refresh","trigger_actor":"user_123"}`),
+		strings.NewReader(`{"operation":"refresh"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -154,10 +165,10 @@ func TestStartTemplateRunMapsMissingStackTemplateToNotFound(t *testing.T) {
 	deps.stackTemplates.getErr = app.ErrNotFound
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/missing_stack_template/runs",
-		strings.NewReader(`{"operation":"plan","trigger_actor":"user_123"}`),
+		strings.NewReader(`{"operation":"plan"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -176,10 +187,10 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 	deps.now = requestedAt
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/template-revisions",
-		strings.NewReader(`{"repo_owner":"acme","repo_name":"infra-templates","source_ref":"v0.0.1","root_path":"modules/vpc","requested_by":"user_123"}`),
+		strings.NewReader(`{"repo_owner":"acme","repo_name":"infra-templates","source_ref":"v0.0.1","root_path":"modules/vpc"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -195,6 +206,9 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 	}
 	if deps.registrations.created.SourceRef != "v0.0.1" {
 		t.Fatalf("source ref = %q", deps.registrations.created.SourceRef)
+	}
+	if deps.registrations.created.RequestedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("requested by = %q, want %q", deps.registrations.created.RequestedBy, apiKeycloakSubject)
 	}
 	if deps.workflows.syncInput.RegistrationID != traits.TemplateRegistrationID("template_registration_123") {
 		t.Fatalf("workflow registration id = %q", deps.workflows.syncInput.RegistrationID)
@@ -220,7 +234,7 @@ func TestRegisterTemplateRejectsInvalidJSON(t *testing.T) {
 
 	server := NewServer(newAPITestDependencies().service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/template-revisions",
 		strings.NewReader(`{"repo_owner":`),
@@ -238,10 +252,10 @@ func TestRegisterTemplateMapsInvalidCommandToBadRequest(t *testing.T) {
 
 	server := NewServer(newAPITestDependencies().service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/template-revisions",
-		strings.NewReader(`{"repo_owner":"acme","repo_name":"infra-templates","root_path":"modules/vpc","requested_by":"user_123"}`),
+		strings.NewReader(`{"repo_owner":"acme","repo_name":"infra-templates","root_path":"modules/vpc"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -260,10 +274,10 @@ func TestCreateStackCallsService(t *testing.T) {
 	deps.now = createdAt
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stacks",
-		strings.NewReader(`{"name":"Acme Prod","tags":{"env":"prod"},"default_credential_ids":["credential_123"],"actor":"user_123"}`),
+		strings.NewReader(`{"name":"Acme Prod","tags":{"env":"prod"},"default_credential_ids":["credential_123"]}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -276,6 +290,9 @@ func TestCreateStackCallsService(t *testing.T) {
 	}
 	if deps.stacks.created.Slug != "acme-prod" {
 		t.Fatalf("slug = %q, want acme-prod", deps.stacks.created.Slug)
+	}
+	if deps.stacks.created.CreatedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("created by = %q, want %q", deps.stacks.created.CreatedBy, apiKeycloakSubject)
 	}
 
 	var body stackResponse
@@ -394,10 +411,10 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 	deps.stackTemplateID = traits.StackTemplateID("stack_template_a1b2c3d4")
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stacks/stack_123/templates",
-		strings.NewReader(`{"template_revision_id":"template_123","selected_ref":"main","config":{"region":"us-east-1"},"actor":"user_123"}`),
+		strings.NewReader(`{"template_revision_id":"template_123","selected_ref":"main","config":{"region":"us-east-1"}}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -407,6 +424,9 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 	}
 	if deps.stackTemplateInstaller.created.StackID != traits.StackID("stack_123") {
 		t.Fatalf("stack id = %q, want stack_123", deps.stackTemplateInstaller.created.StackID)
+	}
+	if deps.stackTemplateInstaller.created.CreatedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("created by = %q, want %q", deps.stackTemplateInstaller.created.CreatedBy, apiKeycloakSubject)
 	}
 
 	var body map[string]any
@@ -419,8 +439,8 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 	if body["id"] != "stack_template_a1b2c3d4" {
 		t.Fatalf("response id = %q, want stack_template_a1b2c3d4", body["id"])
 	}
-	if body["created_by"] != "user_123" {
-		t.Fatalf("response created by = %q, want user_123", body["created_by"])
+	if body["created_by"] != apiKeycloakSubject {
+		t.Fatalf("response created by = %q, want %q", body["created_by"], apiKeycloakSubject)
 	}
 	config, ok := body["config"].(map[string]any)
 	if !ok || config["region"] != "us-east-1" {
@@ -441,10 +461,10 @@ func TestUpdateStackTemplateConfigCallsService(t *testing.T) {
 	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPatch,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/config",
-		strings.NewReader(`{"config":{"region":"us-west-2"},"actor":"user_123"}`),
+		strings.NewReader(`{"config":{"region":"us-west-2"}}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -486,10 +506,10 @@ func TestUpgradeStackTemplateCallsService(t *testing.T) {
 	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade",
-		strings.NewReader(`{"target_template_revision_id":"template_rev_2","actor":"user_123"}`),
+		strings.NewReader(`{"target_template_revision_id":"template_rev_2"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -537,10 +557,10 @@ func TestUpgradeStackTemplateMapsMissingRequiredVariableToConflict(t *testing.T)
 	}
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade",
-		strings.NewReader(`{"target_template_revision_id":"template_rev_2","actor":"user_123"}`),
+		strings.NewReader(`{"target_template_revision_id":"template_rev_2"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -568,10 +588,10 @@ func TestUpgradeStackTemplateMapsSourceMismatchToConflict(t *testing.T) {
 	}
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade",
-		strings.NewReader(`{"target_template_revision_id":"template_rev_2","actor":"user_123"}`),
+		strings.NewReader(`{"target_template_revision_id":"template_rev_2"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -594,13 +614,13 @@ func TestStackTemplateEditRoutesMapMissingStackTemplateToNotFound(t *testing.T) 
 			name:   "config edit",
 			method: http.MethodPatch,
 			path:   "/v1/tenants/tenant_123/stack-templates/missing_stack_template/config",
-			body:   `{"config":{},"actor":"user_123"}`,
+			body:   `{"config":{}}`,
 		},
 		{
 			name:   "upgrade",
 			method: http.MethodPost,
 			path:   "/v1/tenants/tenant_123/stack-templates/missing_stack_template/upgrade",
-			body:   `{"target_template_revision_id":"template_rev_2","actor":"user_123"}`,
+			body:   `{"target_template_revision_id":"template_rev_2"}`,
 		},
 	}
 
@@ -612,7 +632,7 @@ func TestStackTemplateEditRoutesMapMissingStackTemplateToNotFound(t *testing.T) 
 			deps.stackTemplates.getErr = app.ErrNotFound
 			server := NewServer(deps.service())
 			response := httptest.NewRecorder()
-			request := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			request := authenticatedRequest(tt.method, tt.path, strings.NewReader(tt.body))
 
 			server.ServeHTTP(response, request)
 
@@ -978,10 +998,10 @@ func TestApproveRunCallsService(t *testing.T) {
 	deps := newAPITestDependencies()
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/template-runs/run_123/approval",
-		strings.NewReader(`{"approved_by":"user_123"}`),
+		strings.NewReader(`{}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -995,11 +1015,14 @@ func TestApproveRunCallsService(t *testing.T) {
 	if deps.templateRuns.approval.RunID != traits.TemplateRunID("run_123") {
 		t.Fatalf("run id = %q", deps.templateRuns.approval.RunID)
 	}
-	if deps.templateRuns.approval.ApprovedBy != traits.UserID("user_123") {
-		t.Fatalf("approved by = %q", deps.templateRuns.approval.ApprovedBy)
+	if deps.templateRuns.approval.ApprovedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("approved by = %q, want %q", deps.templateRuns.approval.ApprovedBy, apiKeycloakSubject)
 	}
 	if deps.workflows.approvalRunID != traits.TemplateRunID("run_123") {
 		t.Fatalf("workflow run id = %q", deps.workflows.approvalRunID)
+	}
+	if deps.workflows.approvalSignal.ApprovedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("workflow approved by = %q, want %q", deps.workflows.approvalSignal.ApprovedBy, apiKeycloakSubject)
 	}
 }
 
@@ -1009,10 +1032,10 @@ func TestCancelRunCallsService(t *testing.T) {
 	deps := newAPITestDependencies()
 	server := NewServer(deps.service())
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/template-runs/run_123/cancellation",
-		strings.NewReader(`{"requested_by":"user_123","reason":"testing"}`),
+		strings.NewReader(`{"reason":"testing"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -1026,14 +1049,17 @@ func TestCancelRunCallsService(t *testing.T) {
 	if deps.templateRuns.cancellation.RunID != traits.TemplateRunID("run_123") {
 		t.Fatalf("run id = %q", deps.templateRuns.cancellation.RunID)
 	}
-	if deps.templateRuns.cancellation.RequestedBy != traits.UserID("user_123") {
-		t.Fatalf("requested by = %q", deps.templateRuns.cancellation.RequestedBy)
+	if deps.templateRuns.cancellation.RequestedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("requested by = %q, want %q", deps.templateRuns.cancellation.RequestedBy, apiKeycloakSubject)
 	}
 	if deps.templateRuns.cancellation.Reason != "testing" {
 		t.Fatalf("reason = %q", deps.templateRuns.cancellation.Reason)
 	}
 	if deps.workflows.cancelRunID != traits.TemplateRunID("run_123") {
 		t.Fatalf("workflow run id = %q", deps.workflows.cancelRunID)
+	}
+	if deps.workflows.cancelSignal.RequestedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("workflow requested by = %q, want %q", deps.workflows.cancelSignal.RequestedBy, apiKeycloakSubject)
 	}
 }
 
@@ -1050,7 +1076,7 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 		{
 			name: "approval",
 			path: "/v1/tenants/tenant_123/template-runs/run_123/approval",
-			body: `{"approved_by":"user_123"}`,
+			body: `{}`,
 			configure: func(deps *apiTestDependencies) {
 				deps.templateRuns.approvalErr = app.ErrRunNotApprovable
 			},
@@ -1059,7 +1085,7 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 		{
 			name: "cancellation",
 			path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation",
-			body: `{"requested_by":"user_123"}`,
+			body: `{}`,
 			configure: func(deps *apiTestDependencies) {
 				deps.templateRuns.cancellationErr = app.ErrRunNotCancelable
 			},
@@ -1075,7 +1101,7 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 			tt.configure(deps)
 			server := NewServer(deps.service())
 			response := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+			request := authenticatedRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
 
 			server.ServeHTTP(response, request)
 
@@ -1083,6 +1109,63 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 				t.Fatalf("status = %d, want %d", response.Code, tt.statusCode)
 			}
 		})
+	}
+}
+
+func TestMutationRequestsRejectIdentityOverrides(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "actor", path: "/v1/tenants/tenant_123/stacks", body: `{"name":"Acme","actor":"spoofed"}`},
+		{name: "requested by", path: "/v1/tenants/tenant_123/template-revisions", body: `{"repo_owner":"acme","repo_name":"infra","source_ref":"main","root_path":".","requested_by":"spoofed"}`},
+		{name: "trigger actor", path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan","trigger_actor":"spoofed"}`},
+		{name: "approved by", path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{"approved_by":"spoofed"}`},
+		{name: "created by", path: "/v1/tenants/tenant_123/stacks", body: `{"name":"Acme","created_by":"spoofed"}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := NewServer(newAPITestDependencies().service())
+			response := httptest.NewRecorder()
+			request := authenticatedRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestMutationRequestsRejectMissingPrincipal(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service())
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/stacks",
+		strings.NewReader(`{"name":"Acme Prod","tags":{"env":"prod"},"default_credential_ids":["credential_123"]}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnauthorized, response.Body.String())
+	}
+	var body errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error != "unauthorized" {
+		t.Fatalf("error code = %q, want unauthorized", body.Error)
+	}
+	if deps.stacks.created.ID != "" {
+		t.Fatalf("created stack ID = %q, want no mutation", deps.stacks.created.ID)
 	}
 }
 
@@ -1429,10 +1512,12 @@ func (repository *recordingTemplateRepository) GetTemplateRevisionVariables(_ co
 }
 
 type recordingWorkflowDispatcher struct {
-	input         traits.TemplateRunWorkflowInput
-	syncInput     traits.TemplateSyncWorkflowInput
-	approvalRunID traits.TemplateRunID
-	cancelRunID   traits.TemplateRunID
+	input          traits.TemplateRunWorkflowInput
+	syncInput      traits.TemplateSyncWorkflowInput
+	approvalRunID  traits.TemplateRunID
+	approvalSignal traits.ApprovalSignal
+	cancelRunID    traits.TemplateRunID
+	cancelSignal   traits.CancelSignal
 }
 
 func (dispatcher *recordingWorkflowDispatcher) StartTemplateRun(_ context.Context, input traits.TemplateRunWorkflowInput) error {
@@ -1445,13 +1530,15 @@ func (dispatcher *recordingWorkflowDispatcher) StartTemplateSync(_ context.Conte
 	return nil
 }
 
-func (dispatcher *recordingWorkflowDispatcher) ApproveTemplateRun(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, _ traits.ApprovalSignal) error {
+func (dispatcher *recordingWorkflowDispatcher) ApproveTemplateRun(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, signal traits.ApprovalSignal) error {
 	dispatcher.approvalRunID = runID
+	dispatcher.approvalSignal = signal
 	return nil
 }
 
-func (dispatcher *recordingWorkflowDispatcher) CancelTemplateRun(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, _ traits.CancelSignal) error {
+func (dispatcher *recordingWorkflowDispatcher) CancelTemplateRun(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, signal traits.CancelSignal) error {
 	dispatcher.cancelRunID = runID
+	dispatcher.cancelSignal = signal
 	return nil
 }
 
