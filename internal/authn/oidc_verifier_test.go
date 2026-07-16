@@ -267,6 +267,34 @@ func TestOIDCVerifierVerifiesStringAudience(t *testing.T) {
 	}
 }
 
+func TestOIDCVerifierValidatedTokenRejectsMissingNotBefore(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	tok := jwt.New()
+	_ = tok.Set(jwt.IssuerKey, "https://issuer.example")
+	_ = tok.Set(jwt.AudienceKey, []string{"test-audience"})
+	_ = tok.Set(jwt.ExpirationKey, now.Add(time.Hour))
+	_ = tok.Set(jwt.SubjectKey, "user-123")
+	_ = tok.Set("typ", "Bearer")
+	payload, err := json.Marshal(tok)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	v := &OIDCVerifier{
+		cfg: OIDCVerifierConfig{
+			Audience: "test-audience",
+			Clock: func() time.Time {
+				return now
+			},
+		},
+		discovery: discoveryDocument{Issuer: "https://issuer.example"},
+	}
+	_, err = v.validatedToken(payload)
+	if err != ErrInvalidToken {
+		t.Fatalf("validatedToken() error = %v, want ErrInvalidToken", err)
+	}
+}
+
 func TestOIDCVerifierRejectsInvalidTokens(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 
@@ -360,6 +388,14 @@ func TestOIDCVerifierRejectsInvalidTokens(t *testing.T) {
 			raw: func(t *testing.T, s *oidcTestServer) string {
 				return s.sign(t, "key-a", func(tok jwt.Token) {
 					_ = tok.Set(jwt.NotBeforeKey, now.Add(clockSkew+time.Second))
+				})
+			},
+		},
+		{
+			name: "missing not before",
+			raw: func(t *testing.T, s *oidcTestServer) string {
+				return s.sign(t, "key-a", func(tok jwt.Token) {
+					_ = tok.Remove(jwt.NotBeforeKey)
 				})
 			},
 		},
