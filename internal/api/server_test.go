@@ -1063,6 +1063,61 @@ func TestCancelRunCallsService(t *testing.T) {
 	}
 }
 
+func TestRunDecisionRequestsRejectTopLevelNull(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		path            string
+		assertNoEffects func(*testing.T, *apiTestDependencies)
+	}{
+		{
+			name: "approval",
+			path: "/v1/tenants/tenant_123/template-runs/run_123/approval",
+			assertNoEffects: func(t *testing.T, deps *apiTestDependencies) {
+				t.Helper()
+				if deps.templateRuns.approval.RunID != "" {
+					t.Errorf("approval run ID = %q, want no approval", deps.templateRuns.approval.RunID)
+				}
+				if deps.workflows.approvalRunID != "" {
+					t.Errorf("workflow approval run ID = %q, want no signal", deps.workflows.approvalRunID)
+				}
+			},
+		},
+		{
+			name: "cancellation",
+			path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation",
+			assertNoEffects: func(t *testing.T, deps *apiTestDependencies) {
+				t.Helper()
+				if deps.templateRuns.cancellation.RunID != "" {
+					t.Errorf("cancellation run ID = %q, want no cancellation", deps.templateRuns.cancellation.RunID)
+				}
+				if deps.workflows.cancelRunID != "" {
+					t.Errorf("workflow cancellation run ID = %q, want no signal", deps.workflows.cancelRunID)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newAPITestDependencies()
+			server := NewServer(deps.service())
+			response := httptest.NewRecorder()
+			request := authenticatedRequest(http.MethodPost, test.path, strings.NewReader(`null`))
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
+			}
+			test.assertNoEffects(t, deps)
+		})
+	}
+}
+
 func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 	t.Parallel()
 

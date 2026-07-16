@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -84,8 +85,18 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 
 func decodeRequestBody(response http.ResponseWriter, request *http.Request, destination any) bool {
 	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_json", "request body must match the expected JSON schema")
+		return false
+	}
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || trimmed[0] != '{' {
+		writeError(response, http.StatusBadRequest, "invalid_json", "request body must contain one JSON object")
+		return false
+	}
+	bodyDecoder := json.NewDecoder(bytes.NewReader(raw))
+	bodyDecoder.DisallowUnknownFields()
+	if err := bodyDecoder.Decode(destination); err != nil {
 		writeError(response, http.StatusBadRequest, "invalid_json", "request body must match the expected JSON schema")
 		return false
 	}
