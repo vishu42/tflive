@@ -186,6 +186,26 @@ func TestRunUsesDefaultTemporalTaskQueue(t *testing.T) {
 	}
 }
 
+func TestRunConstructsAndClosesOIDCVerifier(t *testing.T) {
+	deps := newRecordingAPIDependencies(t)
+	verifier := &recordingTokenVerifier{}
+	var got authn.OIDCVerifierConfig
+	deps.newVerifier = func(_ context.Context, cfg authn.OIDCVerifierConfig) (tokenVerifier, error) {
+		got = cfg
+		return verifier, nil
+	}
+
+	if err := runWithDependencies(context.Background(), apiTestEnv, deps.apiDependencies); err != nil {
+		t.Fatalf("runWithDependencies() error = %v", err)
+	}
+	if got.IssuerURL == nil || got.IssuerURL.String() != apiTestEnv("OIDC_ISSUER_URL") || got.Audience != apiTestEnv("OIDC_AUDIENCE") {
+		t.Fatalf("OIDC verifier config = %#v", got)
+	}
+	if !verifier.closed {
+		t.Fatal("verifier was not closed")
+	}
+}
+
 func TestRunWrapsTemporalDialFailure(t *testing.T) {
 	t.Parallel()
 
@@ -426,6 +446,19 @@ func (testTokenVerifier) Verify(context.Context, string) (authn.VerifiedToken, e
 }
 
 func (testTokenVerifier) Close(context.Context) error { return nil }
+
+type recordingTokenVerifier struct {
+	closed bool
+}
+
+func (verifier *recordingTokenVerifier) Verify(context.Context, string) (authn.VerifiedToken, error) {
+	return authn.VerifiedToken{Subject: "test-user"}, nil
+}
+
+func (verifier *recordingTokenVerifier) Close(context.Context) error {
+	verifier.closed = true
+	return nil
+}
 
 type recordingPostgresPool struct {
 	databaseURL string

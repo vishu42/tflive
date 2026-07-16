@@ -44,7 +44,7 @@ func TestRequireAuthentication(t *testing.T) {
 				called = true
 				if request.URL.Path == "/v1/stacks" {
 					principal, ok := PrincipalFromContext(request.Context())
-					if !ok || principal.Subject != valid.Subject || principal.Email != valid.Email || len(principal.RealmRoles) != 1 || principal.RealmRoles[0] != "admin" {
+					if !ok || principal.Subject != valid.Subject || principal.Name != valid.Name || principal.PreferredUsername != valid.PreferredUsername || principal.Email != valid.Email || len(principal.RealmRoles) != 1 || principal.RealmRoles[0] != "admin" {
 						t.Fatalf("principal = %#v, ok = %t", principal, ok)
 					}
 				}
@@ -64,6 +64,19 @@ func TestRequireAuthentication(t *testing.T) {
 				t.Fatalf("body = %q", response.Body.String())
 			}
 		})
+	}
+}
+
+func TestPrincipalFromContextCopiesRoles(t *testing.T) {
+	ctx := ContextWithPrincipal(context.Background(), Principal{Subject: "user-123", RealmRoles: []string{"admin"}})
+	principal, ok := PrincipalFromContext(ctx)
+	if !ok {
+		t.Fatal("principal is missing")
+	}
+	principal.RealmRoles[0] = "mutated"
+	second, ok := PrincipalFromContext(ctx)
+	if !ok || second.RealmRoles[0] != "admin" {
+		t.Fatalf("principal after mutation = %#v, ok = %t", second, ok)
 	}
 }
 
