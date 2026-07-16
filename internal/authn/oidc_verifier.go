@@ -38,6 +38,9 @@ func (v *OIDCVerifier) retryAfterSignatureFailure(ctx context.Context, raw, keyI
 	refreshErr := v.refreshKeys(ctx, true)
 	key, found, keyErr := v.cachedKeyFor(keyID, algorithm)
 	if keyErr != nil {
+		if errors.Is(keyErr, errJWKSCacheExpired) {
+			return VerifiedToken{}, ErrVerifierUnavailable
+		}
 		return VerifiedToken{}, keyErr
 	}
 	if !found {

@@ -19,6 +19,7 @@ import (
 var (
 	errProviderResponseTooLarge = errors.New("provider response exceeds size limit")
 	errRefreshCooldown          = errors.New("oidc refresh cooldown")
+	errJWKSCacheExpired         = errors.New("oidc JWKS cache expired")
 )
 
 type discoveryDocument struct {
@@ -27,9 +28,10 @@ type discoveryDocument struct {
 }
 
 type keyCache struct {
-	url   string
-	cache *jwk.Cache
-	set   jwk.CachedSet
+	url        string
+	cache      *jwk.Cache
+	set        jwk.CachedSet
+	freshUntil time.Time
 }
 
 type OIDCVerifier struct {
@@ -96,6 +98,10 @@ func NewOIDCVerifier(ctx context.Context, cfg OIDCVerifierConfig) (*OIDCVerifier
 	if err != nil || hasDuplicateKeyIDs(set) {
 		return nil, ErrVerifierUnavailable
 	}
+	freshUntil, err := jwksFreshUntil(cfg.Clock(), cache, jwksURL)
+	if err != nil {
+		return nil, ErrVerifierUnavailable
+	}
 
 	keepCache = true
 	return &OIDCVerifier{
@@ -103,9 +109,10 @@ func NewOIDCVerifier(ctx context.Context, cfg OIDCVerifierConfig) (*OIDCVerifier
 		discovery:  discovery,
 		discovered: cfg.Clock(),
 		keys: &keyCache{
-			url:   jwksURL,
-			cache: cache,
-			set:   set,
+			url:        jwksURL,
+			cache:      cache,
+			set:        set,
+			freshUntil: freshUntil,
 		},
 	}, nil
 }
@@ -127,7 +134,7 @@ func (v *OIDCVerifier) Close(ctx context.Context) error {
 
 func (v *OIDCVerifier) keyFor(ctx context.Context, kid string, algorithm jwa.SignatureAlgorithm) (any, error) {
 	publicKey, found, err := v.cachedKeyFor(kid, algorithm)
-	if err != nil {
+	if err != nil && !errors.Is(err, errJWKSCacheExpired) {
 		return nil, err
 	}
 	if found {
@@ -137,6 +144,9 @@ func (v *OIDCVerifier) keyFor(ctx context.Context, kid string, algorithm jwa.Sig
 	refreshErr := v.refreshKeys(ctx, true)
 	publicKey, found, err = v.cachedKeyFor(kid, algorithm)
 	if err != nil {
+		if errors.Is(err, errJWKSCacheExpired) {
+			return nil, ErrVerifierUnavailable
+		}
 		return nil, err
 	}
 	if found {
@@ -157,6 +167,9 @@ func (v *OIDCVerifier) cachedKeyFor(kid string, algorithm jwa.SignatureAlgorithm
 	keys := v.keys
 	if keys == nil || keys.set == nil {
 		return nil, false, ErrVerifierUnavailable
+	}
+	if !keys.freshUntil.After(v.cfg.Clock()) {
+		return nil, false, errJWKSCacheExpired
 	}
 	if kid == "" {
 		return nil, false, ErrInvalidToken
@@ -232,6 +245,15 @@ func (v *OIDCVerifier) refreshKeys(ctx context.Context, force bool) error {
 	if hasDuplicateKeyIDs(set) {
 		return errors.New("OIDC JWKS contains duplicate key IDs")
 	}
+	freshUntil, err := jwksFreshUntil(v.cfg.Clock(), keys.cache, keys.url)
+	if err != nil {
+		return err
+	}
+	v.mu.Lock()
+	if v.keys == keys {
+		keys.freshUntil = freshUntil
+	}
+	v.mu.Unlock()
 	return nil
 }
 
@@ -311,8 +333,12 @@ func (v *OIDCVerifier) replaceKeyCache(ctx context.Context, jwksURI string) erro
 	if hasDuplicateKeyIDs(set) {
 		return errors.New("OIDC JWKS contains duplicate key IDs")
 	}
+	freshUntil, err := jwksFreshUntil(v.cfg.Clock(), cache, jwksURI)
+	if err != nil {
+		return err
+	}
 
-	newKeys := &keyCache{url: jwksURI, cache: cache, set: set}
+	newKeys := &keyCache{url: jwksURI, cache: cache, set: set, freshUntil: freshUntil}
 	v.mu.Lock()
 	oldKeys := v.keys
 	v.keys = newKeys
@@ -323,6 +349,21 @@ func (v *OIDCVerifier) replaceKeyCache(ctx context.Context, jwksURI string) erro
 		return oldKeys.cache.Shutdown(context.Background())
 	}
 	return nil
+}
+
+func jwksFreshUntil(now time.Time, cache *jwk.Cache, jwksURI string) (time.Time, error) {
+	resource, err := cache.LookupResource(context.Background(), jwksURI)
+	if err != nil {
+		return time.Time{}, err
+	}
+	lifetime := resource.Next().Sub(time.Now())
+	if lifetime < defaultJWKSMinRefreshInterval {
+		lifetime = defaultJWKSMinRefreshInterval
+	}
+	if lifetime > defaultJWKSMaxRefreshInterval {
+		lifetime = defaultJWKSMaxRefreshInterval
+	}
+	return now.Add(lifetime), nil
 }
 
 func validOIDCVerifierConfig(cfg OIDCVerifierConfig) bool {

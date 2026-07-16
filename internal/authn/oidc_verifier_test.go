@@ -396,12 +396,18 @@ func TestOIDCVerifierUsesFreshCachedKeyDuringProviderOutage(t *testing.T) {
 	s := newOIDCTestServer(t)
 	s.addRSAKey(t, "key-a")
 	s.publish("key-a")
-	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	now := time.Now().UTC().Truncate(time.Second)
+	cfg := s.config(now)
+	cfg.Clock = func() time.Time {
+		return now
+	}
+	v, err := NewOIDCVerifier(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer v.Close(context.Background())
 
+	now = now.Add(30 * time.Second)
 	s.setUnavailable("keycloak-down")
 	if _, err := v.Verify(context.Background(), s.sign(t, "key-a", nil)); err != nil {
 		t.Fatalf("Verify() error = %v", err)
@@ -409,6 +415,33 @@ func TestOIDCVerifierUsesFreshCachedKeyDuringProviderOutage(t *testing.T) {
 	_, jwks := s.requestCounts()
 	if jwks != 1 {
 		t.Fatalf("JWKS requests = %d, want 1", jwks)
+	}
+}
+
+func TestOIDCVerifierRejectsExpiredCachedKeyDuringProviderOutage(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	now := time.Now().UTC().Truncate(time.Second)
+	cfg := s.config(now)
+	cfg.Clock = func() time.Time {
+		return now
+	}
+	v, err := NewOIDCVerifier(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	now = now.Add(defaultJWKSMinRefreshInterval + time.Second)
+	s.setUnavailable("keycloak-down")
+	_, err = v.Verify(context.Background(), s.sign(t, "key-a", nil))
+	if !errors.Is(err, ErrVerifierUnavailable) {
+		t.Fatalf("Verify() error = %v, want ErrVerifierUnavailable", err)
+	}
+	_, jwks := s.requestCounts()
+	if jwks != 2 {
+		t.Fatalf("JWKS requests = %d, want 2", jwks)
 	}
 }
 
