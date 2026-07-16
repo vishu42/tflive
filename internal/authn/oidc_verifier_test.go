@@ -421,6 +421,36 @@ func TestOIDCVerifierUsesFreshCachedKeyDuringProviderOutage(t *testing.T) {
 	}
 }
 
+func TestOIDCVerifierFailsClosedAfterJWKSFreshnessExpiresDuringProviderOutage(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	cfg := s.config(time.Now())
+	cfg.Clock = time.Now
+	cfg.JWKSMinRefreshInterval = time.Second
+	cfg.JWKSMaxRefreshInterval = time.Second
+	v, err := NewOIDCVerifier(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	time.Sleep(2 * time.Second)
+	_, jwks := s.requestCounts()
+	if jwks != 1 {
+		t.Fatalf("automatic JWKS requests = %d, want 1", jwks)
+	}
+	s.setUnavailable("keycloak-down")
+	_, err = v.Verify(context.Background(), s.sign(t, "key-a", nil))
+	if err != ErrVerifierUnavailable {
+		t.Fatalf("Verify() error = %v, want ErrVerifierUnavailable", err)
+	}
+	_, jwks = s.requestCounts()
+	if jwks != 2 {
+		t.Fatalf("JWKS requests = %d, want 2", jwks)
+	}
+}
+
 func TestOIDCVerifierRejectsExpiredCachedKeyDuringProviderOutage(t *testing.T) {
 	s := newOIDCTestServer(t)
 	s.addRSAKey(t, "key-a")

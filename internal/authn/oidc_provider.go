@@ -22,6 +22,11 @@ var (
 	errJWKSCacheExpired         = errors.New("oidc JWKS cache expired")
 )
 
+// manualJWKSRefreshInterval prevents jwk.Cache from refreshing outside the
+// verifier's coordinated refresh path. Only a successful synchronous refresh
+// may extend the verifier's bounded freshness window.
+const manualJWKSRefreshInterval = 100 * 365 * 24 * time.Hour
+
 type discoveryDocument struct {
 	Issuer  string `json:"issuer"`
 	JWKSURI string `json:"jwks_uri"`
@@ -102,6 +107,9 @@ func NewOIDCVerifier(ctx context.Context, cfg OIDCVerifierConfig) (*OIDCVerifier
 		cfg.Clock(), cache, jwksURL, cfg.JWKSMinRefreshInterval, cfg.JWKSMaxRefreshInterval,
 	)
 	if err != nil {
+		return nil, ErrVerifierUnavailable
+	}
+	if err := deferAutomaticJWKSRefresh(cache, jwksURL); err != nil {
 		return nil, ErrVerifierUnavailable
 	}
 
@@ -253,6 +261,9 @@ func (v *OIDCVerifier) refreshKeys(ctx context.Context, force bool) error {
 	if err != nil {
 		return err
 	}
+	if err := deferAutomaticJWKSRefresh(keys.cache, keys.url); err != nil {
+		return err
+	}
 	v.mu.Lock()
 	if v.keys == keys {
 		keys.freshUntil = freshUntil
@@ -343,6 +354,9 @@ func (v *OIDCVerifier) replaceKeyCache(ctx context.Context, jwksURI string) erro
 	if err != nil {
 		return err
 	}
+	if err := deferAutomaticJWKSRefresh(cache, jwksURI); err != nil {
+		return err
+	}
 
 	newKeys := &keyCache{url: jwksURI, cache: cache, set: set, freshUntil: freshUntil}
 	v.mu.Lock()
@@ -370,6 +384,15 @@ func jwksFreshUntil(now time.Time, cache *jwk.Cache, jwksURI string, minimum, ma
 		lifetime = maximum
 	}
 	return now.Add(lifetime), nil
+}
+
+func deferAutomaticJWKSRefresh(cache *jwk.Cache, jwksURI string) error {
+	resource, err := cache.LookupResource(context.Background(), jwksURI)
+	if err != nil {
+		return err
+	}
+	resource.SetNext(time.Now().Add(manualJWKSRefreshInterval))
+	return nil
 }
 
 func validOIDCVerifierConfig(cfg OIDCVerifierConfig) bool {
