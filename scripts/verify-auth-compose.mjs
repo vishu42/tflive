@@ -14,6 +14,30 @@ const rendered = execFileSync(
 );
 const config = JSON.parse(rendered);
 const source = readFileSync(resolve(root, "docker-compose.yaml"), "utf8");
+const envExample = readFileSync(resolve(root, ".env.example"), "utf8");
+
+function envValue(name) {
+  const prefix = `${name}=`;
+  const matches = envExample
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith(prefix));
+  assert.equal(matches.length, 1, `${name} must appear exactly once in .env.example`);
+  return matches[0].slice(prefix.length);
+}
+
+for (const [name, value] of Object.entries({
+  TFLIVE_ENVIRONMENT: "development",
+  TFLIVE_TENANT_ID: "tenant_123",
+  OIDC_ISSUER_URL: "http://localhost:8082/realms/tflive",
+  OIDC_AUDIENCE: "tflive-api",
+  OPENFGA_API_URL: "http://localhost:8080",
+  OPENFGA_STORE_ID: "",
+  OPENFGA_MODEL_ID: "",
+  OPENFGA_API_TOKEN: "",
+  OPENFGA_HTTP_TIMEOUT: "10s",
+})) {
+  assert.equal(envValue(name), value, `${name} has the wrong local example value`);
+}
 
 function service(name) {
   const value = config.services?.[name];

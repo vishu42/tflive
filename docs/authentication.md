@@ -95,7 +95,7 @@ trusted bootstrap email as verified so the initial administrator is immediately
 usable. The password is set only when the user is first created; later reruns do
 not overwrite a password rotated by a deployment administrator.
 
-## Runtime Configuration
+## Keycloak Provisioner Configuration
 
 The provisioner requires these values. Local-only examples live in
 `.env.example`; production supplies them through its secret/config delivery
@@ -121,6 +121,49 @@ system and must not reuse the examples.
 
 Configured passwords and in-memory admin tokens are redacted from surfaced
 errors and never written to successful logs.
+
+## API Runtime Security Configuration
+
+The API validates its authentication and authorization configuration before it
+connects to Postgres or Temporal or starts its HTTP listener.
+
+| Variable | Sensitive | Purpose |
+|---|---:|---|
+| `TFLIVE_ENVIRONMENT` | No | Optional runtime mode; empty defaults to `development`; valid values are `development` and `production` |
+| `TFLIVE_TENANT_ID` | No | Required single configured tenant identifier |
+| `OIDC_ISSUER_URL` | No | Required exact Keycloak issuer URL |
+| `OIDC_AUDIENCE` | No | Required access-token audience; local value is `tflive-api` |
+| `OPENFGA_API_URL` | No | Required OpenFGA API base URL |
+| `OPENFGA_STORE_ID` | No | Required exact store ID emitted by bootstrap |
+| `OPENFGA_MODEL_ID` | No | Required exact immutable model ID emitted by bootstrap |
+| `OPENFGA_API_TOKEN` | Yes | Optional for local development and required in production |
+| `OPENFGA_HTTP_TIMEOUT` | No | Positive per-request deadline; defaults to `10s` |
+
+Development permits the documented loopback HTTP issuer, local HTTP OpenFGA
+endpoint, and tokenless OpenFGA service. Production must be selected explicitly
+with `TFLIVE_ENVIRONMENT=production`; it requires HTTPS for both external
+dependencies and a non-empty OpenFGA bearer token. Unknown modes, malformed
+tenant IDs, unsafe URLs or identifiers, and non-positive timeouts stop startup.
+
+The OpenFGA store and model IDs are never discovered at API startup. Copy the
+exact assignments printed by the serialized bootstrap command into runtime
+configuration before starting the API. Keycloak bootstrap passwords and
+provisioner administrator tokens are not API runtime credentials.
+
+## API Access-Token Verification
+
+The API accepts compact bearer access tokens for the configured issuer and
+`OIDC_AUDIENCE`. It does not accept ID tokens or opaque tokens. Signature,
+issuer, audience, expiry, optional not-before (when present), subject, and
+bearer type checks complete before identity data is returned.
+
+Keycloak discovery and JWKS signing keys are cached. A new or replaced signing
+key triggers one bounded refresh, so routine key rotation does not require an
+API restart. A fresh cached key continues to work through a short Keycloak
+outage. If the verifier cannot fetch required public keys, it fails closed and
+exposes no token or provider-response detail.
+
+AUTH-007 middleware owns HTTP status mapping and bearer-header parsing.
 
 ## Operation and Reruns
 
