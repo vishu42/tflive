@@ -110,6 +110,32 @@ func TestNewOIDCVerifierRejectsOversizedSuccessfulProviderResponses(t *testing.T
 	}
 }
 
+func TestNewOIDCVerifierRejectsMalformedJWKSWithoutHangingOrLeakingDetails(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.setJWKSBody(`{"keys":[{"kid":"provider-private-malformed-jwks-detail"}`)
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrVerifierUnavailable) {
+			t.Fatalf("error = %v", err)
+		}
+		if got := err.Error(); got != ErrVerifierUnavailable.Error() {
+			t.Fatalf("error = %q", got)
+		}
+		if strings.Contains(err.Error(), "provider-private-malformed-jwks-detail") {
+			t.Fatalf("error leaked provider body: %q", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("NewOIDCVerifier() did not return for malformed JWKS")
+	}
+}
+
 func TestNewOIDCVerifierAllowsProviderResponseAtSizeLimit(t *testing.T) {
 	s := newOIDCTestServer(t)
 	s.addRSAKey(t, "key-a")

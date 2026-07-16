@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/httprc/v3"
+	"github.com/lestrrat-go/httprc/v3/errsink"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 )
 
@@ -59,7 +60,13 @@ func NewOIDCVerifier(ctx context.Context, cfg OIDCVerifierConfig) (*OIDCVerifier
 		return nil, ErrVerifierUnavailable
 	}
 
-	cache, err := jwk.NewCache(ctx, httprc.NewClient())
+	registrationCtx, cancelRegistration := context.WithCancel(ctx)
+	defer cancelRegistration()
+	cache, err := jwk.NewCache(ctx, httprc.NewClient(
+		httprc.WithErrorSink(errsink.NewFunc(func(context.Context, error) {
+			cancelRegistration()
+		})),
+	))
 	if err != nil {
 		return nil, ErrVerifierUnavailable
 	}
@@ -70,8 +77,6 @@ func NewOIDCVerifier(ctx context.Context, cfg OIDCVerifierConfig) (*OIDCVerifier
 		}
 	}()
 
-	registrationCtx, cancelRegistration := context.WithCancel(ctx)
-	defer cancelRegistration()
 	cacheClient := hardenedProviderClient(providerClient, cancelRegistration)
 	if err := cache.Register(
 		registrationCtx,
