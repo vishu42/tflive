@@ -1,6 +1,14 @@
 package authn
 
-import "context"
+import (
+	"context"
+	"slices"
+)
+
+var globalRoles = map[string]struct{}{
+	"platform-admin": {},
+	"stack-creator":  {},
+}
 
 // Principal is the normalized identity made available after token verification.
 // Roles are copied before the value is stored in a request context.
@@ -34,6 +42,21 @@ func principalFromVerifiedToken(token VerifiedToken) Principal {
 		Name:              token.Name,
 		PreferredUsername: token.PreferredUsername,
 		Email:             token.Email,
-		RealmRoles:        append([]string(nil), token.RealmRoles...),
+		RealmRoles:        normalizedGlobalRoles(token.RealmRoles),
 	}
+}
+
+func normalizedGlobalRoles(roles []string) []string {
+	seen := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		if _, ok := globalRoles[role]; ok {
+			seen[role] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for role := range seen {
+		result = append(result, role)
+	}
+	slices.Sort(result)
+	return result
 }

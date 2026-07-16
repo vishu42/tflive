@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
@@ -20,7 +21,7 @@ func (verifier *middlewareVerifier) Verify(_ context.Context, raw string) (Verif
 }
 
 func TestRequireAuthentication(t *testing.T) {
-	valid := VerifiedToken{Subject: "user-123", Name: "Ada", PreferredUsername: "ada", Email: "ada@example.test", RealmRoles: []string{"admin"}}
+	valid := VerifiedToken{Subject: "user-123", Name: "Ada", PreferredUsername: "ada", Email: "ada@example.test", RealmRoles: []string{"stack-creator", "ignored", "platform-admin", "stack-creator"}}
 
 	for _, test := range []struct {
 		name          string
@@ -44,7 +45,7 @@ func TestRequireAuthentication(t *testing.T) {
 				called = true
 				if request.URL.Path == "/v1/stacks" {
 					principal, ok := PrincipalFromContext(request.Context())
-					if !ok || principal.Subject != valid.Subject || principal.Name != valid.Name || principal.PreferredUsername != valid.PreferredUsername || principal.Email != valid.Email || len(principal.RealmRoles) != 1 || principal.RealmRoles[0] != "admin" {
+					if !ok || principal.Subject != valid.Subject || principal.Name != valid.Name || principal.PreferredUsername != valid.PreferredUsername || principal.Email != valid.Email || !slices.Equal(principal.RealmRoles, []string{"platform-admin", "stack-creator"}) {
 						t.Fatalf("principal = %#v, ok = %t", principal, ok)
 					}
 				}
@@ -64,6 +65,13 @@ func TestRequireAuthentication(t *testing.T) {
 				t.Fatalf("body = %q", response.Body.String())
 			}
 		})
+	}
+}
+
+func TestNormalizedGlobalRoles(t *testing.T) {
+	got := normalizedGlobalRoles([]string{"stack-creator", "ignored", "platform-admin", "stack-creator"})
+	if !slices.Equal(got, []string{"platform-admin", "stack-creator"}) {
+		t.Fatalf("roles = %#v", got)
 	}
 }
 
