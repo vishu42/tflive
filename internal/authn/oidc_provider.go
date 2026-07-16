@@ -12,6 +12,7 @@ import (
 
 	"github.com/lestrrat-go/httprc/v3"
 	"github.com/lestrrat-go/httprc/v3/errsink"
+	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 )
 
@@ -118,25 +119,51 @@ func (v *OIDCVerifier) Close(ctx context.Context) error {
 	return keys.cache.Shutdown(ctx)
 }
 
-func (v *OIDCVerifier) keyFor(_ context.Context, kid, _ string) (jwk.Key, error) {
+func (v *OIDCVerifier) keyFor(_ context.Context, kid string, algorithm jwa.SignatureAlgorithm) (any, error) {
 	v.mu.RLock()
 	keys := v.keys
 	v.mu.RUnlock()
-	if keys == nil || keys.set == nil || kid == "" {
+	if keys == nil || keys.set == nil {
 		return nil, ErrVerifierUnavailable
 	}
+	if kid == "" {
+		return nil, ErrInvalidToken
+	}
 
+	keyIDs := make(map[string]struct{}, keys.set.Len())
+	var selected jwk.Key
 	for index := 0; index < keys.set.Len(); index++ {
 		key, ok := keys.set.Key(index)
 		if !ok {
 			return nil, ErrVerifierUnavailable
 		}
 		keyID, ok := key.KeyID()
-		if ok && keyID == kid {
-			return key, nil
+		if !ok || keyID == "" {
+			continue
+		}
+		if _, duplicate := keyIDs[keyID]; duplicate {
+			return nil, ErrInvalidToken
+		}
+		keyIDs[keyID] = struct{}{}
+		if keyID == kid {
+			selected = key
 		}
 	}
-	return nil, ErrInvalidToken
+	if selected == nil {
+		return nil, ErrInvalidToken
+	}
+	if usage, present := selected.KeyUsage(); present && usage != "sig" {
+		return nil, ErrInvalidToken
+	}
+	if configuredAlgorithm, present := selected.Algorithm(); present && configuredAlgorithm.String() != algorithm.String() {
+		return nil, ErrInvalidToken
+	}
+
+	var publicKey any
+	if err := jwk.Export(selected, &publicKey); err != nil || publicKey == nil {
+		return nil, ErrInvalidToken
+	}
+	return publicKey, nil
 }
 
 func validOIDCVerifierConfig(cfg OIDCVerifierConfig) bool {
