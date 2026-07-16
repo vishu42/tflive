@@ -1,1 +1,2 @@
 - api still doing dual-write for template-sync
+- no logs persisting in object storage
