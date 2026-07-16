@@ -1168,26 +1168,97 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 }
 
 func TestMutationRequestsRejectIdentityOverrides(t *testing.T) {
+	assertNoStackCreation := func(t *testing.T, deps *apiTestDependencies) {
+		t.Helper()
+		if deps.stacks.created.ID != "" {
+			t.Errorf("created stack ID = %q, want no mutation", deps.stacks.created.ID)
+		}
+	}
+	assertNoRegistration := func(t *testing.T, deps *apiTestDependencies) {
+		t.Helper()
+		if deps.registrations.created.ID != "" {
+			t.Errorf("created registration ID = %q, want no mutation", deps.registrations.created.ID)
+		}
+		if deps.workflows.syncInput.RegistrationID != "" {
+			t.Errorf("workflow registration ID = %q, want no workflow start", deps.workflows.syncInput.RegistrationID)
+		}
+	}
+	assertNoRun := func(t *testing.T, deps *apiTestDependencies) {
+		t.Helper()
+		if deps.templateRuns.created.ID != "" {
+			t.Errorf("created run ID = %q, want no mutation", deps.templateRuns.created.ID)
+		}
+		if deps.workflows.input.RunID != "" {
+			t.Errorf("workflow run ID = %q, want no workflow start", deps.workflows.input.RunID)
+		}
+	}
+	assertNoApproval := func(t *testing.T, deps *apiTestDependencies) {
+		t.Helper()
+		if deps.templateRuns.approval.RunID != "" {
+			t.Errorf("approval run ID = %q, want no mutation", deps.templateRuns.approval.RunID)
+		}
+		if deps.workflows.approvalRunID != "" {
+			t.Errorf("workflow approval run ID = %q, want no signal", deps.workflows.approvalRunID)
+		}
+	}
+
 	tests := []struct {
-		name string
-		path string
-		body string
+		name            string
+		path            string
+		body            string
+		assertNoEffects func(*testing.T, *apiTestDependencies)
 	}{
-		{name: "actor", path: "/v1/tenants/tenant_123/stacks", body: `{"name":"Acme","actor":"spoofed"}`},
-		{name: "requested by", path: "/v1/tenants/tenant_123/template-revisions", body: `{"repo_owner":"acme","repo_name":"infra","source_ref":"main","root_path":".","requested_by":"spoofed"}`},
-		{name: "trigger actor", path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan","trigger_actor":"spoofed"}`},
-		{name: "approved by", path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{"approved_by":"spoofed"}`},
-		{name: "created by", path: "/v1/tenants/tenant_123/stacks", body: `{"name":"Acme","created_by":"spoofed"}`},
+		{name: "actor", path: "/v1/tenants/tenant_123/stacks", body: `{"name":"Acme","actor":"spoofed"}`, assertNoEffects: assertNoStackCreation},
+		{name: "requested by", path: "/v1/tenants/tenant_123/template-revisions", body: `{"repo_owner":"acme","repo_name":"infra","source_ref":"main","root_path":".","requested_by":"spoofed"}`, assertNoEffects: assertNoRegistration},
+		{name: "trigger actor", path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan","trigger_actor":"spoofed"}`, assertNoEffects: assertNoRun},
+		{name: "approved by", path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{"approved_by":"spoofed"}`, assertNoEffects: assertNoApproval},
+		{name: "created by", path: "/v1/tenants/tenant_123/stacks", body: `{"name":"Acme","created_by":"spoofed"}`, assertNoEffects: assertNoStackCreation},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := NewServer(newAPITestDependencies().service())
+			deps := newAPITestDependencies()
+			server := NewServer(deps.service())
 			response := httptest.NewRecorder()
 			request := authenticatedRequest(http.MethodPost, test.path, strings.NewReader(test.body))
 
 			server.ServeHTTP(response, request)
 
+			if response.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
+			}
+			test.assertNoEffects(t, deps)
+		})
+	}
+}
+
+func TestDecodeRequestBodyRejectsNonObjectAndMultipleValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "array", body: `[]`},
+		{name: "string", body: `"value"`},
+		{name: "number", body: `42`},
+		{name: "boolean", body: `true`},
+		{name: "second value", body: `{"name":"accepted"} {"name":"extra"}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(test.body))
+			var destination struct {
+				Name string `json:"name"`
+			}
+
+			if decodeRequestBody(response, request, &destination) {
+				t.Fatal("decodeRequestBody accepted request, want rejection before service effect")
+			}
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
 			}
