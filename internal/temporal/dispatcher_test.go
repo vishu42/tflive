@@ -13,6 +13,11 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
+const (
+	requesterSubject = traits.UserID("6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91")
+	approverSubject  = traits.UserID("cb4afba6-d18d-496f-80ce-8a50b94f09be")
+)
+
 var _ app.WorkflowDispatcher = (*Dispatcher)(nil)
 
 func TestStartTemplateRunExecutesWorkflow(t *testing.T) {
@@ -96,7 +101,7 @@ func TestApproveTemplateRunSignalsWorkflow(t *testing.T) {
 
 	workflowClient := &recordingWorkflowClient{}
 	dispatcher := newDispatcher(workflowClient, "terraform-runs")
-	signal := traits.ApprovalSignal{ApprovedBy: traits.UserID("user_123")}
+	signal := traits.ApprovalSignal{ApprovedBy: approverSubject}
 
 	err := dispatcher.ApproveTemplateRun(
 		context.Background(),
@@ -128,7 +133,7 @@ func TestCancelTemplateRunSignalsWorkflow(t *testing.T) {
 	workflowClient := &recordingWorkflowClient{}
 	dispatcher := newDispatcher(workflowClient, "terraform-runs")
 	signal := traits.CancelSignal{
-		RequestedBy: traits.UserID("user_456"),
+		RequestedBy: requesterSubject,
 		Reason:      "superseded by a newer run",
 	}
 
@@ -202,7 +207,7 @@ func TestApproveTemplateRunWrapsClientError(t *testing.T) {
 		context.Background(),
 		traits.TenantID("tenant_123"),
 		traits.TemplateRunID("run_123"),
-		traits.ApprovalSignal{ApprovedBy: traits.UserID("user_123")},
+		traits.ApprovalSignal{ApprovedBy: approverSubject},
 	)
 	if !errors.Is(err, clientErr) {
 		t.Fatalf("error = %v, want wrapped client error", err)
@@ -222,7 +227,7 @@ func TestCancelTemplateRunWrapsClientError(t *testing.T) {
 		context.Background(),
 		traits.TenantID("tenant_123"),
 		traits.TemplateRunID("run_123"),
-		traits.CancelSignal{RequestedBy: traits.UserID("user_456")},
+		traits.CancelSignal{RequestedBy: requesterSubject},
 	)
 	if !errors.Is(err, clientErr) {
 		t.Fatalf("error = %v, want wrapped client error", err)

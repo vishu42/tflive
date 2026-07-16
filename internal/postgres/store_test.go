@@ -19,6 +19,11 @@ import (
 	"github.com/vishu42/tflive/internal/traits"
 )
 
+const (
+	requesterSubject = traits.UserID("6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91")
+	approverSubject  = traits.UserID("cb4afba6-d18d-496f-80ce-8a50b94f09be")
+)
+
 var (
 	_ app.StackRepository                    = (*Store)(nil)
 	_ app.StackTemplateRepository            = (*Store)(nil)
@@ -1182,7 +1187,7 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 		BackendType:        "s3",
 		BackendConfigHash:  "backend_hash_123",
 		Status:             traits.TemplateRunQueued,
-		TriggerActor:       traits.UserID("user_123"),
+		TriggerActor:       requesterSubject,
 		StartedAt:          startedAt,
 		CompletedAt:        completedAt,
 		ErrorSummary:       "previous error summary",
@@ -1555,13 +1560,13 @@ func TestApproveTemplateRunApprovesWaitingRun(t *testing.T) {
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 		Status:          traits.TemplateRunWaitingApproval,
-		TriggerActor:    traits.UserID("user_123"),
+		TriggerActor:    requesterSubject,
 	})
 
 	err := store.ApproveTemplateRun(ctx, traits.TemplateRunApproval{
 		RunID:      traits.TemplateRunID("run_123"),
 		TenantID:   traits.TenantID("tenant_123"),
-		ApprovedBy: traits.UserID("user_456"),
+		ApprovedBy: approverSubject,
 		ApprovedAt: approvedAt,
 	})
 	if err != nil {
@@ -1585,8 +1590,8 @@ func TestApproveTemplateRunApprovesWaitingRun(t *testing.T) {
 	`, "run_123").Scan(&approvedBy, &gotApprovedAt); err != nil {
 		t.Fatalf("read approval row: %v", err)
 	}
-	if approvedBy != traits.UserID("user_456") {
-		t.Fatalf("approved_by = %q, want user_456", approvedBy)
+	if approvedBy != approverSubject {
+		t.Fatalf("approved_by = %q, want %q", approvedBy, approverSubject)
 	}
 	if !gotApprovedAt.Equal(approvedAt) {
 		t.Fatalf("approved_at = %v, want %v", gotApprovedAt, approvedAt)
@@ -1636,13 +1641,13 @@ func TestRequestTemplateRunCancellationMarksCancelableRun(t *testing.T) {
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 		Status:          traits.TemplateRunApplyStarted,
-		TriggerActor:    traits.UserID("user_123"),
+		TriggerActor:    requesterSubject,
 	})
 
 	err := store.RequestTemplateRunCancellation(ctx, traits.TemplateRunCancellation{
 		RunID:       traits.TemplateRunID("run_123"),
 		TenantID:    traits.TenantID("tenant_123"),
-		RequestedBy: traits.UserID("user_456"),
+		RequestedBy: requesterSubject,
 		Reason:      "superseded by newer run",
 		RequestedAt: requestedAt,
 	})
@@ -1668,8 +1673,8 @@ func TestRequestTemplateRunCancellationMarksCancelableRun(t *testing.T) {
 	if status != traits.TemplateRunCancelRequested {
 		t.Fatalf("status = %q, want %q", status, traits.TemplateRunCancelRequested)
 	}
-	if requestedBy != traits.UserID("user_456") {
-		t.Fatalf("requested_by = %q, want user_456", requestedBy)
+	if requestedBy != requesterSubject {
+		t.Fatalf("requested_by = %q, want %q", requestedBy, requesterSubject)
 	}
 	if reason != "superseded by newer run" {
 		t.Fatalf("reason = %q, want superseded by newer run", reason)
