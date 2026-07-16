@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -28,6 +29,30 @@ func TestHealthzReturnsOK(t *testing.T) {
 	if strings.TrimSpace(response.Body.String()) != `{"status":"ok"}` {
 		t.Fatalf("body = %q", response.Body.String())
 	}
+}
+
+func TestAuthenticatedServerProtectsV1AndLeavesHealthPublic(t *testing.T) {
+	server := NewAuthenticatedServer(app.NewService(app.Service{}), apiTestVerifier{})
+
+	for _, test := range []struct {
+		path   string
+		status int
+	}{
+		{path: "/healthz", status: http.StatusOK},
+		{path: "/v1/tenants/tenant_123/stacks", status: http.StatusUnauthorized},
+	} {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+		if response.Code != test.status {
+			t.Fatalf("%s status = %d, want %d", test.path, response.Code, test.status)
+		}
+	}
+}
+
+type apiTestVerifier struct{}
+
+func (apiTestVerifier) Verify(context.Context, string) (authn.VerifiedToken, error) {
+	return authn.VerifiedToken{Subject: "user-123"}, nil
 }
 
 func TestStartTemplateRunCallsService(t *testing.T) {

@@ -165,6 +165,19 @@ exposes no token or provider-response detail.
 
 AUTH-007 middleware owns HTTP status mapping and bearer-header parsing.
 
+## API Request Authentication
+
+All `/v1` API routes require an `Authorization: Bearer <access-token>` header.
+`/healthz` remains public for liveness probes. Missing, malformed, invalid, or
+temporarily unverifiable credentials receive `401` with the stable JSON body
+`{"code":"unauthorized"}`; tokens, claims, and verifier details are never
+written to logs or responses.
+
+After verification, the request context contains an `authn.Principal` with the
+immutable subject, safe display claims, and normalized realm roles. Handlers and
+application services obtain it with `authn.PrincipalFromContext` rather than
+parsing HTTP headers or access tokens.
+
 ## Operation and Reruns
 
 Start or reconcile the realm with:

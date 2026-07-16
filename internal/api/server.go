@@ -7,12 +7,14 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
 type Server struct {
 	service *app.Service
 	mux     *http.ServeMux
+	handler http.Handler
 }
 
 func NewServer(service *app.Service) *Server {
@@ -64,11 +66,19 @@ func NewServer(service *app.Service) *Server {
 	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/approval", server.handleApproveRun)
 	// Requests cancellation for a running template run.
 	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/cancellation", server.handleCancelRun)
+	server.handler = server.mux
+	return server
+}
+
+// NewAuthenticatedServer protects all /v1 routes and leaves health probes public.
+func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier) *Server {
+	server := NewServer(service)
+	server.handler = authn.RequireAuthentication(verifier, "/healthz")(server.mux)
 	return server
 }
 
 func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
-	server.mux.ServeHTTP(response, request)
+	server.handler.ServeHTTP(response, request)
 }
 
 func (server *Server) handleHealth(response http.ResponseWriter, request *http.Request) {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/temporal"
 	"github.com/vishu42/tflive/internal/traits"
@@ -182,6 +183,26 @@ func TestRunUsesDefaultTemporalTaskQueue(t *testing.T) {
 	}
 	if deps.dispatcherTaskQueue != config.DefaultTemporalTaskQueue {
 		t.Fatalf("dispatcher task queue = %q, want %q", deps.dispatcherTaskQueue, config.DefaultTemporalTaskQueue)
+	}
+}
+
+func TestRunConstructsAndClosesOIDCVerifier(t *testing.T) {
+	deps := newRecordingAPIDependencies(t)
+	verifier := &recordingTokenVerifier{}
+	var got authn.OIDCVerifierConfig
+	deps.newVerifier = func(_ context.Context, cfg authn.OIDCVerifierConfig) (tokenVerifier, error) {
+		got = cfg
+		return verifier, nil
+	}
+
+	if err := runWithDependencies(context.Background(), apiTestEnv, deps.apiDependencies); err != nil {
+		t.Fatalf("runWithDependencies() error = %v", err)
+	}
+	if got.IssuerURL == nil || got.IssuerURL.String() != apiTestEnv("OIDC_ISSUER_URL") || got.Audience != apiTestEnv("OIDC_AUDIENCE") {
+		t.Fatalf("OIDC verifier config = %#v", got)
+	}
+	if !verifier.closed {
+		t.Fatal("verifier was not closed")
 	}
 }
 
@@ -406,6 +427,9 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 			}
 			return app.NewService(service), nil
 		},
+		newVerifier: func(context.Context, authn.OIDCVerifierConfig) (tokenVerifier, error) {
+			return testTokenVerifier{}, nil
+		},
 		listenAndServe: func(_ context.Context, address string, handler http.Handler) error {
 			deps.serverAddress = address
 			deps.serverHandler = handler
@@ -413,6 +437,27 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 		},
 	}
 	return deps
+}
+
+type testTokenVerifier struct{}
+
+func (testTokenVerifier) Verify(context.Context, string) (authn.VerifiedToken, error) {
+	return authn.VerifiedToken{Subject: "test-user"}, nil
+}
+
+func (testTokenVerifier) Close(context.Context) error { return nil }
+
+type recordingTokenVerifier struct {
+	closed bool
+}
+
+func (verifier *recordingTokenVerifier) Verify(context.Context, string) (authn.VerifiedToken, error) {
+	return authn.VerifiedToken{Subject: "test-user"}, nil
+}
+
+func (verifier *recordingTokenVerifier) Close(context.Context) error {
+	verifier.closed = true
+	return nil
 }
 
 type recordingPostgresPool struct {

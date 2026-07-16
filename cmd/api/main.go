@@ -15,6 +15,7 @@ import (
 	"github.com/vishu42/tflive/internal/api"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/artifacts"
+	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/temporal"
@@ -37,6 +38,11 @@ type appRepositories interface {
 	app.TemplateRunLogRepository
 }
 
+type tokenVerifier interface {
+	authn.Verifier
+	Close(context.Context) error
+}
+
 type apiDependencies struct {
 	newPostgresPool func(context.Context, string) (postgresPool, error)
 	migratePostgres func(context.Context, postgresPool) error
@@ -45,6 +51,7 @@ type apiDependencies struct {
 	newDispatcher   func(client.Client, string) app.WorkflowDispatcher
 	newLogReader    func(config.ArtifactStoreConfig) (app.TemplateRunLogReader, error)
 	newService      func(app.Service) (*app.Service, error)
+	newVerifier     func(context.Context, authn.OIDCVerifierConfig) (tokenVerifier, error)
 	listenAndServe  func(context.Context, string, http.Handler) error
 }
 
@@ -92,6 +99,9 @@ func defaultAPIDependencies() apiDependencies {
 		newService: func(service app.Service) (*app.Service, error) {
 			return app.NewService(service), nil
 		},
+		newVerifier: func(ctx context.Context, cfg authn.OIDCVerifierConfig) (tokenVerifier, error) {
+			return authn.NewOIDCVerifier(ctx, cfg)
+		},
 		listenAndServe: listenAndServe,
 	}
 }
@@ -105,6 +115,15 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 	if err != nil {
 		return fmt.Errorf("load api config: %w", err)
 	}
+
+	verifier, err := deps.newVerifier(ctx, authn.OIDCVerifierConfig{
+		IssuerURL: cfg.Security.OIDC.IssuerURL,
+		Audience:  cfg.Security.OIDC.Audience,
+	})
+	if err != nil {
+		return fmt.Errorf("create token verifier: %w", err)
+	}
+	defer verifier.Close(context.Background())
 
 	pool, err := deps.newPostgresPool(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -155,7 +174,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire service: %w", err)
 	}
 
-	handler := api.NewServer(service)
+	handler := api.NewAuthenticatedServer(service, verifier)
 	if err := deps.listenAndServe(ctx, cfg.HTTPAddress, handler); err != nil {
 		return fmt.Errorf("listen and serve api: %w", err)
 	}
