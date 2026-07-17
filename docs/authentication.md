@@ -147,9 +147,10 @@ logs, artifacts, or authorization data. Missing, malformed, and mismatched
 tenant paths return `404` without disclosing whether a referenced resource
 exists.
 
-The React application reads `VITE_TFLIVE_TENANT_ID` as non-editable runtime
+The React application reads `VITE_TFLIVE_TENANT_ID` as non-editable build-time
 context. Deployments must set it to the same value as `TFLIVE_TENANT_ID`; a
-mismatch is safe but prevents tenant-scoped requests from succeeding.
+mismatch is safe but prevents tenant-scoped requests from succeeding. Changing
+this value requires rebuilding and redeploying the frontend bundle.
 
 Development permits the documented loopback HTTP issuer, local HTTP OpenFGA
 endpoint, and tokenless OpenFGA service. Production must be selected explicitly

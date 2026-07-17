@@ -148,6 +148,38 @@ func TestAuthenticatedServerEvaluatesTenantAfterAuthentication(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedServerAllowsConfiguredTenantToReachService(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stacks.list = []traits.Stack{{
+		ID:       traits.StackID("stack_123"),
+		TenantID: configuredTenantID,
+		Name:     "Acme Prod",
+		Slug:     "acme-prod",
+	}}
+	server := NewAuthenticatedServer(deps.service(), apiTestVerifier{}, configuredTenantID)
+	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
+	request.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if deps.stacks.gotListTenantID != configuredTenantID {
+		t.Fatalf("tenant list lookup = %q, want %q", deps.stacks.gotListTenantID, configuredTenantID)
+	}
+	var body []stackResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body) != 1 || body[0].ID != "stack_123" || body[0].Slug != "acme-prod" {
+		t.Fatalf("stack response = %#v", body)
+	}
+}
+
 type apiTestVerifier struct{}
 
 func (apiTestVerifier) Verify(context.Context, string) (authn.VerifiedToken, error) {
