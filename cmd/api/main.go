@@ -174,7 +174,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire service: %w", err)
 	}
 
-	handler := api.NewAuthenticatedServer(service, verifier)
+	handler := api.NewAuthenticatedServer(service, verifier, cfg.Security.TenantID)
 	if err := deps.listenAndServe(ctx, cfg.HTTPAddress, handler); err != nil {
 		return fmt.Errorf("listen and serve api: %w", err)
 	}

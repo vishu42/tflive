@@ -14,15 +14,17 @@ import (
 )
 
 type Server struct {
-	service *app.Service
-	mux     *http.ServeMux
-	handler http.Handler
+	service  *app.Service
+	tenantID traits.TenantID
+	mux      *http.ServeMux
+	handler  http.Handler
 }
 
-func NewServer(service *app.Service) *Server {
+func NewServer(service *app.Service, tenantID traits.TenantID) *Server {
 	server := &Server{
-		service: service,
-		mux:     http.NewServeMux(),
+		service:  service,
+		tenantID: tenantID,
+		mux:      http.NewServeMux(),
 	}
 
 	// Health routes.
@@ -31,52 +33,66 @@ func NewServer(service *app.Service) *Server {
 
 	// Template revision registration routes.
 	// Starts async registration for a public GitHub Terraform template source.
-	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/template-revisions", server.handleRegisterTemplate)
+	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/template-revisions", server.handleRegisterTemplate)
 	// Lists registered template revision metadata for the tenant.
-	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-revisions", server.handleListTemplateRevisions)
+	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/template-revisions", server.handleListTemplateRevisions)
 	// Reads the current state of a template registration attempt.
-	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-registrations/{registration_id}", server.handleGetTemplateRegistration)
+	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/template-registrations/{registration_id}", server.handleGetTemplateRegistration)
 	// Lists variables inferred from an immutable registered template revision.
-	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-revisions/{template_revision_id}/variables", server.handleGetTemplateRevisionVariables)
+	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/template-revisions/{template_revision_id}/variables", server.handleGetTemplateRevisionVariables)
 
 	// Stack routes.
 	// Creates a logical infrastructure stack.
-	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/stacks", server.handleCreateStack)
+	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/stacks", server.handleCreateStack)
 	// Lists tenant-owned stacks.
-	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/stacks", server.handleListStacks)
+	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/stacks", server.handleListStacks)
 	// Reads one stack with installed templates.
-	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/stacks/{stack_id}", server.handleGetStack)
+	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/stacks/{stack_id}", server.handleGetStack)
 	// Installs a registered template into a stack.
-	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/stacks/{stack_id}/templates", server.handleAddTemplateToStack)
+	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/stacks/{stack_id}/templates", server.handleAddTemplateToStack)
 	// Edits desired config for an installed stack template.
-	server.mux.HandleFunc("PATCH /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/config", server.handleUpdateStackTemplateConfig)
+	server.handleTenantRoute("PATCH /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/config", server.handleUpdateStackTemplateConfig)
 	// Stages an installed stack template to a newer template revision.
-	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/upgrade", server.handleUpgradeStackTemplate)
+	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/upgrade", server.handleUpgradeStackTemplate)
 
 	// Template run routes.
 	// Starts a Terraform operation for an installed stack template.
-	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/runs", server.handleStartTemplateRun)
+	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/runs", server.handleStartTemplateRun)
 	// Reads the current state of a template run.
-	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-runs/{run_id}", server.handleGetTemplateRun)
+	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/template-runs/{run_id}", server.handleGetTemplateRun)
 	// Lists persisted log metadata for all phases of a template run.
-	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs", server.handleListTemplateRunLogs)
+	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs", server.handleListTemplateRunLogs)
 	// Reads the persisted log body for one template run phase.
-	server.mux.HandleFunc("GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs/{phase}", server.handleGetTemplateRunLog)
+	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs/{phase}", server.handleGetTemplateRunLog)
 
 	// Template run decision routes.
 	// Records approval for a waiting template run.
-	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/approval", server.handleApproveRun)
+	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/approval", server.handleApproveRun)
 	// Requests cancellation for a running template run.
-	server.mux.HandleFunc("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/cancellation", server.handleCancelRun)
+	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/cancellation", server.handleCancelRun)
 	server.handler = server.mux
 	return server
 }
 
 // NewAuthenticatedServer protects all /v1 routes and leaves health probes public.
-func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier) *Server {
-	server := NewServer(service)
+func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier, tenantID traits.TenantID) *Server {
+	server := NewServer(service, tenantID)
 	server.handler = authn.RequireAuthentication(verifier, "/healthz")(server.mux)
 	return server
+}
+
+func (server *Server) handleTenantRoute(pattern string, handler http.HandlerFunc) {
+	server.mux.Handle(pattern, server.requireConfiguredTenant(handler))
+}
+
+func (server *Server) requireConfiguredTenant(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if traits.TenantID(request.PathValue("tenant_id")) != server.tenantID {
+			writeError(response, http.StatusNotFound, "not_found", "resource not found")
+			return
+		}
+		next.ServeHTTP(response, request)
+	})
 }
 
 func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
