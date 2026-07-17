@@ -131,6 +131,7 @@ connects to Postgres or Temporal or starts its HTTP listener.
 |---|---:|---|
 | `TFLIVE_ENVIRONMENT` | No | Optional runtime mode; empty defaults to `development`; valid values are `development` and `production` |
 | `TFLIVE_TENANT_ID` | No | Required single configured tenant identifier |
+| `VITE_TFLIVE_TENANT_ID` | No | Frontend build-time tenant context; must exactly match `TFLIVE_TENANT_ID`; local development falls back to `tenant_123` |
 | `OIDC_ISSUER_URL` | No | Required exact Keycloak issuer URL |
 | `OIDC_AUDIENCE` | No | Required access-token audience; local value is `tflive-api` |
 | `OPENFGA_API_URL` | No | Required OpenFGA API base URL |
@@ -138,6 +139,17 @@ connects to Postgres or Temporal or starts its HTTP listener.
 | `OPENFGA_MODEL_ID` | No | Required exact immutable model ID emitted by bootstrap |
 | `OPENFGA_API_TOKEN` | Yes | Optional for local development and required in production |
 | `OPENFGA_HTTP_TIMEOUT` | No | Positive per-request deadline; defaults to `10s` |
+
+`TFLIVE_TENANT_ID` is the authoritative security boundary. Every authenticated
+tenant-scoped route compares its `{tenant_id}` path value with that configured
+tenant before decoding a body or accessing application services, repositories,
+logs, artifacts, or authorization data. Missing, malformed, and mismatched
+tenant paths return `404` without disclosing whether a referenced resource
+exists.
+
+The React application reads `VITE_TFLIVE_TENANT_ID` as non-editable runtime
+context. Deployments must set it to the same value as `TFLIVE_TENANT_ID`; a
+mismatch is safe but prevents tenant-scoped requests from succeeding.
 
 Development permits the documented loopback HTTP issuer, local HTTP OpenFGA
 endpoint, and tokenless OpenFGA service. Production must be selected explicitly
