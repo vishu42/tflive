@@ -26,8 +26,7 @@ describe("api client", () => {
       repo_owner: "acme",
       repo_name: "infra",
       source_ref: "main",
-      root_path: ".",
-      requested_by: "user_123"
+      root_path: "."
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -38,27 +37,33 @@ describe("api client", () => {
           repo_owner: "acme",
           repo_name: "infra",
           source_ref: "main",
-          root_path: ".",
-          requested_by: "user_123"
+          root_path: "."
         })
       })
     );
   });
 
-  it("posts stack creation with actor and tags", async () => {
+  it("posts stack creation with tags", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: "stack_123" }));
 
     await createStack("tenant_123", {
       name: "Acme Prod",
       slug: "",
       tags: { env: "prod" },
-      default_credential_ids: [],
-      actor: "user_123"
+      default_credential_ids: []
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/v1/tenants/tenant_123/stacks",
-      expect.objectContaining({ method: "POST" })
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          name: "Acme Prod",
+          slug: "",
+          tags: { env: "prod" },
+          default_credential_ids: []
+        })
+      })
     );
   });
 
@@ -91,8 +96,7 @@ describe("api client", () => {
     await addTemplateToStack("tenant_123", "stack_123", {
       template_revision_id: "template_123",
       selected_ref: "main",
-      config: { region: "us-east-1" },
-      actor: "user_123"
+      config: { region: "us-east-1" }
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -102,8 +106,7 @@ describe("api client", () => {
         body: JSON.stringify({
           template_revision_id: "template_123",
           selected_ref: "main",
-          config: { region: "us-east-1" },
-          actor: "user_123"
+          config: { region: "us-east-1" }
         })
       })
     );
@@ -116,32 +119,36 @@ describe("api client", () => {
       .mockResolvedValueOnce(jsonResponse({ id: "stack_template_123" }));
 
     await updateStackTemplateConfig("tenant_123", "stack_template_123", {
-      config: { region: "us-west-2" },
-      actor: "user_123"
+      config: { region: "us-west-2" }
     });
     await upgradeStackTemplate("tenant_123", "stack_template_123", {
-      target_template_revision_id: "template_rev_2",
-      actor: "user_123"
+      target_template_revision_id: "template_rev_2"
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/v1/tenants/tenant_123/stack-templates/stack_template_123/config",
-      expect.objectContaining({ method: "PATCH" })
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ config: { region: "us-west-2" } })
+      })
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade",
-      expect.objectContaining({ method: "POST" })
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ target_template_revision_id: "template_rev_2" })
+      })
     );
   });
 
   it("posts run operations, approvals, and cancellations", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: "run_123" }));
 
-    await startTemplateRun("tenant_123", "stack_template_123", { operation: "apply", trigger_actor: "user_123" });
-    await approveRun("tenant_123", "run_123", { approved_by: "user_123" });
-    await cancelRun("tenant_123", "run_456", { requested_by: "user_123", reason: "manual stop" });
+    await startTemplateRun("tenant_123", "stack_template_123", { operation: "apply" });
+    await approveRun("tenant_123", "run_123");
+    await cancelRun("tenant_123", "run_456", { reason: "manual stop" });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -158,6 +165,9 @@ describe("api client", () => {
       "/v1/tenants/tenant_123/template-runs/run_456/cancellation",
       expect.objectContaining({ method: "POST" })
     );
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ operation: "apply" });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({});
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({ reason: "manual stop" });
   });
 
   it("reads log bodies as text", async () => {
@@ -180,8 +190,7 @@ describe("api client", () => {
         name: "",
         slug: "",
         tags: {},
-        default_credential_ids: [],
-        actor: "user_123"
+        default_credential_ids: []
       });
       throw new Error("expected createStack to fail");
     } catch (error) {

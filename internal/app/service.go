@@ -12,10 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
 var (
+	ErrUnauthenticated                    = errors.New("unauthenticated")
 	ErrInvalidCommand                     = errors.New("invalid command")
 	ErrDuplicateStackSlug                 = errors.New("duplicate stack slug")
 	ErrDuplicateStackTemplateComponentKey = errors.New("duplicate stack template component key")
@@ -27,6 +29,14 @@ var (
 	ErrRunNotApprovable                   = errors.New("run is not approvable")
 	ErrRunNotCancelable                   = errors.New("run is not cancelable")
 )
+
+func authenticatedActor(ctx context.Context) (traits.UserID, error) {
+	principal, ok := authn.PrincipalFromContext(ctx)
+	if !ok || principal.Subject == "" {
+		return "", ErrUnauthenticated
+	}
+	return traits.UserID(principal.Subject), nil
+}
 
 // StackRepository persists and reads tenant-owned stacks.
 type StackRepository interface {
@@ -167,12 +177,11 @@ func NewService(service Service) *Service {
 
 // RegisterTemplateCommand asks the app to register a Terraform template source.
 type RegisterTemplateCommand struct {
-	TenantID    traits.TenantID
-	RepoOwner   string
-	RepoName    string
-	SourceRef   string
-	RootPath    string
-	RequestedBy traits.UserID
+	TenantID  traits.TenantID
+	RepoOwner string
+	RepoName  string
+	SourceRef string
+	RootPath  string
 }
 
 // CreateStackCommand asks the app to create a logical infrastructure stack.
@@ -182,7 +191,6 @@ type CreateStackCommand struct {
 	Slug                 string
 	Tags                 map[string]string
 	DefaultCredentialIDs []traits.CredentialSetID
-	Actor                traits.UserID
 }
 
 // StackView returns one stack with its installed templates.
@@ -200,7 +208,6 @@ type AddTemplateToStackCommand struct {
 	SelectedRef        string
 	WorkspaceName      string
 	ConfigJSON         json.RawMessage
-	Actor              traits.UserID
 }
 
 // StartTemplateRunCommand asks the app to start one Terraform operation.
@@ -208,7 +215,6 @@ type StartTemplateRunCommand struct {
 	TenantID        traits.TenantID
 	StackTemplateID traits.StackTemplateID
 	Operation       traits.OperationType
-	TriggerActor    traits.UserID
 }
 
 // UpdateStackTemplateConfigCommand asks the app to edit desired config before a run.
@@ -216,7 +222,6 @@ type UpdateStackTemplateConfigCommand struct {
 	TenantID        traits.TenantID
 	StackTemplateID traits.StackTemplateID
 	ConfigJSON      json.RawMessage
-	Actor           traits.UserID
 }
 
 // UpgradeStackTemplateCommand asks the app to point one install at another revision.
@@ -225,22 +230,19 @@ type UpgradeStackTemplateCommand struct {
 	StackTemplateID          traits.StackTemplateID
 	TargetTemplateRevisionID traits.TemplateRevisionID
 	ConfigJSON               json.RawMessage
-	Actor                    traits.UserID
 }
 
 // ApproveRunCommand asks the app to approve a waiting run.
 type ApproveRunCommand struct {
-	TenantID   traits.TenantID
-	RunID      traits.TemplateRunID
-	ApprovedBy traits.UserID
+	TenantID traits.TenantID
+	RunID    traits.TemplateRunID
 }
 
 // CancelRunCommand asks the app to cancel a running run.
 type CancelRunCommand struct {
-	TenantID    traits.TenantID
-	RunID       traits.TemplateRunID
-	RequestedBy traits.UserID
-	Reason      string
+	TenantID traits.TenantID
+	RunID    traits.TemplateRunID
+	Reason   string
 }
 
 // GetStackCommand asks the app to read one stack and its installed templates.
@@ -292,6 +294,10 @@ type GetTemplateRevisionVariablesCommand struct {
 
 // RegisterTemplate creates a pending registration attempt and dispatches its sync workflow.
 func (service *Service) RegisterTemplate(ctx context.Context, command RegisterTemplateCommand) (traits.TemplateRegistration, error) {
+	actor, err := authenticatedActor(ctx)
+	if err != nil {
+		return traits.TemplateRegistration{}, err
+	}
 	if err := validateRegisterTemplateCommand(command); err != nil {
 		return traits.TemplateRegistration{}, err
 	}
@@ -304,7 +310,7 @@ func (service *Service) RegisterTemplate(ctx context.Context, command RegisterTe
 		SourceRef:   strings.TrimSpace(command.SourceRef),
 		RootPath:    filepath.Clean(strings.TrimSpace(command.RootPath)),
 		Status:      traits.TemplateRegistrationPending,
-		RequestedBy: command.RequestedBy,
+		RequestedBy: actor,
 		RequestedAt: service.Clock.Now(),
 	}
 
@@ -329,6 +335,10 @@ func (service *Service) RegisterTemplate(ctx context.Context, command RegisterTe
 
 // CreateStack creates a tenant-owned infrastructure stack.
 func (service *Service) CreateStack(ctx context.Context, command CreateStackCommand) (traits.Stack, error) {
+	actor, err := authenticatedActor(ctx)
+	if err != nil {
+		return traits.Stack{}, err
+	}
 	if err := validateCreateStackCommand(command); err != nil {
 		return traits.Stack{}, err
 	}
@@ -345,7 +355,7 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		Slug:                 slug,
 		Tags:                 cloneStringMap(command.Tags),
 		DefaultCredentialIDs: append([]traits.CredentialSetID(nil), command.DefaultCredentialIDs...),
-		CreatedBy:            command.Actor,
+		CreatedBy:            actor,
 		CreatedAt:            service.Clock.Now(),
 	}
 
@@ -358,6 +368,10 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 
 // AddTemplateToStack validates one template install and persists the tenant-owned stack template.
 func (service *Service) AddTemplateToStack(ctx context.Context, command AddTemplateToStackCommand) (traits.StackTemplate, error) {
+	actor, err := authenticatedActor(ctx)
+	if err != nil {
+		return traits.StackTemplate{}, err
+	}
 	if err := validateAddTemplateToStackCommand(command); err != nil {
 		return traits.StackTemplate{}, err
 	}
@@ -396,7 +410,7 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 		WorkspaceName:             workspaceName(stack.Slug, id),
 		ConfigJSON:                configJSON,
 		DesiredConfigJSON:         configJSON,
-		CreatedBy:                 command.Actor,
+		CreatedBy:                 actor,
 		Lifecycle:                 traits.StackTemplateActive,
 	}
 
@@ -409,6 +423,10 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 // StartTemplateRun creates a queued run. The repository persists its workflow
 // dispatch intent atomically for an asynchronous dispatcher to process.
 func (service *Service) StartTemplateRun(ctx context.Context, command StartTemplateRunCommand) (traits.TemplateRun, error) {
+	actor, err := authenticatedActor(ctx)
+	if err != nil {
+		return traits.TemplateRun{}, err
+	}
 	if err := validateStartTemplateRunCommand(command); err != nil {
 		return traits.TemplateRun{}, err
 	}
@@ -452,7 +470,7 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 		WorkspaceName:      stackTemplate.WorkspaceName,
 		ConfigJSON:         desiredConfigJSON,
 		Status:             traits.TemplateRunQueued,
-		TriggerActor:       command.TriggerActor,
+		TriggerActor:       actor,
 		StartedAt:          service.Clock.Now(),
 	}
 
@@ -465,6 +483,9 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 
 // UpdateStackTemplateConfig validates and saves desired config for an installed template.
 func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command UpdateStackTemplateConfigCommand) (traits.StackTemplate, error) {
+	if _, err := authenticatedActor(ctx); err != nil {
+		return traits.StackTemplate{}, err
+	}
 	if err := validateUpdateStackTemplateConfigCommand(command); err != nil {
 		return traits.StackTemplate{}, err
 	}
@@ -499,6 +520,9 @@ func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command U
 
 // UpgradeStackTemplate changes desired revision for an existing installed template.
 func (service *Service) UpgradeStackTemplate(ctx context.Context, command UpgradeStackTemplateCommand) (traits.StackTemplate, error) {
+	if _, err := authenticatedActor(ctx); err != nil {
+		return traits.StackTemplate{}, err
+	}
 	if err := validateUpgradeStackTemplateCommand(command); err != nil {
 		return traits.StackTemplate{}, err
 	}
@@ -626,6 +650,10 @@ func (service *Service) GetTemplateRevisionVariables(ctx context.Context, comman
 
 // ApproveRun records an approval decision and signals the waiting workflow.
 func (service *Service) ApproveRun(ctx context.Context, command ApproveRunCommand) error {
+	actor, err := authenticatedActor(ctx)
+	if err != nil {
+		return err
+	}
 	if err := validateApproveRunCommand(command); err != nil {
 		return err
 	}
@@ -633,7 +661,7 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 	approval := traits.TemplateRunApproval{
 		RunID:      command.RunID,
 		TenantID:   command.TenantID,
-		ApprovedBy: command.ApprovedBy,
+		ApprovedBy: actor,
 		ApprovedAt: service.Clock.Now(),
 	}
 
@@ -643,7 +671,7 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 
 	// TODO: Consider an outbox-backed approval signal so a persisted approval cannot
 	// be lost if the Temporal signal call fails.
-	signal := traits.ApprovalSignal{ApprovedBy: command.ApprovedBy}
+	signal := traits.ApprovalSignal{ApprovedBy: actor}
 	if err := service.Workflows.ApproveTemplateRun(ctx, command.TenantID, command.RunID, signal); err != nil {
 		return fmt.Errorf("approve template run workflow: %w", err)
 	}
@@ -653,6 +681,10 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 
 // CancelRun records a cancellation request and signals the running workflow.
 func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand) error {
+	actor, err := authenticatedActor(ctx)
+	if err != nil {
+		return err
+	}
 	if err := validateCancelRunCommand(command); err != nil {
 		return err
 	}
@@ -660,7 +692,7 @@ func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand)
 	cancellation := traits.TemplateRunCancellation{
 		RunID:       command.RunID,
 		TenantID:    command.TenantID,
-		RequestedBy: command.RequestedBy,
+		RequestedBy: actor,
 		Reason:      command.Reason,
 		RequestedAt: service.Clock.Now(),
 	}
@@ -672,7 +704,7 @@ func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand)
 	// TODO: Consider an outbox-backed cancellation signal so a persisted cancel request
 	// cannot be lost if the Temporal signal call fails.
 	signal := traits.CancelSignal{
-		RequestedBy: command.RequestedBy,
+		RequestedBy: actor,
 		Reason:      command.Reason,
 	}
 	if err := service.Workflows.CancelTemplateRun(ctx, command.TenantID, command.RunID, signal); err != nil {
@@ -765,8 +797,6 @@ func validateCreateStackCommand(command CreateStackCommand) error {
 		return fmt.Errorf("%w: tags are invalid", ErrInvalidCommand)
 	case !validCredentialSetIDs(command.DefaultCredentialIDs):
 		return fmt.Errorf("%w: default credential ids are invalid", ErrInvalidCommand)
-	case command.Actor == "":
-		return fmt.Errorf("%w: actor is required", ErrInvalidCommand)
 	default:
 		return nil
 	}
@@ -807,8 +837,6 @@ func validateAddTemplateToStackCommand(command AddTemplateToStackCommand) error 
 		return fmt.Errorf("%w: template revision id is required", ErrInvalidCommand)
 	case strings.TrimSpace(command.SelectedRef) == "":
 		return fmt.Errorf("%w: selected ref is required", ErrInvalidCommand)
-	case command.Actor == "":
-		return fmt.Errorf("%w: actor is required", ErrInvalidCommand)
 	default:
 		return nil
 	}
@@ -822,8 +850,6 @@ func validateStartTemplateRunCommand(command StartTemplateRunCommand) error {
 		return fmt.Errorf("%w: stack template id is required", ErrInvalidCommand)
 	case !command.Operation.Valid():
 		return fmt.Errorf("%w: operation is unsupported", ErrInvalidCommand)
-	case command.TriggerActor == "":
-		return fmt.Errorf("%w: trigger actor is required", ErrInvalidCommand)
 	default:
 		return nil
 	}
@@ -837,8 +863,6 @@ func validateUpdateStackTemplateConfigCommand(command UpdateStackTemplateConfigC
 		return fmt.Errorf("%w: stack template id is required", ErrInvalidCommand)
 	case len(command.ConfigJSON) == 0:
 		return fmt.Errorf("%w: config is required", ErrInvalidCommand)
-	case command.Actor == "":
-		return fmt.Errorf("%w: actor is required", ErrInvalidCommand)
 	default:
 		return nil
 	}
@@ -852,8 +876,6 @@ func validateUpgradeStackTemplateCommand(command UpgradeStackTemplateCommand) er
 		return fmt.Errorf("%w: stack template id is required", ErrInvalidCommand)
 	case command.TargetTemplateRevisionID == "":
 		return fmt.Errorf("%w: target template revision id is required", ErrInvalidCommand)
-	case command.Actor == "":
-		return fmt.Errorf("%w: actor is required", ErrInvalidCommand)
 	default:
 		return nil
 	}
@@ -871,8 +893,6 @@ func validateRegisterTemplateCommand(command RegisterTemplateCommand) error {
 		return fmt.Errorf("%w: source ref is required", ErrInvalidCommand)
 	case !validTemplateRootPath(command.RootPath):
 		return fmt.Errorf("%w: root path is invalid", ErrInvalidCommand)
-	case command.RequestedBy == "":
-		return fmt.Errorf("%w: requested by is required", ErrInvalidCommand)
 	default:
 		return nil
 	}
@@ -884,8 +904,6 @@ func validateApproveRunCommand(command ApproveRunCommand) error {
 		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
 	case command.RunID == "":
 		return fmt.Errorf("%w: run id is required", ErrInvalidCommand)
-	case command.ApprovedBy == "":
-		return fmt.Errorf("%w: approved by is required", ErrInvalidCommand)
 	default:
 		return nil
 	}
@@ -897,8 +915,6 @@ func validateCancelRunCommand(command CancelRunCommand) error {
 		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
 	case command.RunID == "":
 		return fmt.Errorf("%w: run id is required", ErrInvalidCommand)
-	case command.RequestedBy == "":
-		return fmt.Errorf("%w: requested by is required", ErrInvalidCommand)
 	default:
 		return nil
 	}

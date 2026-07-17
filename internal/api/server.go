@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -81,24 +83,46 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	server.handler.ServeHTTP(response, request)
 }
 
+func decodeRequestBody(response http.ResponseWriter, request *http.Request, destination any) bool {
+	decoder := json.NewDecoder(request.Body)
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_json", "request body must match the expected JSON schema")
+		return false
+	}
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || trimmed[0] != '{' {
+		writeError(response, http.StatusBadRequest, "invalid_json", "request body must contain one JSON object")
+		return false
+	}
+	bodyDecoder := json.NewDecoder(bytes.NewReader(raw))
+	bodyDecoder.DisallowUnknownFields()
+	if err := bodyDecoder.Decode(destination); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_json", "request body must match the expected JSON schema")
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(response, http.StatusBadRequest, "invalid_json", "request body must contain one JSON object")
+		return false
+	}
+	return true
+}
+
 func (server *Server) handleHealth(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (server *Server) handleRegisterTemplate(response http.ResponseWriter, request *http.Request) {
 	var body registerTemplateRequest
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+	if !decodeRequestBody(response, request, &body) {
 		return
 	}
 
 	registration, err := server.service.RegisterTemplate(request.Context(), app.RegisterTemplateCommand{
-		TenantID:    traits.TenantID(request.PathValue("tenant_id")),
-		RepoOwner:   body.RepoOwner,
-		RepoName:    body.RepoName,
-		SourceRef:   body.SourceRef,
-		RootPath:    body.RootPath,
-		RequestedBy: traits.UserID(body.RequestedBy),
+		TenantID:  traits.TenantID(request.PathValue("tenant_id")),
+		RepoOwner: body.RepoOwner,
+		RepoName:  body.RepoName,
+		SourceRef: body.SourceRef,
+		RootPath:  body.RootPath,
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -148,8 +172,7 @@ func (server *Server) handleGetTemplateRevisionVariables(response http.ResponseW
 
 func (server *Server) handleCreateStack(response http.ResponseWriter, request *http.Request) {
 	var body createStackRequest
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+	if !decodeRequestBody(response, request, &body) {
 		return
 	}
 
@@ -164,7 +187,6 @@ func (server *Server) handleCreateStack(response http.ResponseWriter, request *h
 		Slug:                 body.Slug,
 		Tags:                 body.Tags,
 		DefaultCredentialIDs: credentialIDs,
-		Actor:                traits.UserID(body.Actor),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -205,8 +227,7 @@ func (server *Server) handleGetStack(response http.ResponseWriter, request *http
 
 func (server *Server) handleAddTemplateToStack(response http.ResponseWriter, request *http.Request) {
 	var body addTemplateToStackRequest
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+	if !decodeRequestBody(response, request, &body) {
 		return
 	}
 
@@ -222,7 +243,6 @@ func (server *Server) handleAddTemplateToStack(response http.ResponseWriter, req
 		ComponentKey:       body.ComponentKey,
 		SelectedRef:        body.SelectedRef,
 		ConfigJSON:         configJSON,
-		Actor:              traits.UserID(body.Actor),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -234,8 +254,7 @@ func (server *Server) handleAddTemplateToStack(response http.ResponseWriter, req
 
 func (server *Server) handleUpdateStackTemplateConfig(response http.ResponseWriter, request *http.Request) {
 	var body updateStackTemplateConfigRequest
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+	if !decodeRequestBody(response, request, &body) {
 		return
 	}
 
@@ -248,7 +267,6 @@ func (server *Server) handleUpdateStackTemplateConfig(response http.ResponseWrit
 		TenantID:        traits.TenantID(request.PathValue("tenant_id")),
 		StackTemplateID: traits.StackTemplateID(request.PathValue("stack_template_id")),
 		ConfigJSON:      configJSON,
-		Actor:           traits.UserID(body.Actor),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -260,8 +278,7 @@ func (server *Server) handleUpdateStackTemplateConfig(response http.ResponseWrit
 
 func (server *Server) handleUpgradeStackTemplate(response http.ResponseWriter, request *http.Request) {
 	var body upgradeStackTemplateRequest
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+	if !decodeRequestBody(response, request, &body) {
 		return
 	}
 
@@ -279,7 +296,6 @@ func (server *Server) handleUpgradeStackTemplate(response http.ResponseWriter, r
 		StackTemplateID:          traits.StackTemplateID(request.PathValue("stack_template_id")),
 		TargetTemplateRevisionID: traits.TemplateRevisionID(body.TargetTemplateRevisionID),
 		ConfigJSON:               configJSON,
-		Actor:                    traits.UserID(body.Actor),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -291,8 +307,7 @@ func (server *Server) handleUpgradeStackTemplate(response http.ResponseWriter, r
 
 func (server *Server) handleStartTemplateRun(response http.ResponseWriter, request *http.Request) {
 	var body startTemplateRunRequest
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+	if !decodeRequestBody(response, request, &body) {
 		return
 	}
 
@@ -300,7 +315,6 @@ func (server *Server) handleStartTemplateRun(response http.ResponseWriter, reque
 		TenantID:        traits.TenantID(request.PathValue("tenant_id")),
 		StackTemplateID: traits.StackTemplateID(request.PathValue("stack_template_id")),
 		Operation:       traits.OperationType(body.Operation),
-		TriggerActor:    traits.UserID(body.TriggerActor),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -354,15 +368,13 @@ func (server *Server) handleListTemplateRunLogs(response http.ResponseWriter, re
 
 func (server *Server) handleApproveRun(response http.ResponseWriter, request *http.Request) {
 	var body approveRunRequest
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+	if !decodeRequestBody(response, request, &body) {
 		return
 	}
 
 	err := server.service.ApproveRun(request.Context(), app.ApproveRunCommand{
-		TenantID:   traits.TenantID(request.PathValue("tenant_id")),
-		RunID:      traits.TemplateRunID(request.PathValue("run_id")),
-		ApprovedBy: traits.UserID(body.ApprovedBy),
+		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+		RunID:    traits.TemplateRunID(request.PathValue("run_id")),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -374,16 +386,14 @@ func (server *Server) handleApproveRun(response http.ResponseWriter, request *ht
 
 func (server *Server) handleCancelRun(response http.ResponseWriter, request *http.Request) {
 	var body cancelRunRequest
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+	if !decodeRequestBody(response, request, &body) {
 		return
 	}
 
 	err := server.service.CancelRun(request.Context(), app.CancelRunCommand{
-		TenantID:    traits.TenantID(request.PathValue("tenant_id")),
-		RunID:       traits.TemplateRunID(request.PathValue("run_id")),
-		RequestedBy: traits.UserID(body.RequestedBy),
-		Reason:      body.Reason,
+		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+		RunID:    traits.TemplateRunID(request.PathValue("run_id")),
+		Reason:   body.Reason,
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -406,11 +416,10 @@ func stackTemplateConfigJSON(response http.ResponseWriter, config map[string]any
 }
 
 type registerTemplateRequest struct {
-	RepoOwner   string `json:"repo_owner"`
-	RepoName    string `json:"repo_name"`
-	SourceRef   string `json:"source_ref"`
-	RootPath    string `json:"root_path"`
-	RequestedBy string `json:"requested_by"`
+	RepoOwner string `json:"repo_owner"`
+	RepoName  string `json:"repo_name"`
+	SourceRef string `json:"source_ref"`
+	RootPath  string `json:"root_path"`
 }
 
 type createStackRequest struct {
@@ -418,7 +427,6 @@ type createStackRequest struct {
 	Slug                 string            `json:"slug"`
 	Tags                 map[string]string `json:"tags"`
 	DefaultCredentialIDs []string          `json:"default_credential_ids"`
-	Actor                string            `json:"actor"`
 }
 
 type addTemplateToStackRequest struct {
@@ -426,32 +434,25 @@ type addTemplateToStackRequest struct {
 	ComponentKey       string         `json:"component_key"`
 	SelectedRef        string         `json:"selected_ref"`
 	Config             map[string]any `json:"config"`
-	Actor              string         `json:"actor"`
 }
 
 type updateStackTemplateConfigRequest struct {
 	Config map[string]any `json:"config"`
-	Actor  string         `json:"actor"`
 }
 
 type upgradeStackTemplateRequest struct {
 	TargetTemplateRevisionID string         `json:"target_template_revision_id"`
 	Config                   map[string]any `json:"config"`
-	Actor                    string         `json:"actor"`
 }
 
 type startTemplateRunRequest struct {
-	Operation    string `json:"operation"`
-	TriggerActor string `json:"trigger_actor"`
+	Operation string `json:"operation"`
 }
 
-type approveRunRequest struct {
-	ApprovedBy string `json:"approved_by"`
-}
+type approveRunRequest struct{}
 
 type cancelRunRequest struct {
-	RequestedBy string `json:"requested_by"`
-	Reason      string `json:"reason"`
+	Reason string `json:"reason"`
 }
 
 type stackViewResponse struct {
@@ -562,6 +563,8 @@ func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateR
 
 func writeAppError(response http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, app.ErrUnauthenticated):
+		writeError(response, http.StatusUnauthorized, "unauthorized", "authentication required")
 	case errors.Is(err, app.ErrInvalidCommand):
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, app.ErrNotFound):
