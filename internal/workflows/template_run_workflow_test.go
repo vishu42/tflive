@@ -2,12 +2,15 @@ package workflows
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -370,4 +373,182 @@ func assertWorkflowCompleted(t *testing.T, env *testsuite.TestWorkflowEnvironmen
 	if err := env.GetWorkflowError(); err != nil {
 		t.Fatalf("workflow returned error: %v", err)
 	}
+}
+
+func TestTemplateRunWorkflowRetriesTransientActivityError(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	input := templateRunWorkflowInput(traits.OperationPlan)
+
+	var prepareAttempts int
+	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+			prepareAttempts++
+			if prepareAttempts < 3 {
+				return traits.PrepareWorkspaceActivityOutput{}, errors.New("connection reset")
+			}
+			return traits.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123"}, nil
+		})
+
+	mockFetchSource(t, env)
+	mockRunTerraformNoop(t, env)
+	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+	assertWorkflowCompleted(t, env)
+	if prepareAttempts != 3 {
+		t.Fatalf("prepare attempts = %d, want 3 (2 failures + 1 success)", prepareAttempts)
+	}
+}
+
+func TestTemplateRunWorkflowStopsOnNonRetryableError(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	input := templateRunWorkflowInput(traits.OperationPlan)
+
+	var prepareAttempts int
+	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+			prepareAttempts++
+			return traits.PrepareWorkspaceActivityOutput{}, temporal.NewNonRetryableApplicationError(
+				"invalid configuration",
+				"InvalidConfig",
+				nil,
+			)
+		})
+
+	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err == nil {
+		t.Fatal("workflow error is nil, want non-retryable error")
+	}
+	if prepareAttempts != 1 {
+		t.Fatalf("prepare attempts = %d, want 1 (non-retryable should not retry)", prepareAttempts)
+	}
+}
+
+func TestTemplateRunWorkflowRetriesTerraformCommand(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	input := templateRunWorkflowInput(traits.OperationPlan)
+
+	mockPrepareWorkspace(t, env)
+	mockFetchSource(t, env)
+
+	var planAttempts int
+	env.OnActivity(traits.RunTerraformActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput traits.RunTerraformActivityInput) error {
+			if activityInput.Command == traits.TerraformCommandPlan {
+				planAttempts++
+				if planAttempts < 3 {
+					return errors.New("rate limit exceeded")
+				}
+			}
+			return nil
+		})
+
+	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+	assertWorkflowCompleted(t, env)
+	if planAttempts != 3 {
+		t.Fatalf("plan attempts = %d, want 3 (2 failures + 1 success)", planAttempts)
+	}
+}
+
+func TestTemplateRunWorkflowNonRetryableTerraformError(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	input := templateRunWorkflowInput(traits.OperationPlan)
+
+	mockPrepareWorkspace(t, env)
+	mockFetchSource(t, env)
+
+	var terraformAttempts int
+	env.OnActivity(traits.RunTerraformActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput traits.RunTerraformActivityInput) error {
+			terraformAttempts++
+			if activityInput.Command == traits.TerraformCommandPlan {
+				return temporal.NewNonRetryableApplicationError(
+					"unsupported terraform command",
+					"UnsupportedCommand",
+					nil,
+				)
+			}
+			return nil
+		})
+
+	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err == nil {
+		t.Fatal("workflow error is nil, want non-retryable error")
+	}
+	// Attempts: init (1), select_workspace (1), plan (1 - non-retryable)
+	if terraformAttempts != 3 {
+		t.Fatalf("terraform attempts = %d, want 3 (non-retryable should not retry)", terraformAttempts)
+	}
+}
+
+func TestDefaultRunRetryPolicy(t *testing.T) {
+	t.Parallel()
+
+	if defaultRunRetryPolicy.MaximumAttempts != 5 {
+		t.Fatalf("MaximumAttempts = %d, want 5", defaultRunRetryPolicy.MaximumAttempts)
+	}
+	if defaultRunRetryPolicy.InitialInterval != 30*time.Second {
+		t.Fatalf("InitialInterval = %v, want 30s", defaultRunRetryPolicy.InitialInterval)
+	}
+	if defaultRunRetryPolicy.BackoffCoefficient != 2.0 {
+		t.Fatalf("BackoffCoefficient = %f, want 2.0", defaultRunRetryPolicy.BackoffCoefficient)
+	}
+	if defaultRunRetryPolicy.MaximumInterval != 5*time.Minute {
+		t.Fatalf("MaximumInterval = %v, want 5m", defaultRunRetryPolicy.MaximumInterval)
+	}
+	wantNonRetryable := []string{"InvalidConfig", "UnsupportedCommand"}
+	if !reflect.DeepEqual(defaultRunRetryPolicy.NonRetryableErrorTypes, wantNonRetryable) {
+		t.Fatalf("NonRetryableErrorTypes = %v, want %v", defaultRunRetryPolicy.NonRetryableErrorTypes, wantNonRetryable)
+	}
+}
+
+func TestTerraformRetryPolicy(t *testing.T) {
+	t.Parallel()
+
+	if terraformRetryPolicy.MaximumAttempts != 3 {
+		t.Fatalf("MaximumAttempts = %d, want 3", terraformRetryPolicy.MaximumAttempts)
+	}
+	if terraformRetryPolicy.InitialInterval != time.Minute {
+		t.Fatalf("InitialInterval = %v, want 1m", terraformRetryPolicy.InitialInterval)
+	}
+	if terraformRetryPolicy.BackoffCoefficient != 2.0 {
+		t.Fatalf("BackoffCoefficient = %f, want 2.0", terraformRetryPolicy.BackoffCoefficient)
+	}
+	if terraformRetryPolicy.MaximumInterval != 10*time.Minute {
+		t.Fatalf("MaximumInterval = %v, want 10m", terraformRetryPolicy.MaximumInterval)
+	}
+	wantNonRetryable := []string{"InvalidConfig", "UnsupportedCommand"}
+	if !reflect.DeepEqual(terraformRetryPolicy.NonRetryableErrorTypes, wantNonRetryable) {
+		t.Fatalf("NonRetryableErrorTypes = %v, want %v", terraformRetryPolicy.NonRetryableErrorTypes, wantNonRetryable)
+	}
+}
+
+func mockRunTerraformNoop(t *testing.T, env *testsuite.TestWorkflowEnvironment) {
+	t.Helper()
+
+	env.OnActivity(traits.RunTerraformActivityName, mock.Anything, mock.Anything).Return(nil)
 }

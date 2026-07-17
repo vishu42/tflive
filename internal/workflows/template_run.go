@@ -6,14 +6,32 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/traits"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
 var errTemplateRunCanceled = errors.New("template run canceled")
 
+// defaultRunRetryPolicy is the retry policy applied to activities in the
+// template-run workflow when no activity-specific override is set. It caps
+// retries at 5 attempts with a 30-second initial interval and exponential
+// backoff. Transient infrastructure errors (network timeouts, temporary
+// failures) are retried; permanent application errors are not.
+var defaultRunRetryPolicy = &temporal.RetryPolicy{
+	InitialInterval:    30 * time.Second,
+	BackoffCoefficient: 2.0,
+	MaximumInterval:    5 * time.Minute,
+	MaximumAttempts:    5,
+	NonRetryableErrorTypes: []string{
+		"InvalidConfig",
+		"UnsupportedCommand",
+	},
+}
+
 func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowInput) error {
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: time.Minute,
+		RetryPolicy:         defaultRunRetryPolicy,
 	})
 
 	run := templateRunWorkflow{
@@ -212,6 +230,21 @@ func (run *templateRunWorkflow) complete() error {
 	return run.recordStatuses(traits.TemplateRunLockReleased, traits.TemplateRunCompleted)
 }
 
+// terraformRetryPolicy is applied to long-running Terraform commands (plan,
+// apply) that can legitimately take many minutes. It allows more retries with
+// longer intervals than the default policy to accommodate transient cloud API
+// errors and rate limits.
+var terraformRetryPolicy = &temporal.RetryPolicy{
+	InitialInterval:    time.Minute,
+	BackoffCoefficient: 2.0,
+	MaximumInterval:    10 * time.Minute,
+	MaximumAttempts:    3,
+	NonRetryableErrorTypes: []string{
+		"InvalidConfig",
+		"UnsupportedCommand",
+	},
+}
+
 func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType) error {
 	input := traits.RunTerraformActivityInput{
 		RunID:         run.input.RunID,
@@ -226,8 +259,16 @@ func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType
 	activityCtx, cancelActivity := workflow.WithCancel(run.ctx)
 	defer cancelActivity()
 
+	// Apply a longer timeout and more generous retry policy for Terraform
+	// commands that involve cloud API calls (plan, apply). Init and workspace
+	// selection use the default workflow-level options.
+	terraformCtx := workflow.WithActivityOptions(activityCtx, workflow.ActivityOptions{
+		StartToCloseTimeout: 10 * time.Minute,
+		RetryPolicy:         terraformRetryPolicy,
+	})
+
 	future := workflow.ExecuteActivity(
-		activityCtx,
+		terraformCtx,
 		traits.RunTerraformActivityName,
 		input,
 	)
