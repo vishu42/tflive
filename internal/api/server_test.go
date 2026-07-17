@@ -1224,7 +1224,7 @@ func TestRunDecisionRequestsRejectTopLevelNull(t *testing.T) {
 			t.Parallel()
 
 			deps := newAPITestDependencies()
-			server := NewServer(deps.service())
+			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := authenticatedRequest(http.MethodPost, test.path, strings.NewReader(`null`))
 
@@ -1338,7 +1338,7 @@ func TestMutationRequestsRejectIdentityOverrides(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			deps := newAPITestDependencies()
-			server := NewServer(deps.service())
+			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := authenticatedRequest(http.MethodPost, test.path, strings.NewReader(test.body))
 
@@ -1390,7 +1390,7 @@ func TestMutationRequestsRejectMissingPrincipal(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
