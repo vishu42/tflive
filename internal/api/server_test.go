@@ -160,7 +160,7 @@ func TestAuthenticatedServerAllowsConfiguredTenantToReachService(t *testing.T) {
 		Slug:     "acme-prod",
 	}}
 	server := NewAuthenticatedServer(deps.service(), apiTestVerifier{}, configuredTenantID)
-	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
+	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
 	request.Header.Set("Authorization", "Bearer test-token")
 	response := httptest.NewRecorder()
 
@@ -501,7 +501,7 @@ func TestListStacksReturnsTenantStacks(t *testing.T) {
 	}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
+	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
 
 	server.ServeHTTP(response, request)
 
@@ -551,7 +551,7 @@ func TestGetStackReturnsStackView(t *testing.T) {
 	}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack_123", nil)
+	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack_123", nil)
 
 	server.ServeHTTP(response, request)
 
@@ -1535,16 +1535,23 @@ func (deps *apiTestDependencies) service() *app.Service {
 	})
 }
 
-type apiAuthorizer struct{ writeErr error }
+type apiAuthorizer struct {
+	writeErr error
+	denied   bool
+}
 
-func (apiAuthorizer) Check(context.Context, authz.CheckRequest) (authz.CheckResult, error) {
-	return authz.CheckResult{}, nil
+func (authorizer apiAuthorizer) Check(context.Context, authz.CheckRequest) (authz.CheckResult, error) {
+	return authz.CheckResult{Allowed: !authorizer.denied}, nil
 }
 func (apiAuthorizer) BatchCheck(context.Context, authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
 	return authz.BatchCheckResult{}, nil
 }
-func (apiAuthorizer) ListAccessibleStacks(context.Context, authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
-	return authz.ListAccessibleStacksResult{}, nil
+func (authorizer apiAuthorizer) ListAccessibleStacks(context.Context, authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
+	if authorizer.denied {
+		return authz.ListAccessibleStacksResult{}, nil
+	}
+	stack, _ := authz.StackFromID("stack_123")
+	return authz.ListAccessibleStacksResult{Stacks: []authz.Stack{stack}}, nil
 }
 func (apiAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
 	return authz.ListGrantsResult{}, nil

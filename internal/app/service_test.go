@@ -205,9 +205,10 @@ func TestGetStackPassesTenantAndIDAndNormalizesNilTemplates(t *testing.T) {
 			Templates: nil,
 		},
 	}
-	service := NewService(Service{Stacks: stacks})
+	service := NewService(Service{Stacks: stacks, Authorizer: &permissionAuthorizer{allowed: true}})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject})
 
-	view, err := service.GetStack(context.Background(), GetStackCommand{
+	view, err := service.GetStack(ctx, GetStackCommand{
 		TenantID: traits.TenantID("tenant_123"),
 		StackID:  traits.StackID("stack_123"),
 	})
@@ -233,9 +234,10 @@ func TestListStacksPassesTenantAndNormalizesNilStacks(t *testing.T) {
 	t.Parallel()
 
 	stacks := &recordingStackRepository{list: nil}
-	service := NewService(Service{Stacks: stacks})
+	service := NewService(Service{Stacks: stacks, Authorizer: &permissionAuthorizer{}})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject, RealmRoles: []string{"platform-admin"}})
 
-	got, err := service.ListStacks(context.Background(), ListStacksCommand{
+	got, err := service.ListStacks(ctx, ListStacksCommand{
 		TenantID: traits.TenantID("tenant_123"),
 	})
 	if err != nil {
@@ -1466,6 +1468,7 @@ type recordingStackRepository struct {
 	gotTenantID     traits.TenantID
 	gotStackID      traits.StackID
 	gotListTenantID traits.TenantID
+	gotListStackIDs []traits.StackID
 	createErr       error
 	getErr          error
 	listErr         error
@@ -1506,7 +1509,8 @@ func (repository *recordingStackRepository) ListStacks(_ context.Context, tenant
 	return repository.list, nil
 }
 
-func (repository *recordingStackRepository) ListStacksByIDs(_ context.Context, tenantID traits.TenantID, _ []traits.StackID) ([]traits.Stack, error) {
+func (repository *recordingStackRepository) ListStacksByIDs(_ context.Context, tenantID traits.TenantID, stackIDs []traits.StackID) ([]traits.Stack, error) {
+	repository.gotListStackIDs = append([]traits.StackID(nil), stackIDs...)
 	return repository.ListStacks(context.Background(), tenantID)
 }
 

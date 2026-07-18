@@ -635,6 +635,9 @@ func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (
 	if err := validateGetStackCommand(command); err != nil {
 		return StackView{}, err
 	}
+	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionView, ErrNotFound); err != nil {
+		return StackView{}, err
+	}
 
 	view, err := service.Stacks.GetStackWithTemplates(ctx, command.TenantID, command.StackID)
 	if err != nil {
@@ -652,7 +655,7 @@ func (service *Service) ListStacks(ctx context.Context, command ListStacksComman
 		return nil, err
 	}
 
-	stacks, err := service.Stacks.ListStacks(ctx, command.TenantID)
+	stacks, err := listAccessibleStacks(ctx, service.Authorizer, service.Stacks, command.TenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list stacks: %w", err)
 	}
