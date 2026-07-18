@@ -245,11 +245,12 @@ administrator.
 - The API always sends the explicit configured OpenFGA store and immutable
   model IDs; it never discovers a latest model at runtime.
 - Direct role writes and deletes can request higher-consistency confirmation. A
-  confirmation timeout or negative confirmation is returned as
-  `authorization_write_unconfirmed` and may be retried safely.
-- Explicit OpenFGA denial is distinct from an OpenFGA timeout, unavailable
-  service, or malformed response. The latter failures fail closed and map to
-  `503 authorization_unavailable` when an authorization decision is required.
+  completed negative higher-consistency confirmation returns
+  `authorization_write_unconfirmed` and is retryable safely.
+- A confirmation timeout, unavailable service, malformed response, or other
+  confirmation dependency failure fails closed as `authorization_unavailable`.
+  Explicit OpenFGA denial remains distinct; when an authorization decision is
+  required, dependency failures map to `503 authorization_unavailable`.
 
 ### Provisioning and Verification
 
