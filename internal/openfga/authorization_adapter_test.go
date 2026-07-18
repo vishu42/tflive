@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"testing"
 	"time"
 
@@ -126,6 +127,128 @@ func TestAuthorizationAdapterRejectsInvalidRequests(t *testing.T) {
 	}
 }
 
+func TestAuthorizationAdapterListAccessibleStacksWithConfiguredModel(t *testing.T) {
+	adapter, requests := testAuthorizationAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/stores/store-id/list-objects" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			AuthorizationModelID string `json:"authorization_model_id"`
+			Type                 string `json:"type"`
+			Relation             string `json:"relation"`
+			User                 string `json:"user"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.AuthorizationModelID != "model-id" || body.Type != "stack" || body.Relation != "can_view" || body.User != "user:alice" {
+			t.Fatalf("body = %#v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"objects":["stack:one","stack:two"]}`)
+	})
+
+	result, err := adapter.ListAccessibleStacks(context.Background(), authz.ListAccessibleStacksRequest{Subject: mustSubject(t, "alice"), Permission: authz.PermissionView})
+	want := authz.ListAccessibleStacksResult{Stacks: []authz.Stack{mustStack(t, "one"), mustStack(t, "two")}}
+	if err != nil || !reflect.DeepEqual(result, want) || *requests != 1 {
+		t.Fatalf("ListAccessibleStacks() = %#v, %v", result, err)
+	}
+}
+
+func TestAuthorizationAdapterRejectsInvalidListObjects(t *testing.T) {
+	for _, body := range []string{`{"objects":["stack:"]}`, `{"objects":["user:alice"]}`, `{"objects":["stack:one","stack:one"]}`, `{`, `{}`} {
+		adapter := adapterForResponse(t, http.StatusOK, "application/json", body)
+		_, err := adapter.ListAccessibleStacks(context.Background(), authz.ListAccessibleStacksRequest{Subject: mustSubject(t, "alice"), Permission: authz.PermissionView})
+		if !errors.Is(err, authz.ErrMalformedResponse) {
+			t.Fatalf("body %q error = %v", body, err)
+		}
+	}
+}
+
+func TestAuthorizationAdapterListsOnlyDirectRoleGrantsAcrossPages(t *testing.T) {
+	var requests *int
+	adapter, requests := testAuthorizationAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/stores/store-id/read" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			TupleKey struct {
+				Object string `json:"object"`
+			} `json:"tuple_key"`
+			PageSize          int    `json:"page_size"`
+			ContinuationToken string `json:"continuation_token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.TupleKey.Object != "stack:one" || body.PageSize != 100 {
+			t.Fatalf("body = %#v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch *requests {
+		case 1:
+			if body.ContinuationToken != "" {
+				t.Fatalf("first continuation token = %q", body.ContinuationToken)
+			}
+			fmt.Fprint(w, `{"tuples":[{"key":{"user":"user:bob","relation":"viewer","object":"stack:one"}}],"continuation_token":"next"}`)
+		case 2:
+			if body.ContinuationToken != "next" {
+				t.Fatalf("second continuation token = %q", body.ContinuationToken)
+			}
+			fmt.Fprint(w, `{"tuples":[{"key":{"user":"user:alice","relation":"owner","object":"stack:one"}}]}`)
+		default:
+			t.Fatalf("unexpected request count %d", *requests)
+		}
+	})
+
+	result, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Stack: mustStack(t, "one")})
+	want := authz.ListGrantsResult{Grants: []authz.Grant{
+		mustGrant(t, "alice", "one", authz.RoleOwner),
+		mustGrant(t, "bob", "one", authz.RoleViewer),
+	}}
+	if err != nil || !reflect.DeepEqual(result, want) || *requests != 2 {
+		t.Fatalf("ListGrants() = %#v, %v", result, err)
+	}
+}
+
+func TestAuthorizationAdapterRejectsMalformedGrantReadPages(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"tuples":[{"key":{"user":"user:alice","relation":"can_view","object":"stack:one"}}]}`,
+		`{"tuples":[{"key":{"user":"user:alice","relation":"owner","object":"stack:other"}}]}`,
+		`{"tuples":[{"key":{"user":"user:alice","relation":"owner","object":"stack:one"}},{"key":{"user":"user:alice","relation":"owner","object":"stack:one"}}]}`,
+	} {
+		adapter := adapterForResponse(t, http.StatusOK, "application/json", body)
+		_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Stack: mustStack(t, "one")})
+		if !errors.Is(err, authz.ErrMalformedResponse) {
+			t.Fatalf("body %q error = %v", body, err)
+		}
+	}
+}
+
+func TestAuthorizationAdapterRejectsRepeatedGrantReadTokens(t *testing.T) {
+	var requests *int
+	adapter, requests := testAuthorizationAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/stores/store-id/read" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch *requests {
+		case 1, 2:
+			fmt.Fprint(w, `{"tuples":[],"continuation_token":"next"}`)
+		case 3:
+			fmt.Fprint(w, `{"tuples":[]}`)
+		default:
+			t.Fatalf("unexpected request count %d", *requests)
+		}
+	})
+
+	_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Stack: mustStack(t, "one")})
+	if !errors.Is(err, authz.ErrMalformedResponse) {
+		t.Fatalf("ListGrants() error = %v", err)
+	}
+}
+
 func testAuthorizationAdapter(t *testing.T, handler http.HandlerFunc) (*AuthorizationAdapter, *int) {
 	t.Helper()
 	requests := new(int)
@@ -173,4 +296,31 @@ func operateCheck(t *testing.T) authz.CheckRequest {
 	check := viewCheck(t)
 	check.Permission = authz.PermissionOperate
 	return check
+}
+
+func mustSubject(t *testing.T, sub string) authz.Subject {
+	t.Helper()
+	subject, err := authz.SubjectFromKeycloakSub(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return subject
+}
+
+func mustStack(t *testing.T, id string) authz.Stack {
+	t.Helper()
+	stack, err := authz.StackFromID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stack
+}
+
+func mustGrant(t *testing.T, subject, stack string, role authz.Role) authz.Grant {
+	t.Helper()
+	grant, err := authz.NewGrant(mustSubject(t, subject), mustStack(t, stack), role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return grant
 }

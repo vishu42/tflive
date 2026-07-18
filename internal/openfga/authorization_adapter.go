@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/vishu42/tflive/internal/authz"
 )
@@ -88,6 +90,147 @@ func (adapter *AuthorizationAdapter) BatchCheck(ctx context.Context, request aut
 		result.Results[index] = authz.CheckResult{Allowed: *check.Allowed}
 	}
 	return result, nil
+}
+
+// ListAccessibleStacks returns validated stacks for which the subject has the
+// requested derived permission in the configured authorization model.
+func (adapter *AuthorizationAdapter) ListAccessibleStacks(ctx context.Context, request authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
+	if !request.Valid() {
+		return authz.ListAccessibleStacksResult{}, fmt.Errorf("%w: invalid accessible stacks request", authz.ErrInvalidInput)
+	}
+
+	var response struct {
+		Objects *[]string `json:"objects"`
+	}
+	input := struct {
+		AuthorizationModelID string `json:"authorization_model_id"`
+		Type                 string `json:"type"`
+		Relation             string `json:"relation"`
+		User                 string `json:"user"`
+	}{
+		AuthorizationModelID: adapter.modelID,
+		Type:                 "stack",
+		Relation:             string(request.Permission),
+		User:                 request.Subject.String(),
+	}
+	if err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "list-objects"), nil, input, &response, http.StatusOK); err != nil {
+		return authz.ListAccessibleStacksResult{}, adapter.classify(err)
+	}
+	if response.Objects == nil {
+		return authz.ListAccessibleStacksResult{}, fmt.Errorf("%w: list objects response is missing objects", authz.ErrMalformedResponse)
+	}
+
+	result := authz.ListAccessibleStacksResult{Stacks: make([]authz.Stack, 0, len(*response.Objects))}
+	seen := make(map[string]struct{}, len(*response.Objects))
+	for _, object := range *response.Objects {
+		stack, err := stackFromCanonicalObject(object)
+		if err != nil {
+			return authz.ListAccessibleStacksResult{}, fmt.Errorf("%w: list objects contains invalid stack %q", authz.ErrMalformedResponse, object)
+		}
+		if _, duplicate := seen[stack.String()]; duplicate {
+			return authz.ListAccessibleStacksResult{}, fmt.Errorf("%w: list objects contains duplicate stack %q", authz.ErrMalformedResponse, object)
+		}
+		seen[stack.String()] = struct{}{}
+		result.Stacks = append(result.Stacks, stack)
+	}
+	return result, nil
+}
+
+// ListGrants returns all direct role assignments for the requested stack.
+func (adapter *AuthorizationAdapter) ListGrants(ctx context.Context, request authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
+	if !request.Valid() {
+		return authz.ListGrantsResult{}, fmt.Errorf("%w: invalid grants request", authz.ErrInvalidInput)
+	}
+
+	type readTuple struct {
+		Key *tupleKey `json:"key"`
+	}
+	type readResponse struct {
+		Tuples            *[]readTuple `json:"tuples"`
+		ContinuationToken string       `json:"continuation_token"`
+	}
+
+	result := authz.ListGrantsResult{}
+	seenGrants := map[struct{ subject, role string }]struct{}{}
+	seenTokens := map[string]struct{}{}
+	continuationToken := ""
+	for {
+		input := struct {
+			TupleKey struct {
+				Object string `json:"object"`
+			} `json:"tuple_key"`
+			PageSize          int    `json:"page_size"`
+			ContinuationToken string `json:"continuation_token,omitempty"`
+		}{PageSize: 100, ContinuationToken: continuationToken}
+		input.TupleKey.Object = request.Stack.String()
+
+		var response readResponse
+		if err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "read"), nil, input, &response, http.StatusOK); err != nil {
+			return authz.ListGrantsResult{}, adapter.classify(err)
+		}
+		if response.Tuples == nil {
+			return authz.ListGrantsResult{}, fmt.Errorf("%w: read response is missing tuples", authz.ErrMalformedResponse)
+		}
+		for _, tuple := range *response.Tuples {
+			grant, err := grantFromReadTuple(tuple.Key, request.Stack)
+			if err != nil {
+				return authz.ListGrantsResult{}, fmt.Errorf("%w: read response contains invalid tuple", authz.ErrMalformedResponse)
+			}
+			key := struct{ subject, role string }{subject: grant.Subject().String(), role: grant.Role().String()}
+			if _, duplicate := seenGrants[key]; duplicate {
+				return authz.ListGrantsResult{}, fmt.Errorf("%w: read response contains duplicate grant", authz.ErrMalformedResponse)
+			}
+			seenGrants[key] = struct{}{}
+			result.Grants = append(result.Grants, grant)
+		}
+		if response.ContinuationToken == "" {
+			break
+		}
+		if !safeOpaqueIdentifier(response.ContinuationToken) {
+			return authz.ListGrantsResult{}, fmt.Errorf("%w: read response continuation token is invalid", authz.ErrMalformedResponse)
+		}
+		if _, repeated := seenTokens[response.ContinuationToken]; repeated {
+			return authz.ListGrantsResult{}, fmt.Errorf("%w: read response repeats continuation token", authz.ErrMalformedResponse)
+		}
+		seenTokens[response.ContinuationToken] = struct{}{}
+		continuationToken = response.ContinuationToken
+	}
+
+	sort.Slice(result.Grants, func(i, j int) bool {
+		if result.Grants[i].Subject().String() != result.Grants[j].Subject().String() {
+			return result.Grants[i].Subject().String() < result.Grants[j].Subject().String()
+		}
+		return result.Grants[i].Role().String() < result.Grants[j].Role().String()
+	})
+	return result, nil
+}
+
+func stackFromCanonicalObject(object string) (authz.Stack, error) {
+	const prefix = "stack:"
+	if !strings.HasPrefix(object, prefix) {
+		return authz.Stack{}, fmt.Errorf("missing stack prefix")
+	}
+	stack, err := authz.StackFromID(strings.TrimPrefix(object, prefix))
+	if err != nil || stack.String() != object {
+		return authz.Stack{}, fmt.Errorf("invalid stack")
+	}
+	return stack, nil
+}
+
+func grantFromReadTuple(key *tupleKey, requestedStack authz.Stack) (authz.Grant, error) {
+	const subjectPrefix = "user:"
+	if key == nil || key.Object != requestedStack.String() || !strings.HasPrefix(key.User, subjectPrefix) {
+		return authz.Grant{}, fmt.Errorf("invalid tuple key")
+	}
+	subject, err := authz.SubjectFromKeycloakSub(strings.TrimPrefix(key.User, subjectPrefix))
+	if err != nil || subject.String() != key.User {
+		return authz.Grant{}, fmt.Errorf("invalid tuple subject")
+	}
+	role, err := authz.RoleFromDirectRelation(key.Relation)
+	if err != nil {
+		return authz.Grant{}, fmt.Errorf("invalid tuple relation")
+	}
+	return authz.NewGrant(subject, requestedStack, role)
 }
 
 type tupleKey struct {
