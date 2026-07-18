@@ -4,12 +4,29 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/traits"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
+
+// syncRetryPolicy is the retry policy for template-sync activities. Git clones
+// and HCL parsing can fail due to transient network errors or GitHub rate
+// limits, but invalid configuration or missing repositories are permanent
+// failures that should not be retried.
+var syncRetryPolicy = &temporal.RetryPolicy{
+	InitialInterval:    30 * time.Second,
+	BackoffCoefficient: 2.0,
+	MaximumInterval:    5 * time.Minute,
+	MaximumAttempts:    4,
+	NonRetryableErrorTypes: []string{
+		"InvalidTemplate",
+		"RepositoryNotFound",
+	},
+}
 
 func TemplateSyncWorkflow(ctx workflow.Context, input traits.TemplateSyncWorkflowInput) error {
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 5 * time.Minute,
+		RetryPolicy:         syncRetryPolicy,
 	})
 
 	run := templateSyncWorkflow{
