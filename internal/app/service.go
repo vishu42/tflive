@@ -58,6 +58,7 @@ type StackRepository interface {
 	GetStack(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error)
 	GetStackWithTemplates(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (StackView, error)
 	ListStacks(ctx context.Context, tenantID traits.TenantID) ([]traits.Stack, error)
+	ListStacksByIDs(ctx context.Context, tenantID traits.TenantID, stackIDs []traits.StackID) ([]traits.Stack, error)
 }
 
 type stackOwnerIntentRepository interface {

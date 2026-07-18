@@ -126,6 +126,9 @@ func (repository *authorizationStackRepository) GetStackWithTemplates(context.Co
 func (repository *authorizationStackRepository) ListStacks(context.Context, traits.TenantID) ([]traits.Stack, error) {
 	return nil, nil
 }
+func (repository *authorizationStackRepository) ListStacksByIDs(context.Context, traits.TenantID, []traits.StackID) ([]traits.Stack, error) {
+	return nil, nil
+}
 
 type recordingAuthorizer struct {
 	calls    int

@@ -671,6 +671,80 @@ func TestListStacksReturnsTenantScopedStacksNewestFirst(t *testing.T) {
 	}
 }
 
+func TestListStacksByIDsReturnsRequestedTenantStacksNewestFirst(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	older := traits.Stack{
+		ID:        traits.StackID("stack_older"),
+		TenantID:  traits.TenantID("tenant_123"),
+		Name:      "Older Stack",
+		Slug:      "older-stack",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
+	}
+	newer := traits.Stack{
+		ID:        traits.StackID("stack_newer"),
+		TenantID:  traits.TenantID("tenant_123"),
+		Name:      "Newer Stack",
+		Slug:      "newer-stack",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Date(2026, 7, 6, 11, 0, 0, 0, time.UTC),
+	}
+	otherTenant := traits.Stack{
+		ID:        traits.StackID("stack_other"),
+		TenantID:  traits.TenantID("tenant_456"),
+		Name:      "Other Stack",
+		Slug:      "other-stack",
+		CreatedBy: traits.UserID("user_456"),
+		CreatedAt: time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
+	}
+	for _, stack := range []traits.Stack{older, newer, otherTenant} {
+		if err := store.CreateStack(ctx, stack); err != nil {
+			t.Fatalf("CreateStack(%s) returned error: %v", stack.ID, err)
+		}
+	}
+
+	stacks, err := store.ListStacksByIDs(ctx, traits.TenantID("tenant_123"), []traits.StackID{"stack_older", "stack_newer", "stack_other"})
+	if err != nil {
+		t.Fatalf("ListStacksByIDs returned error: %v", err)
+	}
+	if len(stacks) != 2 {
+		t.Fatalf("len(stacks) = %d, want 2: %#v", len(stacks), stacks)
+	}
+	if stacks[0].ID != newer.ID || stacks[1].ID != older.ID {
+		t.Fatalf("stack order = %#v", stacks)
+	}
+}
+
+func TestListStacksByIDsReturnsEmptyForNoIDs(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	if err := store.CreateStack(ctx, traits.Stack{
+		ID:        traits.StackID("stack_123"),
+		TenantID:  traits.TenantID("tenant_123"),
+		Name:      "Acme",
+		Slug:      "acme",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+
+	stacks, err := store.ListStacksByIDs(ctx, traits.TenantID("tenant_123"), nil)
+	if err != nil {
+		t.Fatalf("ListStacksByIDs returned error: %v", err)
+	}
+	if len(stacks) != 0 {
+		t.Fatalf("stacks = %#v, want empty", stacks)
+	}
+}
+
 func TestGetTemplateRevisionReturnsTenantScopedRevision(t *testing.T) {
 	t.Parallel()
 

@@ -1602,6 +1602,10 @@ func (repository *recordingStackRepository) ListStacks(_ context.Context, tenant
 	return repository.list, nil
 }
 
+func (repository *recordingStackRepository) ListStacksByIDs(_ context.Context, tenantID traits.TenantID, _ []traits.StackID) ([]traits.Stack, error) {
+	return repository.ListStacks(context.Background(), tenantID)
+}
+
 type recordingStackTemplateRepository struct {
 	stackTemplate                traits.StackTemplate
 	gotTenantID                  traits.TenantID

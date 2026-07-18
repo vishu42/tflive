@@ -457,6 +457,45 @@ func (store *Store) ListStacks(ctx context.Context, tenantID traits.TenantID) ([
 	return stacks, nil
 }
 
+func (store *Store) ListStacksByIDs(ctx context.Context, tenantID traits.TenantID, stackIDs []traits.StackID) ([]traits.Stack, error) {
+	if len(stackIDs) == 0 {
+		return []traits.Stack{}, nil
+	}
+
+	rows, err := store.pool.Query(ctx, `
+		select
+			id,
+			tenant_id,
+			name,
+			slug,
+			tags_json,
+			default_credential_ids_json,
+			created_by,
+			created_at
+		from stacks
+		where tenant_id = $1
+			and id = any($2)
+		order by created_at desc, id desc
+	`, tenantID, stackIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list stacks by IDs: %w", err)
+	}
+	defer rows.Close()
+
+	stacks := make([]traits.Stack, 0, len(stackIDs))
+	for rows.Next() {
+		stack, err := scanStack(rows)
+		if err != nil {
+			return nil, err
+		}
+		stacks = append(stacks, stack)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate stacks by IDs: %w", err)
+	}
+	return stacks, nil
+}
+
 func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (app.StackView, error) {
 	stack, err := store.getStack(ctx, tenantID, stackID)
 	if err != nil {
