@@ -20,6 +20,8 @@ type AuthorizationAdapter struct {
 	modelID string
 }
 
+const maxConfirmationChecks = 25
+
 // NewAuthorizationAdapter returns an OpenFGA adapter configured to check the
 // exact verified store and authorization model.
 func NewAuthorizationAdapter(cfg Config) (*AuthorizationAdapter, error) {
@@ -203,6 +205,165 @@ func (adapter *AuthorizationAdapter) ListGrants(ctx context.Context, request aut
 		return result.Grants[i].Role().String() < result.Grants[j].Role().String()
 	})
 	return result, nil
+}
+
+// WriteRelationships grants direct roles. If OpenFGA reports a conflicting
+// write, it confirms the desired state before deciding whether the operation
+// can safely be treated as an idempotent success.
+func (adapter *AuthorizationAdapter) WriteRelationships(ctx context.Context, mutation authz.Mutation) error {
+	grants, err := validMutation(mutation)
+	if err != nil {
+		return err
+	}
+	if err := adapter.write(ctx, grants, nil); err != nil {
+		original := adapter.classify(err)
+		matches, confirmErr := adapter.confirm(ctx, grants, true)
+		if confirmErr != nil {
+			return confirmErr
+		}
+		if !matches {
+			return original
+		}
+	}
+	if !mutation.Confirm() {
+		return nil
+	}
+	matches, err := adapter.confirm(ctx, grants, true)
+	if err != nil {
+		return err
+	}
+	if !matches {
+		return fmt.Errorf("%w: grants not visible", authz.ErrWriteUnconfirmed)
+	}
+	return nil
+}
+
+// DeleteRelationships revokes direct roles. If OpenFGA reports a conflicting
+// delete, it confirms the desired absence before reporting an error.
+func (adapter *AuthorizationAdapter) DeleteRelationships(ctx context.Context, mutation authz.Mutation) error {
+	grants, err := validMutation(mutation)
+	if err != nil {
+		return err
+	}
+	if err := adapter.write(ctx, nil, grants); err != nil {
+		original := adapter.classify(err)
+		matches, confirmErr := adapter.confirm(ctx, grants, false)
+		if confirmErr != nil {
+			return confirmErr
+		}
+		if !matches {
+			return original
+		}
+	}
+	if !mutation.Confirm() {
+		return nil
+	}
+	matches, err := adapter.confirm(ctx, grants, false)
+	if err != nil {
+		return err
+	}
+	if !matches {
+		return fmt.Errorf("%w: grants still visible", authz.ErrWriteUnconfirmed)
+	}
+	return nil
+}
+
+func validMutation(mutation authz.Mutation) ([]authz.Grant, error) {
+	if !mutation.Valid() {
+		return nil, fmt.Errorf("%w: invalid relationship mutation", authz.ErrInvalidInput)
+	}
+	grants := mutation.Grants()
+	seen := make(map[tupleKey]struct{}, len(grants))
+	for _, grant := range grants {
+		if !grant.Valid() {
+			return nil, fmt.Errorf("%w: invalid relationship mutation grant", authz.ErrInvalidInput)
+		}
+		key := tupleKey{User: grant.Subject().String(), Relation: grant.Role().String(), Object: grant.Stack().String()}
+		if _, duplicate := seen[key]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate relationship mutation grant", authz.ErrInvalidInput)
+		}
+		seen[key] = struct{}{}
+	}
+	return grants, nil
+}
+
+func (adapter *AuthorizationAdapter) write(ctx context.Context, writes, deletes []authz.Grant) error {
+	type tupleKeys struct {
+		TupleKeys []tupleKey `json:"tuple_keys"`
+	}
+	input := struct {
+		AuthorizationModelID string     `json:"authorization_model_id"`
+		Writes               *tupleKeys `json:"writes,omitempty"`
+		Deletes              *tupleKeys `json:"deletes,omitempty"`
+	}{AuthorizationModelID: adapter.modelID}
+	if len(writes) > 0 && len(deletes) == 0 {
+		input.Writes = &tupleKeys{TupleKeys: tuples(writes)}
+	} else if len(deletes) > 0 && len(writes) == 0 {
+		input.Deletes = &tupleKeys{TupleKeys: tuples(deletes)}
+	} else {
+		return fmt.Errorf("%w: relationship write must contain exactly one mutation direction", authz.ErrInvalidInput)
+	}
+	return adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "write"), nil, input, nil, http.StatusOK)
+}
+
+func (adapter *AuthorizationAdapter) confirm(ctx context.Context, grants []authz.Grant, expected bool) (bool, error) {
+	type batchCheck struct {
+		TupleKey      tupleKey `json:"tuple_key"`
+		CorrelationID string   `json:"correlation_id"`
+	}
+	for start := 0; start < len(grants); start += maxConfirmationChecks {
+		end := start + maxConfirmationChecks
+		if end > len(grants) {
+			end = len(grants)
+		}
+		input := struct {
+			AuthorizationModelID string       `json:"authorization_model_id"`
+			Checks               []batchCheck `json:"checks"`
+			Consistency          string       `json:"consistency"`
+		}{
+			AuthorizationModelID: adapter.modelID,
+			Checks:               make([]batchCheck, end-start),
+			Consistency:          "HIGHER_CONSISTENCY",
+		}
+		for index, grant := range grants[start:end] {
+			input.Checks[index] = batchCheck{TupleKey: tupleForGrant(grant), CorrelationID: strconv.Itoa(index)}
+		}
+
+		var response struct {
+			Result map[string]struct {
+				Allowed *bool `json:"allowed"`
+			} `json:"result"`
+		}
+		err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "batch-check"), nil, input, &response, http.StatusOK)
+		if err != nil {
+			return false, adapter.classify(err)
+		}
+		if len(response.Result) != len(input.Checks) {
+			return false, fmt.Errorf("%w: confirmation results do not match grants", authz.ErrMalformedResponse)
+		}
+		for index := range input.Checks {
+			result, ok := response.Result[strconv.Itoa(index)]
+			if !ok || result.Allowed == nil {
+				return false, fmt.Errorf("%w: confirmation result %q is missing or invalid", authz.ErrMalformedResponse, strconv.Itoa(index))
+			}
+			if *result.Allowed != expected {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+func tuples(grants []authz.Grant) []tupleKey {
+	result := make([]tupleKey, len(grants))
+	for index, grant := range grants {
+		result[index] = tupleForGrant(grant)
+	}
+	return result
+}
+
+func tupleForGrant(grant authz.Grant) tupleKey {
+	return tupleKey{User: grant.Subject().String(), Relation: grant.Role().String(), Object: grant.Stack().String()}
 }
 
 func stackFromCanonicalObject(object string) (authz.Stack, error) {

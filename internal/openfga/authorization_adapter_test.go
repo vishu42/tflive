@@ -249,6 +249,212 @@ func TestAuthorizationAdapterRejectsRepeatedGrantReadTokens(t *testing.T) {
 	}
 }
 
+func TestAuthorizationAdapterRelationshipWritesAreIdempotent(t *testing.T) {
+	adapter := adapterForHandler(t, duplicateWriteThenConfirmedHandler(t, true))
+	if err := adapter.WriteRelationships(context.Background(), mutationForGrant(t, ownerGrant(t), false)); err != nil {
+		t.Fatalf("WriteRelationships() error = %v", err)
+	}
+}
+
+func TestAuthorizationAdapterRelationshipDeletesAreIdempotent(t *testing.T) {
+	adapter := adapterForHandler(t, duplicateWriteThenConfirmedHandler(t, false))
+	if err := adapter.DeleteRelationships(context.Background(), mutationForGrant(t, ownerGrant(t), false)); err != nil {
+		t.Fatalf("DeleteRelationships() error = %v", err)
+	}
+}
+
+func TestAuthorizationAdapterConfirmationUsesHigherConsistency(t *testing.T) {
+	adapter := adapterForHandler(t, confirmedWriteHandler(t, true))
+	if err := adapter.WriteRelationships(context.Background(), mutationForGrant(t, ownerGrant(t), true)); err != nil {
+		t.Fatalf("WriteRelationships() error = %v", err)
+	}
+}
+
+func TestAuthorizationAdapterUnconfirmedAndInvalidMutationsFailClosed(t *testing.T) {
+	adapter := adapterForHandler(t, confirmedWriteHandler(t, false))
+	err := adapter.WriteRelationships(context.Background(), mutationForGrant(t, ownerGrant(t), true))
+	if !errors.Is(err, authz.ErrWriteUnconfirmed) {
+		t.Fatalf("unconfirmed write error = %v", err)
+	}
+
+	if err := adapter.WriteRelationships(context.Background(), authz.Mutation{}); !errors.Is(err, authz.ErrInvalidInput) {
+		t.Fatalf("invalid mutation error = %v", err)
+	}
+}
+
+func TestAuthorizationAdapterRejectsDuplicateMutationGrants(t *testing.T) {
+	grant := ownerGrant(t)
+	mutation, err := authz.NewMutation([]authz.Grant{grant, grant}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+	})
+	if err := adapter.WriteRelationships(context.Background(), mutation); !errors.Is(err, authz.ErrInvalidInput) {
+		t.Fatalf("duplicate mutation error = %v", err)
+	}
+}
+
+func TestAuthorizationAdapterBoundsConfirmationBatchChecks(t *testing.T) {
+	const maxChecksPerRequest = 25
+	grants := make([]authz.Grant, maxChecksPerRequest+1)
+	for index := range grants {
+		grants[index] = mustGrant(t, fmt.Sprintf("user-%d", index), "one", authz.RoleOwner)
+	}
+	mutation, err := authz.NewMutation(grants, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	confirmationRequests := 0
+	adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/stores/store-id/write":
+			w.WriteHeader(http.StatusOK)
+		case "/stores/store-id/batch-check":
+			var body struct {
+				Consistency string `json:"consistency"`
+				Checks      []struct {
+					CorrelationID string `json:"correlation_id"`
+				} `json:"checks"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Consistency != "HIGHER_CONSISTENCY" || len(body.Checks) == 0 || len(body.Checks) > maxChecksPerRequest {
+				t.Fatalf("body = %#v", body)
+			}
+			confirmationRequests++
+			result := make(map[string]map[string]bool, len(body.Checks))
+			for _, check := range body.Checks {
+				result[check.CorrelationID] = map[string]bool{"allowed": true}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(map[string]any{"result": result}); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	if err := adapter.WriteRelationships(context.Background(), mutation); err != nil {
+		t.Fatalf("WriteRelationships() error = %v", err)
+	}
+	if confirmationRequests != 2 {
+		t.Fatalf("confirmation requests = %d, want 2", confirmationRequests)
+	}
+}
+
+func duplicateWriteThenConfirmedHandler(t *testing.T, expected bool) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/stores/store-id/write":
+			assertRelationshipWrite(t, r, expected)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			fmt.Fprint(w, `{}`)
+		case "/stores/store-id/batch-check":
+			assertRelationshipConfirmation(t, r)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"result":{"0":{"allowed":%t}}}`, expected)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}
+}
+
+func confirmedWriteHandler(t *testing.T, confirmed bool) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/stores/store-id/write":
+			assertRelationshipWrite(t, r, true)
+			w.WriteHeader(http.StatusOK)
+		case "/stores/store-id/batch-check":
+			assertRelationshipConfirmation(t, r)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"result":{"0":{"allowed":%t}}}`, confirmed)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}
+}
+
+func assertRelationshipWrite(t *testing.T, r *http.Request, expectedWrite bool) {
+	t.Helper()
+	if r.Method != http.MethodPost {
+		t.Fatalf("method = %s", r.Method)
+	}
+	var body struct {
+		AuthorizationModelID string `json:"authorization_model_id"`
+		Writes               *struct {
+			TupleKeys []tupleKey `json:"tuple_keys"`
+		} `json:"writes"`
+		Deletes *struct {
+			TupleKeys []tupleKey `json:"tuple_keys"`
+		} `json:"deletes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.AuthorizationModelID != "model-id" {
+		t.Fatalf("model = %q", body.AuthorizationModelID)
+	}
+	if expectedWrite && (body.Writes == nil || body.Deletes != nil) {
+		t.Fatalf("body = %#v", body)
+	}
+	if !expectedWrite && (body.Deletes == nil || body.Writes != nil) {
+		t.Fatalf("body = %#v", body)
+	}
+	var tuples []tupleKey
+	if expectedWrite {
+		tuples = body.Writes.TupleKeys
+	} else {
+		tuples = body.Deletes.TupleKeys
+	}
+	if !reflect.DeepEqual(tuples, []tupleKey{{User: "user:alice", Relation: "owner", Object: "stack:one"}}) {
+		t.Fatalf("tuple keys = %#v", tuples)
+	}
+}
+
+func assertRelationshipConfirmation(t *testing.T, r *http.Request) {
+	t.Helper()
+	if r.Method != http.MethodPost {
+		t.Fatalf("method = %s", r.Method)
+	}
+	var body struct {
+		AuthorizationModelID string `json:"authorization_model_id"`
+		Consistency          string `json:"consistency"`
+		Checks               []struct {
+			TupleKey      tupleKey `json:"tuple_key"`
+			CorrelationID string   `json:"correlation_id"`
+		} `json:"checks"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.AuthorizationModelID != "model-id" || body.Consistency != "HIGHER_CONSISTENCY" || len(body.Checks) != 1 || body.Checks[0].CorrelationID != "0" || body.Checks[0].TupleKey != (tupleKey{User: "user:alice", Relation: "owner", Object: "stack:one"}) {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
+func ownerGrant(t *testing.T) authz.Grant {
+	t.Helper()
+	return mustGrant(t, "alice", "one", authz.RoleOwner)
+}
+
+func mutationForGrant(t *testing.T, grant authz.Grant, confirm bool) authz.Mutation {
+	t.Helper()
+	mutation, err := authz.NewMutation([]authz.Grant{grant}, confirm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mutation
+}
+
 func testAuthorizationAdapter(t *testing.T, handler http.HandlerFunc) (*AuthorizationAdapter, *int) {
 	t.Helper()
 	requests := new(int)
@@ -275,6 +481,12 @@ func adapterForResponse(t *testing.T, status int, contentType, body string) *Aut
 		w.WriteHeader(status)
 		fmt.Fprint(w, body)
 	})
+	return adapter
+}
+
+func adapterForHandler(t *testing.T, handler http.HandlerFunc) *AuthorizationAdapter {
+	t.Helper()
+	adapter, _ := testAuthorizationAdapter(t, handler)
 	return adapter
 }
 
