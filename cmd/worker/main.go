@@ -10,8 +10,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/activities"
 	"github.com/vishu42/tflive/internal/artifacts"
+	"github.com/vishu42/tflive/internal/authdispatch"
+	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/dispatch"
+	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/temporal"
 	"github.com/vishu42/tflive/internal/traits"
@@ -38,6 +41,7 @@ type workerStore interface {
 	activities.TemplateSyncStore
 	artifacts.LogMetadataRecorder
 	dispatch.Outbox
+	authdispatch.Outbox
 }
 
 type outboxDispatcher interface {
@@ -58,7 +62,9 @@ type workerDependencies struct {
 	// newWorkflowStarter creates the idempotent Temporal workflow starter used by the outbox.
 	newWorkflowStarter func(client.Client, string) dispatch.WorkflowStarter
 	// newOutboxDispatcher builds the durable Postgres-to-Temporal dispatch loop.
-	newOutboxDispatcher func(dispatch.Outbox, dispatch.WorkflowStarter) outboxDispatcher
+	newOutboxDispatcher        func(dispatch.Outbox, dispatch.WorkflowStarter) outboxDispatcher
+	newAuthorizationAdapter    func(config.OpenFGAConfig) (authz.Authorizer, error)
+	newAuthorizationDispatcher func(authdispatch.Outbox, authz.Authorizer) outboxDispatcher
 	// registerWorkflow attaches the workflow implementations this process can execute.
 	registerWorkflow func(temporalWorker)
 	// registerActivities attaches activity handlers and their shared dependencies to the worker.
@@ -103,6 +109,12 @@ func defaultWorkerDependencies() workerDependencies {
 		},
 		newOutboxDispatcher: func(outbox dispatch.Outbox, starter dispatch.WorkflowStarter) outboxDispatcher {
 			return dispatch.NewDispatcher(outbox, starter, dispatch.Options{})
+		},
+		newAuthorizationAdapter: func(cfg config.OpenFGAConfig) (authz.Authorizer, error) {
+			return openfga.NewAuthorizationAdapter(openfga.Config{APIURL: cfg.APIURL, StoreID: cfg.StoreID, ModelID: cfg.ModelID, APIToken: cfg.APIToken.Value(), HTTPTimeout: cfg.RequestTimeout})
+		},
+		newAuthorizationDispatcher: func(outbox authdispatch.Outbox, authorizer authz.Authorizer) outboxDispatcher {
+			return authdispatch.NewDispatcher(outbox, authorizer, authdispatch.Options{})
 		},
 		registerWorkflow: func(worker temporalWorker) {
 			worker.RegisterWorkflowWithOptions(workflows.TemplateRunWorkflow, workflow.RegisterOptions{
@@ -174,6 +186,10 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 	if err != nil {
 		return fmt.Errorf("wire activities: %w", err)
 	}
+	authorizer, err := deps.newAuthorizationAdapter(cfg.OpenFGA)
+	if err != nil {
+		return fmt.Errorf("create authorization adapter: %w", err)
+	}
 	logStore, err := deps.newLogStore(cfg.ArtifactStore, store)
 	if err != nil {
 		return fmt.Errorf("wire log store: %w", err)
@@ -193,14 +209,16 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 	deps.registerActivities(worker, store, cfg.WorkerRunRoot, logStore)
 	workflowStarter := deps.newWorkflowStarter(temporalClient, cfg.TemporalTaskQueue)
 	outbox := deps.newOutboxDispatcher(store, workflowStarter)
+	authorizationOutbox := deps.newAuthorizationDispatcher(store, authorizer)
 
 	dispatchCtx, cancelDispatch := context.WithCancel(ctx)
 	var dispatchGroup sync.WaitGroup
-	dispatchGroup.Add(1)
+	dispatchGroup.Add(2)
 	go func() {
 		defer dispatchGroup.Done()
 		outbox.Run(dispatchCtx)
 	}()
+	go func() { defer dispatchGroup.Done(); authorizationOutbox.Run(dispatchCtx) }()
 
 	workerErr := worker.Run(deps.interruptCh())
 	cancelDispatch()

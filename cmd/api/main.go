@@ -15,6 +15,7 @@ import (
 	"github.com/vishu42/tflive/internal/api"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/artifacts"
+	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
@@ -38,6 +39,7 @@ type appRepositories interface {
 	app.TemplateRevisionMetadataRepository
 	app.TemplateRevisionRepository
 	app.TemplateRunLogRepository
+	authdispatch.Outbox
 }
 
 type tokenVerifier interface {
@@ -173,6 +175,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 	}
 	service, err := deps.newService(app.Service{
 		Authorizer:               authorizer,
+		AuthorizationOutbox:      store,
 		Stacks:                   store,
 		StackTemplates:           store,
 		StackTemplateInstaller:   store,

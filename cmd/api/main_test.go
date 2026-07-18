@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
@@ -548,6 +549,17 @@ func (temporalClient *recordingTemporalClient) Close() {
 }
 
 type recordingStore struct{}
+
+func (recordingStore) ClaimAuthorizationRelationship(context.Context, time.Time, time.Time) (authdispatch.Entry, bool, error) {
+	return authdispatch.Entry{}, false, nil
+}
+func (recordingStore) CompleteAuthorizationRelationship(context.Context, string) error { return nil }
+func (recordingStore) RetryAuthorizationRelationship(context.Context, string, time.Time, string) error {
+	return nil
+}
+func (recordingStore) FailAuthorizationRelationship(context.Context, string, string) error {
+	return nil
+}
 
 func (recordingStore) CreateStack(context.Context, traits.Stack) error {
 	return nil
