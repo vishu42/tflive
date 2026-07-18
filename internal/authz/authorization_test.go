@@ -31,9 +31,13 @@ func TestCanonicalIdentifiersRejectUnsafeAndPrefixedValues(t *testing.T) {
 }
 
 func TestOnlyDirectRolesAndDerivedPermissionsAreValid(t *testing.T) {
-	owner, err := RoleFromDirectRelation("owner")
-	if err != nil || !owner.Valid() || !PermissionView.Valid() {
-		t.Fatal("known values must validate")
+	for _, role := range []Role{RoleOwner, RoleOperator, RoleApprover, RoleViewer} {
+		if !role.Valid() {
+			t.Fatalf("named direct role %q must validate", role.String())
+		}
+	}
+	if !PermissionView.Valid() {
+		t.Fatal("known permission must validate")
 	}
 	if _, err := RoleFromDirectRelation("can_view"); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("derived permission as role error = %v", err)

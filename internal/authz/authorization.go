@@ -56,6 +56,13 @@ type Role struct {
 	value string
 }
 
+var (
+	RoleOwner    = Role{value: "owner"}
+	RoleOperator = Role{value: "operator"}
+	RoleApprover = Role{value: "approver"}
+	RoleViewer   = Role{value: "viewer"}
+)
+
 // RoleFromDirectRelation returns one of the direct, writable role relations.
 func RoleFromDirectRelation(relation string) (Role, error) {
 	role := Role{value: relation}
