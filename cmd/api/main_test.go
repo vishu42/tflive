@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -168,6 +169,36 @@ func TestRunWiresTemporalDispatcher(t *testing.T) {
 	}
 	if !deps.pool.closed {
 		t.Fatal("postgres pool was not closed")
+	}
+}
+
+func TestRunWiresConfiguredTenantBoundary(t *testing.T) {
+	t.Parallel()
+
+	values := apiTestValues()
+	values["TFLIVE_TENANT_ID"] = "tenant_configured"
+	deps := newRecordingAPIDependencies(t)
+	if err := runWithDependencies(context.Background(), apiTestGetenv(values), deps.apiDependencies); err != nil {
+		t.Fatalf("runWithDependencies returned error: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_other/stacks", nil)
+	request.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+	deps.serverHandler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body.String())
+	}
+	var body struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error != "not_found" || body.Message != "resource not found" {
+		t.Fatalf("body = %#v", body)
 	}
 }
 

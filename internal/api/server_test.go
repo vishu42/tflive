@@ -16,6 +16,7 @@ import (
 )
 
 const apiKeycloakSubject = "6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91"
+const configuredTenantID = traits.TenantID("tenant_123")
 
 func authenticatedRequest(method, target string, body io.Reader) *http.Request {
 	request := httptest.NewRequest(method, target, body)
@@ -28,7 +29,7 @@ func authenticatedRequest(method, target string, body io.Reader) *http.Request {
 func TestHealthzReturnsOK(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(app.NewService(app.Service{}))
+	server := NewServer(app.NewService(app.Service{}), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 
@@ -43,7 +44,7 @@ func TestHealthzReturnsOK(t *testing.T) {
 }
 
 func TestAuthenticatedServerProtectsV1AndLeavesHealthPublic(t *testing.T) {
-	server := NewAuthenticatedServer(app.NewService(app.Service{}), apiTestVerifier{})
+	server := NewAuthenticatedServer(app.NewService(app.Service{}), apiTestVerifier{}, configuredTenantID)
 
 	for _, test := range []struct {
 		path   string
@@ -57,6 +58,125 @@ func TestAuthenticatedServerProtectsV1AndLeavesHealthPublic(t *testing.T) {
 		if response.Code != test.status {
 			t.Fatalf("%s status = %d, want %d", test.path, response.Code, test.status)
 		}
+	}
+}
+
+func TestTenantScopedRoutesRejectOtherTenantBeforeHandler(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(nil, configuredTenantID)
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "register template", method: http.MethodPost, path: "/v1/tenants/tenant_other/template-revisions"},
+		{name: "list template revisions", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-revisions"},
+		{name: "get template registration", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-registrations/registration_123"},
+		{name: "get template variables", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-revisions/revision_123/variables"},
+		{name: "create stack", method: http.MethodPost, path: "/v1/tenants/tenant_other/stacks"},
+		{name: "list stacks", method: http.MethodGet, path: "/v1/tenants/tenant_other/stacks"},
+		{name: "get stack", method: http.MethodGet, path: "/v1/tenants/tenant_other/stacks/stack_123"},
+		{name: "install template", method: http.MethodPost, path: "/v1/tenants/tenant_other/stacks/stack_123/templates"},
+		{name: "update template config", method: http.MethodPatch, path: "/v1/tenants/tenant_other/stack-templates/stack_template_123/config"},
+		{name: "upgrade template", method: http.MethodPost, path: "/v1/tenants/tenant_other/stack-templates/stack_template_123/upgrade"},
+		{name: "start run", method: http.MethodPost, path: "/v1/tenants/tenant_other/stack-templates/stack_template_123/runs"},
+		{name: "get run", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-runs/run_123"},
+		{name: "list run logs", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-runs/run_123/logs"},
+		{name: "get run log artifact", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-runs/run_123/logs/plan"},
+		{name: "approve run", method: http.MethodPost, path: "/v1/tenants/tenant_other/template-runs/run_123/approval"},
+		{name: "cancel run", method: http.MethodPost, path: "/v1/tenants/tenant_other/template-runs/run_123/cancellation"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader("{"))
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body.String())
+			}
+			var body errorResponse
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error != "not_found" || body.Message != "resource not found" {
+				t.Fatalf("body = %#v", body)
+			}
+		})
+	}
+}
+
+func TestTenantBoundaryRejectsMissingAndMalformedPaths(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(nil, configuredTenantID)
+	for _, path := range []string{
+		"/v1/tenants/stacks",
+		"/v1/tenants/-tenant/stacks",
+		"/v1/tenants/tenant%2Fother/stacks",
+	} {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want %d", path, response.Code, http.StatusNotFound)
+		}
+	}
+}
+
+func TestAuthenticatedServerEvaluatesTenantAfterAuthentication(t *testing.T) {
+	t.Parallel()
+
+	server := NewAuthenticatedServer(nil, apiTestVerifier{}, configuredTenantID)
+	path := "/v1/tenants/tenant_other/stacks"
+
+	unauthenticated := httptest.NewRecorder()
+	server.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, path, nil))
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want %d", unauthenticated.Code, http.StatusUnauthorized)
+	}
+
+	authenticatedRequest := httptest.NewRequest(http.MethodGet, path, nil)
+	authenticatedRequest.Header.Set("Authorization", "Bearer test-token")
+	authenticated := httptest.NewRecorder()
+	server.ServeHTTP(authenticated, authenticatedRequest)
+	if authenticated.Code != http.StatusNotFound {
+		t.Fatalf("authenticated status = %d, want %d", authenticated.Code, http.StatusNotFound)
+	}
+}
+
+func TestAuthenticatedServerAllowsConfiguredTenantToReachService(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stacks.list = []traits.Stack{{
+		ID:       traits.StackID("stack_123"),
+		TenantID: configuredTenantID,
+		Name:     "Acme Prod",
+		Slug:     "acme-prod",
+	}}
+	server := NewAuthenticatedServer(deps.service(), apiTestVerifier{}, configuredTenantID)
+	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
+	request.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if deps.stacks.gotListTenantID != configuredTenantID {
+		t.Fatalf("tenant list lookup = %q, want %q", deps.stacks.gotListTenantID, configuredTenantID)
+	}
+	var body []stackResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body) != 1 || body[0].ID != "stack_123" || body[0].Slug != "acme-prod" {
+		t.Fatalf("stack response = %#v", body)
 	}
 }
 
@@ -81,7 +201,7 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 	}
 	deps.runID = traits.TemplateRunID("run_123")
 	deps.now = startedAt
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -125,7 +245,7 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 func TestStartTemplateRunRejectsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service())
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -143,7 +263,7 @@ func TestStartTemplateRunRejectsInvalidJSON(t *testing.T) {
 func TestStartTemplateRunMapsInvalidCommandToBadRequest(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service())
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -163,7 +283,7 @@ func TestStartTemplateRunMapsMissingStackTemplateToNotFound(t *testing.T) {
 
 	deps := newAPITestDependencies()
 	deps.stackTemplates.getErr = app.ErrNotFound
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -185,7 +305,7 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 	deps := newAPITestDependencies()
 	deps.registrationID = traits.TemplateRegistrationID("template_registration_123")
 	deps.now = requestedAt
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -232,7 +352,7 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 func TestRegisterTemplateRejectsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service())
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -250,7 +370,7 @@ func TestRegisterTemplateRejectsInvalidJSON(t *testing.T) {
 func TestRegisterTemplateMapsInvalidCommandToBadRequest(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service())
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -272,7 +392,7 @@ func TestCreateStackCallsService(t *testing.T) {
 	deps := newAPITestDependencies()
 	deps.stackID = traits.StackID("stack_123")
 	deps.now = createdAt
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -323,7 +443,7 @@ func TestListStacksReturnsTenantStacks(t *testing.T) {
 			CreatedAt: createdAt,
 		},
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
 
@@ -373,7 +493,7 @@ func TestGetStackReturnsStackView(t *testing.T) {
 			},
 		},
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack_123", nil)
 
@@ -409,7 +529,7 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 	deps.templates.template = traits.TemplateRevision{ID: traits.TemplateRevisionID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateRevisionActive}
 	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
 	deps.stackTemplateID = traits.StackTemplateID("stack_template_a1b2c3d4")
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -459,7 +579,7 @@ func TestUpdateStackTemplateConfigCallsService(t *testing.T) {
 		Lifecycle:                 traits.StackTemplateActive,
 	}
 	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPatch,
@@ -504,7 +624,7 @@ func TestUpgradeStackTemplateCallsService(t *testing.T) {
 		Status:           traits.TemplateRevisionActive,
 	}
 	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -555,7 +675,7 @@ func TestUpgradeStackTemplateMapsMissingRequiredVariableToConflict(t *testing.T)
 		{Name: "region", Required: true},
 		{Name: "cidr_block", Required: true},
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -586,7 +706,7 @@ func TestUpgradeStackTemplateMapsSourceMismatchToConflict(t *testing.T) {
 		SourceTemplateID: traits.SourceTemplateID("source_template_db"),
 		Status:           traits.TemplateRevisionActive,
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -630,7 +750,7 @@ func TestStackTemplateEditRoutesMapMissingStackTemplateToNotFound(t *testing.T) 
 
 			deps := newAPITestDependencies()
 			deps.stackTemplates.getErr = app.ErrNotFound
-			server := NewServer(deps.service())
+			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := authenticatedRequest(tt.method, tt.path, strings.NewReader(tt.body))
 
@@ -652,7 +772,7 @@ func TestGetTemplateRegistrationReturnsRegistration(t *testing.T) {
 		TenantID: traits.TenantID("tenant_123"),
 		Status:   traits.TemplateRegistrationCompleted,
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -698,7 +818,7 @@ func TestListTemplateRevisionsReturnsTenantTemplateRevisions(t *testing.T) {
 			CreatedAt:         createdAt,
 		},
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/template-revisions", nil)
 
@@ -735,7 +855,7 @@ func TestGetTemplateRevisionVariablesReturnsVariables(t *testing.T) {
 			Required:           true,
 		},
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -775,7 +895,7 @@ func TestGetTemplateRunReturnsRun(t *testing.T) {
 		Operation:       traits.OperationPlan,
 		Status:          traits.TemplateRunCompleted,
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -822,7 +942,7 @@ func TestGetTemplateRunLogReturnsPlainText(t *testing.T) {
 		Phase:     "plan",
 		ObjectKey: "tenants/tenant_123/runs/run_123/logs/plan.log",
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -866,7 +986,7 @@ func TestListTemplateRunLogsReturnsMetadata(t *testing.T) {
 			UploadedAt:  uploadedAt,
 		},
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -906,7 +1026,7 @@ func TestListTemplateRunLogsReturnsEmptyArray(t *testing.T) {
 		ID:       traits.TemplateRunID("run_123"),
 		TenantID: traits.TenantID("tenant_123"),
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -927,7 +1047,7 @@ func TestListTemplateRunLogsReturnsEmptyArray(t *testing.T) {
 func TestGetTemplateRunLogMapsInvalidPhaseToBadRequest(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service())
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -947,7 +1067,7 @@ func TestGetTemplateRunMapsMissingRunToNotFound(t *testing.T) {
 
 	deps := newAPITestDependencies()
 	deps.templateRuns.getErr = app.ErrNotFound
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -977,7 +1097,7 @@ func TestGetTemplateRunLogMapsMissingLogToNotFound(t *testing.T) {
 		Phase:     "plan",
 		ObjectKey: "tenants/tenant_123/runs/run_123/logs/plan.log",
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -996,7 +1116,7 @@ func TestApproveRunCallsService(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -1030,7 +1150,7 @@ func TestCancelRunCallsService(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -1104,7 +1224,7 @@ func TestRunDecisionRequestsRejectTopLevelNull(t *testing.T) {
 			t.Parallel()
 
 			deps := newAPITestDependencies()
-			server := NewServer(deps.service())
+			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := authenticatedRequest(http.MethodPost, test.path, strings.NewReader(`null`))
 
@@ -1154,7 +1274,7 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 
 			deps := newAPITestDependencies()
 			tt.configure(deps)
-			server := NewServer(deps.service())
+			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := authenticatedRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
 
@@ -1218,7 +1338,7 @@ func TestMutationRequestsRejectIdentityOverrides(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			deps := newAPITestDependencies()
-			server := NewServer(deps.service())
+			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := authenticatedRequest(http.MethodPost, test.path, strings.NewReader(test.body))
 
@@ -1270,7 +1390,7 @@ func TestMutationRequestsRejectMissingPrincipal(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -1298,7 +1418,7 @@ func TestMutationRequestsRejectMissingPrincipal(t *testing.T) {
 func TestUnknownRouteReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service())
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/nope", nil)
 

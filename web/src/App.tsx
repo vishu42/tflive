@@ -33,6 +33,7 @@ import {
   upgradeStackTemplate
 } from "./api/client";
 import type { Stack, StackTemplate, TemplateRevision, TemplateRegistration, TemplateRun, TemplateRunLog, TemplateVariable } from "./api/types";
+import { tenantID } from "./config";
 import { isTerminalRegistrationStatus, isTerminalRunStatus, nextPollDelayMs } from "./polling";
 import {
   canUpgradeStackTemplate,
@@ -52,7 +53,6 @@ import {
 } from "./workflowState";
 
 export default function App() {
-  const [tenantID, setTenantID] = useState("tenant_123");
   const [repoOwner, setRepoOwner] = useState("hashicorp");
   const [repoName, setRepoName] = useState("");
   const [sourceRef, setSourceRef] = useState("main");
@@ -558,10 +558,10 @@ export default function App() {
             <h1>Terraform workflow console</h1>
           </div>
           <div className="runtime-fields">
-            <label>
-              Tenant
-              <input value={tenantID} onChange={(event) => setTenantID(event.target.value)} />
-            </label>
+            <div className="runtime-field">
+              <span>Tenant</span>
+              <span className="runtime-value" data-testid="tenant-context">{tenantID}</span>
+            </div>
           </div>
         </header>
 
