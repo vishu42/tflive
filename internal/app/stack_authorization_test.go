@@ -46,6 +46,9 @@ func TestCreateStackAssignsConfirmedOwner(t *testing.T) {
 	if grant.Subject().String() != "user:user_123" || grant.Stack().String() != "stack:stack_123" || grant.Role() != authz.RoleOwner {
 		t.Fatalf("grant = %#v", grant)
 	}
+	if stacks.ownerGrant != grant {
+		t.Fatalf("persisted owner intent = %#v, want %#v", stacks.ownerGrant, grant)
+	}
 }
 
 func TestCreateStackAllowsPlatformAdmin(t *testing.T) {
@@ -99,11 +102,18 @@ func TestCreateStackRejectsInvalidOpenFGASubjectBeforePersistence(t *testing.T) 
 }
 
 type authorizationStackRepository struct {
-	calls int
+	calls      int
+	ownerGrant authz.Grant
 }
 
 func (repository *authorizationStackRepository) CreateStack(context.Context, traits.Stack) error {
 	repository.calls++
+	return nil
+}
+
+func (repository *authorizationStackRepository) CreateStackWithOwnerIntent(_ context.Context, _ traits.Stack, grant authz.Grant) error {
+	repository.calls++
+	repository.ownerGrant = grant
 	return nil
 }
 

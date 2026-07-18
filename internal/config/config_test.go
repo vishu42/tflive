@@ -79,6 +79,12 @@ func TestLoadAPIConfigDefaultsTemporalTaskQueue(t *testing.T) {
 			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
 		case "TEMPORAL_ADDRESS":
 			return "localhost:7233"
+		case "OPENFGA_API_URL":
+			return "http://localhost:8080"
+		case "OPENFGA_STORE_ID":
+			return "store-id"
+		case "OPENFGA_MODEL_ID":
+			return "model-id"
 		default:
 			return ""
 		}
@@ -166,6 +172,12 @@ func TestLoadWorkerConfigReadsWorkerSettings(t *testing.T) {
 			return " secret-key "
 		case "S3_FORCE_PATH_STYLE":
 			return " true "
+		case "OPENFGA_API_URL":
+			return "http://localhost:8080"
+		case "OPENFGA_STORE_ID":
+			return "store-id"
+		case "OPENFGA_MODEL_ID":
+			return "model-id"
 		default:
 			return ""
 		}
@@ -201,6 +213,12 @@ func TestLoadWorkerConfigDefaultsTemporalTaskQueue(t *testing.T) {
 			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
 		case "TEMPORAL_ADDRESS":
 			return "localhost:7233"
+		case "OPENFGA_API_URL":
+			return "http://localhost:8080"
+		case "OPENFGA_STORE_ID":
+			return "store-id"
+		case "OPENFGA_MODEL_ID":
+			return "model-id"
 		default:
 			return ""
 		}

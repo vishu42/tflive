@@ -113,6 +113,32 @@ func TestWorkflowOutboxMigrationDefinesDurablePendingQueue(t *testing.T) {
 	}
 }
 
+func TestAuthorizationOutboxMigrationDefinesDurablePendingQueue(t *testing.T) {
+	t.Parallel()
+
+	migration, err := migrationFiles.ReadFile("migrations/0008_authorization_outbox.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	sql := strings.ToLower(string(migration))
+
+	for _, snippet := range []string{
+		"create table authorization_outbox",
+		"operation text not null check (operation in ('grant', 'revoke'))",
+		"subject text not null",
+		"stack text not null",
+		"role text not null check (role in ('owner', 'operator', 'approver', 'viewer'))",
+		"claimed_until timestamptz",
+		"processed_at timestamptz",
+		"failed_at timestamptz",
+		"where processed_at is null and failed_at is null",
+	} {
+		if !strings.Contains(sql, snippet) {
+			t.Fatalf("migration 0008 is missing durable outbox snippet %q", snippet)
+		}
+	}
+}
+
 func TestTemplateRevisionTablesUseRevisionNames(t *testing.T) {
 	t.Parallel()
 

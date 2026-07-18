@@ -33,6 +33,7 @@ type WorkerConfig struct {
 	TemporalTaskQueue string
 	WorkerRunRoot     string
 	ArtifactStore     ArtifactStoreConfig
+	OpenFGA           OpenFGAConfig
 }
 
 type ArtifactStoreKind string
@@ -98,6 +99,10 @@ func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
 }
 
 func LoadWorkerConfig(getenv func(string) string) (WorkerConfig, error) {
+	openFGA, err := loadOpenFGAConfig(getenv)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
 	artifactStore, err := loadArtifactStoreConfig(getenv)
 	if err != nil {
 		return WorkerConfig{}, err
@@ -110,6 +115,7 @@ func LoadWorkerConfig(getenv func(string) string) (WorkerConfig, error) {
 		TemporalTaskQueue: strings.TrimSpace(getenv("TEMPORAL_TASK_QUEUE")),
 		WorkerRunRoot:     strings.TrimSpace(getenv("WORKER_RUN_ROOT")),
 		ArtifactStore:     artifactStore,
+		OpenFGA:           openFGA,
 	}
 	if cfg.TemporalTaskQueue == "" {
 		cfg.TemporalTaskQueue = DefaultTemporalTaskQueue

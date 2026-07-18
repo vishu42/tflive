@@ -11,6 +11,8 @@ import (
 
 	"github.com/vishu42/tflive/internal/activities"
 	"github.com/vishu42/tflive/internal/artifacts"
+	"github.com/vishu42/tflive/internal/authdispatch"
+	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/dispatch"
 	"github.com/vishu42/tflive/internal/temporal"
@@ -135,6 +137,12 @@ func TestRunUsesDefaultTemporalTaskQueue(t *testing.T) {
 			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
 		case "TEMPORAL_ADDRESS":
 			return "localhost:7233"
+		case "OPENFGA_API_URL":
+			return "http://localhost:8080"
+		case "OPENFGA_STORE_ID":
+			return "store_123"
+		case "OPENFGA_MODEL_ID":
+			return "model_123"
 		default:
 			return ""
 		}
@@ -249,6 +257,12 @@ func workerTestEnv(key string) string {
 		return "filesystem"
 	case "ARTIFACT_STORE_FILESYSTEM_ROOT":
 		return "/tmp/tflive-worker-artifacts"
+	case "OPENFGA_API_URL":
+		return "http://localhost:8080"
+	case "OPENFGA_STORE_ID":
+		return "store_123"
+	case "OPENFGA_MODEL_ID":
+		return "model_123"
 	default:
 		return ""
 	}
@@ -335,6 +349,8 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			}
 			return deps.outboxDispatcher
 		},
+		newAuthorizationAdapter:    func(config.OpenFGAConfig) (authz.Authorizer, error) { return &recordingWorkerAuthorizer{}, nil },
+		newAuthorizationDispatcher: func(authdispatch.Outbox, authz.Authorizer) outboxDispatcher { return &recordingOutboxDispatcher{} },
 		registerWorkflow: func(worker temporalWorker) {
 			if worker != deps.worker {
 				t.Fatalf("registerWorkflow worker = %p, want %p", worker, deps.worker)
@@ -417,6 +433,19 @@ func (pool *recordingWorkerPostgresPool) Close() {
 
 type recordingWorkerStore struct{}
 
+func (store *recordingWorkerStore) ClaimAuthorizationRelationship(context.Context, time.Time, time.Time) (authdispatch.Entry, bool, error) {
+	return authdispatch.Entry{}, false, nil
+}
+func (store *recordingWorkerStore) CompleteAuthorizationRelationship(context.Context, string) error {
+	return nil
+}
+func (store *recordingWorkerStore) RetryAuthorizationRelationship(context.Context, string, time.Time, string) error {
+	return nil
+}
+func (store *recordingWorkerStore) FailAuthorizationRelationship(context.Context, string, string) error {
+	return nil
+}
+
 func (store *recordingWorkerStore) RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error {
 	return nil
 }
@@ -446,6 +475,27 @@ func (store *recordingWorkerStore) RetryTemplateRun(context.Context, string, tim
 }
 
 type recordingWorkflowStarter struct{}
+
+type recordingWorkerAuthorizer struct{}
+
+func (*recordingWorkerAuthorizer) Check(context.Context, authz.CheckRequest) (authz.CheckResult, error) {
+	return authz.CheckResult{}, nil
+}
+func (*recordingWorkerAuthorizer) BatchCheck(context.Context, authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
+	return authz.BatchCheckResult{}, nil
+}
+func (*recordingWorkerAuthorizer) ListAccessibleStacks(context.Context, authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
+	return authz.ListAccessibleStacksResult{}, nil
+}
+func (*recordingWorkerAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
+	return authz.ListGrantsResult{}, nil
+}
+func (*recordingWorkerAuthorizer) WriteRelationships(context.Context, authz.Mutation) error {
+	return nil
+}
+func (*recordingWorkerAuthorizer) DeleteRelationships(context.Context, authz.Mutation) error {
+	return nil
+}
 
 func (*recordingWorkflowStarter) StartTemplateRun(context.Context, traits.TemplateRunWorkflowInput) error {
 	return nil

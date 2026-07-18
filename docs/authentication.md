@@ -246,8 +246,11 @@ administrator.
   `stack-creator` or `platform-admin` realm role. After Postgres persists the
   stack, the API writes and higher-consistency-confirms an OpenFGA `owner`
   relationship for that user's immutable subject. An ownership-write failure
-  returns `503 authorization_unavailable` after persistence; AUTH-012 will add
-  durable recovery for this partial state.
+  returns `503 authorization_unavailable` after persistence. The initial owner
+  intent is recorded atomically with the stack in `authorization_outbox`; the
+  worker retries confirmed OpenFGA delivery until it succeeds. Operators can
+  inspect pending rows using `attempts`, `available_at`, and the sanitized
+  `last_error`. The outbox never stores tokens or OpenFGA request bodies.
 - The API always sends the explicit configured OpenFGA store and immutable
   model IDs; it never discovers a latest model at runtime.
 - Direct role writes and deletes can request higher-consistency confirmation. A

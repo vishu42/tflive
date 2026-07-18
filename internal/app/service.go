@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/traits"
@@ -57,6 +58,10 @@ type StackRepository interface {
 	GetStack(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error)
 	GetStackWithTemplates(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (StackView, error)
 	ListStacks(ctx context.Context, tenantID traits.TenantID) ([]traits.Stack, error)
+}
+
+type stackOwnerIntentRepository interface {
+	CreateStackWithOwnerIntent(context.Context, traits.Stack, authz.Grant) error
 }
 
 // StackTemplateRepository reads installed template state for use cases.
@@ -147,6 +152,7 @@ type Clock interface {
 // Service owns app use cases and the dependencies wired by cmd packages.
 type Service struct {
 	Authorizer               authz.Authorizer
+	AuthorizationOutbox      authdispatch.Outbox
 	Stacks                   StackRepository
 	StackTemplates           StackTemplateRepository
 	TemplateRuns             TemplateRunRepository
@@ -396,14 +402,28 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		return traits.Stack{}, fmt.Errorf("create owner mutation: %w", err)
 	}
 
-	if err := service.Stacks.CreateStack(ctx, stack); err != nil {
+	if repository, ok := service.Stacks.(stackOwnerIntentRepository); ok {
+		err = repository.CreateStackWithOwnerIntent(ctx, stack, grant)
+	} else {
+		err = service.Stacks.CreateStack(ctx, stack)
+	}
+	if err != nil {
 		return traits.Stack{}, fmt.Errorf("create stack: %w", err)
 	}
 	if err := service.Authorizer.WriteRelationships(ctx, mutation); err != nil {
 		return traits.Stack{}, fmt.Errorf("assign stack owner: %w", err)
 	}
+	if service.AuthorizationOutbox != nil {
+		if err := service.AuthorizationOutbox.CompleteAuthorizationRelationship(ctx, authorizationOutboxID("grant", grant)); err != nil {
+			return traits.Stack{}, fmt.Errorf("complete stack owner delivery: %w", err)
+		}
+	}
 
 	return stack, nil
+}
+
+func authorizationOutboxID(operation string, grant authz.Grant) string {
+	return operation + "/" + grant.Subject().String() + "/" + grant.Stack().String() + "/" + grant.Role().String()
 }
 
 // AddTemplateToStack validates one template install and persists the tenant-owned stack template.
