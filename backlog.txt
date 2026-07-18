@@ -1,2 +1,3 @@
 - api still doing dual-write for template-sync
 - no logs persisting in object storage
+- evaluate moving global authorization from Keycloak realm roles to OpenFGA through a tenant or platform object; update the model, provisioning, and creation permission checks
