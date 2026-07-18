@@ -216,13 +216,12 @@ func (adapter *AuthorizationAdapter) WriteRelationships(ctx context.Context, mut
 		return err
 	}
 	if err := adapter.write(ctx, grants, nil); err != nil {
-		original := adapter.classify(err)
 		matches, confirmErr := adapter.confirm(ctx, grants, true)
 		if confirmErr != nil {
 			return confirmErr
 		}
 		if !matches {
-			return original
+			return fmt.Errorf("%w: grants not visible after rejected write", authz.ErrWriteUnconfirmed)
 		}
 	}
 	if !mutation.Confirm() {
@@ -246,13 +245,12 @@ func (adapter *AuthorizationAdapter) DeleteRelationships(ctx context.Context, mu
 		return err
 	}
 	if err := adapter.write(ctx, nil, grants); err != nil {
-		original := adapter.classify(err)
 		matches, confirmErr := adapter.confirm(ctx, grants, false)
 		if confirmErr != nil {
 			return confirmErr
 		}
 		if !matches {
-			return original
+			return fmt.Errorf("%w: grants still visible after rejected delete", authz.ErrWriteUnconfirmed)
 		}
 	}
 	if !mutation.Confirm() {

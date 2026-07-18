@@ -263,6 +263,22 @@ func TestAuthorizationAdapterRelationshipDeletesAreIdempotent(t *testing.T) {
 	}
 }
 
+func TestAuthorizationAdapterRejectedWriteWithUnconfirmedStateFailsClosed(t *testing.T) {
+	adapter := adapterForHandler(t, rejectedMutationThenConfirmedHandler(t, true, false))
+	err := adapter.WriteRelationships(context.Background(), mutationForGrant(t, ownerGrant(t), false))
+	if !errors.Is(err, authz.ErrWriteUnconfirmed) {
+		t.Fatalf("WriteRelationships() error = %v, want ErrWriteUnconfirmed", err)
+	}
+}
+
+func TestAuthorizationAdapterRejectedDeleteWithUnconfirmedStateFailsClosed(t *testing.T) {
+	adapter := adapterForHandler(t, rejectedMutationThenConfirmedHandler(t, false, true))
+	err := adapter.DeleteRelationships(context.Background(), mutationForGrant(t, ownerGrant(t), false))
+	if !errors.Is(err, authz.ErrWriteUnconfirmed) {
+		t.Fatalf("DeleteRelationships() error = %v, want ErrWriteUnconfirmed", err)
+	}
+}
+
 func TestAuthorizationAdapterConfirmationUsesHigherConsistency(t *testing.T) {
 	adapter := adapterForHandler(t, confirmedWriteHandler(t, true))
 	if err := adapter.WriteRelationships(context.Background(), mutationForGrant(t, ownerGrant(t), true)); err != nil {
@@ -360,6 +376,25 @@ func duplicateWriteThenConfirmedHandler(t *testing.T, expected bool) http.Handle
 			assertRelationshipConfirmation(t, r)
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprintf(w, `{"result":{"0":{"allowed":%t}}}`, expected)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}
+}
+
+func rejectedMutationThenConfirmedHandler(t *testing.T, expectedWrite, confirmed bool) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/stores/store-id/write":
+			assertRelationshipWrite(t, r, expectedWrite)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			fmt.Fprint(w, `{}`)
+		case "/stores/store-id/batch-check":
+			assertRelationshipConfirmation(t, r)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"result":{"0":{"allowed":%t}}}`, confirmed)
 		default:
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}
