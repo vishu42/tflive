@@ -87,6 +87,10 @@ func TestClientBoundsAndRedactsServerErrors(t *testing.T) {
 	if !strings.Contains(err.Error(), "[REDACTED]") || len(err.Error()) > 70000 {
 		t.Fatalf("error was not bounded and redacted: length=%d error=%v", len(err.Error()), err)
 	}
+	var statusError *HTTPStatusError
+	if !errors.As(err, &statusError) || statusError.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("error = %T %[1]v, want HTTPStatusError", err)
+	}
 }
 
 func TestClientBoundsErrorsAfterRedactionExpansion(t *testing.T) {

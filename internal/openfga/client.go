@@ -16,6 +16,20 @@ import (
 
 const maxResponseBody = 64 << 10
 
+var errMalformedHTTPResponse = fmt.Errorf("malformed HTTP response")
+
+// HTTPStatusError reports a non-accepted OpenFGA HTTP response. Its body has
+// already been redacted and bounded by Client.doJSON.
+type HTTPStatusError struct {
+	StatusCode int
+	Status     string
+	Body       string
+}
+
+func (err *HTTPStatusError) Error() string {
+	return fmt.Sprintf("unexpected HTTP status %s: %s", err.Status, err.Body)
+}
+
 type Store struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -245,18 +259,18 @@ func (client *Client) doJSON(ctx context.Context, method string, endpoint *url.U
 		if truncated {
 			safe += " [TRUNCATED]"
 		}
-		return fmt.Errorf("unexpected HTTP status %s: %s", response.Status, strings.TrimSpace(safe))
+		return &HTTPStatusError{StatusCode: response.StatusCode, Status: response.Status, Body: strings.TrimSpace(safe)}
 	}
 	if truncated {
-		return fmt.Errorf("response exceeds %s bytes", strconv.Itoa(maxResponseBody))
+		return fmt.Errorf("%w: response exceeds %s bytes", errMalformedHTTPResponse, strconv.Itoa(maxResponseBody))
 	}
 	if output != nil {
 		mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 		if err != nil || mediaType != "application/json" {
-			return fmt.Errorf("response content type must be application/json")
+			return fmt.Errorf("%w: response content type must be application/json", errMalformedHTTPResponse)
 		}
 		if err := json.Unmarshal(data, output); err != nil {
-			return fmt.Errorf("decode response: %w", err)
+			return fmt.Errorf("%w: decode response: %w", errMalformedHTTPResponse, err)
 		}
 	}
 	return nil
