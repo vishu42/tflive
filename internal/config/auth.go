@@ -119,47 +119,18 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 		return SecurityConfig{}, authConfigError("OIDC_AUDIENCE must not contain whitespace or control characters")
 	}
 
-	openFGAURL, err := parseConfigURL("OPENFGA_API_URL", getenv("OPENFGA_API_URL"))
+	openFGA, err := loadOpenFGAConfig(getenv)
 	if err != nil {
 		return SecurityConfig{}, err
 	}
-	storeID := strings.TrimSpace(getenv("OPENFGA_STORE_ID"))
-	if storeID == "" {
-		return SecurityConfig{}, authConfigError("OPENFGA_STORE_ID is required")
+	if mode == RuntimeProduction && openFGA.APIURL.Scheme != "https" {
+		return SecurityConfig{}, authConfigError("OPENFGA_API_URL must use HTTPS in production")
 	}
-	if !safeOpaqueValue(storeID) {
-		return SecurityConfig{}, authConfigError("OPENFGA_STORE_ID must not contain whitespace or control characters")
-	}
-	modelID := strings.TrimSpace(getenv("OPENFGA_MODEL_ID"))
-	if modelID == "" {
-		return SecurityConfig{}, authConfigError("OPENFGA_MODEL_ID is required")
-	}
-	if !safeOpaqueValue(modelID) {
-		return SecurityConfig{}, authConfigError("OPENFGA_MODEL_ID must not contain whitespace or control characters")
-	}
-
-	tokenValue := getenv("OPENFGA_API_TOKEN")
-	if tokenValue != "" && !safeOpaqueValue(tokenValue) {
-		return SecurityConfig{}, authConfigError("OPENFGA_API_TOKEN must not contain whitespace or control characters")
-	}
-	token := newSecret(tokenValue)
-
-	timeout := DefaultOpenFGAHTTPTimeout
-	if rawTimeout := strings.TrimSpace(getenv("OPENFGA_HTTP_TIMEOUT")); rawTimeout != "" {
-		timeout, err = time.ParseDuration(rawTimeout)
-		if err != nil || timeout <= 0 {
-			return SecurityConfig{}, authConfigError("OPENFGA_HTTP_TIMEOUT must be a positive duration")
-		}
-	}
-
 	if mode == RuntimeProduction {
 		if issuerURL.Scheme != "https" {
 			return SecurityConfig{}, authConfigError("OIDC_ISSUER_URL must use HTTPS in production")
 		}
-		if openFGAURL.Scheme != "https" {
-			return SecurityConfig{}, authConfigError("OPENFGA_API_URL must use HTTPS in production")
-		}
-		if token.Empty() {
+		if openFGA.APIToken.Empty() {
 			return SecurityConfig{}, authConfigError("OPENFGA_API_TOKEN is required in production")
 		}
 	}
@@ -171,14 +142,41 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 			IssuerURL: issuerURL,
 			Audience:  audience,
 		},
-		OpenFGA: OpenFGAConfig{
-			APIURL:         openFGAURL,
-			StoreID:        storeID,
-			ModelID:        modelID,
-			APIToken:       token,
-			RequestTimeout: timeout,
-		},
+		OpenFGA: openFGA,
 	}, nil
+}
+
+func loadOpenFGAConfig(getenv func(string) string) (OpenFGAConfig, error) {
+	apiURL, err := parseConfigURL("OPENFGA_API_URL", getenv("OPENFGA_API_URL"))
+	if err != nil {
+		return OpenFGAConfig{}, err
+	}
+	storeID := strings.TrimSpace(getenv("OPENFGA_STORE_ID"))
+	if storeID == "" {
+		return OpenFGAConfig{}, authConfigError("OPENFGA_STORE_ID is required")
+	}
+	if !safeOpaqueValue(storeID) {
+		return OpenFGAConfig{}, authConfigError("OPENFGA_STORE_ID must not contain whitespace or control characters")
+	}
+	modelID := strings.TrimSpace(getenv("OPENFGA_MODEL_ID"))
+	if modelID == "" {
+		return OpenFGAConfig{}, authConfigError("OPENFGA_MODEL_ID is required")
+	}
+	if !safeOpaqueValue(modelID) {
+		return OpenFGAConfig{}, authConfigError("OPENFGA_MODEL_ID must not contain whitespace or control characters")
+	}
+	token := newSecret(getenv("OPENFGA_API_TOKEN"))
+	if !token.Empty() && !safeOpaqueValue(token.Value()) {
+		return OpenFGAConfig{}, authConfigError("OPENFGA_API_TOKEN must not contain whitespace or control characters")
+	}
+	timeout := DefaultOpenFGAHTTPTimeout
+	if raw := strings.TrimSpace(getenv("OPENFGA_HTTP_TIMEOUT")); raw != "" {
+		timeout, err = time.ParseDuration(raw)
+		if err != nil || timeout <= 0 {
+			return OpenFGAConfig{}, authConfigError("OPENFGA_HTTP_TIMEOUT must be a positive duration")
+		}
+	}
+	return OpenFGAConfig{APIURL: apiURL, StoreID: storeID, ModelID: modelID, APIToken: token, RequestTimeout: timeout}, nil
 }
 
 func parseRuntimeMode(raw string) (RuntimeMode, error) {
