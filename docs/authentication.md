@@ -242,6 +242,12 @@ administrator.
 
 ### Runtime Authorization Behavior
 
+- Stack creation requires the authenticated user to have the Keycloak
+  `stack-creator` or `platform-admin` realm role. After Postgres persists the
+  stack, the API writes and higher-consistency-confirms an OpenFGA `owner`
+  relationship for that user's immutable subject. An ownership-write failure
+  returns `503 authorization_unavailable` after persistence; AUTH-012 will add
+  durable recovery for this partial state.
 - The API always sends the explicit configured OpenFGA store and immutable
   model IDs; it never discovers a latest model at runtime.
 - Direct role writes and deletes can request higher-consistency confirmation. A

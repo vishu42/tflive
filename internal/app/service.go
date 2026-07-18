@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/authn"
+	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -36,6 +37,18 @@ func authenticatedActor(ctx context.Context) (traits.UserID, error) {
 		return "", ErrUnauthenticated
 	}
 	return traits.UserID(principal.Subject), nil
+}
+
+// ErrForbidden indicates an authenticated actor lacks permission for an operation.
+var ErrForbidden = errors.New("forbidden")
+
+func canCreateStack(principal authn.Principal) bool {
+	for _, role := range principal.RealmRoles {
+		if role == "platform-admin" || role == "stack-creator" {
+			return true
+		}
+	}
+	return false
 }
 
 // StackRepository persists and reads tenant-owned stacks.
@@ -133,6 +146,7 @@ type Clock interface {
 
 // Service owns app use cases and the dependencies wired by cmd packages.
 type Service struct {
+	Authorizer               authz.Authorizer
 	Stacks                   StackRepository
 	StackTemplates           StackTemplateRepository
 	TemplateRuns             TemplateRunRepository
@@ -335,12 +349,23 @@ func (service *Service) RegisterTemplate(ctx context.Context, command RegisterTe
 
 // CreateStack creates a tenant-owned infrastructure stack.
 func (service *Service) CreateStack(ctx context.Context, command CreateStackCommand) (traits.Stack, error) {
-	actor, err := authenticatedActor(ctx)
-	if err != nil {
-		return traits.Stack{}, err
+	principal, ok := authn.PrincipalFromContext(ctx)
+	if !ok || principal.Subject == "" {
+		return traits.Stack{}, ErrUnauthenticated
 	}
+	if !canCreateStack(principal) {
+		return traits.Stack{}, ErrForbidden
+	}
+	actor := traits.UserID(principal.Subject)
 	if err := validateCreateStackCommand(command); err != nil {
 		return traits.Stack{}, err
+	}
+	if service.Authorizer == nil {
+		return traits.Stack{}, errors.New("authorization not configured")
+	}
+	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
+	if err != nil {
+		return traits.Stack{}, fmt.Errorf("create owner subject: %w", err)
 	}
 
 	slug := strings.TrimSpace(command.Slug)
@@ -358,9 +383,24 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		CreatedBy:            actor,
 		CreatedAt:            service.Clock.Now(),
 	}
+	authorizedStack, err := authz.StackFromID(string(stack.ID))
+	if err != nil {
+		return traits.Stack{}, fmt.Errorf("create owner stack: %w", err)
+	}
+	grant, err := authz.NewGrant(subject, authorizedStack, authz.RoleOwner)
+	if err != nil {
+		return traits.Stack{}, fmt.Errorf("create owner grant: %w", err)
+	}
+	mutation, err := authz.NewMutation([]authz.Grant{grant}, true)
+	if err != nil {
+		return traits.Stack{}, fmt.Errorf("create owner mutation: %w", err)
+	}
 
 	if err := service.Stacks.CreateStack(ctx, stack); err != nil {
 		return traits.Stack{}, fmt.Errorf("create stack: %w", err)
+	}
+	if err := service.Authorizer.WriteRelationships(ctx, mutation); err != nil {
+		return traits.Stack{}, fmt.Errorf("assign stack owner: %w", err)
 	}
 
 	return stack, nil

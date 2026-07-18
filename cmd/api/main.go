@@ -16,7 +16,9 @@ import (
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/artifacts"
 	"github.com/vishu42/tflive/internal/authn"
+	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/temporal"
 	"go.temporal.io/sdk/client"
@@ -52,6 +54,7 @@ type apiDependencies struct {
 	newLogReader    func(config.ArtifactStoreConfig) (app.TemplateRunLogReader, error)
 	newService      func(app.Service) (*app.Service, error)
 	newVerifier     func(context.Context, authn.OIDCVerifierConfig) (tokenVerifier, error)
+	newAuthorizer   func(openfga.Config) (authz.Authorizer, error)
 	listenAndServe  func(context.Context, string, http.Handler) error
 }
 
@@ -102,6 +105,7 @@ func defaultAPIDependencies() apiDependencies {
 		newVerifier: func(ctx context.Context, cfg authn.OIDCVerifierConfig) (tokenVerifier, error) {
 			return authn.NewOIDCVerifier(ctx, cfg)
 		},
+		newAuthorizer:  func(cfg openfga.Config) (authz.Authorizer, error) { return openfga.NewAuthorizationAdapter(cfg) },
 		listenAndServe: listenAndServe,
 	}
 }
@@ -124,6 +128,15 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("create token verifier: %w", err)
 	}
 	defer verifier.Close(context.Background())
+
+	authorizer, err := deps.newAuthorizer(openfga.Config{
+		APIURL: cfg.Security.OpenFGA.APIURL, StoreID: cfg.Security.OpenFGA.StoreID,
+		ModelID: cfg.Security.OpenFGA.ModelID, APIToken: cfg.Security.OpenFGA.APIToken.Value(),
+		HTTPTimeout: cfg.Security.OpenFGA.RequestTimeout,
+	})
+	if err != nil {
+		return fmt.Errorf("create authorization adapter: %w", err)
+	}
 
 	pool, err := deps.newPostgresPool(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -159,6 +172,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire log reader: %w", err)
 	}
 	service, err := deps.newService(app.Service{
+		Authorizer:               authorizer,
 		Stacks:                   store,
 		StackTemplates:           store,
 		StackTemplateInstaller:   store,

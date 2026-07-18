@@ -16,7 +16,9 @@ import (
 
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
+	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/temporal"
 	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/client"
@@ -124,6 +126,12 @@ func TestRunWiresTemporalDispatcher(t *testing.T) {
 	}
 	if deps.service.Workflows != deps.dispatcher {
 		t.Fatal("service Workflows is not the dispatcher")
+	}
+	if deps.service.Authorizer != deps.authorizer {
+		t.Fatal("service Authorizer is not the configured OpenFGA adapter")
+	}
+	if deps.openFGAConfig.APIURL.String() != "http://localhost:8080" || deps.openFGAConfig.StoreID != "store-id" || deps.openFGAConfig.ModelID != "model-id" || deps.openFGAConfig.HTTPTimeout != 10*time.Second {
+		t.Fatalf("OpenFGA config = %#v", deps.openFGAConfig)
 	}
 	if deps.service.Stacks != deps.store {
 		t.Fatal("service Stacks is not the store")
@@ -404,6 +412,8 @@ type recordingAPIDependencies struct {
 	dialErr             error
 	serviceErr          error
 	serverErr           error
+	openFGAConfig       openfga.Config
+	authorizer          authz.Authorizer
 }
 
 func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
@@ -461,16 +471,38 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 		newVerifier: func(context.Context, authn.OIDCVerifierConfig) (tokenVerifier, error) {
 			return testTokenVerifier{}, nil
 		},
+		newAuthorizer: func(cfg openfga.Config) (authz.Authorizer, error) {
+			deps.openFGAConfig = cfg
+			return deps.authorizer, nil
+		},
 		listenAndServe: func(_ context.Context, address string, handler http.Handler) error {
 			deps.serverAddress = address
 			deps.serverHandler = handler
 			return deps.serverErr
 		},
 	}
+	deps.authorizer = testAuthorizer{}
 	return deps
 }
 
 type testTokenVerifier struct{}
+
+type testAuthorizer struct{}
+
+func (testAuthorizer) Check(context.Context, authz.CheckRequest) (authz.CheckResult, error) {
+	return authz.CheckResult{}, nil
+}
+func (testAuthorizer) BatchCheck(context.Context, authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
+	return authz.BatchCheckResult{}, nil
+}
+func (testAuthorizer) ListAccessibleStacks(context.Context, authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
+	return authz.ListAccessibleStacksResult{}, nil
+}
+func (testAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
+	return authz.ListGrantsResult{}, nil
+}
+func (testAuthorizer) WriteRelationships(context.Context, authz.Mutation) error  { return nil }
+func (testAuthorizer) DeleteRelationships(context.Context, authz.Mutation) error { return nil }
 
 func (testTokenVerifier) Verify(context.Context, string) (authn.VerifiedToken, error) {
 	return authn.VerifiedToken{Subject: "test-user"}, nil

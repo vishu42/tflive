@@ -10,6 +10,7 @@ import (
 
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
+	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -581,6 +582,8 @@ func writeAppError(response http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, app.ErrUnauthenticated):
 		writeError(response, http.StatusUnauthorized, "unauthorized", "authentication required")
+	case errors.Is(err, app.ErrForbidden):
+		writeError(response, http.StatusForbidden, "forbidden", "forbidden")
 	case errors.Is(err, app.ErrInvalidCommand):
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, app.ErrNotFound):
@@ -594,6 +597,10 @@ func writeAppError(response http.ResponseWriter, err error) {
 		errors.Is(err, app.ErrStackTemplateUpgradeInvalid):
 		writeError(response, http.StatusConflict, "conflict", err.Error())
 	default:
+		if status, code, ok := authz.HTTPStatus(err); ok {
+			writeError(response, status, code, "authorization service unavailable")
+			return
+		}
 		writeError(response, http.StatusInternalServerError, "internal_error", "internal server error")
 	}
 }
