@@ -16,6 +16,24 @@ import (
 
 const maxResponseBody = 64 << 10
 
+var (
+	errMalformedHTTPResponse = fmt.Errorf("malformed HTTP response")
+	errHTTPTransport         = fmt.Errorf("OpenFGA HTTP transport failure")
+	errHTTPBodyRead          = fmt.Errorf("OpenFGA HTTP response body read failure")
+)
+
+// HTTPStatusError reports a non-accepted OpenFGA HTTP response. Its body has
+// already been redacted and bounded by Client.doJSON.
+type HTTPStatusError struct {
+	StatusCode int
+	Status     string
+	Body       string
+}
+
+func (err *HTTPStatusError) Error() string {
+	return fmt.Sprintf("unexpected HTTP status %s: %s", err.Status, err.Body)
+}
+
 type Store struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -229,12 +247,12 @@ func (client *Client) doJSON(ctx context.Context, method string, endpoint *url.U
 
 	response, err := client.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("send request: %w", err)
+		return fmt.Errorf("%w: send request: %w", errHTTPTransport, err)
 	}
 	defer response.Body.Close()
 	data, truncated, err := readBounded(response.Body)
 	if err != nil {
-		return fmt.Errorf("read response: %w", err)
+		return fmt.Errorf("%w: read response: %w", errHTTPBodyRead, err)
 	}
 	if !containsStatus(accepted, response.StatusCode) {
 		safe := redact(string(data), client.token)
@@ -245,18 +263,18 @@ func (client *Client) doJSON(ctx context.Context, method string, endpoint *url.U
 		if truncated {
 			safe += " [TRUNCATED]"
 		}
-		return fmt.Errorf("unexpected HTTP status %s: %s", response.Status, strings.TrimSpace(safe))
+		return &HTTPStatusError{StatusCode: response.StatusCode, Status: response.Status, Body: strings.TrimSpace(safe)}
 	}
 	if truncated {
-		return fmt.Errorf("response exceeds %s bytes", strconv.Itoa(maxResponseBody))
+		return fmt.Errorf("%w: response exceeds %s bytes", errMalformedHTTPResponse, strconv.Itoa(maxResponseBody))
 	}
 	if output != nil {
 		mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 		if err != nil || mediaType != "application/json" {
-			return fmt.Errorf("response content type must be application/json")
+			return fmt.Errorf("%w: response content type must be application/json", errMalformedHTTPResponse)
 		}
 		if err := json.Unmarshal(data, output); err != nil {
-			return fmt.Errorf("decode response: %w", err)
+			return fmt.Errorf("%w: decode response: %w", errMalformedHTTPResponse, err)
 		}
 	}
 	return nil
