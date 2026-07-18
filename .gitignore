@@ -3,3 +3,7 @@
 web/node_modules/
 web/dist/
 tmp
+
+.claude/settings.local.json
+.claude/agents/
+CLAUDE.local.md
