@@ -138,17 +138,27 @@ func TestAuthorizationAdapterCheckClassifiesTransportAndBodyReadFailuresAsUnavai
 	}
 }
 
-func TestAuthorizationAdapterCheckDoesNotLeakUpstreamRetryableResponse(t *testing.T) {
-	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
+func TestAuthorizationAdapterCheckDoesNotLeakUpstreamHTTPResponse(t *testing.T) {
+	for _, test := range []struct {
+		status int
+		want   error
+	}{
+		{status: http.StatusBadRequest, want: authz.ErrMalformedResponse},
+		{status: http.StatusUnauthorized, want: authz.ErrMalformedResponse},
+		{status: http.StatusForbidden, want: authz.ErrMalformedResponse},
+		{status: http.StatusNotFound, want: authz.ErrMalformedResponse},
+		{status: http.StatusTooManyRequests, want: authz.ErrUnavailable},
+		{status: http.StatusInternalServerError, want: authz.ErrUnavailable},
+	} {
+		t.Run(http.StatusText(test.status), func(t *testing.T) {
 			const body = "upstream OpenFGA detail that must not cross the authorization port"
-			adapter := adapterForResponse(t, status, "application/json", body)
+			adapter := adapterForResponse(t, test.status, "application/json", body)
 
 			_, err := adapter.Check(context.Background(), viewCheck(t))
-			if !errors.Is(err, authz.ErrUnavailable) {
-				t.Fatalf("Check() error = %v, want ErrUnavailable", err)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Check() error = %v, want %v", err, test.want)
 			}
-			if strings.Contains(err.Error(), body) || strings.Contains(err.Error(), fmt.Sprintf("%d %s", status, http.StatusText(status))) {
+			if strings.Contains(err.Error(), body) || strings.Contains(err.Error(), fmt.Sprintf("%d %s", test.status, http.StatusText(test.status))) {
 				t.Fatalf("Check() leaked upstream response: %v", err)
 			}
 		})

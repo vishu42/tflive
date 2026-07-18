@@ -425,8 +425,11 @@ func (adapter *AuthorizationAdapter) classify(err error) error {
 	}
 
 	var statusError *HTTPStatusError
-	if errors.As(err, &statusError) && (statusError.StatusCode == http.StatusTooManyRequests || statusError.StatusCode >= http.StatusInternalServerError) {
-		return fmt.Errorf("%w: OpenFGA returned a retryable response", authz.ErrUnavailable)
+	if errors.As(err, &statusError) {
+		if statusError.StatusCode == http.StatusTooManyRequests || statusError.StatusCode >= http.StatusInternalServerError {
+			return fmt.Errorf("%w: OpenFGA returned a retryable response", authz.ErrUnavailable)
+		}
+		return fmt.Errorf("%w: OpenFGA returned an unexpected response", authz.ErrMalformedResponse)
 	}
 	return err
 }
