@@ -240,6 +240,17 @@ The derived relations are exactly:
 person or pipeline that configures and deploys the services is the deployment
 administrator.
 
+### Runtime Authorization Behavior
+
+- The API always sends the explicit configured OpenFGA store and immutable
+  model IDs; it never discovers a latest model at runtime.
+- Direct role writes and deletes can request higher-consistency confirmation. A
+  confirmation timeout or negative confirmation is returned as
+  `authorization_write_unconfirmed` and may be retried safely.
+- Explicit OpenFGA denial is distinct from an OpenFGA timeout, unavailable
+  service, or malformed response. The latter failures fail closed and map to
+  `503 authorization_unavailable` when an authorization decision is required.
+
 ### Provisioning and Verification
 
 On a clean checkout, initialize OpenFGA with the two-phase workflow:
