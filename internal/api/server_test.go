@@ -465,6 +465,24 @@ func TestCreateStackRejectsPrincipalWithoutCreatorRole(t *testing.T) {
 	}
 }
 
+func TestCreateStackMapsOwnerWriteFailureAfterPersistence(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.authorizer.writeErr = authz.ErrUnavailable
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, authenticatedRequest(http.MethodPost, "/v1/tenants/tenant_123/stacks", strings.NewReader(`{"name":"Acme"}`)))
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	if deps.stacks.created.ID == "" {
+		t.Fatal("owner-write failure did not preserve the persisted stack")
+	}
+}
+
 func TestListStacksReturnsTenantStacks(t *testing.T) {
 	t.Parallel()
 
@@ -1468,6 +1486,7 @@ func TestUnknownRouteReturnsNotFound(t *testing.T) {
 }
 
 type apiTestDependencies struct {
+	authorizer             *apiAuthorizer
 	stacks                 recordingStackRepository
 	stackTemplates         recordingStackTemplateRepository
 	stackTemplateInstaller recordingStackTemplateInstaller
@@ -1486,6 +1505,7 @@ type apiTestDependencies struct {
 
 func newAPITestDependencies() *apiTestDependencies {
 	return &apiTestDependencies{
+		authorizer:      &apiAuthorizer{},
 		stackID:         traits.StackID("stack_123"),
 		stackTemplateID: traits.StackTemplateID("stack_template_123"),
 		runID:           traits.TemplateRunID("run_123"),
@@ -1496,7 +1516,7 @@ func newAPITestDependencies() *apiTestDependencies {
 
 func (deps *apiTestDependencies) service() *app.Service {
 	return app.NewService(app.Service{
-		Authorizer:               apiAuthorizer{},
+		Authorizer:               deps.authorizer,
 		Stacks:                   &deps.stacks,
 		StackTemplates:           &deps.stackTemplates,
 		StackTemplateInstaller:   &deps.stackTemplateInstaller,
@@ -1515,7 +1535,7 @@ func (deps *apiTestDependencies) service() *app.Service {
 	})
 }
 
-type apiAuthorizer struct{}
+type apiAuthorizer struct{ writeErr error }
 
 func (apiAuthorizer) Check(context.Context, authz.CheckRequest) (authz.CheckResult, error) {
 	return authz.CheckResult{}, nil
@@ -1529,7 +1549,9 @@ func (apiAuthorizer) ListAccessibleStacks(context.Context, authz.ListAccessibleS
 func (apiAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
 	return authz.ListGrantsResult{}, nil
 }
-func (apiAuthorizer) WriteRelationships(context.Context, authz.Mutation) error  { return nil }
+func (authorizer *apiAuthorizer) WriteRelationships(context.Context, authz.Mutation) error {
+	return authorizer.writeErr
+}
 func (apiAuthorizer) DeleteRelationships(context.Context, authz.Mutation) error { return nil }
 
 type recordingStackRepository struct {
