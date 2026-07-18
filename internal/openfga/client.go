@@ -16,7 +16,11 @@ import (
 
 const maxResponseBody = 64 << 10
 
-var errMalformedHTTPResponse = fmt.Errorf("malformed HTTP response")
+var (
+	errMalformedHTTPResponse = fmt.Errorf("malformed HTTP response")
+	errHTTPTransport         = fmt.Errorf("OpenFGA HTTP transport failure")
+	errHTTPBodyRead          = fmt.Errorf("OpenFGA HTTP response body read failure")
+)
 
 // HTTPStatusError reports a non-accepted OpenFGA HTTP response. Its body has
 // already been redacted and bounded by Client.doJSON.
@@ -243,12 +247,12 @@ func (client *Client) doJSON(ctx context.Context, method string, endpoint *url.U
 
 	response, err := client.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("send request: %w", err)
+		return fmt.Errorf("%w: send request: %w", errHTTPTransport, err)
 	}
 	defer response.Body.Close()
 	data, truncated, err := readBounded(response.Body)
 	if err != nil {
-		return fmt.Errorf("read response: %w", err)
+		return fmt.Errorf("%w: read response: %w", errHTTPBodyRead, err)
 	}
 	if !containsStatus(accepted, response.StatusCode) {
 		safe := redact(string(data), client.token)

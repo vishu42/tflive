@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,6 +76,89 @@ func TestAuthorizationAdapterCheckDistinguishesDenialAndFailures(t *testing.T) {
 				t.Fatalf("Check() = %#v, %v", result, err)
 			}
 		})
+	}
+}
+
+func TestAuthorizationAdapterCheckDeadlineMapsToTimeoutHTTPStatus(t *testing.T) {
+	adapter := adapterForResponse(t, http.StatusOK, "application/json", `{"allowed":true}`)
+	adapter.client.timeout = 10 * time.Millisecond
+	adapter.client.http.Timeout = adapter.client.timeout
+	adapter.client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})
+
+	_, err := adapter.Check(context.Background(), viewCheck(t))
+	if !errors.Is(err, authz.ErrTimeout) {
+		t.Fatalf("Check() error = %v, want ErrTimeout", err)
+	}
+	status, code, ok := authz.HTTPStatus(err)
+	if !ok || status != http.StatusServiceUnavailable || code != "authorization_unavailable" {
+		t.Fatalf("HTTPStatus() = %d, %q, %t", status, code, ok)
+	}
+}
+
+func TestAuthorizationAdapterCheckClassifiesTransportAndBodyReadFailuresAsUnavailable(t *testing.T) {
+	tests := []struct {
+		name      string
+		transport http.RoundTripper
+	}{
+		{
+			name: "transport",
+			transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, errors.New("dial OpenFGA")
+			}),
+		},
+		{
+			name: "body read",
+			transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     http.Header{"Content-Type": {"application/json"}},
+					Body:       io.NopCloser(errorReader{}),
+					Request:    request,
+				}, nil
+			}),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := adapterForResponse(t, http.StatusOK, "application/json", `{"allowed":true}`)
+			adapter.client.http.Transport = test.transport
+
+			result, err := adapter.Check(context.Background(), viewCheck(t))
+			if !errors.Is(err, authz.ErrUnavailable) {
+				t.Fatalf("Check() error = %v, want ErrUnavailable", err)
+			}
+			if result.Allowed {
+				t.Fatal("dependency failure returned an allow decision")
+			}
+		})
+	}
+}
+
+func TestAuthorizationAdapterCheckDoesNotLeakUpstreamRetryableResponse(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			const body = "upstream OpenFGA detail that must not cross the authorization port"
+			adapter := adapterForResponse(t, status, "application/json", body)
+
+			_, err := adapter.Check(context.Background(), viewCheck(t))
+			if !errors.Is(err, authz.ErrUnavailable) {
+				t.Fatalf("Check() error = %v, want ErrUnavailable", err)
+			}
+			if strings.Contains(err.Error(), body) || strings.Contains(err.Error(), fmt.Sprintf("%d %s", status, http.StatusText(status))) {
+				t.Fatalf("Check() leaked upstream response: %v", err)
+			}
+		})
+	}
+}
+
+func TestNewAuthorizationAdapterRejectsNilAPIURL(t *testing.T) {
+	_, err := NewAuthorizationAdapter(Config{StoreID: "store-id", ModelID: "model-id"})
+	if err == nil || !strings.Contains(err.Error(), "API URL") {
+		t.Fatalf("NewAuthorizationAdapter() error = %v, want API URL validation error", err)
 	}
 }
 
@@ -523,6 +608,12 @@ func adapterForHandler(t *testing.T, handler http.HandlerFunc) *AuthorizationAda
 	t.Helper()
 	adapter, _ := testAuthorizationAdapter(t, handler)
 	return adapter
+}
+
+type errorReader struct{}
+
+func (errorReader) Read([]byte) (int, error) {
+	return 0, errors.New("read OpenFGA response")
 }
 
 func viewCheck(t *testing.T) authz.CheckRequest {

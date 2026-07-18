@@ -25,6 +25,9 @@ const maxConfirmationChecks = 25
 // NewAuthorizationAdapter returns an OpenFGA adapter configured to check the
 // exact verified store and authorization model.
 func NewAuthorizationAdapter(cfg Config) (*AuthorizationAdapter, error) {
+	if cfg.APIURL == nil {
+		return nil, fmt.Errorf("OpenFGA API URL is required")
+	}
 	if err := cfg.ValidateVerify(); err != nil {
 		return nil, fmt.Errorf("validate OpenFGA authorization config: %w", err)
 	}
@@ -417,11 +420,13 @@ func (adapter *AuthorizationAdapter) classify(err error) error {
 		return fmt.Errorf("authorization check canceled: %w", err)
 	case errors.Is(err, errMalformedHTTPResponse):
 		return fmt.Errorf("%w: %v", authz.ErrMalformedResponse, err)
+	case errors.Is(err, errHTTPTransport), errors.Is(err, errHTTPBodyRead):
+		return fmt.Errorf("%w: OpenFGA request failed", authz.ErrUnavailable)
 	}
 
 	var statusError *HTTPStatusError
 	if errors.As(err, &statusError) && (statusError.StatusCode == http.StatusTooManyRequests || statusError.StatusCode >= http.StatusInternalServerError) {
-		return fmt.Errorf("%w: %w", authz.ErrUnavailable, err)
+		return fmt.Errorf("%w: OpenFGA returned a retryable response", authz.ErrUnavailable)
 	}
 	return err
 }
