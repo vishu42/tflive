@@ -27,7 +27,6 @@ interface RegisterTemplateRequest {
   repo_name: string;
   source_ref: string;
   root_path: string;
-  requested_by: string;
 }
 
 interface CreateStackRequest {
@@ -35,7 +34,6 @@ interface CreateStackRequest {
   slug: string;
   tags: Record<string, string>;
   default_credential_ids: string[];
-  actor: string;
 }
 
 interface AddTemplateToStackRequest {
@@ -43,31 +41,22 @@ interface AddTemplateToStackRequest {
   component_key?: string;
   selected_ref: string;
   config: Record<string, unknown>;
-  actor: string;
 }
 
 interface UpdateStackTemplateConfigRequest {
   config: Record<string, unknown>;
-  actor: string;
 }
 
 interface UpgradeStackTemplateRequest {
   target_template_revision_id: string;
   config?: Record<string, unknown>;
-  actor: string;
 }
 
 interface StartRunRequest {
   operation: Operation;
-  trigger_actor: string;
-}
-
-interface ApproveRunRequest {
-  approved_by: string;
 }
 
 interface CancelRunRequest {
-  requested_by: string;
   reason: string;
 }
 
@@ -145,10 +134,10 @@ export function getTemplateRunLog(tenantID: string, runID: string, phase: string
   return requestText(`/v1/tenants/${encodeURIComponent(tenantID)}/template-runs/${encodeURIComponent(runID)}/logs/${encodeURIComponent(phase)}`);
 }
 
-export function approveRun(tenantID: string, runID: string, body: ApproveRunRequest): Promise<void> {
+export function approveRun(tenantID: string, runID: string): Promise<void> {
   return requestNoContent(`/v1/tenants/${encodeURIComponent(tenantID)}/template-runs/${encodeURIComponent(runID)}/approval`, {
     method: "POST",
-    body: JSON.stringify(body)
+    body: JSON.stringify({})
   });
 }
 

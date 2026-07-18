@@ -8,13 +8,80 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/traits"
 )
+
+const keycloakSubject = "6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91"
+
+func authenticatedContext() context.Context {
+	return authn.ContextWithPrincipal(context.Background(), authn.Principal{
+		Subject: keycloakSubject,
+	})
+}
+
+func TestActorMutationsRejectMissingPrincipal(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{})
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "register template", call: func() error {
+			_, err := service.RegisterTemplate(context.Background(), RegisterTemplateCommand{})
+			return err
+		}},
+		{name: "create stack", call: func() error {
+			_, err := service.CreateStack(context.Background(), CreateStackCommand{})
+			return err
+		}},
+		{name: "add template", call: func() error {
+			_, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{})
+			return err
+		}},
+		{name: "update config", call: func() error {
+			_, err := service.UpdateStackTemplateConfig(context.Background(), UpdateStackTemplateConfigCommand{})
+			return err
+		}},
+		{name: "upgrade template", call: func() error {
+			_, err := service.UpgradeStackTemplate(context.Background(), UpgradeStackTemplateCommand{})
+			return err
+		}},
+		{name: "start run", call: func() error {
+			_, err := service.StartTemplateRun(context.Background(), StartTemplateRunCommand{})
+			return err
+		}},
+		{name: "approve run", call: func() error {
+			return service.ApproveRun(context.Background(), ApproveRunCommand{})
+		}},
+		{name: "cancel run", call: func() error {
+			return service.CancelRun(context.Background(), CancelRunCommand{})
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.call(); !errors.Is(err, ErrUnauthenticated) {
+				t.Fatalf("error = %v, want ErrUnauthenticated", err)
+			}
+		})
+	}
+}
+
+func TestAuthenticatedActorRejectsEmptySubject(t *testing.T) {
+	t.Parallel()
+
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{})
+	if _, err := authenticatedActor(ctx); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("error = %v, want ErrUnauthenticated", err)
+	}
+}
 
 func TestCreateStackDerivesSlugAndPersistsStack(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := authenticatedContext()
 	now := time.Date(2026, 7, 6, 13, 30, 0, 0, time.UTC)
 	stacks := &recordingStackRepository{}
 	service := NewService(Service{
@@ -30,7 +97,6 @@ func TestCreateStackDerivesSlugAndPersistsStack(t *testing.T) {
 			"env": "prod",
 		},
 		DefaultCredentialIDs: []traits.CredentialSetID{traits.CredentialSetID("credential_123")},
-		Actor:                traits.UserID("user_123"),
 	})
 	if err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
@@ -42,8 +108,8 @@ func TestCreateStackDerivesSlugAndPersistsStack(t *testing.T) {
 	if stack.Slug != "acme-prod" {
 		t.Fatalf("slug = %q, want acme-prod", stack.Slug)
 	}
-	if stack.CreatedBy != traits.UserID("user_123") {
-		t.Fatalf("created by = %q, want user_123", stack.CreatedBy)
+	if stack.CreatedBy != traits.UserID(keycloakSubject) {
+		t.Fatalf("created by = %q, want %q", stack.CreatedBy, keycloakSubject)
 	}
 	if !stack.CreatedAt.Equal(now) {
 		t.Fatalf("created at = %v, want %v", stack.CreatedAt, now)
@@ -59,23 +125,6 @@ func TestCreateStackDerivesSlugAndPersistsStack(t *testing.T) {
 	}
 }
 
-func TestCreateStackRejectsMissingActor(t *testing.T) {
-	t.Parallel()
-
-	service := NewService(Service{
-		Stacks:   &recordingStackRepository{},
-		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
-	})
-
-	_, err := service.CreateStack(context.Background(), CreateStackCommand{
-		TenantID: traits.TenantID("tenant_123"),
-		Name:     "Acme Prod",
-	})
-	if !errors.Is(err, ErrInvalidCommand) {
-		t.Fatalf("error = %v, want ErrInvalidCommand", err)
-	}
-}
-
 func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
 	t.Parallel()
 
@@ -86,11 +135,10 @@ func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
 		Clock:    fixedClock{now: time.Now()},
 	})
 
-	_, err := service.CreateStack(context.Background(), CreateStackCommand{
+	_, err := service.CreateStack(authenticatedContext(), CreateStackCommand{
 		TenantID: traits.TenantID("tenant_123"),
 		Name:     "Acme Prod",
 		Slug:     "acme-prod",
-		Actor:    traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrDuplicateStackSlug) {
 		t.Fatalf("error = %v, want ErrDuplicateStackSlug", err)
@@ -105,13 +153,12 @@ func TestCreateStackRejectsInvalidTagKey(t *testing.T) {
 		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
 	})
 
-	_, err := service.CreateStack(context.Background(), CreateStackCommand{
+	_, err := service.CreateStack(authenticatedContext(), CreateStackCommand{
 		TenantID: traits.TenantID("tenant_123"),
 		Name:     "Acme Prod",
 		Tags: map[string]string{
 			"bad key": "prod",
 		},
-		Actor: traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrInvalidCommand) {
 		t.Fatalf("error = %v, want ErrInvalidCommand", err)
@@ -126,13 +173,12 @@ func TestCreateStackRejectsEmptyDefaultCredentialID(t *testing.T) {
 		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
 	})
 
-	_, err := service.CreateStack(context.Background(), CreateStackCommand{
+	_, err := service.CreateStack(authenticatedContext(), CreateStackCommand{
 		TenantID: traits.TenantID("tenant_123"),
 		Name:     "Acme Prod",
 		DefaultCredentialIDs: []traits.CredentialSetID{
 			traits.CredentialSetID(""),
 		},
-		Actor: traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrInvalidCommand) {
 		t.Fatalf("error = %v, want ErrInvalidCommand", err)
@@ -258,14 +304,13 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 		StackTemplateIDs:         fixedStackTemplateIDGenerator{id: traits.StackTemplateID("stack_template_a1b2c3d4")},
 	})
 
-	stackTemplate, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{
+	stackTemplate, err := service.AddTemplateToStack(authenticatedContext(), AddTemplateToStackCommand{
 		TenantID:           traits.TenantID("tenant_123"),
 		StackID:            traits.StackID("stack_123"),
 		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
 		ComponentKey:       "primary-vpc",
 		SelectedRef:        "main",
 		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-		Actor:              traits.UserID("user_123"),
 	})
 	if err != nil {
 		t.Fatalf("AddTemplateToStack returned error: %v", err)
@@ -283,8 +328,8 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	if stackTemplate.Lifecycle != traits.StackTemplateActive {
 		t.Fatalf("lifecycle = %q, want active", stackTemplate.Lifecycle)
 	}
-	if stackTemplate.CreatedBy != traits.UserID("user_123") {
-		t.Fatalf("created by = %q, want user_123", stackTemplate.CreatedBy)
+	if stackTemplate.CreatedBy != traits.UserID(keycloakSubject) {
+		t.Fatalf("created by = %q, want %q", stackTemplate.CreatedBy, keycloakSubject)
 	}
 	if stackTemplate.ComponentKey != "primary-vpc" {
 		t.Fatalf("component key = %q, want primary-vpc", stackTemplate.ComponentKey)
@@ -298,8 +343,8 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	if string(stackTemplate.DesiredConfigJSON) != `{"region":"us-east-1"}` {
 		t.Fatalf("desired config json = %s", stackTemplate.DesiredConfigJSON)
 	}
-	if installer.created.CreatedBy != traits.UserID("user_123") {
-		t.Fatalf("persisted created by = %q, want user_123", installer.created.CreatedBy)
+	if installer.created.CreatedBy != traits.UserID(keycloakSubject) {
+		t.Fatalf("persisted created by = %q, want %q", installer.created.CreatedBy, keycloakSubject)
 	}
 	if string(installer.created.ConfigJSON) != `{"region":"us-east-1"}` {
 		t.Fatalf("config json = %s", installer.created.ConfigJSON)
@@ -332,13 +377,12 @@ func TestAddTemplateToStackRejectsMissingRequiredVariable(t *testing.T) {
 		StackTemplateIDs:       fixedStackTemplateIDGenerator{id: traits.StackTemplateID("stack_template_a1b2c3d4")},
 	})
 
-	_, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{
+	_, err := service.AddTemplateToStack(authenticatedContext(), AddTemplateToStackCommand{
 		TenantID:           traits.TenantID("tenant_123"),
 		StackID:            traits.StackID("stack_123"),
 		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
 		SelectedRef:        "main",
 		ConfigJSON:         json.RawMessage(`{}`),
-		Actor:              traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrStackTemplateConfigInvalid) {
 		t.Fatalf("error = %v, want ErrStackTemplateConfigInvalid", err)
@@ -362,13 +406,12 @@ func TestAddTemplateToStackRejectsUnknownVariable(t *testing.T) {
 		StackTemplateIDs:       fixedStackTemplateIDGenerator{id: traits.StackTemplateID("stack_template_a1b2c3d4")},
 	})
 
-	_, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{
+	_, err := service.AddTemplateToStack(authenticatedContext(), AddTemplateToStackCommand{
 		TenantID:           traits.TenantID("tenant_123"),
 		StackID:            traits.StackID("stack_123"),
 		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
 		SelectedRef:        "main",
 		ConfigJSON:         json.RawMessage(`{"region":"us-east-1","extra":"nope"}`),
-		Actor:              traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrStackTemplateConfigInvalid) {
 		t.Fatalf("error = %v, want ErrStackTemplateConfigInvalid", err)
@@ -390,13 +433,12 @@ func TestAddTemplateToStackRejectsInactiveTemplate(t *testing.T) {
 		StackTemplateIDs:       fixedStackTemplateIDGenerator{id: traits.StackTemplateID("stack_template_a1b2c3d4")},
 	})
 
-	_, err := service.AddTemplateToStack(context.Background(), AddTemplateToStackCommand{
+	_, err := service.AddTemplateToStack(authenticatedContext(), AddTemplateToStackCommand{
 		TenantID:           traits.TenantID("tenant_123"),
 		StackID:            traits.StackID("stack_123"),
 		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
 		SelectedRef:        "main",
 		ConfigJSON:         json.RawMessage(`{}`),
-		Actor:              traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrTemplateNotInstallable) {
 		t.Fatalf("error = %v, want ErrTemplateNotInstallable", err)
@@ -406,7 +448,7 @@ func TestAddTemplateToStackRejectsInactiveTemplate(t *testing.T) {
 func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := authenticatedContext()
 	now := time.Date(2026, 7, 2, 9, 30, 0, 0, time.UTC)
 
 	stackTemplates := &recordingStackTemplateRepository{
@@ -449,7 +491,6 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 		TenantID:        traits.TenantID("tenant_123"),
 		StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		Operation:       traits.OperationApply,
-		TriggerActor:    traits.UserID("user_123"),
 	})
 	if err != nil {
 		t.Fatalf("StartTemplateRun returned error: %v", err)
@@ -461,6 +502,9 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 
 	if run.Status != traits.TemplateRunQueued {
 		t.Fatalf("run.Status = %q, want %q", run.Status, traits.TemplateRunQueued)
+	}
+	if run.TriggerActor != traits.UserID(keycloakSubject) {
+		t.Fatalf("run.TriggerActor = %q, want %q", run.TriggerActor, keycloakSubject)
 	}
 
 	if run.WorkspaceName != "mtp_acme_prod_vpc_a13f9c" {
@@ -534,11 +578,10 @@ func TestUpdateStackTemplateConfigValidatesDesiredRevisionVariables(t *testing.T
 		TemplateRevisions: templates,
 	})
 
-	updated, err := service.UpdateStackTemplateConfig(context.Background(), UpdateStackTemplateConfigCommand{
+	updated, err := service.UpdateStackTemplateConfig(authenticatedContext(), UpdateStackTemplateConfigCommand{
 		TenantID:        traits.TenantID("tenant_123"),
 		StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		ConfigJSON:      json.RawMessage(`{"region":"us-east-1"}`),
-		Actor:           traits.UserID("user_123"),
 	})
 	if err != nil {
 		t.Fatalf("UpdateStackTemplateConfig returned error: %v", err)
@@ -570,11 +613,10 @@ func TestUpdateStackTemplateConfigRejectsMissingDesiredRevision(t *testing.T) {
 		TemplateRevisions: &recordingTemplateRepository{},
 	})
 
-	_, err := service.UpdateStackTemplateConfig(context.Background(), UpdateStackTemplateConfigCommand{
+	_, err := service.UpdateStackTemplateConfig(authenticatedContext(), UpdateStackTemplateConfigCommand{
 		TenantID:        traits.TenantID("tenant_123"),
 		StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		ConfigJSON:      json.RawMessage(`{}`),
-		Actor:           traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrStackTemplateConfigInvalid) {
 		t.Fatalf("error = %v, want ErrStackTemplateConfigInvalid", err)
@@ -615,11 +657,10 @@ func TestUpgradeStackTemplateCarriesForwardCompatibleConfig(t *testing.T) {
 		TemplateRevisions:        templates,
 	})
 
-	updated, err := service.UpgradeStackTemplate(context.Background(), UpgradeStackTemplateCommand{
+	updated, err := service.UpgradeStackTemplate(authenticatedContext(), UpgradeStackTemplateCommand{
 		TenantID:                 traits.TenantID("tenant_123"),
 		StackTemplateID:          traits.StackTemplateID("stack_template_123"),
 		TargetTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
-		Actor:                    traits.UserID("user_123"),
 	})
 	if err != nil {
 		t.Fatalf("UpgradeStackTemplate returned error: %v", err)
@@ -661,11 +702,10 @@ func TestUpgradeStackTemplateRejectsDifferentSourceTemplate(t *testing.T) {
 		TemplateRevisions:        templates,
 	})
 
-	_, err := service.UpgradeStackTemplate(context.Background(), UpgradeStackTemplateCommand{
+	_, err := service.UpgradeStackTemplate(authenticatedContext(), UpgradeStackTemplateCommand{
 		TenantID:                 traits.TenantID("tenant_123"),
 		StackTemplateID:          traits.StackTemplateID("stack_template_123"),
 		TargetTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
-		Actor:                    traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrStackTemplateUpgradeInvalid) {
 		t.Fatalf("error = %v, want ErrStackTemplateUpgradeInvalid", err)
@@ -683,11 +723,10 @@ func TestStartTemplateRunRejectsInvalidOperation(t *testing.T) {
 		Clock:          fixedClock{now: time.Now()},
 	})
 
-	_, err := service.StartTemplateRun(context.Background(), StartTemplateRunCommand{
+	_, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
 		TenantID:        traits.TenantID("tenant_123"),
 		StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		Operation:       traits.OperationType("refresh"),
-		TriggerActor:    traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrInvalidCommand) {
 		t.Fatalf("error = %v, want ErrInvalidCommand", err)
@@ -716,11 +755,10 @@ func TestStartTemplateRunRejectsInactiveStackTemplate(t *testing.T) {
 		Clock:          fixedClock{now: time.Now()},
 	})
 
-	_, err := service.StartTemplateRun(context.Background(), StartTemplateRunCommand{
+	_, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
 		TenantID:        traits.TenantID("tenant_123"),
 		StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		Operation:       traits.OperationApply,
-		TriggerActor:    traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrStackTemplateNotRunnable) {
 		t.Fatalf("error = %v, want ErrStackTemplateNotRunnable", err)
@@ -763,11 +801,10 @@ func TestStartTemplateRunRejectsMissingDesiredRevision(t *testing.T) {
 		Clock:  fixedClock{now: time.Now()},
 	})
 
-	_, err := service.StartTemplateRun(context.Background(), StartTemplateRunCommand{
+	_, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
 		TenantID:        traits.TenantID("tenant_123"),
 		StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		Operation:       traits.OperationApply,
-		TriggerActor:    traits.UserID("user_123"),
 	})
 	if !errors.Is(err, ErrStackTemplateNotRunnable) {
 		t.Fatalf("error = %v, want ErrStackTemplateNotRunnable", err)
@@ -810,11 +847,10 @@ func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
 		Clock:     fixedClock{now: time.Now()},
 	})
 
-	run, err := service.StartTemplateRun(context.Background(), StartTemplateRunCommand{
+	run, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
 		TenantID:        traits.TenantID("tenant_123"),
 		StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		Operation:       traits.OperationPlan,
-		TriggerActor:    traits.UserID("user_123"),
 	})
 	if err != nil {
 		t.Fatalf("StartTemplateRun returned error: %v", err)
@@ -831,7 +867,7 @@ func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
 func TestRegisterTemplateCreatesPendingRegistrationAndDispatchesWorkflow(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := authenticatedContext()
 	now := time.Date(2026, 7, 6, 10, 30, 0, 0, time.UTC)
 	registrations := &recordingTemplateRegistrationRepository{}
 	workflows := &recordingWorkflowDispatcher{}
@@ -844,12 +880,11 @@ func TestRegisterTemplateCreatesPendingRegistrationAndDispatchesWorkflow(t *test
 	})
 
 	registration, err := service.RegisterTemplate(ctx, RegisterTemplateCommand{
-		TenantID:    traits.TenantID("tenant_123"),
-		RepoOwner:   "acme",
-		RepoName:    "infra-templates",
-		SourceRef:   "v0.0.1",
-		RootPath:    "modules/vpc",
-		RequestedBy: traits.UserID("user_123"),
+		TenantID:  traits.TenantID("tenant_123"),
+		RepoOwner: "acme",
+		RepoName:  "infra-templates",
+		SourceRef: "v0.0.1",
+		RootPath:  "modules/vpc",
 	})
 	if err != nil {
 		t.Fatalf("RegisterTemplate returned error: %v", err)
@@ -860,6 +895,9 @@ func TestRegisterTemplateCreatesPendingRegistrationAndDispatchesWorkflow(t *test
 	}
 	if registration.Status != traits.TemplateRegistrationPending {
 		t.Fatalf("registration.Status = %q, want %q", registration.Status, traits.TemplateRegistrationPending)
+	}
+	if registration.RequestedBy != traits.UserID(keycloakSubject) {
+		t.Fatalf("registration.RequestedBy = %q, want %q", registration.RequestedBy, keycloakSubject)
 	}
 	if !registration.RequestedAt.Equal(now) {
 		t.Fatalf("registration.RequestedAt = %v, want %v", registration.RequestedAt, now)
@@ -883,12 +921,11 @@ func TestRegisterTemplateRejectsMissingSourceRef(t *testing.T) {
 		Workflows:             &recordingWorkflowDispatcher{},
 	})
 
-	_, err := service.RegisterTemplate(context.Background(), RegisterTemplateCommand{
-		TenantID:    traits.TenantID("tenant_123"),
-		RepoOwner:   "acme",
-		RepoName:    "infra-templates",
-		RootPath:    "modules/vpc",
-		RequestedBy: traits.UserID("user_123"),
+	_, err := service.RegisterTemplate(authenticatedContext(), RegisterTemplateCommand{
+		TenantID:  traits.TenantID("tenant_123"),
+		RepoOwner: "acme",
+		RepoName:  "infra-templates",
+		RootPath:  "modules/vpc",
 	})
 	if !errors.Is(err, ErrInvalidCommand) {
 		t.Fatalf("error = %v, want ErrInvalidCommand", err)
@@ -907,13 +944,12 @@ func TestRegisterTemplateDoesNotDispatchWhenPersistenceFails(t *testing.T) {
 		RegistrationIDs:       fixedTemplateRegistrationIDGenerator{id: traits.TemplateRegistrationID("template_registration_123")},
 	})
 
-	_, err := service.RegisterTemplate(context.Background(), RegisterTemplateCommand{
-		TenantID:    traits.TenantID("tenant_123"),
-		RepoOwner:   "acme",
-		RepoName:    "infra-templates",
-		SourceRef:   "v0.0.1",
-		RootPath:    "modules/vpc",
-		RequestedBy: traits.UserID("user_123"),
+	_, err := service.RegisterTemplate(authenticatedContext(), RegisterTemplateCommand{
+		TenantID:  traits.TenantID("tenant_123"),
+		RepoOwner: "acme",
+		RepoName:  "infra-templates",
+		SourceRef: "v0.0.1",
+		RootPath:  "modules/vpc",
 	})
 	if !errors.Is(err, persistErr) {
 		t.Fatalf("error = %v, want wrapped persistence error", err)
@@ -926,7 +962,7 @@ func TestRegisterTemplateDoesNotDispatchWhenPersistenceFails(t *testing.T) {
 func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := authenticatedContext()
 	now := time.Date(2026, 7, 2, 10, 15, 0, 0, time.UTC)
 	runs := &recordingTemplateRunRepository{}
 	workflows := &recordingWorkflowDispatcher{}
@@ -938,9 +974,8 @@ func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 	})
 
 	err := service.ApproveRun(ctx, ApproveRunCommand{
-		TenantID:   traits.TenantID("tenant_123"),
-		RunID:      traits.TemplateRunID("run_123"),
-		ApprovedBy: traits.UserID("user_123"),
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
 	})
 	if err != nil {
 		t.Fatalf("ApproveRun returned error: %v", err)
@@ -954,8 +989,8 @@ func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 		t.Fatalf("approval tenant ID = %q, want tenant_123", runs.approval.TenantID)
 	}
 
-	if runs.approval.ApprovedBy != traits.UserID("user_123") {
-		t.Fatalf("approval actor = %q, want user_123", runs.approval.ApprovedBy)
+	if runs.approval.ApprovedBy != traits.UserID(keycloakSubject) {
+		t.Fatalf("approval actor = %q, want %q", runs.approval.ApprovedBy, keycloakSubject)
 	}
 
 	if !runs.approval.ApprovedAt.Equal(now) {
@@ -966,8 +1001,8 @@ func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 		t.Fatalf("workflow approval run ID = %q, want run_123", workflows.approvalRunID)
 	}
 
-	if workflows.approvalSignal.ApprovedBy != traits.UserID("user_123") {
-		t.Fatalf("workflow approval actor = %q, want user_123", workflows.approvalSignal.ApprovedBy)
+	if workflows.approvalSignal.ApprovedBy != traits.UserID(keycloakSubject) {
+		t.Fatalf("workflow approval actor = %q, want %q", workflows.approvalSignal.ApprovedBy, keycloakSubject)
 	}
 }
 
@@ -983,10 +1018,9 @@ func TestApproveRunDoesNotSignalWhenRunIsNotApprovable(t *testing.T) {
 		Clock:        fixedClock{now: time.Now()},
 	})
 
-	err := service.ApproveRun(context.Background(), ApproveRunCommand{
-		TenantID:   traits.TenantID("tenant_123"),
-		RunID:      traits.TemplateRunID("run_123"),
-		ApprovedBy: traits.UserID("user_123"),
+	err := service.ApproveRun(authenticatedContext(), ApproveRunCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
 	})
 	if !errors.Is(err, ErrRunNotApprovable) {
 		t.Fatalf("error = %v, want ErrRunNotApprovable", err)
@@ -997,28 +1031,10 @@ func TestApproveRunDoesNotSignalWhenRunIsNotApprovable(t *testing.T) {
 	}
 }
 
-func TestApproveRunRejectsMissingActor(t *testing.T) {
-	t.Parallel()
-
-	service := NewService(Service{
-		TemplateRuns: &recordingTemplateRunRepository{},
-		Workflows:    &recordingWorkflowDispatcher{},
-		Clock:        fixedClock{now: time.Now()},
-	})
-
-	err := service.ApproveRun(context.Background(), ApproveRunCommand{
-		TenantID: traits.TenantID("tenant_123"),
-		RunID:    traits.TemplateRunID("run_123"),
-	})
-	if !errors.Is(err, ErrInvalidCommand) {
-		t.Fatalf("error = %v, want ErrInvalidCommand", err)
-	}
-}
-
 func TestCancelRunRecordsCancellationAndSignalsWorkflow(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := authenticatedContext()
 	now := time.Date(2026, 7, 2, 10, 45, 0, 0, time.UTC)
 	runs := &recordingTemplateRunRepository{}
 	workflows := &recordingWorkflowDispatcher{}
@@ -1030,10 +1046,9 @@ func TestCancelRunRecordsCancellationAndSignalsWorkflow(t *testing.T) {
 	})
 
 	err := service.CancelRun(ctx, CancelRunCommand{
-		TenantID:    traits.TenantID("tenant_123"),
-		RunID:       traits.TemplateRunID("run_123"),
-		RequestedBy: traits.UserID("user_456"),
-		Reason:      "superseded by a newer run",
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
+		Reason:   "superseded by a newer run",
 	})
 	if err != nil {
 		t.Fatalf("CancelRun returned error: %v", err)
@@ -1043,8 +1058,8 @@ func TestCancelRunRecordsCancellationAndSignalsWorkflow(t *testing.T) {
 		t.Fatalf("cancellation run ID = %q, want run_123", runs.cancellation.RunID)
 	}
 
-	if runs.cancellation.RequestedBy != traits.UserID("user_456") {
-		t.Fatalf("cancellation actor = %q, want user_456", runs.cancellation.RequestedBy)
+	if runs.cancellation.RequestedBy != traits.UserID(keycloakSubject) {
+		t.Fatalf("cancellation actor = %q, want %q", runs.cancellation.RequestedBy, keycloakSubject)
 	}
 
 	if runs.cancellation.Reason != "superseded by a newer run" {
@@ -1059,8 +1074,8 @@ func TestCancelRunRecordsCancellationAndSignalsWorkflow(t *testing.T) {
 		t.Fatalf("workflow cancel run ID = %q, want run_123", workflows.cancelRunID)
 	}
 
-	if workflows.cancelSignal.RequestedBy != traits.UserID("user_456") {
-		t.Fatalf("workflow cancel actor = %q, want user_456", workflows.cancelSignal.RequestedBy)
+	if workflows.cancelSignal.RequestedBy != traits.UserID(keycloakSubject) {
+		t.Fatalf("workflow cancel actor = %q, want %q", workflows.cancelSignal.RequestedBy, keycloakSubject)
 	}
 }
 
@@ -1076,10 +1091,9 @@ func TestCancelRunDoesNotSignalWhenRunIsNotCancelable(t *testing.T) {
 		Clock:        fixedClock{now: time.Now()},
 	})
 
-	err := service.CancelRun(context.Background(), CancelRunCommand{
-		TenantID:    traits.TenantID("tenant_123"),
-		RunID:       traits.TemplateRunID("run_123"),
-		RequestedBy: traits.UserID("user_456"),
+	err := service.CancelRun(authenticatedContext(), CancelRunCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
 	})
 	if !errors.Is(err, ErrRunNotCancelable) {
 		t.Fatalf("error = %v, want ErrRunNotCancelable", err)

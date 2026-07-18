@@ -33,6 +33,7 @@ import {
   upgradeStackTemplate
 } from "./api/client";
 import type { Stack, StackTemplate, TemplateRevision, TemplateRegistration, TemplateRun, TemplateRunLog, TemplateVariable } from "./api/types";
+import { tenantID } from "./config";
 import { isTerminalRegistrationStatus, isTerminalRunStatus, nextPollDelayMs } from "./polling";
 import {
   canUpgradeStackTemplate,
@@ -52,8 +53,6 @@ import {
 } from "./workflowState";
 
 export default function App() {
-  const [tenantID, setTenantID] = useState("tenant_123");
-  const [actor, setActor] = useState("user_123");
   const [repoOwner, setRepoOwner] = useState("hashicorp");
   const [repoName, setRepoName] = useState("");
   const [sourceRef, setSourceRef] = useState("main");
@@ -389,8 +388,7 @@ export default function App() {
         repo_owner: repoOwner,
         repo_name: repoName,
         source_ref: sourceRef,
-        root_path: rootPath,
-        requested_by: actor
+        root_path: rootPath
       });
       setRegistration(next);
       setSelectedTemplateRevisionID("");
@@ -407,8 +405,7 @@ export default function App() {
         name: stackName,
         slug: stackSlug,
         tags: {},
-        default_credential_ids: [],
-        actor
+        default_credential_ids: []
       });
       setStack(next);
       setStacks((current) => [next, ...current.filter((item) => item.id !== next.id)]);
@@ -436,8 +433,7 @@ export default function App() {
       const next = await addTemplateToStack(tenantID, stack.id, {
         template_revision_id: selectedTemplateRevision.id,
         selected_ref: selectedTemplateRevision.source_ref,
-        config,
-        actor
+        config
       });
       setStackTemplates((current) => upsertStackTemplate(current, next));
       setSelectedStackTemplateID(next.id);
@@ -452,8 +448,7 @@ export default function App() {
 
     await runAction("config", async () => {
       const next = await updateStackTemplateConfig(tenantID, installedTemplate.id, {
-        config: configFromVariableValues(variables, variableValues),
-        actor
+        config: configFromVariableValues(variables, variableValues)
       });
       setStackTemplates((current) => upsertStackTemplate(current, next));
       setSelectedStackTemplateID(next.id);
@@ -469,8 +464,7 @@ export default function App() {
     await runAction("upgrade", async () => {
       const next = await upgradeStackTemplate(tenantID, installedTemplate.id, {
         target_template_revision_id: selectedTemplateRevision.id,
-        config: configFromVariableValues(variables, variableValues),
-        actor
+        config: configFromVariableValues(variables, variableValues)
       });
       setStackTemplates((current) => upsertStackTemplate(current, next));
       setSelectedStackTemplateID(next.id);
@@ -493,8 +487,7 @@ export default function App() {
 
     await runAction(operation, async () => {
       const next = await startTemplateRun(tenantID, installedTemplate.id, {
-        operation,
-        trigger_actor: actor
+        operation
       });
       if (operation === "apply") {
         setApplyRun(next);
@@ -512,7 +505,7 @@ export default function App() {
     }
 
     await runAction("approve", async () => {
-      await approveRun(tenantID, applyRun.id, { approved_by: actor });
+      await approveRun(tenantID, applyRun.id);
       const next = await getTemplateRun(tenantID, applyRun.id);
       setApplyRun(next);
     });
@@ -525,7 +518,6 @@ export default function App() {
 
     await runAction("cancel", async () => {
       await cancelRun(tenantID, currentRun.id, {
-        requested_by: actor,
         reason: "canceled from workflow console"
       });
       const next = await getTemplateRun(tenantID, currentRun.id);
@@ -566,14 +558,10 @@ export default function App() {
             <h1>Terraform workflow console</h1>
           </div>
           <div className="runtime-fields">
-            <label>
-              Tenant
-              <input value={tenantID} onChange={(event) => setTenantID(event.target.value)} />
-            </label>
-            <label>
-              Actor
-              <input value={actor} onChange={(event) => setActor(event.target.value)} />
-            </label>
+            <div className="runtime-field">
+              <span>Tenant</span>
+              <span className="runtime-value" data-testid="tenant-context">{tenantID}</span>
+            </div>
           </div>
         </header>
 

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,10 +15,21 @@ import (
 	"github.com/vishu42/tflive/internal/traits"
 )
 
+const apiKeycloakSubject = "6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91"
+const configuredTenantID = traits.TenantID("tenant_123")
+
+func authenticatedRequest(method, target string, body io.Reader) *http.Request {
+	request := httptest.NewRequest(method, target, body)
+	ctx := authn.ContextWithPrincipal(request.Context(), authn.Principal{
+		Subject: apiKeycloakSubject,
+	})
+	return request.WithContext(ctx)
+}
+
 func TestHealthzReturnsOK(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(app.NewService(app.Service{}))
+	server := NewServer(app.NewService(app.Service{}), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 
@@ -32,7 +44,7 @@ func TestHealthzReturnsOK(t *testing.T) {
 }
 
 func TestAuthenticatedServerProtectsV1AndLeavesHealthPublic(t *testing.T) {
-	server := NewAuthenticatedServer(app.NewService(app.Service{}), apiTestVerifier{})
+	server := NewAuthenticatedServer(app.NewService(app.Service{}), apiTestVerifier{}, configuredTenantID)
 
 	for _, test := range []struct {
 		path   string
@@ -46,6 +58,125 @@ func TestAuthenticatedServerProtectsV1AndLeavesHealthPublic(t *testing.T) {
 		if response.Code != test.status {
 			t.Fatalf("%s status = %d, want %d", test.path, response.Code, test.status)
 		}
+	}
+}
+
+func TestTenantScopedRoutesRejectOtherTenantBeforeHandler(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(nil, configuredTenantID)
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "register template", method: http.MethodPost, path: "/v1/tenants/tenant_other/template-revisions"},
+		{name: "list template revisions", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-revisions"},
+		{name: "get template registration", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-registrations/registration_123"},
+		{name: "get template variables", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-revisions/revision_123/variables"},
+		{name: "create stack", method: http.MethodPost, path: "/v1/tenants/tenant_other/stacks"},
+		{name: "list stacks", method: http.MethodGet, path: "/v1/tenants/tenant_other/stacks"},
+		{name: "get stack", method: http.MethodGet, path: "/v1/tenants/tenant_other/stacks/stack_123"},
+		{name: "install template", method: http.MethodPost, path: "/v1/tenants/tenant_other/stacks/stack_123/templates"},
+		{name: "update template config", method: http.MethodPatch, path: "/v1/tenants/tenant_other/stack-templates/stack_template_123/config"},
+		{name: "upgrade template", method: http.MethodPost, path: "/v1/tenants/tenant_other/stack-templates/stack_template_123/upgrade"},
+		{name: "start run", method: http.MethodPost, path: "/v1/tenants/tenant_other/stack-templates/stack_template_123/runs"},
+		{name: "get run", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-runs/run_123"},
+		{name: "list run logs", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-runs/run_123/logs"},
+		{name: "get run log artifact", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-runs/run_123/logs/plan"},
+		{name: "approve run", method: http.MethodPost, path: "/v1/tenants/tenant_other/template-runs/run_123/approval"},
+		{name: "cancel run", method: http.MethodPost, path: "/v1/tenants/tenant_other/template-runs/run_123/cancellation"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader("{"))
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body.String())
+			}
+			var body errorResponse
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error != "not_found" || body.Message != "resource not found" {
+				t.Fatalf("body = %#v", body)
+			}
+		})
+	}
+}
+
+func TestTenantBoundaryRejectsMissingAndMalformedPaths(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(nil, configuredTenantID)
+	for _, path := range []string{
+		"/v1/tenants/stacks",
+		"/v1/tenants/-tenant/stacks",
+		"/v1/tenants/tenant%2Fother/stacks",
+	} {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want %d", path, response.Code, http.StatusNotFound)
+		}
+	}
+}
+
+func TestAuthenticatedServerEvaluatesTenantAfterAuthentication(t *testing.T) {
+	t.Parallel()
+
+	server := NewAuthenticatedServer(nil, apiTestVerifier{}, configuredTenantID)
+	path := "/v1/tenants/tenant_other/stacks"
+
+	unauthenticated := httptest.NewRecorder()
+	server.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, path, nil))
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want %d", unauthenticated.Code, http.StatusUnauthorized)
+	}
+
+	authenticatedRequest := httptest.NewRequest(http.MethodGet, path, nil)
+	authenticatedRequest.Header.Set("Authorization", "Bearer test-token")
+	authenticated := httptest.NewRecorder()
+	server.ServeHTTP(authenticated, authenticatedRequest)
+	if authenticated.Code != http.StatusNotFound {
+		t.Fatalf("authenticated status = %d, want %d", authenticated.Code, http.StatusNotFound)
+	}
+}
+
+func TestAuthenticatedServerAllowsConfiguredTenantToReachService(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stacks.list = []traits.Stack{{
+		ID:       traits.StackID("stack_123"),
+		TenantID: configuredTenantID,
+		Name:     "Acme Prod",
+		Slug:     "acme-prod",
+	}}
+	server := NewAuthenticatedServer(deps.service(), apiTestVerifier{}, configuredTenantID)
+	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
+	request.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if deps.stacks.gotListTenantID != configuredTenantID {
+		t.Fatalf("tenant list lookup = %q, want %q", deps.stacks.gotListTenantID, configuredTenantID)
+	}
+	var body []stackResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body) != 1 || body[0].ID != "stack_123" || body[0].Slug != "acme-prod" {
+		t.Fatalf("stack response = %#v", body)
 	}
 }
 
@@ -70,12 +201,12 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 	}
 	deps.runID = traits.TemplateRunID("run_123")
 	deps.now = startedAt
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/runs",
-		strings.NewReader(`{"operation":"plan","trigger_actor":"user_123"}`),
+		strings.NewReader(`{"operation":"plan"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -92,8 +223,8 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 	if deps.templateRuns.created.Operation != traits.OperationPlan {
 		t.Fatalf("operation = %q", deps.templateRuns.created.Operation)
 	}
-	if deps.templateRuns.created.TriggerActor != traits.UserID("user_123") {
-		t.Fatalf("trigger actor = %q", deps.templateRuns.created.TriggerActor)
+	if deps.templateRuns.created.TriggerActor != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("trigger actor = %q, want %q", deps.templateRuns.created.TriggerActor, apiKeycloakSubject)
 	}
 
 	var body traits.TemplateRun
@@ -114,9 +245,9 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 func TestStartTemplateRunRejectsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service())
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/runs",
 		strings.NewReader(`{"operation":`),
@@ -132,12 +263,12 @@ func TestStartTemplateRunRejectsInvalidJSON(t *testing.T) {
 func TestStartTemplateRunMapsInvalidCommandToBadRequest(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service())
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/runs",
-		strings.NewReader(`{"operation":"refresh","trigger_actor":"user_123"}`),
+		strings.NewReader(`{"operation":"refresh"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -152,12 +283,12 @@ func TestStartTemplateRunMapsMissingStackTemplateToNotFound(t *testing.T) {
 
 	deps := newAPITestDependencies()
 	deps.stackTemplates.getErr = app.ErrNotFound
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/missing_stack_template/runs",
-		strings.NewReader(`{"operation":"plan","trigger_actor":"user_123"}`),
+		strings.NewReader(`{"operation":"plan"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -174,12 +305,12 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 	deps := newAPITestDependencies()
 	deps.registrationID = traits.TemplateRegistrationID("template_registration_123")
 	deps.now = requestedAt
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/template-revisions",
-		strings.NewReader(`{"repo_owner":"acme","repo_name":"infra-templates","source_ref":"v0.0.1","root_path":"modules/vpc","requested_by":"user_123"}`),
+		strings.NewReader(`{"repo_owner":"acme","repo_name":"infra-templates","source_ref":"v0.0.1","root_path":"modules/vpc"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -195,6 +326,9 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 	}
 	if deps.registrations.created.SourceRef != "v0.0.1" {
 		t.Fatalf("source ref = %q", deps.registrations.created.SourceRef)
+	}
+	if deps.registrations.created.RequestedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("requested by = %q, want %q", deps.registrations.created.RequestedBy, apiKeycloakSubject)
 	}
 	if deps.workflows.syncInput.RegistrationID != traits.TemplateRegistrationID("template_registration_123") {
 		t.Fatalf("workflow registration id = %q", deps.workflows.syncInput.RegistrationID)
@@ -218,9 +352,9 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 func TestRegisterTemplateRejectsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service())
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/template-revisions",
 		strings.NewReader(`{"repo_owner":`),
@@ -236,12 +370,12 @@ func TestRegisterTemplateRejectsInvalidJSON(t *testing.T) {
 func TestRegisterTemplateMapsInvalidCommandToBadRequest(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service())
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/template-revisions",
-		strings.NewReader(`{"repo_owner":"acme","repo_name":"infra-templates","root_path":"modules/vpc","requested_by":"user_123"}`),
+		strings.NewReader(`{"repo_owner":"acme","repo_name":"infra-templates","root_path":"modules/vpc"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -258,12 +392,12 @@ func TestCreateStackCallsService(t *testing.T) {
 	deps := newAPITestDependencies()
 	deps.stackID = traits.StackID("stack_123")
 	deps.now = createdAt
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stacks",
-		strings.NewReader(`{"name":"Acme Prod","tags":{"env":"prod"},"default_credential_ids":["credential_123"],"actor":"user_123"}`),
+		strings.NewReader(`{"name":"Acme Prod","tags":{"env":"prod"},"default_credential_ids":["credential_123"]}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -276,6 +410,9 @@ func TestCreateStackCallsService(t *testing.T) {
 	}
 	if deps.stacks.created.Slug != "acme-prod" {
 		t.Fatalf("slug = %q, want acme-prod", deps.stacks.created.Slug)
+	}
+	if deps.stacks.created.CreatedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("created by = %q, want %q", deps.stacks.created.CreatedBy, apiKeycloakSubject)
 	}
 
 	var body stackResponse
@@ -306,7 +443,7 @@ func TestListStacksReturnsTenantStacks(t *testing.T) {
 			CreatedAt: createdAt,
 		},
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
 
@@ -356,7 +493,7 @@ func TestGetStackReturnsStackView(t *testing.T) {
 			},
 		},
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack_123", nil)
 
@@ -392,12 +529,12 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 	deps.templates.template = traits.TemplateRevision{ID: traits.TemplateRevisionID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateRevisionActive}
 	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
 	deps.stackTemplateID = traits.StackTemplateID("stack_template_a1b2c3d4")
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stacks/stack_123/templates",
-		strings.NewReader(`{"template_revision_id":"template_123","selected_ref":"main","config":{"region":"us-east-1"},"actor":"user_123"}`),
+		strings.NewReader(`{"template_revision_id":"template_123","selected_ref":"main","config":{"region":"us-east-1"}}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -407,6 +544,9 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 	}
 	if deps.stackTemplateInstaller.created.StackID != traits.StackID("stack_123") {
 		t.Fatalf("stack id = %q, want stack_123", deps.stackTemplateInstaller.created.StackID)
+	}
+	if deps.stackTemplateInstaller.created.CreatedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("created by = %q, want %q", deps.stackTemplateInstaller.created.CreatedBy, apiKeycloakSubject)
 	}
 
 	var body map[string]any
@@ -419,8 +559,8 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 	if body["id"] != "stack_template_a1b2c3d4" {
 		t.Fatalf("response id = %q, want stack_template_a1b2c3d4", body["id"])
 	}
-	if body["created_by"] != "user_123" {
-		t.Fatalf("response created by = %q, want user_123", body["created_by"])
+	if body["created_by"] != apiKeycloakSubject {
+		t.Fatalf("response created by = %q, want %q", body["created_by"], apiKeycloakSubject)
 	}
 	config, ok := body["config"].(map[string]any)
 	if !ok || config["region"] != "us-east-1" {
@@ -439,12 +579,12 @@ func TestUpdateStackTemplateConfigCallsService(t *testing.T) {
 		Lifecycle:                 traits.StackTemplateActive,
 	}
 	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPatch,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/config",
-		strings.NewReader(`{"config":{"region":"us-west-2"},"actor":"user_123"}`),
+		strings.NewReader(`{"config":{"region":"us-west-2"}}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -484,12 +624,12 @@ func TestUpgradeStackTemplateCallsService(t *testing.T) {
 		Status:           traits.TemplateRevisionActive,
 	}
 	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade",
-		strings.NewReader(`{"target_template_revision_id":"template_rev_2","actor":"user_123"}`),
+		strings.NewReader(`{"target_template_revision_id":"template_rev_2"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -535,12 +675,12 @@ func TestUpgradeStackTemplateMapsMissingRequiredVariableToConflict(t *testing.T)
 		{Name: "region", Required: true},
 		{Name: "cidr_block", Required: true},
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade",
-		strings.NewReader(`{"target_template_revision_id":"template_rev_2","actor":"user_123"}`),
+		strings.NewReader(`{"target_template_revision_id":"template_rev_2"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -566,12 +706,12 @@ func TestUpgradeStackTemplateMapsSourceMismatchToConflict(t *testing.T) {
 		SourceTemplateID: traits.SourceTemplateID("source_template_db"),
 		Status:           traits.TemplateRevisionActive,
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade",
-		strings.NewReader(`{"target_template_revision_id":"template_rev_2","actor":"user_123"}`),
+		strings.NewReader(`{"target_template_revision_id":"template_rev_2"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -594,13 +734,13 @@ func TestStackTemplateEditRoutesMapMissingStackTemplateToNotFound(t *testing.T) 
 			name:   "config edit",
 			method: http.MethodPatch,
 			path:   "/v1/tenants/tenant_123/stack-templates/missing_stack_template/config",
-			body:   `{"config":{},"actor":"user_123"}`,
+			body:   `{"config":{}}`,
 		},
 		{
 			name:   "upgrade",
 			method: http.MethodPost,
 			path:   "/v1/tenants/tenant_123/stack-templates/missing_stack_template/upgrade",
-			body:   `{"target_template_revision_id":"template_rev_2","actor":"user_123"}`,
+			body:   `{"target_template_revision_id":"template_rev_2"}`,
 		},
 	}
 
@@ -610,9 +750,9 @@ func TestStackTemplateEditRoutesMapMissingStackTemplateToNotFound(t *testing.T) 
 
 			deps := newAPITestDependencies()
 			deps.stackTemplates.getErr = app.ErrNotFound
-			server := NewServer(deps.service())
+			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
-			request := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			request := authenticatedRequest(tt.method, tt.path, strings.NewReader(tt.body))
 
 			server.ServeHTTP(response, request)
 
@@ -632,7 +772,7 @@ func TestGetTemplateRegistrationReturnsRegistration(t *testing.T) {
 		TenantID: traits.TenantID("tenant_123"),
 		Status:   traits.TemplateRegistrationCompleted,
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -678,7 +818,7 @@ func TestListTemplateRevisionsReturnsTenantTemplateRevisions(t *testing.T) {
 			CreatedAt:         createdAt,
 		},
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/template-revisions", nil)
 
@@ -715,7 +855,7 @@ func TestGetTemplateRevisionVariablesReturnsVariables(t *testing.T) {
 			Required:           true,
 		},
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -755,7 +895,7 @@ func TestGetTemplateRunReturnsRun(t *testing.T) {
 		Operation:       traits.OperationPlan,
 		Status:          traits.TemplateRunCompleted,
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -802,7 +942,7 @@ func TestGetTemplateRunLogReturnsPlainText(t *testing.T) {
 		Phase:     "plan",
 		ObjectKey: "tenants/tenant_123/runs/run_123/logs/plan.log",
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -846,7 +986,7 @@ func TestListTemplateRunLogsReturnsMetadata(t *testing.T) {
 			UploadedAt:  uploadedAt,
 		},
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -886,7 +1026,7 @@ func TestListTemplateRunLogsReturnsEmptyArray(t *testing.T) {
 		ID:       traits.TemplateRunID("run_123"),
 		TenantID: traits.TenantID("tenant_123"),
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -907,7 +1047,7 @@ func TestListTemplateRunLogsReturnsEmptyArray(t *testing.T) {
 func TestGetTemplateRunLogMapsInvalidPhaseToBadRequest(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service())
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -927,7 +1067,7 @@ func TestGetTemplateRunMapsMissingRunToNotFound(t *testing.T) {
 
 	deps := newAPITestDependencies()
 	deps.templateRuns.getErr = app.ErrNotFound
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -957,7 +1097,7 @@ func TestGetTemplateRunLogMapsMissingLogToNotFound(t *testing.T) {
 		Phase:     "plan",
 		ObjectKey: "tenants/tenant_123/runs/run_123/logs/plan.log",
 	}
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -976,12 +1116,12 @@ func TestApproveRunCallsService(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/template-runs/run_123/approval",
-		strings.NewReader(`{"approved_by":"user_123"}`),
+		strings.NewReader(`{}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -995,11 +1135,14 @@ func TestApproveRunCallsService(t *testing.T) {
 	if deps.templateRuns.approval.RunID != traits.TemplateRunID("run_123") {
 		t.Fatalf("run id = %q", deps.templateRuns.approval.RunID)
 	}
-	if deps.templateRuns.approval.ApprovedBy != traits.UserID("user_123") {
-		t.Fatalf("approved by = %q", deps.templateRuns.approval.ApprovedBy)
+	if deps.templateRuns.approval.ApprovedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("approved by = %q, want %q", deps.templateRuns.approval.ApprovedBy, apiKeycloakSubject)
 	}
 	if deps.workflows.approvalRunID != traits.TemplateRunID("run_123") {
 		t.Fatalf("workflow run id = %q", deps.workflows.approvalRunID)
+	}
+	if deps.workflows.approvalSignal.ApprovedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("workflow approved by = %q, want %q", deps.workflows.approvalSignal.ApprovedBy, apiKeycloakSubject)
 	}
 }
 
@@ -1007,12 +1150,12 @@ func TestCancelRunCallsService(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	server := NewServer(deps.service())
+	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/template-runs/run_123/cancellation",
-		strings.NewReader(`{"requested_by":"user_123","reason":"testing"}`),
+		strings.NewReader(`{"reason":"testing"}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -1026,14 +1169,72 @@ func TestCancelRunCallsService(t *testing.T) {
 	if deps.templateRuns.cancellation.RunID != traits.TemplateRunID("run_123") {
 		t.Fatalf("run id = %q", deps.templateRuns.cancellation.RunID)
 	}
-	if deps.templateRuns.cancellation.RequestedBy != traits.UserID("user_123") {
-		t.Fatalf("requested by = %q", deps.templateRuns.cancellation.RequestedBy)
+	if deps.templateRuns.cancellation.RequestedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("requested by = %q, want %q", deps.templateRuns.cancellation.RequestedBy, apiKeycloakSubject)
 	}
 	if deps.templateRuns.cancellation.Reason != "testing" {
 		t.Fatalf("reason = %q", deps.templateRuns.cancellation.Reason)
 	}
 	if deps.workflows.cancelRunID != traits.TemplateRunID("run_123") {
 		t.Fatalf("workflow run id = %q", deps.workflows.cancelRunID)
+	}
+	if deps.workflows.cancelSignal.RequestedBy != traits.UserID(apiKeycloakSubject) {
+		t.Fatalf("workflow requested by = %q, want %q", deps.workflows.cancelSignal.RequestedBy, apiKeycloakSubject)
+	}
+}
+
+func TestRunDecisionRequestsRejectTopLevelNull(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		path            string
+		assertNoEffects func(*testing.T, *apiTestDependencies)
+	}{
+		{
+			name: "approval",
+			path: "/v1/tenants/tenant_123/template-runs/run_123/approval",
+			assertNoEffects: func(t *testing.T, deps *apiTestDependencies) {
+				t.Helper()
+				if deps.templateRuns.approval.RunID != "" {
+					t.Errorf("approval run ID = %q, want no approval", deps.templateRuns.approval.RunID)
+				}
+				if deps.workflows.approvalRunID != "" {
+					t.Errorf("workflow approval run ID = %q, want no signal", deps.workflows.approvalRunID)
+				}
+			},
+		},
+		{
+			name: "cancellation",
+			path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation",
+			assertNoEffects: func(t *testing.T, deps *apiTestDependencies) {
+				t.Helper()
+				if deps.templateRuns.cancellation.RunID != "" {
+					t.Errorf("cancellation run ID = %q, want no cancellation", deps.templateRuns.cancellation.RunID)
+				}
+				if deps.workflows.cancelRunID != "" {
+					t.Errorf("workflow cancellation run ID = %q, want no signal", deps.workflows.cancelRunID)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newAPITestDependencies()
+			server := NewServer(deps.service(), configuredTenantID)
+			response := httptest.NewRecorder()
+			request := authenticatedRequest(http.MethodPost, test.path, strings.NewReader(`null`))
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
+			}
+			test.assertNoEffects(t, deps)
+		})
 	}
 }
 
@@ -1050,7 +1251,7 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 		{
 			name: "approval",
 			path: "/v1/tenants/tenant_123/template-runs/run_123/approval",
-			body: `{"approved_by":"user_123"}`,
+			body: `{}`,
 			configure: func(deps *apiTestDependencies) {
 				deps.templateRuns.approvalErr = app.ErrRunNotApprovable
 			},
@@ -1059,7 +1260,7 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 		{
 			name: "cancellation",
 			path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation",
-			body: `{"requested_by":"user_123"}`,
+			body: `{}`,
 			configure: func(deps *apiTestDependencies) {
 				deps.templateRuns.cancellationErr = app.ErrRunNotCancelable
 			},
@@ -1073,9 +1274,9 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 
 			deps := newAPITestDependencies()
 			tt.configure(deps)
-			server := NewServer(deps.service())
+			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+			request := authenticatedRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
 
 			server.ServeHTTP(response, request)
 
@@ -1086,10 +1287,138 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 	}
 }
 
+func TestMutationRequestsRejectIdentityOverrides(t *testing.T) {
+	assertNoStackCreation := func(t *testing.T, deps *apiTestDependencies) {
+		t.Helper()
+		if deps.stacks.created.ID != "" {
+			t.Errorf("created stack ID = %q, want no mutation", deps.stacks.created.ID)
+		}
+	}
+	assertNoRegistration := func(t *testing.T, deps *apiTestDependencies) {
+		t.Helper()
+		if deps.registrations.created.ID != "" {
+			t.Errorf("created registration ID = %q, want no mutation", deps.registrations.created.ID)
+		}
+		if deps.workflows.syncInput.RegistrationID != "" {
+			t.Errorf("workflow registration ID = %q, want no workflow start", deps.workflows.syncInput.RegistrationID)
+		}
+	}
+	assertNoRun := func(t *testing.T, deps *apiTestDependencies) {
+		t.Helper()
+		if deps.templateRuns.created.ID != "" {
+			t.Errorf("created run ID = %q, want no mutation", deps.templateRuns.created.ID)
+		}
+		if deps.workflows.input.RunID != "" {
+			t.Errorf("workflow run ID = %q, want no workflow start", deps.workflows.input.RunID)
+		}
+	}
+	assertNoApproval := func(t *testing.T, deps *apiTestDependencies) {
+		t.Helper()
+		if deps.templateRuns.approval.RunID != "" {
+			t.Errorf("approval run ID = %q, want no mutation", deps.templateRuns.approval.RunID)
+		}
+		if deps.workflows.approvalRunID != "" {
+			t.Errorf("workflow approval run ID = %q, want no signal", deps.workflows.approvalRunID)
+		}
+	}
+
+	tests := []struct {
+		name            string
+		path            string
+		body            string
+		assertNoEffects func(*testing.T, *apiTestDependencies)
+	}{
+		{name: "actor", path: "/v1/tenants/tenant_123/stacks", body: `{"name":"Acme","actor":"spoofed"}`, assertNoEffects: assertNoStackCreation},
+		{name: "requested by", path: "/v1/tenants/tenant_123/template-revisions", body: `{"repo_owner":"acme","repo_name":"infra","source_ref":"main","root_path":".","requested_by":"spoofed"}`, assertNoEffects: assertNoRegistration},
+		{name: "trigger actor", path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan","trigger_actor":"spoofed"}`, assertNoEffects: assertNoRun},
+		{name: "approved by", path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{"approved_by":"spoofed"}`, assertNoEffects: assertNoApproval},
+		{name: "created by", path: "/v1/tenants/tenant_123/stacks", body: `{"name":"Acme","created_by":"spoofed"}`, assertNoEffects: assertNoStackCreation},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			deps := newAPITestDependencies()
+			server := NewServer(deps.service(), configuredTenantID)
+			response := httptest.NewRecorder()
+			request := authenticatedRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
+			}
+			test.assertNoEffects(t, deps)
+		})
+	}
+}
+
+func TestDecodeRequestBodyRejectsNonObjectAndMultipleValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "array", body: `[]`},
+		{name: "string", body: `"value"`},
+		{name: "number", body: `42`},
+		{name: "boolean", body: `true`},
+		{name: "second value", body: `{"name":"accepted"} {"name":"extra"}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(test.body))
+			var destination struct {
+				Name string `json:"name"`
+			}
+
+			if decodeRequestBody(response, request, &destination) {
+				t.Fatal("decodeRequestBody accepted request, want rejection before service effect")
+			}
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestMutationRequestsRejectMissingPrincipal(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/stacks",
+		strings.NewReader(`{"name":"Acme Prod","tags":{"env":"prod"},"default_credential_ids":["credential_123"]}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnauthorized, response.Body.String())
+	}
+	var body errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error != "unauthorized" {
+		t.Fatalf("error code = %q, want unauthorized", body.Error)
+	}
+	if deps.stacks.created.ID != "" {
+		t.Fatalf("created stack ID = %q, want no mutation", deps.stacks.created.ID)
+	}
+}
+
 func TestUnknownRouteReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service())
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/nope", nil)
 
@@ -1429,10 +1758,12 @@ func (repository *recordingTemplateRepository) GetTemplateRevisionVariables(_ co
 }
 
 type recordingWorkflowDispatcher struct {
-	input         traits.TemplateRunWorkflowInput
-	syncInput     traits.TemplateSyncWorkflowInput
-	approvalRunID traits.TemplateRunID
-	cancelRunID   traits.TemplateRunID
+	input          traits.TemplateRunWorkflowInput
+	syncInput      traits.TemplateSyncWorkflowInput
+	approvalRunID  traits.TemplateRunID
+	approvalSignal traits.ApprovalSignal
+	cancelRunID    traits.TemplateRunID
+	cancelSignal   traits.CancelSignal
 }
 
 func (dispatcher *recordingWorkflowDispatcher) StartTemplateRun(_ context.Context, input traits.TemplateRunWorkflowInput) error {
@@ -1445,13 +1776,15 @@ func (dispatcher *recordingWorkflowDispatcher) StartTemplateSync(_ context.Conte
 	return nil
 }
 
-func (dispatcher *recordingWorkflowDispatcher) ApproveTemplateRun(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, _ traits.ApprovalSignal) error {
+func (dispatcher *recordingWorkflowDispatcher) ApproveTemplateRun(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, signal traits.ApprovalSignal) error {
 	dispatcher.approvalRunID = runID
+	dispatcher.approvalSignal = signal
 	return nil
 }
 
-func (dispatcher *recordingWorkflowDispatcher) CancelTemplateRun(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, _ traits.CancelSignal) error {
+func (dispatcher *recordingWorkflowDispatcher) CancelTemplateRun(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, signal traits.CancelSignal) error {
 	dispatcher.cancelRunID = runID
+	dispatcher.cancelSignal = signal
 	return nil
 }
 

@@ -11,6 +11,11 @@ import (
 	"go.temporal.io/sdk/testsuite"
 )
 
+const (
+	requesterSubject = traits.UserID("6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91")
+	approverSubject  = traits.UserID("cb4afba6-d18d-496f-80ce-8a50b94f09be")
+)
+
 func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 	t.Parallel()
 
@@ -123,7 +128,7 @@ func TestTemplateRunWorkflowWaitsForApplyApproval(t *testing.T) {
 		})
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(traits.ApprovalSignalName, traits.ApprovalSignal{
-			ApprovedBy: traits.UserID("user_123"),
+			ApprovedBy: approverSubject,
 		})
 	}, 0)
 
@@ -173,7 +178,7 @@ func TestTemplateRunWorkflowCancelsApplyWhileWaitingApproval(t *testing.T) {
 			statuses = append(statuses, activityInput.Status)
 			if activityInput.Status == traits.TemplateRunWaitingApproval {
 				env.SignalWorkflow(traits.CancelSignalName, traits.CancelSignal{
-					RequestedBy: traits.UserID("user_456"),
+					RequestedBy: requesterSubject,
 					Reason:      "superseded",
 				})
 			}
@@ -226,7 +231,7 @@ func TestTemplateRunWorkflowCancelsPlanWhenSignalArrivesDuringTerraform(t *testi
 		})
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(traits.CancelSignalName, traits.CancelSignal{
-			RequestedBy: traits.UserID("user_456"),
+			RequestedBy: requesterSubject,
 			Reason:      "stop retries",
 		})
 	}, 0)
