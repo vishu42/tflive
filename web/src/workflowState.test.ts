@@ -171,6 +171,7 @@ function stack(overrides: Partial<Stack>): Stack {
     default_credential_ids: [],
     created_by: "user_123",
     created_at: "2026-07-06T00:00:00Z",
+    effectiveCapabilities: { canView: true, canOperate: true, canApprove: true, canManageAccess: true },
     ...overrides
   };
 }

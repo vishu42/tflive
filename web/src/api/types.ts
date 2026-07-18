@@ -1,3 +1,5 @@
+import type { StackCapabilities } from "../auth/types";
+
 export type TemplateRegistrationStatus =
   | "pending"
   | "running"
@@ -91,6 +93,8 @@ export interface Stack {
   default_credential_ids: string[];
   created_by: string;
   created_at: string;
+  // Per-stack authorization booleans resolved by the backend for AUTH-017; see auth/types.ts.
+  effectiveCapabilities: StackCapabilities;
 }
 
 export interface StackTemplate {
