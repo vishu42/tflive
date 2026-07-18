@@ -12,6 +12,7 @@ import (
 
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
+	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -21,7 +22,7 @@ const configuredTenantID = traits.TenantID("tenant_123")
 func authenticatedRequest(method, target string, body io.Reader) *http.Request {
 	request := httptest.NewRequest(method, target, body)
 	ctx := authn.ContextWithPrincipal(request.Context(), authn.Principal{
-		Subject: apiKeycloakSubject,
+		Subject: apiKeycloakSubject, RealmRoles: []string{"stack-creator"},
 	})
 	return request.WithContext(ctx)
 }
@@ -424,6 +425,61 @@ func TestCreateStackCallsService(t *testing.T) {
 	}
 	if body.Tags["env"] != "prod" {
 		t.Fatalf("response tags = %#v", body.Tags)
+	}
+}
+
+func TestWriteAppErrorMapsAuthorizationDependencyFailure(t *testing.T) {
+	t.Parallel()
+
+	response := httptest.NewRecorder()
+	writeAppError(response, authz.ErrUnavailable)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	var body errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error != "authorization_unavailable" {
+		t.Fatalf("error = %q, want authorization_unavailable", body.Error)
+	}
+}
+
+func TestCreateStackRejectsPrincipalWithoutCreatorRole(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service(), configuredTenantID)
+	request := httptest.NewRequest(http.MethodPost, "/v1/tenants/tenant_123/stacks", strings.NewReader(`{"name":"Acme"}`))
+	request = request.WithContext(authn.ContextWithPrincipal(request.Context(), authn.Principal{Subject: apiKeycloakSubject}))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+	if deps.stacks.created.ID != "" {
+		t.Fatalf("created stack = %#v, want no persistence", deps.stacks.created)
+	}
+}
+
+func TestCreateStackMapsOwnerWriteFailureAfterPersistence(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.authorizer.writeErr = authz.ErrUnavailable
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, authenticatedRequest(http.MethodPost, "/v1/tenants/tenant_123/stacks", strings.NewReader(`{"name":"Acme"}`)))
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	if deps.stacks.created.ID == "" {
+		t.Fatal("owner-write failure did not preserve the persisted stack")
 	}
 }
 
@@ -1430,6 +1486,7 @@ func TestUnknownRouteReturnsNotFound(t *testing.T) {
 }
 
 type apiTestDependencies struct {
+	authorizer             *apiAuthorizer
 	stacks                 recordingStackRepository
 	stackTemplates         recordingStackTemplateRepository
 	stackTemplateInstaller recordingStackTemplateInstaller
@@ -1448,6 +1505,7 @@ type apiTestDependencies struct {
 
 func newAPITestDependencies() *apiTestDependencies {
 	return &apiTestDependencies{
+		authorizer:      &apiAuthorizer{},
 		stackID:         traits.StackID("stack_123"),
 		stackTemplateID: traits.StackTemplateID("stack_template_123"),
 		runID:           traits.TemplateRunID("run_123"),
@@ -1458,6 +1516,7 @@ func newAPITestDependencies() *apiTestDependencies {
 
 func (deps *apiTestDependencies) service() *app.Service {
 	return app.NewService(app.Service{
+		Authorizer:               deps.authorizer,
 		Stacks:                   &deps.stacks,
 		StackTemplates:           &deps.stackTemplates,
 		StackTemplateInstaller:   &deps.stackTemplateInstaller,
@@ -1475,6 +1534,25 @@ func (deps *apiTestDependencies) service() *app.Service {
 		Clock:                    fixedClock{now: deps.now},
 	})
 }
+
+type apiAuthorizer struct{ writeErr error }
+
+func (apiAuthorizer) Check(context.Context, authz.CheckRequest) (authz.CheckResult, error) {
+	return authz.CheckResult{}, nil
+}
+func (apiAuthorizer) BatchCheck(context.Context, authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
+	return authz.BatchCheckResult{}, nil
+}
+func (apiAuthorizer) ListAccessibleStacks(context.Context, authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
+	return authz.ListAccessibleStacksResult{}, nil
+}
+func (apiAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
+	return authz.ListGrantsResult{}, nil
+}
+func (authorizer *apiAuthorizer) WriteRelationships(context.Context, authz.Mutation) error {
+	return authorizer.writeErr
+}
+func (apiAuthorizer) DeleteRelationships(context.Context, authz.Mutation) error { return nil }
 
 type recordingStackRepository struct {
 	created         traits.Stack

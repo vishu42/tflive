@@ -16,7 +16,7 @@ const keycloakSubject = "6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91"
 
 func authenticatedContext() context.Context {
 	return authn.ContextWithPrincipal(context.Background(), authn.Principal{
-		Subject: keycloakSubject,
+		Subject: keycloakSubject, RealmRoles: []string{"stack-creator"},
 	})
 }
 
@@ -85,9 +85,10 @@ func TestCreateStackDerivesSlugAndPersistsStack(t *testing.T) {
 	now := time.Date(2026, 7, 6, 13, 30, 0, 0, time.UTC)
 	stacks := &recordingStackRepository{}
 	service := NewService(Service{
-		Stacks:   stacks,
-		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
-		Clock:    fixedClock{now: now},
+		Stacks:     stacks,
+		Authorizer: &recordingAuthorizer{},
+		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
+		Clock:      fixedClock{now: now},
 	})
 
 	stack, err := service.CreateStack(ctx, CreateStackCommand{
@@ -129,10 +130,12 @@ func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
 	t.Parallel()
 
 	stacks := &recordingStackRepository{createErr: ErrDuplicateStackSlug}
+	authorizer := &recordingAuthorizer{}
 	service := NewService(Service{
-		Stacks:   stacks,
-		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
-		Clock:    fixedClock{now: time.Now()},
+		Stacks:     stacks,
+		Authorizer: authorizer,
+		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
+		Clock:      fixedClock{now: time.Now()},
 	})
 
 	_, err := service.CreateStack(authenticatedContext(), CreateStackCommand{
@@ -142,6 +145,9 @@ func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
 	})
 	if !errors.Is(err, ErrDuplicateStackSlug) {
 		t.Fatalf("error = %v, want ErrDuplicateStackSlug", err)
+	}
+	if authorizer.calls != 0 {
+		t.Fatalf("owner writes = %d, want 0", authorizer.calls)
 	}
 }
 
