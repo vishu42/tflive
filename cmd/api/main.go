@@ -39,6 +39,7 @@ type appRepositories interface {
 	app.TemplateRevisionMetadataRepository
 	app.TemplateRevisionRepository
 	app.TemplateRunLogRepository
+	app.AuditRepository
 	authdispatch.Outbox
 }
 
@@ -186,6 +187,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		TemplateRunLogs:          logReader,
 		TemplateRunLogMetadata:   store,
 		Workflows:                dispatcher,
+		Audit:                    store,
 	})
 	if err != nil {
 		return fmt.Errorf("wire service: %w", err)
