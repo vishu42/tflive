@@ -26,11 +26,11 @@ New file `web/src/auth/useStackCapabilities.ts`:
 
 ```ts
 export function useStackCapabilities(stackId: string): StackCapabilities | undefined {
-  return useStackQuery(tenantID, stackId).data?.effectiveCapabilities;
+  return useStackQuery(tenantID, stackId).data?.stack.effectiveCapabilities;
 }
 ```
 
-`tenantID` is imported from `config.ts` internally (the same pattern `AppShell` and `App.tsx` already use for a module-level tenant constant), so the public signature matches the ticket's `useStackCapabilities(stackId)` exactly — callers never pass a tenant ID.
+`tenantID` is imported from `config.ts` internally (the same pattern `AppShell` and `App.tsx` already use for a module-level tenant constant), so the public signature matches the ticket's `useStackCapabilities(stackId)` exactly — callers never pass a tenant ID. Note `useStackQuery` resolves to a `StackView` (`{ stack, templates }`, see `web/src/api/types.ts`), not a bare `Stack`, so `effectiveCapabilities` is read off `data.stack`, not `data` directly.
 
 ### `<RequireCapability>`
 
