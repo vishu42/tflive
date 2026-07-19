@@ -4,10 +4,16 @@ import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  registrationRefetchInterval,
+  runRefetchInterval,
   useStacksQuery,
   useStackQuery,
+  useTemplateRegistrationQuery,
   useTemplateRevisionVariablesQuery,
-  useTemplateRevisionsQuery
+  useTemplateRevisionsQuery,
+  useTemplateRunLogQuery,
+  useTemplateRunLogsQuery,
+  useTemplateRunQuery
 } from "./queries";
 
 function wrapper(queryClient: QueryClient) {
@@ -71,5 +77,78 @@ describe("read-only query hooks", () => {
 
     expect(result.current.fetchStatus).toBe("idle");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("polling-aware query hooks", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("fetches template registration status", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: "reg_1", status: "running" }));
+    const { result } = renderHook(() => useTemplateRegistrationQuery("tenant_123", "reg_1"), {
+      wrapper: wrapper(testQueryClient())
+    });
+
+    await waitFor(() => expect(result.current.data).toEqual({ id: "reg_1", status: "running" }));
+  });
+
+  it("fetches a template run's status regardless of poll option", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(jsonResponse({ id: "run_1", status: "planned" }))
+    );
+    const { result: polled } = renderHook(() => useTemplateRunQuery("tenant_123", "run_1", { poll: true }), {
+      wrapper: wrapper(testQueryClient())
+    });
+    await waitFor(() => expect(polled.current.data).toEqual({ id: "run_1", status: "planned" }));
+
+    const { result: unpolled } = renderHook(() => useTemplateRunQuery("tenant_123", "run_1", { poll: false }), {
+      wrapper: wrapper(testQueryClient())
+    });
+    await waitFor(() => expect(unpolled.current.data).toEqual({ id: "run_1", status: "planned" }));
+  });
+
+  describe("refetch interval selectors", () => {
+    it("polls a non-terminal registration and stops once terminal", () => {
+      expect(registrationRefetchInterval("running")).toBe(1500);
+      expect(registrationRefetchInterval("completed")).toBe(false);
+      expect(registrationRefetchInterval(undefined)).toBe(1500);
+    });
+
+    it("only polls a run when told to, and stops on terminal status", () => {
+      expect(runRefetchInterval("planned", true)).toBe(1500);
+      expect(runRefetchInterval("completed", true)).toBe(false);
+      expect(runRefetchInterval("planned", false)).toBe(false);
+    });
+  });
+
+  it("keys run logs by status so a status change produces a refetch", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([{ phase: "plan" }]));
+    const queryClient = testQueryClient();
+    const { result, rerender } = renderHook(
+      ({ statusTag }: { statusTag: string }) => useTemplateRunLogsQuery("tenant_123", "run_1", statusTag),
+      { wrapper: wrapper(queryClient), initialProps: { statusTag: "planned" } }
+    );
+    await waitFor(() => expect(result.current.data).toEqual([{ phase: "plan" }]));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    rerender({ statusTag: "completed" });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/v1/tenants/tenant_123/template-runs/run_1/logs",
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
+  it("fetches a single log phase as text", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("plan output\n", { status: 200, headers: { "content-type": "text/plain" } })
+    );
+    const { result } = renderHook(() => useTemplateRunLogQuery("tenant_123", "run_1", "plan", "planned"), {
+      wrapper: wrapper(testQueryClient())
+    });
+
+    await waitFor(() => expect(result.current.data).toBe("plan output\n"));
   });
 });
