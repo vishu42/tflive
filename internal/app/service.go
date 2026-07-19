@@ -788,7 +788,7 @@ func (service *Service) SearchUsers(ctx context.Context, command SearchUsersComm
 	if !ok || principal.Subject == "" {
 		return nil, ErrUnauthenticated
 	}
-	if !hasRole(principal, "platform-admin") {
+	if !isPlatformAdmin(principal) {
 		return nil, ErrForbidden
 	}
 	if err := validateSearchUsersCommand(command); err != nil {
@@ -805,15 +805,6 @@ func (service *Service) SearchUsers(ctx context.Context, command SearchUsersComm
 		return []DirectoryUser{}, nil
 	}
 	return users, nil
-}
-
-func hasRole(principal authn.Principal, role string) bool {
-	for _, r := range principal.RealmRoles {
-		if r == role {
-			return true
-		}
-	}
-	return false
 }
 
 func validateSearchUsersCommand(command SearchUsersCommand) error {
