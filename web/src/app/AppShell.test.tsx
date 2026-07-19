@@ -11,6 +11,7 @@ describe("AppShell", () => {
   it("renders nav, an identity slot, a static tenant indicator, and routed content", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { default: AppShell } = await import("./AppShell");
+    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
 
     const testRouter = createMemoryRouter(
       [
@@ -23,7 +24,11 @@ describe("AppShell", () => {
       { initialEntries: ["/"] }
     );
 
-    const markup = renderToStaticMarkup(<RouterProvider router={testRouter} />);
+    const markup = renderToStaticMarkup(
+      <MockAuthProvider>
+        <RouterProvider router={testRouter} />
+      </MockAuthProvider>
+    );
 
     expect(markup).toContain('href="/stacks"');
     expect(markup).toContain('href="/templates"');
@@ -32,5 +37,26 @@ describe("AppShell", () => {
     expect(markup).toContain(">tenant_123<");
     expect(markup).not.toContain("<input");
     expect(markup).toContain('data-testid="outlet-content"');
+  });
+
+  it("displays the mock user's display name and a logout control", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const { default: AppShell } = await import("./AppShell");
+    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
+    const { mockUsers } = await import("../auth/mockUsers");
+
+    const testRouter = createMemoryRouter(
+      [{ path: "/", element: <AppShell />, children: [{ index: true, element: <div /> }] }],
+      { initialEntries: ["/"] }
+    );
+
+    const markup = renderToStaticMarkup(
+      <MockAuthProvider>
+        <RouterProvider router={testRouter} />
+      </MockAuthProvider>
+    );
+
+    expect(markup).toContain(mockUsers.operator.displayName);
+    expect(markup).toContain('data-testid="logout-button"');
   });
 });

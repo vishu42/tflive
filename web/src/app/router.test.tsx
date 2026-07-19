@@ -12,12 +12,15 @@ describe("routeConfig", () => {
   it("renders the existing workflow console unchanged at the index route", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
+    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
     const queryClient = new QueryClient();
 
     const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/"] });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={testRouter} />
+        <MockAuthProvider>
+          <RouterProvider router={testRouter} />
+        </MockAuthProvider>
       </QueryClientProvider>
     );
 
@@ -28,6 +31,7 @@ describe("routeConfig", () => {
   it("renders a placeholder for every reserved screen in the route map", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
+    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
 
     const reservedPaths = [
       "/stacks",
@@ -43,7 +47,11 @@ describe("routeConfig", () => {
 
     for (const path of reservedPaths) {
       const testRouter = createMemoryRouter(routeConfig, { initialEntries: [path] });
-      const markup = renderToStaticMarkup(<RouterProvider router={testRouter} />);
+      const markup = renderToStaticMarkup(
+        <MockAuthProvider>
+          <RouterProvider router={testRouter} />
+        </MockAuthProvider>
+      );
       expect(markup, `expected a placeholder at ${path}`).toContain('data-testid="route-placeholder"');
     }
   });
@@ -51,9 +59,14 @@ describe("routeConfig", () => {
   it("renders the 404 screen for unknown paths", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
+    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
 
     const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/nonexistent"] });
-    const markup = renderToStaticMarkup(<RouterProvider router={testRouter} />);
+    const markup = renderToStaticMarkup(
+      <MockAuthProvider>
+        <RouterProvider router={testRouter} />
+      </MockAuthProvider>
+    );
 
     expect(markup).toContain('data-testid="route-not-found"');
   });

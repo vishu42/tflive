@@ -1,4 +1,5 @@
 import { Link, Outlet } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 import { tenantID } from "../config";
 
 const navItems: { to: string; label: string }[] = [
@@ -7,6 +8,8 @@ const navItems: { to: string; label: string }[] = [
 ];
 
 export default function AppShell() {
+  const { me, logout } = useAuth();
+
   return (
     <div className="app-frame">
       <header className="app-frame-header">
@@ -18,7 +21,16 @@ export default function AppShell() {
           ))}
         </nav>
         <div className="app-frame-identity">
-          <div className="identity-menu" data-testid="identity-menu" />
+          <div className="identity-menu" data-testid="identity-menu">
+            {me && (
+              <>
+                <span data-testid="identity-display-name">{me.displayName}</span>
+                <button type="button" data-testid="logout-button" onClick={logout}>
+                  Log out
+                </button>
+              </>
+            )}
+          </div>
           <div className="runtime-field">
             <span>Tenant</span>
             <span className="runtime-value" data-testid="shell-tenant-context">
