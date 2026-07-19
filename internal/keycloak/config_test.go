@@ -41,6 +41,9 @@ func TestLoadConfigReadsValidLocalSettings(t *testing.T) {
 	if got, want := cfg.HTTPTimeout, 10*time.Second; got != want {
 		t.Fatalf("HTTPTimeout = %s, want %s", got, want)
 	}
+	if got, want := cfg.DirectoryReaderClientSecret, "dir-reader-secret"; got != want {
+		t.Fatalf("DirectoryReaderClientSecret = %q, want %q", got, want)
+	}
 }
 
 func TestLoadConfigUsesNonSecretDefaults(t *testing.T) {
@@ -83,6 +86,7 @@ func TestLoadConfigRequiresRuntimeSecretsAndEndpoints(t *testing.T) {
 		"KEYCLOAK_PLATFORM_ADMIN_EMAIL",
 		"KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME",
 		"KEYCLOAK_PLATFORM_ADMIN_LAST_NAME",
+		"KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET",
 	}
 	for _, name := range required {
 		name := name
@@ -164,6 +168,7 @@ func validConfigEnv() map[string]string {
 		"KEYCLOAK_PLATFORM_ADMIN_EMAIL":      "tflive-platform-admin@local.test",
 		"KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME": "tflive",
 		"KEYCLOAK_PLATFORM_ADMIN_LAST_NAME":  "Platform Administrator",
+		"KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET": "dir-reader-secret",
 		"KEYCLOAK_HTTP_TIMEOUT":              "10s",
 	}
 }

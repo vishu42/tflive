@@ -87,6 +87,10 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	directoryReaderSecret, err := required(getenv, "KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
 
 	redirectURIs, err := parseBrowserURLs("KEYCLOAK_WEB_REDIRECT_URIS", redirectsRaw, false)
 	if err != nil {
@@ -122,8 +126,9 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		PlatformAdminPassword:  platformPassword,
 		PlatformAdminEmail:     platformEmail,
 		PlatformAdminFirstName: platformFirstName,
-		PlatformAdminLastName:  platformLastName,
-		HTTPTimeout:            timeout,
+		PlatformAdminLastName:       platformLastName,
+		DirectoryReaderClientSecret: directoryReaderSecret,
+		HTTPTimeout:                 timeout,
 	}, nil
 }
 
