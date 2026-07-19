@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1539,6 +1540,26 @@ func TestTemplateCatalogRoutesAllowGlobalRoles(t *testing.T) {
 	}
 }
 
+func TestCreateStackAllowsGlobalRoles(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range []string{"platform-admin", "stack-creator"} {
+		t.Run(role, func(t *testing.T) {
+			t.Parallel()
+			deps := newAPITestDependencies()
+			server := NewServer(deps.service(), configuredTenantID)
+			response := httptest.NewRecorder()
+			request := requestWithGlobalRole(http.MethodPost, "/v1/tenants/tenant_123/stacks", strings.NewReader(`{"name":"Acme"}`), role)
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestStackRoleRoutesUseInheritedPermissions(t *testing.T) {
 	t.Parallel()
 
@@ -1632,6 +1653,113 @@ func TestStackRoleRoutesDenyInsufficientRoles(t *testing.T) {
 			if deps.stackTemplateInstaller.created.ID != "" || deps.templateRuns.created.ID != "" || deps.templateRuns.approval.RunID != "" || deps.templateRuns.cancellation.RunID != "" {
 				t.Fatal("denied mutation had side effects")
 			}
+			if len(deps.stackTemplates.gotConfigJSON) != 0 || deps.stackTemplates.gotDesiredTemplateRevisionID != "" || deps.workflows.approvalRunID != "" || deps.workflows.cancelRunID != "" {
+				t.Fatal("denied mutation updated state or signaled a workflow")
+			}
+			if test.name == "unassigned list is empty" {
+				var stacks []stackResponse
+				if err := json.NewDecoder(response.Body).Decode(&stacks); err != nil {
+					t.Fatalf("decode stack list: %v", err)
+				}
+				if len(stacks) != 0 {
+					t.Fatalf("stacks = %#v, want empty", stacks)
+				}
+			}
+		})
+	}
+}
+
+func TestStackListFiltersMixedDecisions(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stacks.list = []traits.Stack{
+		{ID: "stack_allowed", TenantID: "tenant_123", CreatedAt: time.Unix(2, 0)},
+		{ID: "stack_denied", TenantID: "tenant_123", CreatedAt: time.Unix(1, 0)},
+	}
+	deps.authorizer.batchDecisions = []bool{true, false}
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := ordinaryAuthenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var stacks []stackResponse
+	if err := json.NewDecoder(response.Body).Decode(&stacks); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(stacks) != 1 || stacks[0].ID != "stack_allowed" {
+		t.Fatalf("stacks = %#v, want only stack_allowed", stacks)
+	}
+}
+
+func TestStackListLaterBatchFailureReturnsNoPartialResponse(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stacks.list = make([]traits.Stack, 51)
+	for i := range deps.stacks.list {
+		deps.stacks.list[i] = traits.Stack{ID: traits.StackID(fmt.Sprintf("stack_%02d", 51-i)), TenantID: "tenant_123", CreatedAt: time.Unix(int64(100-i), 0)}
+	}
+	deps.authorizer.batchErr = authz.ErrUnavailable
+	deps.authorizer.failBatch = 2
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := ordinaryAuthenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	}
+	var body errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if body.Error != "authorization_unavailable" {
+		t.Fatalf("error = %q, want authorization_unavailable", body.Error)
+	}
+}
+
+func TestInheritedRouteMissingAndDeniedStatusesMatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		status int
+	}{
+		{name: "approval", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusForbidden},
+		{name: "cancellation", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusForbidden},
+		{name: "log list", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusNotFound},
+		{name: "log body", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusNotFound},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			statuses := make([]int, 0, 2)
+			for _, condition := range []string{"missing", "denied"} {
+				deps := newPermissionMatrixDependencies()
+				if condition == "missing" {
+					deps.templateRuns.getErr = app.ErrNotFound
+				} else {
+					deps.authorizer.denied = true
+				}
+				server := NewServer(deps.service(), configuredTenantID)
+				response := httptest.NewRecorder()
+				request := ordinaryAuthenticatedRequest(test.method, test.path, strings.NewReader(test.body))
+				server.ServeHTTP(response, request)
+				statuses = append(statuses, response.Code)
+			}
+			if statuses[0] != test.status || statuses[1] != test.status {
+				t.Fatalf("missing=%d denied=%d want=%d", statuses[0], statuses[1], test.status)
+			}
 		})
 	}
 }
@@ -1716,6 +1844,40 @@ func TestMissingAuthorizerReturnsServiceUnavailable(t *testing.T) {
 	}
 }
 
+func TestCreateStackWithMissingAuthorizerReturnsServiceUnavailable(t *testing.T) {
+	t.Parallel()
+
+	stacks := &recordingStackRepository{}
+	service := app.NewService(app.Service{Stacks: stacks})
+	server := NewServer(service, configuredTenantID)
+	response := httptest.NewRecorder()
+	request := requestWithGlobalRole(http.MethodPost, "/v1/tenants/tenant_123/stacks", strings.NewReader(`{"name":"Acme"}`), "stack-creator")
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	}
+	if stacks.created.ID != "" {
+		t.Fatalf("created stack = %#v, want no persistence", stacks.created)
+	}
+}
+
+func TestMalformedStackIDReturnsProtectedNotFound(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := ordinaryAuthenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack:bad", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body.String())
+	}
+}
+
 type apiTestDependencies struct {
 	authorizer             *apiAuthorizer
 	stacks                 recordingStackRepository
@@ -1767,12 +1929,17 @@ func (deps *apiTestDependencies) service() *app.Service {
 }
 
 type apiAuthorizer struct {
-	writeErr    error
-	checkErr    error
-	denied      bool
-	enforceRole bool
-	role        authz.Role
-	check       authz.CheckRequest
+	writeErr            error
+	checkErr            error
+	denied              bool
+	enforceRole         bool
+	role                authz.Role
+	check               authz.CheckRequest
+	batchErr            error
+	failBatch           int
+	batchCalls          int
+	batchDecisions      []bool
+	truncateBatchResult bool
 }
 
 func (authorizer *apiAuthorizer) Check(_ context.Context, request authz.CheckRequest) (authz.CheckResult, error) {
@@ -1799,13 +1966,24 @@ func (authorizer *apiAuthorizer) Check(_ context.Context, request authz.CheckReq
 	return authz.CheckResult{Allowed: !authorizer.denied}, nil
 }
 func (authorizer *apiAuthorizer) BatchCheck(ctx context.Context, request authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
+	authorizer.batchCalls++
+	if authorizer.batchErr != nil && (authorizer.failBatch == 0 || authorizer.failBatch == authorizer.batchCalls) {
+		return authz.BatchCheckResult{}, authorizer.batchErr
+	}
 	result := authz.BatchCheckResult{Results: make([]authz.CheckResult, len(request.Checks))}
 	for i, check := range request.Checks {
-		decision, err := authorizer.Check(ctx, check)
-		if err != nil {
-			return authz.BatchCheckResult{}, err
+		if authorizer.batchDecisions != nil && i < len(authorizer.batchDecisions) {
+			result.Results[i] = authz.CheckResult{Allowed: authorizer.batchDecisions[i]}
+		} else {
+			decision, err := authorizer.Check(ctx, check)
+			if err != nil {
+				return authz.BatchCheckResult{}, err
+			}
+			result.Results[i] = decision
 		}
-		result.Results[i] = decision
+	}
+	if authorizer.truncateBatchResult && len(result.Results) > 0 {
+		result.Results = result.Results[:len(result.Results)-1]
 	}
 	return result, nil
 }

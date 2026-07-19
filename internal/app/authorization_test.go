@@ -120,6 +120,25 @@ func TestListStacksSkipsAuthorizationForEmptyTenant(t *testing.T) {
 	}
 }
 
+func TestListStacksRejectsNonAdvancingPage(t *testing.T) {
+	t.Parallel()
+
+	all := make([]traits.Stack, 50)
+	for i := range all {
+		all[i] = traits.Stack{ID: traits.StackID(fmt.Sprintf("stack_%02d", 50-i)), CreatedAt: time.Unix(100, 0)}
+	}
+	service := NewService(Service{
+		Authorizer: &permissionAuthorizer{},
+		Stacks:     &pagedStackRepository{stacks: all, repeatPage: true},
+	})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
+
+	_, err := service.ListStacks(ctx, ListStacksCommand{TenantID: "tenant_123"})
+	if !errors.Is(err, authz.ErrMalformedResponse) {
+		t.Fatalf("error = %v, want ErrMalformedResponse", err)
+	}
+}
+
 func TestStartTemplateRunDenialReturnsForbiddenBeforeMutation(t *testing.T) {
 	t.Parallel()
 
@@ -214,8 +233,9 @@ func (authorizer *permissionAuthorizer) DeleteRelationships(context.Context, aut
 }
 
 type pagedStackRepository struct {
-	stacks    []traits.Stack
-	pageCalls int
+	stacks     []traits.Stack
+	pageCalls  int
+	repeatPage bool
 }
 
 func (*pagedStackRepository) CreateStack(context.Context, traits.Stack) error { return nil }
@@ -231,7 +251,7 @@ func (repository *pagedStackRepository) ListStacks(context.Context, traits.Tenan
 func (repository *pagedStackRepository) ListStacksPage(_ context.Context, _ traits.TenantID, after *StackPageCursor, limit int) ([]traits.Stack, error) {
 	repository.pageCalls++
 	start := 0
-	if after != nil {
+	if after != nil && !repository.repeatPage {
 		for i, stack := range repository.stacks {
 			if stack.ID == after.ID && stack.CreatedAt.Equal(after.CreatedAt) {
 				start = i + 1

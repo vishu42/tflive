@@ -376,7 +376,7 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		return traits.Stack{}, err
 	}
 	if service.Authorizer == nil {
-		return traits.Stack{}, errors.New("authorization not configured")
+		return traits.Stack{}, fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
 	}
 	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
 	if err != nil {

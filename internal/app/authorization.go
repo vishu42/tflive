@@ -55,6 +55,9 @@ func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID tr
 		return err
 	}
 	stack, err := authz.StackFromID(string(stackID))
+	if errors.Is(err, authz.ErrInvalidInput) {
+		return denied
+	}
 	if err != nil {
 		return err
 	}
@@ -94,6 +97,17 @@ func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repo
 		if len(candidates) == 0 {
 			return accessible, nil
 		}
+		if len(candidates) > pageSize {
+			return nil, fmt.Errorf("%w: stack candidate page exceeds limit", authz.ErrMalformedResponse)
+		}
+		if cursor != nil && !stackPageOrderBefore(traits.Stack{ID: cursor.ID, CreatedAt: cursor.CreatedAt}, candidates[0]) {
+			return nil, fmt.Errorf("%w: stack candidate page did not advance", authz.ErrMalformedResponse)
+		}
+		for i := 1; i < len(candidates); i++ {
+			if !stackPageOrderBefore(candidates[i-1], candidates[i]) {
+				return nil, fmt.Errorf("%w: stack candidate page is not strictly ordered", authz.ErrMalformedResponse)
+			}
+		}
 
 		checks := make([]authz.CheckRequest, len(candidates))
 		for i, candidate := range candidates {
@@ -121,6 +135,13 @@ func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repo
 		last := candidates[len(candidates)-1]
 		cursor = &StackPageCursor{CreatedAt: last.CreatedAt, ID: last.ID}
 	}
+}
+
+func stackPageOrderBefore(left, right traits.Stack) bool {
+	if !left.CreatedAt.Equal(right.CreatedAt) {
+		return left.CreatedAt.After(right.CreatedAt)
+	}
+	return left.ID > right.ID
 }
 
 func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID, permission authz.Permission, denied error) (traits.StackTemplate, error) {

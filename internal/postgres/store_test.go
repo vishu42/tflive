@@ -629,7 +629,7 @@ func TestListStacksReturnsTenantScopedStacksNewestFirst(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 	older := traits.Stack{
-		ID:        traits.StackID("stack_older"),
+		ID:        traits.StackID("stack_a"),
 		TenantID:  traits.TenantID("tenant_123"),
 		Name:      "Older Stack",
 		Slug:      "older-stack",
@@ -637,12 +637,12 @@ func TestListStacksReturnsTenantScopedStacksNewestFirst(t *testing.T) {
 		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
 	}
 	newer := traits.Stack{
-		ID:        traits.StackID("stack_newer"),
+		ID:        traits.StackID("stack_b"),
 		TenantID:  traits.TenantID("tenant_123"),
 		Name:      "Newer Stack",
 		Slug:      "newer-stack",
 		CreatedBy: traits.UserID("user_123"),
-		CreatedAt: time.Date(2026, 7, 6, 11, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
 	}
 	otherTenant := traits.Stack{
 		ID:        traits.StackID("stack_other"),
@@ -678,7 +678,7 @@ func TestListStacksPageReturnsTenantStacksWithStableKeyset(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 	older := traits.Stack{
-		ID:        traits.StackID("stack_older"),
+		ID:        traits.StackID("stack_a"),
 		TenantID:  traits.TenantID("tenant_123"),
 		Name:      "Older Stack",
 		Slug:      "older-stack",
@@ -686,12 +686,12 @@ func TestListStacksPageReturnsTenantStacksWithStableKeyset(t *testing.T) {
 		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
 	}
 	newer := traits.Stack{
-		ID:        traits.StackID("stack_newer"),
+		ID:        traits.StackID("stack_b"),
 		TenantID:  traits.TenantID("tenant_123"),
 		Name:      "Newer Stack",
 		Slug:      "newer-stack",
 		CreatedBy: traits.UserID("user_123"),
-		CreatedAt: time.Date(2026, 7, 6, 11, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
 	}
 	otherTenant := traits.Stack{
 		ID:        traits.StackID("stack_other"),
