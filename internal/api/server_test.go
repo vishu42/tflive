@@ -285,7 +285,7 @@ func TestStartTemplateRunMapsInvalidCommandToBadRequest(t *testing.T) {
 	}
 }
 
-func TestStartTemplateRunMapsMissingStackTemplateToNotFound(t *testing.T) {
+func TestStartTemplateRunHidesMissingStackTemplateAsForbidden(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
@@ -300,8 +300,8 @@ func TestStartTemplateRunMapsMissingStackTemplateToNotFound(t *testing.T) {
 
 	server.ServeHTTP(response, request)
 
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body.String())
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusForbidden, response.Body.String())
 	}
 }
 
@@ -783,7 +783,7 @@ func TestUpgradeStackTemplateMapsSourceMismatchToConflict(t *testing.T) {
 	}
 }
 
-func TestStackTemplateEditRoutesMapMissingStackTemplateToNotFound(t *testing.T) {
+func TestStackTemplateEditRoutesHideMissingStackTemplateAsForbidden(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -818,8 +818,8 @@ func TestStackTemplateEditRoutesMapMissingStackTemplateToNotFound(t *testing.T) 
 
 			server.ServeHTTP(response, request)
 
-			if response.Code != http.StatusNotFound {
-				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body.String())
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusForbidden, response.Body.String())
 			}
 		})
 	}
@@ -1589,6 +1589,21 @@ func TestAuthorizationDependencyFailureReturnsServiceUnavailable(t *testing.T) {
 	}
 	if body.Error != "authorization_unavailable" {
 		t.Fatalf("error = %q, want authorization_unavailable", body.Error)
+	}
+}
+
+func TestMissingAuthorizerReturnsServiceUnavailable(t *testing.T) {
+	t.Parallel()
+
+	service := app.NewService(app.Service{Stacks: &recordingStackRepository{}})
+	server := NewServer(service, configuredTenantID)
+	response := httptest.NewRecorder()
+	request := ordinaryAuthenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack_123", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
 	}
 }
 

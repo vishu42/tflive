@@ -144,6 +144,29 @@ func TestStartTemplateRunDenialReturnsForbiddenBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestInheritedResourceMissingMutationReturnsForbidden(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{TemplateRuns: &recordingTemplateRunRepository{getErr: ErrNotFound}})
+
+	err := service.ApproveRun(authenticatedContext(), ApproveRunCommand{TenantID: "tenant_123", RunID: "missing_run"})
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("error = %v, want ErrForbidden", err)
+	}
+}
+
+func TestMissingAuthorizerIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{Stacks: &recordingStackRepository{}})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
+
+	_, err := service.GetStack(ctx, GetStackCommand{TenantID: "tenant_123", StackID: "stack_123"})
+	if !errors.Is(err, authz.ErrUnavailable) {
+		t.Fatalf("error = %v, want ErrUnavailable", err)
+	}
+}
+
 type permissionAuthorizer struct {
 	allowed             bool
 	check               authz.CheckRequest

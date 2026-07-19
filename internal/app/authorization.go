@@ -48,7 +48,7 @@ func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID tr
 		return err
 	}
 	if authorizer == nil {
-		return errors.New("authorization not configured")
+		return fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
 	}
 	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
 	if err != nil {
@@ -77,7 +77,7 @@ func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repo
 		return repository.ListStacks(ctx, tenantID)
 	}
 	if authorizer == nil {
-		return nil, errors.New("authorization not configured")
+		return nil, fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
 	}
 	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
 	if err != nil {
@@ -125,6 +125,9 @@ func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repo
 
 func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID, permission authz.Permission, denied error) (traits.StackTemplate, error) {
 	stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, tenantID, stackTemplateID)
+	if errors.Is(err, ErrNotFound) {
+		return traits.StackTemplate{}, denied
+	}
 	if err != nil {
 		return traits.StackTemplate{}, err
 	}
@@ -136,6 +139,9 @@ func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID tr
 
 func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, permission authz.Permission, denied error) (traits.TemplateRun, error) {
 	run, err := service.TemplateRuns.GetTemplateRun(ctx, tenantID, runID)
+	if errors.Is(err, ErrNotFound) {
+		return traits.TemplateRun{}, denied
+	}
 	if err != nil {
 		return traits.TemplateRun{}, err
 	}
