@@ -31,6 +31,17 @@ func requirePrincipal(ctx context.Context) (authn.Principal, error) {
 	return principal, nil
 }
 
+func requireTemplateCatalogAccess(ctx context.Context) error {
+	principal, err := requirePrincipal(ctx)
+	if err != nil {
+		return err
+	}
+	if isPlatformAdmin(principal) || hasRealmRole(principal, "stack-creator") {
+		return nil
+	}
+	return ErrForbidden
+}
+
 func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID, permission authz.Permission, denied error) error {
 	principal, err := requirePrincipal(ctx)
 	if err != nil || isPlatformAdmin(principal) {
@@ -81,4 +92,33 @@ func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repo
 		stackIDs = append(stackIDs, traits.StackID(strings.TrimPrefix(stack.String(), "stack:")))
 	}
 	return repository.ListStacksByIDs(ctx, tenantID, stackIDs)
+}
+
+func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID, permission authz.Permission, denied error) (traits.StackTemplate, error) {
+	stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, tenantID, stackTemplateID)
+	if err != nil {
+		return traits.StackTemplate{}, err
+	}
+	if err := authorizeStack(ctx, service.Authorizer, stackTemplate.StackID, permission, denied); err != nil {
+		return traits.StackTemplate{}, err
+	}
+	return stackTemplate, nil
+}
+
+func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, permission authz.Permission, denied error) (traits.TemplateRun, error) {
+	run, err := service.TemplateRuns.GetTemplateRun(ctx, tenantID, runID)
+	if err != nil {
+		return traits.TemplateRun{}, err
+	}
+	principal, err := requirePrincipal(ctx)
+	if err != nil {
+		return traits.TemplateRun{}, err
+	}
+	if isPlatformAdmin(principal) {
+		return run, nil
+	}
+	if _, err := service.authorizedStackTemplate(ctx, tenantID, run.StackTemplateID, permission, denied); err != nil {
+		return traits.TemplateRun{}, err
+	}
+	return run, nil
 }

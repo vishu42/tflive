@@ -573,6 +573,10 @@ func (recordingStore) ListStacks(context.Context, traits.TenantID) ([]traits.Sta
 	return nil, nil
 }
 
+func (recordingStore) ListStacksByIDs(context.Context, traits.TenantID, []traits.StackID) ([]traits.Stack, error) {
+	return nil, nil
+}
+
 func (recordingStore) GetStackWithTemplates(context.Context, traits.TenantID, traits.StackID) (app.StackView, error) {
 	return app.StackView{}, nil
 }

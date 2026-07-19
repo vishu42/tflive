@@ -65,6 +65,30 @@ func TestListStacksUsesAccessibleViewIDs(t *testing.T) {
 	}
 }
 
+func TestStartTemplateRunDenialReturnsForbiddenBeforeMutation(t *testing.T) {
+	t.Parallel()
+
+	templates := &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{
+		ID:       "stack_template_123",
+		TenantID: "tenant_123",
+		StackID:  "stack_123",
+	}}
+	service := NewService(Service{
+		Authorizer:     &permissionAuthorizer{},
+		StackTemplates: templates,
+	})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
+
+	_, err := service.StartTemplateRun(ctx, StartTemplateRunCommand{
+		TenantID:        "tenant_123",
+		StackTemplateID: "stack_template_123",
+		Operation:       traits.OperationPlan,
+	})
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("error = %v, want ErrForbidden", err)
+	}
+}
+
 type permissionAuthorizer struct {
 	allowed bool
 	check   authz.CheckRequest
@@ -88,7 +112,9 @@ func (authorizer *permissionAuthorizer) ListGrants(context.Context, authz.ListGr
 	return authz.ListGrantsResult{}, nil
 }
 
-func (authorizer *permissionAuthorizer) WriteRelationships(context.Context, authz.Mutation) error { return nil }
+func (authorizer *permissionAuthorizer) WriteRelationships(context.Context, authz.Mutation) error {
+	return nil
+}
 func (authorizer *permissionAuthorizer) DeleteRelationships(context.Context, authz.Mutation) error {
 	return nil
 }

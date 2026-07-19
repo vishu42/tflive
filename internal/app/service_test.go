@@ -16,7 +16,7 @@ const keycloakSubject = "6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91"
 
 func authenticatedContext() context.Context {
 	return authn.ContextWithPrincipal(context.Background(), authn.Principal{
-		Subject: keycloakSubject, RealmRoles: []string{"stack-creator"},
+		Subject: keycloakSubject, RealmRoles: []string{"platform-admin"},
 	})
 }
 
@@ -261,7 +261,7 @@ func TestListTemplateRevisionsPassesTenantAndNormalizesNilTemplateRevisions(t *t
 	templates := &recordingTemplateRepository{templates: nil}
 	service := NewService(Service{TemplateRevisions: templates})
 
-	got, err := service.ListTemplateRevisions(context.Background(), ListTemplateRevisionsCommand{
+	got, err := service.ListTemplateRevisions(authenticatedContext(), ListTemplateRevisionsCommand{
 		TenantID: traits.TenantID("tenant_123"),
 	})
 	if err != nil {
@@ -483,7 +483,7 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 			Status:            traits.TemplateRevisionActive,
 		},
 	}
-	runs := &recordingTemplateRunRepository{}
+	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
 	workflows := &recordingWorkflowDispatcher{}
 
 	service := NewService(Service{
@@ -572,6 +572,7 @@ func TestUpdateStackTemplateConfigValidatesDesiredRevisionVariables(t *testing.T
 		stackTemplate: traits.StackTemplate{
 			ID:                        traits.StackTemplateID("stack_template_123"),
 			TenantID:                  traits.TenantID("tenant_123"),
+			StackID:                   traits.StackID("stack_123"),
 			DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
 			Lifecycle:                 traits.StackTemplateActive,
 		},
@@ -582,6 +583,7 @@ func TestUpdateStackTemplateConfigValidatesDesiredRevisionVariables(t *testing.T
 		},
 	}
 	service := NewService(Service{
+		Authorizer:        &permissionAuthorizer{allowed: true},
 		StackTemplates:    stackTemplates,
 		TemplateRevisions: templates,
 	})
@@ -976,9 +978,11 @@ func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 	workflows := &recordingWorkflowDispatcher{}
 
 	service := NewService(Service{
-		TemplateRuns: runs,
-		Workflows:    workflows,
-		Clock:        fixedClock{now: now},
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
+		Workflows:      workflows,
+		Clock:          fixedClock{now: now},
 	})
 
 	err := service.ApproveRun(ctx, ApproveRunCommand{
@@ -1017,13 +1021,15 @@ func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 func TestApproveRunDoesNotSignalWhenRunIsNotApprovable(t *testing.T) {
 	t.Parallel()
 
-	runs := &recordingTemplateRunRepository{approvalErr: ErrRunNotApprovable}
+	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}, approvalErr: ErrRunNotApprovable}
 	workflows := &recordingWorkflowDispatcher{}
 
 	service := NewService(Service{
-		TemplateRuns: runs,
-		Workflows:    workflows,
-		Clock:        fixedClock{now: time.Now()},
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
+		Workflows:      workflows,
+		Clock:          fixedClock{now: time.Now()},
 	})
 
 	err := service.ApproveRun(authenticatedContext(), ApproveRunCommand{
@@ -1090,13 +1096,15 @@ func TestCancelRunRecordsCancellationAndSignalsWorkflow(t *testing.T) {
 func TestCancelRunDoesNotSignalWhenRunIsNotCancelable(t *testing.T) {
 	t.Parallel()
 
-	runs := &recordingTemplateRunRepository{cancellationErr: ErrRunNotCancelable}
+	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}, cancellationErr: ErrRunNotCancelable}
 	workflows := &recordingWorkflowDispatcher{}
 
 	service := NewService(Service{
-		TemplateRuns: runs,
-		Workflows:    workflows,
-		Clock:        fixedClock{now: time.Now()},
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
+		Workflows:      workflows,
+		Clock:          fixedClock{now: time.Now()},
 	})
 
 	err := service.CancelRun(authenticatedContext(), CancelRunCommand{
@@ -1124,9 +1132,14 @@ func TestGetTemplateRunReturnsTenantScopedRun(t *testing.T) {
 			Status:          traits.TemplateRunCompleted,
 		},
 	}
-	service := NewService(Service{TemplateRuns: runs})
+	service := NewService(Service{
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
+	})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject})
 
-	run, err := service.GetTemplateRun(context.Background(), GetTemplateRunCommand{
+	run, err := service.GetTemplateRun(ctx, GetTemplateRunCommand{
 		TenantID: traits.TenantID("tenant_123"),
 		RunID:    traits.TemplateRunID("run_123"),
 	})
@@ -1170,7 +1183,7 @@ func TestGetTemplateRegistrationReturnsTenantScopedRegistration(t *testing.T) {
 	}
 	service := NewService(Service{TemplateRegistrations: registrations})
 
-	registration, err := service.GetTemplateRegistration(context.Background(), GetTemplateRegistrationCommand{
+	registration, err := service.GetTemplateRegistration(authenticatedContext(), GetTemplateRegistrationCommand{
 		TenantID:       traits.TenantID("tenant_123"),
 		RegistrationID: traits.TemplateRegistrationID("template_registration_123"),
 	})
@@ -1201,7 +1214,7 @@ func TestGetTemplateRevisionVariablesReturnsTenantScopedVariables(t *testing.T) 
 	}
 	service := NewService(Service{TemplateRevisions: templates})
 
-	variables, err := service.GetTemplateRevisionVariables(context.Background(), GetTemplateRevisionVariablesCommand{
+	variables, err := service.GetTemplateRevisionVariables(authenticatedContext(), GetTemplateRevisionVariablesCommand{
 		TenantID:           traits.TenantID("tenant_123"),
 		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
 	})
@@ -1225,8 +1238,9 @@ func TestGetTemplateRunLogChecksRunOwnershipBeforeReadingLog(t *testing.T) {
 
 	runs := &recordingTemplateRunRepository{
 		run: traits.TemplateRun{
-			ID:       traits.TemplateRunID("run_123"),
-			TenantID: traits.TenantID("tenant_123"),
+			ID:              traits.TemplateRunID("run_123"),
+			TenantID:        traits.TenantID("tenant_123"),
+			StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		},
 	}
 	logs := &recordingTemplateRunLogReader{content: []byte("plan output\n")}
@@ -1244,7 +1258,7 @@ func TestGetTemplateRunLogChecksRunOwnershipBeforeReadingLog(t *testing.T) {
 		TemplateRunLogMetadata: metadata,
 	})
 
-	content, err := service.GetTemplateRunLog(context.Background(), GetTemplateRunLogCommand{
+	content, err := service.GetTemplateRunLog(authenticatedContext(), GetTemplateRunLogCommand{
 		TenantID: traits.TenantID("tenant_123"),
 		RunID:    traits.TemplateRunID("run_123"),
 		Phase:    "plan",
@@ -1287,7 +1301,7 @@ func TestGetTemplateRunLogDoesNotReadLogWhenRunIsMissing(t *testing.T) {
 		TemplateRunLogMetadata: &recordingTemplateRunLogRepository{},
 	})
 
-	_, err := service.GetTemplateRunLog(context.Background(), GetTemplateRunLogCommand{
+	_, err := service.GetTemplateRunLog(authenticatedContext(), GetTemplateRunLogCommand{
 		TenantID: traits.TenantID("tenant_123"),
 		RunID:    traits.TemplateRunID("run_123"),
 		Phase:    "plan",
@@ -1305,19 +1319,23 @@ func TestGetTemplateRunLogDoesNotReadObjectWhenMetadataIsMissing(t *testing.T) {
 
 	runs := &recordingTemplateRunRepository{
 		run: traits.TemplateRun{
-			ID:       traits.TemplateRunID("run_123"),
-			TenantID: traits.TenantID("tenant_123"),
+			ID:              traits.TemplateRunID("run_123"),
+			TenantID:        traits.TenantID("tenant_123"),
+			StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		},
 	}
 	logs := &recordingTemplateRunLogReader{content: []byte("plan output\n")}
 	metadata := &recordingTemplateRunLogRepository{getErr: ErrNotFound}
 	service := NewService(Service{
+		Authorizer:             &permissionAuthorizer{allowed: true},
 		TemplateRuns:           runs,
+		StackTemplates:         &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 		TemplateRunLogs:        logs,
 		TemplateRunLogMetadata: metadata,
 	})
 
-	_, err := service.GetTemplateRunLog(context.Background(), GetTemplateRunLogCommand{
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject})
+	_, err := service.GetTemplateRunLog(ctx, GetTemplateRunLogCommand{
 		TenantID: traits.TenantID("tenant_123"),
 		RunID:    traits.TemplateRunID("run_123"),
 		Phase:    "plan",
@@ -1354,7 +1372,7 @@ func TestGetTemplateRunLogMapsMissingLogToNotFound(t *testing.T) {
 		TemplateRunLogMetadata: metadata,
 	})
 
-	_, err := service.GetTemplateRunLog(context.Background(), GetTemplateRunLogCommand{
+	_, err := service.GetTemplateRunLog(authenticatedContext(), GetTemplateRunLogCommand{
 		TenantID: traits.TenantID("tenant_123"),
 		RunID:    traits.TemplateRunID("run_123"),
 		Phase:    "plan",
@@ -1406,11 +1424,13 @@ func TestListTemplateRunLogsChecksRunOwnershipBeforeListingMetadata(t *testing.T
 		},
 	}
 	service := NewService(Service{
+		Authorizer:             &permissionAuthorizer{allowed: true},
 		TemplateRuns:           runs,
+		StackTemplates:         &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 		TemplateRunLogMetadata: metadata,
 	})
 
-	logs, err := service.ListTemplateRunLogs(context.Background(), ListTemplateRunLogsCommand{
+	logs, err := service.ListTemplateRunLogs(authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject}), ListTemplateRunLogsCommand{
 		TenantID: traits.TenantID("tenant_123"),
 		RunID:    traits.TemplateRunID("run_123"),
 	})
