@@ -51,7 +51,7 @@ and documentation instructions and define the current implementation.
 - Historical interface: `ListStacksByIDs`, removed and replaced by `ListStacksPage` in Task 6.
 - Historical flow: unary OpenFGA `ListAccessibleStacks`, removed from this endpoint by Task 6.
 
-- [ ] **Step 1: Write the failing Postgres and recording-repository tests**
+- [x] **Step 1: Write the failing Postgres and recording-repository tests**
 
 Add `TestListStacksByIDsReturnsOnlyRequestedTenantStacksNewestFirst` in `internal/postgres/store_test.go`. Insert two `tenant_123` stacks and one stack from another tenant; call:
 
@@ -67,13 +67,13 @@ if got := []traits.StackID{stacks[0].ID, stacks[1].ID}; !reflect.DeepEqual(got, 
 
 Add an empty-ID test asserting `ListStacksByIDs(ctx, "tenant_123", nil)` returns an empty slice without querying all tenant stacks. Extend both recording stack repositories with `gotListStackIDs []traits.StackID` and a `ListStacksByIDs` method so they continue to satisfy the expanded interface.
 
-- [ ] **Step 2: Run the focused test to verify it fails**
+- [x] **Step 2: Run the focused test to verify it fails**
 
 Run: `go test ./internal/postgres -run 'TestListStacksByIDs' -count=1`
 
 Expected: FAIL because `ListStacksByIDs` is undefined.
 
-- [ ] **Step 3: Implement the filtered repository query**
+- [x] **Step 3: Implement the filtered repository query**
 
 Add the interface method and implement it on `*postgres.Store`. Return `[]traits.Stack{}` immediately for no IDs. For non-empty IDs, use pgx's array parameter support and preserve existing ordering:
 
@@ -109,13 +109,13 @@ func (store *Store) ListStacksByIDs(ctx context.Context, tenantID traits.TenantI
 
 Do not interpolate identifiers into SQL and do not call `ListStacks` as a fallback.
 
-- [ ] **Step 4: Run focused tests to verify they pass**
+- [x] **Step 4: Run focused tests to verify they pass**
 
 Run: `go test ./internal/postgres ./internal/app ./internal/api -run 'TestListStacks(ByIDs|PassesTenant)' -count=1`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the filtered repository boundary**
+- [x] **Step 5: Commit the filtered repository boundary**
 
 ```bash
 git add internal/app/service.go internal/app/service_test.go internal/api/server_test.go internal/postgres/repositories.go internal/postgres/store_test.go
@@ -134,7 +134,7 @@ git commit -m "feat(authz): query authorized stacks by ID"
 - Produces: `listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repository StackRepository, tenantID traits.TenantID) ([]traits.Stack, error)`.
 - Current dependencies after Task 6: `authn.PrincipalFromContext`, `authz.SubjectFromKeycloakSub`, `authz.StackFromID`, `authz.Authorizer.Check`, and bounded `authz.Authorizer.BatchCheck`.
 
-- [ ] **Step 1: Write failing unit tests for direct checks and list filtering**
+- [x] **Step 1: Write failing unit tests for direct checks and list filtering**
 
 In `internal/app/authorization_test.go`, create a configurable fake authorizer recording `CheckRequest` and `ListAccessibleStacksRequest`. Add tests that prove:
 
@@ -149,13 +149,13 @@ func TestStackAuthorizationUnavailablePropagates(t *testing.T)
 
 For the direct denial test, configure `CheckResult{Allowed: false}` and assert `errors.Is(err, ErrNotFound)` plus zero `GetStackWithTemplates` calls. For the list test, return canonical `stack:stack_123` and assert the repository receives exactly `[]traits.StackID{"stack_123"}` with `PermissionView`.
 
-- [ ] **Step 2: Run the focused tests to verify they fail**
+- [x] **Step 2: Run the focused tests to verify they fail**
 
 Run: `go test ./internal/app -run 'Test(GetStackChecksView|GetStackDenial|ListStacksUsesAccessible|ListStacksReturnsEmpty|ListStacksAllowsPlatformAdmin|StackAuthorizationUnavailable)' -count=1`
 
 Expected: FAIL because the use cases do not yet enforce OpenFGA decisions.
 
-- [ ] **Step 3: Implement the primitives and apply them to direct stack reads and lists**
+- [x] **Step 3: Implement the primitives and apply them to direct stack reads and lists**
 
 Create `internal/app/authorization.go` with role predicates and helpers. Use `ErrNotFound` as the passed denial error for read callers and return `ErrForbidden` for mutation callers in later tasks:
 
@@ -200,13 +200,13 @@ Treat a nil `Authorizer` as a regular non-nil configuration error, never as allo
 
 Update existing successful service tests to use `authn.ContextWithPrincipal` and an allowed fake authorizer. Update `apiAuthorizer` so its default `Check` result is allowed, and change successful stack/list API requests to `authenticatedRequest`; individual denial tests explicitly set `allowed: false`. This preserves the intent of pre-existing success tests while making authorization visible in their setup.
 
-- [ ] **Step 4: Run focused tests to verify they pass**
+- [x] **Step 4: Run focused tests to verify they pass**
 
 Run: `go test ./internal/app -run 'Test(GetStackChecksView|GetStackDenial|ListStacksUsesAccessible|ListStacksReturnsEmpty|ListStacksAllowsPlatformAdmin|StackAuthorizationUnavailable)' -count=1`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit direct stack enforcement**
+- [x] **Step 5: Commit direct stack enforcement**
 
 ```bash
 git add internal/app/authorization.go internal/app/authorization_test.go internal/app/service.go
@@ -227,7 +227,7 @@ git commit -m "feat(authz): enforce stack view permissions"
 - Produces: `authorizedTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, permission authz.Permission, denied error) (traits.TemplateRun, error)`.
 - Consumes: `StackTemplateRepository.GetStackTemplate` and `TemplateRunRepository.GetTemplateRun`; `traits.StackTemplate.StackID` connects each inherited resource to OpenFGA.
 
-- [ ] **Step 1: Write failing permission-matrix unit tests**
+- [x] **Step 1: Write failing permission-matrix unit tests**
 
 Add table-driven tests that put `StackID: "stack_123"` on all stack-template fixtures and prove these calls use the stated permission before a write or protected payload read:
 
@@ -248,13 +248,13 @@ tests := []struct {
 
 Also test that denied mutations return `ErrForbidden` and do not create templates/runs, update config, write approval/cancellation, or signal workflows. Test that denied run reads, log lists, and log body reads return `ErrNotFound`; OpenFGA errors must propagate unchanged. Add a role table for owner, operator, approver, viewer, and unassigned decisions using the fake authorizer response appropriate to the requested relation.
 
-- [ ] **Step 2: Run the focused tests to verify they fail**
+- [x] **Step 2: Run the focused tests to verify they fail**
 
 Run: `go test ./internal/app -run 'Test(OperatePermissionMatrix|ApprovePermissionMatrix|DeniedInheritedReads|DeniedMutationsHaveNoSideEffects|InheritedAuthorizationUnavailable)' -count=1`
 
 Expected: FAIL because stack-template and run operations currently access repositories before authorization.
 
-- [ ] **Step 3: Implement inherited-resource checks**
+- [x] **Step 3: Implement inherited-resource checks**
 
 Implement `authorizedStackTemplate` to retrieve the minimal template record, invoke `authorizeStack` with its `StackID`, and return the record only after authorization succeeds. Implement `authorizedTemplateRun` to retrieve the run, retrieve `run.StackTemplateID`, then authorize that template's `StackID`.
 
@@ -270,7 +270,7 @@ Use them at the beginning of each relevant use case:
 
 Reuse resolved records inside each use case rather than querying them a second time. For log functions, pass an already-authorized run to a private helper or keep the first resolved run in scope so the log metadata/object-store read happens only after `can_view` succeeds.
 
-- [ ] **Step 4: Add failing route-level denial tests and verify they fail**
+- [x] **Step 4: Add failing route-level denial tests and verify they fail**
 
 Extend `apiAuthorizer` to record check requests and configure `allowed bool` and `checkErr error`. In `internal/api/server_test.go`, add a table covering a denied direct stack read (`404`), a denied inherited run/log read (`404`), and denied install/config/upgrade/start/approve/cancel mutations (`403`). Assert each mutation recorder remains untouched. Add one test returning `authz.ErrUnavailable` and assert status `503` with `authorization_unavailable`.
 
@@ -278,13 +278,13 @@ Run: `go test ./internal/api -run 'Test(ProtectedResourceRoutes|StackMutationRou
 
 Expected: FAIL until the service-level enforcement is complete.
 
-- [ ] **Step 5: Run application and API matrix tests to verify they pass**
+- [x] **Step 5: Run application and API matrix tests to verify they pass**
 
 Run: `go test ./internal/app ./internal/api -run 'Test(OperatePermissionMatrix|ApprovePermissionMatrix|DeniedInheritedReads|DeniedMutationsHaveNoSideEffects|InheritedAuthorizationUnavailable|ProtectedResourceRoutes|StackMutationRoutes|AuthorizationDependencyFailure)' -count=1`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit inherited-resource enforcement**
+- [x] **Step 6: Commit inherited-resource enforcement**
 
 ```bash
 git add internal/app/authorization.go internal/app/authorization_test.go internal/app/service.go internal/app/service_test.go internal/api/server_test.go
@@ -303,19 +303,19 @@ git commit -m "feat(authz): enforce inherited stack permissions"
 - Produces: `requireTemplateCatalogAccess(ctx context.Context) error`.
 - Consumes: `authn.Principal.RealmRoles`; allows only `platform-admin` and `stack-creator`.
 
-- [ ] **Step 1: Write failing catalog authorization tests**
+- [x] **Step 1: Write failing catalog authorization tests**
 
 Add application tests for `RegisterTemplate`, `GetTemplateRegistration`, `ListTemplateRevisions`, and `GetTemplateRevisionVariables`. Use an ordinary principal with no global roles and assert `ErrForbidden` plus no repository or workflow activity. Repeat each with `stack-creator` and `platform-admin` and assert the existing success behavior remains.
 
 Add route-level table coverage that asserts `403` with error code `forbidden` for the same four routes under an ordinary authenticated principal.
 
-- [ ] **Step 2: Run the focused tests to verify they fail**
+- [x] **Step 2: Run the focused tests to verify they fail**
 
 Run: `go test ./internal/app ./internal/api -run 'Test(TemplateCatalogRequiresGlobalRole|TemplateCatalogRoutesRejectOrdinaryUser|TemplateCatalogAllowsCreatorAndAdmin)' -count=1`
 
 Expected: FAIL because catalog methods currently accept any authenticated caller.
 
-- [ ] **Step 3: Implement the catalog role gate**
+- [x] **Step 3: Implement the catalog role gate**
 
 Add the helper beside `isPlatformAdmin`:
 
@@ -334,13 +334,13 @@ func requireTemplateCatalogAccess(ctx context.Context) error {
 
 Call it after command validation and before any catalog repository or workflow call in all four use cases. `RegisterTemplate` may obtain the actor from the already-validated principal instead of parsing the context twice.
 
-- [ ] **Step 4: Run focused tests to verify they pass**
+- [x] **Step 4: Run focused tests to verify they pass**
 
 Run: `go test ./internal/app ./internal/api -run 'Test(TemplateCatalogRequiresGlobalRole|TemplateCatalogRoutesRejectOrdinaryUser|TemplateCatalogAllowsCreatorAndAdmin)' -count=1`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit catalog authorization**
+- [x] **Step 5: Commit catalog authorization**
 
 ```bash
 git add internal/app/authorization.go internal/app/authorization_test.go internal/app/service.go internal/api/server_test.go
@@ -357,21 +357,21 @@ git commit -m "feat(authz): restrict template catalog routes"
 - Consumes: the implemented route and permission matrix from `docs/superpowers/specs/2026-07-18-endpoint-permission-matrix-design.md`.
 - Produces: operational documentation that names the permitted global roles, stack permissions, protected `404`, mutation `403`, and fail-closed `503` outcomes.
 
-- [ ] **Step 1: Add the runtime endpoint enforcement documentation**
+- [x] **Step 1: Add the runtime endpoint enforcement documentation**
 
 After the existing runtime authorization bullets in `docs/authentication.md`, add a concise table for every current route. State that catalog routes require `platform-admin` or `stack-creator`; describe `can_view`, `can_operate`, and `can_approve` mappings; state that `can_manage_access` has no current route; and document that non-admin lists use stable Postgres keyset pages with bounded `BatchCheck(can_view)` calls. State the protected-read `404`, denied-mutation `403`, and authorization-service `503` behavior.
 
-- [ ] **Step 2: Mark the backlog item done**
+- [x] **Step 2: Mark the backlog item done**
 
 Change AUTH-013's status in `docs/sprint/authn_and_authz/README.md` from `Not Started` to `Done` only after the test commands in the next steps succeed.
 
-- [ ] **Step 3: Run the complete test suite**
+- [x] **Step 3: Run the complete test suite**
 
 Run: `go test ./...`
 
 Expected: PASS.
 
-- [ ] **Step 4: Run formatting and diff validation**
+- [x] **Step 4: Run formatting and diff validation**
 
 Run: `gofmt -w internal/app/authorization.go internal/app/authorization_test.go internal/app/service.go internal/app/service_test.go internal/api/server_test.go internal/postgres/repositories.go internal/postgres/store_test.go`
 
@@ -379,7 +379,7 @@ Run: `go test ./... && git diff --check`
 
 Expected: PASS with no formatting changes left and no whitespace errors.
 
-- [ ] **Step 5: Commit documentation and backlog status**
+- [x] **Step 5: Commit documentation and backlog status**
 
 ```bash
 git add docs/authentication.md docs/sprint/authn_and_authz/README.md
@@ -409,7 +409,7 @@ git commit -m "docs(auth): publish endpoint permission matrix"
 - Consumes: `authz.Authorizer.BatchCheck` with at most 50 `authz.CheckRequest` values.
 - Removes: endpoint use of `ListAccessibleStacks`; retain the provider-neutral port for other bounded consumers.
 
-- [ ] **Step 1: Write failing application tests for complete multi-page filtering**
+- [x] **Step 1: Write failing application tests for complete multi-page filtering**
 
 Replace the old list-ID test with tests that configure a recording repository with 55 tenant stacks and a fake authorizer that allows every even-indexed stack. Assert:
 
@@ -427,13 +427,13 @@ if len(stacks) != 28 {
 
 Add separate tests proving an empty first page makes no OpenFGA call, a batch error returns no partial list, a result-count mismatch returns `authz.ErrMalformedResponse`, and `platform-admin` still calls `ListStacks` without paging or OpenFGA.
 
-- [ ] **Step 2: Run the application tests to verify they fail**
+- [x] **Step 2: Run the application tests to verify they fail**
 
 Run: `go test ./internal/app -run 'TestListStacks(BatchesCompleteTenantScan|ReturnsNoPartialResults|RejectsMismatchedBatchResults|SkipsAuthorizationForEmptyTenant|AllowsPlatformAdmin)' -count=1`
 
 Expected: FAIL because `ListStacks` still calls `ListAccessibleStacks` and `ListStacksByIDs`.
 
-- [ ] **Step 3: Implement the paged repository contract**
+- [x] **Step 3: Implement the paged repository contract**
 
 Define the cursor and replace `ListStacksByIDs` in `StackRepository`:
 
@@ -466,7 +466,7 @@ limit $4
 
 Reject non-positive limits before querying. Remove `ListStacksByIDs` and its tests, then update every test double to implement `ListStacksPage` with copied cursor/page inputs.
 
-- [ ] **Step 4: Write and run failing Postgres paging tests**
+- [x] **Step 4: Write and run failing Postgres paging tests**
 
 Seed stacks with equal and unequal timestamps, call page one with limit 2, then page two with the last record cursor. Assert no duplicates, stable descending order, tenant isolation, and an empty final page.
 
@@ -474,7 +474,7 @@ Run: `go test ./internal/postgres -run 'TestListStacksPage' -count=1`
 
 Expected: FAIL before `ListStacksPage` exists; with no `tflive_POSTGRES_TEST_DSN`, compilation succeeds and tests report skipped.
 
-- [ ] **Step 5: Implement complete BatchCheck filtering**
+- [x] **Step 5: Implement complete BatchCheck filtering**
 
 Use a fixed batch size matching OpenFGA's default maximum:
 
@@ -508,13 +508,13 @@ for {
 
 Return results only after the complete scan succeeds; any later-page error discards earlier allowed records.
 
-- [ ] **Step 6: Run focused and package tests**
+- [x] **Step 6: Run focused and package tests**
 
 Run: `go test ./internal/app ./internal/api ./cmd/api -count=1`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit complete stack listing**
+- [x] **Step 7: Commit complete stack listing**
 
 ```bash
 git add cmd/api/main_test.go internal/app internal/api/server_test.go internal/postgres
@@ -532,7 +532,7 @@ git commit -m "fix(authz): make stack listing complete"
 - Consumes: caller-supplied `denied error` in `authorizedStackTemplate` and `authorizedTemplateRun`.
 - Produces: identical externally visible results for missing and inaccessible inherited resources.
 
-- [ ] **Step 1: Write paired missing/inaccessible tests**
+- [x] **Step 1: Write paired missing/inaccessible tests**
 
 Add table-driven service and route tests for stack-template config, upgrade, start-run, approval, cancellation, run detail, run logs, and log body. For each route, issue one request for an existing but denied resource and one for a repository `app.ErrNotFound`. Assert both statuses match:
 
@@ -548,13 +548,13 @@ if missing.Code != wantStatus || denied.Code != wantStatus {
 
 For mutations, assert no repository mutation or workflow signal occurs in either case.
 
-- [ ] **Step 2: Run the paired tests to verify they fail**
+- [x] **Step 2: Run the paired tests to verify they fail**
 
 Run: `go test ./internal/app ./internal/api -run 'TestInheritedResource(MissingAndDeniedReadsMatch|MissingAndDeniedMutationsMatch)' -count=1`
 
 Expected: FAIL because repository `ErrNotFound` currently bypasses the caller-supplied denial error.
 
-- [ ] **Step 3: Map only not-found resolution failures to denial**
+- [x] **Step 3: Map only not-found resolution failures to denial**
 
 Update both resolvers without hiding internal failures:
 
@@ -570,7 +570,7 @@ if err != nil {
 
 Apply the same pattern to `TemplateRuns.GetTemplateRun`. Keep platform-administrator bypass after existence resolution so missing mutation targets receive the same stable `403` policy.
 
-- [ ] **Step 4: Map missing authorizer to stable dependency failure**
+- [x] **Step 4: Map missing authorizer to stable dependency failure**
 
 Replace both untyped nil-authorizer errors with:
 
@@ -580,13 +580,13 @@ return fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
 
 Add application and API tests asserting a nil authorizer returns `503 authorization_unavailable` and no protected operation proceeds.
 
-- [ ] **Step 5: Run focused and package tests**
+- [x] **Step 5: Run focused and package tests**
 
 Run: `go test ./internal/app ./internal/api -count=1`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit non-disclosure and stable failures**
+- [x] **Step 6: Commit non-disclosure and stable failures**
 
 ```bash
 git add internal/app/authorization.go internal/app/authorization_test.go internal/api/server_test.go
@@ -602,7 +602,7 @@ git commit -m "fix(authz): hide inherited resource existence"
 - Consumes: the documented route matrix in `docs/authentication.md`.
 - Produces: one route-level assertion for every current endpoint's global role or OpenFGA permission.
 
-- [ ] **Step 1: Replace representative role tests with a complete route table**
+- [x] **Step 1: Replace representative role tests with a complete route table**
 
 Create a table containing all non-health routes. Each row specifies method, path, valid body, expected permission or global role, allowed role, denied role, allowed status, denied status, and a side-effect assertion for mutations. The stack-scoped rows must include:
 
@@ -621,17 +621,17 @@ Create a table containing all non-health routes. Each row specifies method, path
 
 Keep separate global-route rows proving `platform-admin` and `stack-creator` access plus ordinary-user `403`. Stack creation remains global-role tested and must not call OpenFGA `Check` before creation.
 
-- [ ] **Step 2: Make test doubles enforce real filtering and failures**
+- [x] **Step 2: Make test doubles enforce real filtering and failures**
 
 The recording stack repository's `ListStacksPage` must slice its configured ordered list by cursor and limit. Extend `apiAuthorizer` with `batchErr`, `batchResults`, recorded batch requests, and role-derived decisions. Never make the fake return the complete stack list regardless of requested page or authorization result.
 
-- [ ] **Step 3: Run matrix tests**
+- [x] **Step 3: Run matrix tests**
 
 Run: `go test ./internal/api -run 'TestEndpointPermissionMatrix' -count=1`
 
 Expected: PASS only when every route invokes the documented permission and denied mutations have no side effects.
 
-- [ ] **Step 4: Run all API tests and commit**
+- [x] **Step 4: Run all API tests and commit**
 
 Run: `go test ./internal/api -count=1`
 
@@ -652,15 +652,15 @@ git commit -m "test(authz): cover complete endpoint matrix"
 - Consumes: complete paged BatchCheck behavior and non-disclosure policy from Tasks 6-8.
 - Produces: accurate operations documentation and final AUTH-013 completion evidence.
 
-- [ ] **Step 1: Correct stack-list documentation**
+- [x] **Step 1: Correct stack-list documentation**
 
 Replace the `ListObjects` description with keyset-paged Postgres candidates and bounded `BatchCheck(can_view)` calls. Document the 50-check page bound, all-or-nothing response, stable ordering, and `503` behavior on any page failure.
 
-- [ ] **Step 2: Correct inherited-resource error documentation**
+- [x] **Step 2: Correct inherited-resource error documentation**
 
 State explicitly that missing and inaccessible inherited reads both return `404`, while missing and inaccessible inherited mutations both return `403`. Document nil authorizer as `503 authorization_unavailable`.
 
-- [ ] **Step 3: Run formatting and complete verification**
+- [x] **Step 3: Run formatting and complete verification**
 
 Run: `gofmt -w cmd/api/main_test.go internal/app/authorization.go internal/app/authorization_test.go internal/app/service.go internal/app/service_test.go internal/app/stack_authorization_test.go internal/api/server_test.go internal/postgres/repositories.go internal/postgres/store_test.go`
 
@@ -668,11 +668,11 @@ Run: `go test ./... && go vet ./... && git diff --check`
 
 Expected: all commands exit zero. Postgres runtime tests may report skipped when `tflive_POSTGRES_TEST_DSN` is unset, but must compile.
 
-- [ ] **Step 4: Confirm worktree ownership and status**
+- [x] **Step 4: Confirm worktree ownership and status**
 
 Run: `git status --short` in both the feature worktree and main checkout. The tracked plan must exist only in the feature branch; neither checkout may contain an untracked copy.
 
-- [ ] **Step 5: Commit final documentation**
+- [x] **Step 5: Commit final documentation**
 
 ```bash
 git add docs/authentication.md docs/sprint/authn_and_authz/README.md docs/superpowers/plans/2026-07-18-endpoint-permission-matrix.md
