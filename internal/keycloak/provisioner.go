@@ -7,11 +7,18 @@ import (
 )
 
 const (
-	platformAdminDescription = "Administer tflive and bypass ordinary stack checks except security invariants"
-	stackCreatorDescription  = "Create tflive stacks and become their initial owner"
-	audienceScopeName        = "tflive-api-audience"
-	audienceMapperName       = "tflive-api-audience"
+	platformAdminDescription    = "Administer tflive and bypass ordinary stack checks except security invariants"
+	stackCreatorDescription     = "Create tflive stacks and become their initial owner"
+	directoryReaderClientID     = "tflive-directory-reader"
+	audienceScopeName           = "tflive-api-audience"
+	audienceMapperName          = "tflive-api-audience"
 )
+
+var directoryReaderRealmManagementRoles = []string{
+	"query-users",
+	"view-users",
+	"view-realm",
+}
 
 var platformRealmManagementRoles = []string{
 	"manage-users",
@@ -89,10 +96,12 @@ type ExampleAccessToken struct {
 // Result contains only non-sensitive identifiers suitable for operational
 // logs after a successful provisioning run.
 type Result struct {
-	Realm                 string
-	WebClientID           string
-	APIClientID           string
-	PlatformAdminUsername string
+	Realm                      string
+	WebClientID                string
+	APIClientID                string
+	PlatformAdminUsername       string
+	DirectoryReaderClientID    string
+	DirectoryReaderClientSecret string
 }
 
 type provisionBackend interface {
@@ -249,6 +258,42 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 		return Result{}, fmt.Errorf("assign least-privilege realm administration roles: %w", err)
 	}
 
+	if _, err := backend.EnsureClient(ctx, cfg.Realm, ClientSpec{
+		ClientID:                     directoryReaderClientID,
+		Name:                         "tflive directory reader",
+		Enabled:                      true,
+		Protocol:                     "openid-connect",
+		BearerOnly:                   false,
+		PublicClient:                 false,
+		StandardFlowEnabled:          false,
+		ImplicitFlowEnabled:          false,
+		DirectAccessGrantsEnabled:    false,
+		ServiceAccountsEnabled:       true,
+		AuthorizationServicesEnabled: false,
+		FullScopeAllowed:             false,
+		Attributes:                   disabledGrantAttributes(),
+	}); err != nil {
+		return Result{}, fmt.Errorf("ensure directory reader client %s: %w", directoryReaderClientID, err)
+	}
+	directoryReaderSA, err := backend.EnsureUser(ctx, cfg.Realm, UserSpec{
+		Username: "service-account-" + directoryReaderClientID,
+		Enabled:  true,
+	})
+	if err != nil {
+		return Result{}, fmt.Errorf("ensure directory reader service account: %w", err)
+	}
+	directoryReaderRoles := make([]ResourceRef, 0, len(directoryReaderRealmManagementRoles))
+	for _, roleName := range directoryReaderRealmManagementRoles {
+		role, err := backend.ClientRole(ctx, cfg.Realm, realmManagement, roleName)
+		if err != nil {
+			return Result{}, fmt.Errorf("lookup realm-management role %s for directory reader: %w", roleName, err)
+		}
+		directoryReaderRoles = append(directoryReaderRoles, role)
+	}
+	if err := backend.EnsureClientRoleMapping(ctx, cfg.Realm, directoryReaderSA, realmManagement, directoryReaderRoles); err != nil {
+		return Result{}, fmt.Errorf("assign directory reader realm-management roles: %w", err)
+	}
+
 	exampleToken, err := backend.ExampleAccessToken(ctx, cfg.Realm, webClient, platformUser)
 	if err != nil {
 		return Result{}, fmt.Errorf("generate effective example access token: %w", err)
@@ -261,10 +306,12 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 	}
 
 	return Result{
-		Realm:                 cfg.Realm,
-		WebClientID:           cfg.WebClientID,
-		APIClientID:           cfg.APIClientID,
-		PlatformAdminUsername: cfg.PlatformAdminUsername,
+		Realm:                      cfg.Realm,
+		WebClientID:                cfg.WebClientID,
+		APIClientID:                cfg.APIClientID,
+		PlatformAdminUsername:       cfg.PlatformAdminUsername,
+		DirectoryReaderClientID:    directoryReaderClientID,
+		DirectoryReaderClientSecret: cfg.DirectoryReaderClientSecret,
 	}, nil
 }
 

@@ -23,14 +23,19 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 		}
 	}
 
+	last, err := provisionWithBackend(context.Background(), cfg, backend)
+	if err != nil {
+		t.Fatalf("provisionWithBackend() final run error = %v", err)
+	}
+
 	if got, want := backend.createdRealms, 1; got != want {
 		t.Fatalf("created realms = %d, want %d", got, want)
 	}
 	if got, want := backend.createdRoles, 2; got != want {
 		t.Fatalf("created roles = %d, want %d", got, want)
 	}
-	if got, want := backend.createdClients, 2; got != want {
-		t.Fatalf("created owned clients = %d, want %d", got, want)
+	if got, want := backend.createdClients, 3; got != want {
+		t.Fatalf("created clients = %d, want %d", got, want)
 	}
 	if got, want := backend.createdScopes, 1; got != want {
 		t.Fatalf("created scopes = %d, want %d", got, want)
@@ -38,7 +43,7 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 	if got, want := backend.createdMappers, 1; got != want {
 		t.Fatalf("created mappers = %d, want %d", got, want)
 	}
-	if got, want := backend.createdUsers, 1; got != want {
+	if got, want := backend.createdUsers, 2; got != want {
 		t.Fatalf("created users = %d, want %d", got, want)
 	}
 	platformUser := backend.users[cfg.PlatformAdminUsername]
@@ -92,6 +97,27 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 	}
 	if backend.clientRoleMappings[cfg.PlatformAdminUsername]["realm-management"]["realm-admin"] {
 		t.Fatal("platform user must not receive realm-admin")
+	}
+
+	directoryReader := backend.clients[directoryReaderClientID]
+	if !directoryReader.ServiceAccountsEnabled || directoryReader.PublicClient || directoryReader.BearerOnly {
+		t.Fatalf("directory reader client = %#v", directoryReader)
+	}
+	if got, want := last.DirectoryReaderClientID, directoryReaderClientID; got != want {
+		t.Fatalf("result.DirectoryReaderClientID = %q, want %q", got, want)
+	}
+	if got, want := last.DirectoryReaderClientSecret, cfg.DirectoryReaderClientSecret; got != want {
+		t.Fatalf("result.DirectoryReaderClientSecret = %q, want %q", got, want)
+	}
+	saUser := "service-account-" + directoryReaderClientID
+	if !backend.clientRoleMappings[saUser]["realm-management"]["query-users"] {
+		t.Fatalf("directory reader realm-management roles = %#v", backend.clientRoleMappings[saUser]["realm-management"])
+	}
+	if !backend.clientRoleMappings[saUser]["realm-management"]["view-users"] {
+		t.Fatalf("directory reader missing view-users role")
+	}
+	if !backend.clientRoleMappings[saUser]["realm-management"]["view-realm"] {
+		t.Fatalf("directory reader missing view-realm role")
 	}
 }
 

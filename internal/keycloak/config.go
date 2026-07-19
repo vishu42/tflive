@@ -32,8 +32,9 @@ type Config struct {
 	PlatformAdminPassword  string
 	PlatformAdminEmail     string
 	PlatformAdminFirstName string
-	PlatformAdminLastName  string
-	HTTPTimeout            time.Duration
+	PlatformAdminLastName       string
+	DirectoryReaderClientSecret string
+	HTTPTimeout                 time.Duration
 }
 
 // LoadConfig reads and validates Keycloak provisioning configuration.
