@@ -986,7 +986,12 @@ func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 
 	ctx := authenticatedContext()
 	now := time.Date(2026, 7, 2, 10, 15, 0, 0, time.UTC)
-	runs := &recordingTemplateRunRepository{}
+	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{
+		ID:            "run_123",
+		TenantID:      "tenant_123",
+		StackTemplateID: "stack_template_123",
+		TriggerActor:  traits.UserID("different-user"),
+	}}
 	workflows := &recordingWorkflowDispatcher{}
 
 	service := NewService(Service{
@@ -1175,8 +1180,8 @@ func TestApproveRunAuditsSuccessfulApproval(t *testing.T) {
 	if len(audit.events) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(audit.events))
 	}
-	if audit.events[0].Action != traits.AuditActionGrant {
-		t.Fatalf("audit action = %q, want %q", audit.events[0].Action, traits.AuditActionGrant)
+	if audit.events[0].Action != traits.AuditActionApprovalGranted {
+		t.Fatalf("audit action = %q, want %q", audit.events[0].Action, traits.AuditActionApprovalGranted)
 	}
 	if audit.events[0].Outcome != traits.AuditOutcomeSuccess {
 		t.Fatalf("audit outcome = %q, want %q", audit.events[0].Outcome, traits.AuditOutcomeSuccess)

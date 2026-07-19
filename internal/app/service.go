@@ -832,7 +832,7 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 
 	service.auditError(ctx, traits.SecurityAuditEvent{
 		ActorSubject:  string(actor),
-		Action:        traits.AuditActionGrant,
+		Action:        traits.AuditActionApprovalGranted,
 		TenantID:      command.TenantID,
 		Outcome:       traits.AuditOutcomeSuccess,
 		CorrelationID: "",

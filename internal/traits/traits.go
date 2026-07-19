@@ -504,6 +504,7 @@ const (
 	AuditActionRoleChange          AuditAction = "role_change"
 	AuditActionFailedAccessAttempt AuditAction = "failed_access_attempt"
 	AuditActionSelfApprovalRejected AuditAction = "self_approval_rejected"
+	AuditActionApprovalGranted     AuditAction = "approval_granted"
 )
 
 // AuditOutcome reports whether the audited operation succeeded or failed.
