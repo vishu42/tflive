@@ -1114,11 +1114,7 @@ func TestGetTemplateRunMapsMissingRunToNotFound(t *testing.T) {
 	deps.templateRuns.getErr = app.ErrNotFound
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
-		http.MethodGet,
-		"/v1/tenants/tenant_123/template-runs/run_123",
-		nil,
-	)
+	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/template-runs/run_123", nil)
 
 	server.ServeHTTP(response, request)
 
@@ -1860,6 +1856,44 @@ func TestCreateStackWithMissingAuthorizerReturnsServiceUnavailable(t *testing.T)
 	}
 	if stacks.created.ID != "" {
 		t.Fatalf("created stack = %#v, want no persistence", stacks.created)
+	}
+}
+
+func TestPlatformAdminCannotBypassMissingAuthorizer(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "stack list", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks"},
+		{name: "stack detail", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123"},
+		{name: "stack mutation", method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","selected_ref":"main","config":{}}`},
+		{name: "inherited read", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			stacks := &recordingStackRepository{}
+			runs := &recordingTemplateRunRepository{}
+			installer := &recordingStackTemplateInstaller{}
+			service := app.NewService(app.Service{Stacks: stacks, TemplateRuns: runs, StackTemplateInstaller: installer})
+			server := NewServer(service, configuredTenantID)
+			response := httptest.NewRecorder()
+			request := requestWithGlobalRole(test.method, test.path, strings.NewReader(test.body), "platform-admin")
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+			}
+			if stacks.gotStackID != "" || stacks.gotListTenantID != "" || runs.gotGetRunID != "" || installer.created.ID != "" {
+				t.Fatal("missing authorizer allowed repository access or mutation")
+			}
+		})
 	}
 }
 

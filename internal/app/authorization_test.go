@@ -139,6 +139,65 @@ func TestListStacksRejectsNonAdvancingPage(t *testing.T) {
 	}
 }
 
+func TestListStacksRejectsOversizedPage(t *testing.T) {
+	t.Parallel()
+
+	all := make([]traits.Stack, 51)
+	for i := range all {
+		all[i] = traits.Stack{ID: traits.StackID(fmt.Sprintf("stack_%02d", 51-i)), CreatedAt: time.Unix(100, 0)}
+	}
+	service := NewService(Service{Authorizer: &permissionAuthorizer{}, Stacks: &pagedStackRepository{stacks: all, ignoreLimit: true}})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
+
+	_, err := service.ListStacks(ctx, ListStacksCommand{TenantID: "tenant_123"})
+	if !errors.Is(err, authz.ErrMalformedResponse) {
+		t.Fatalf("error = %v, want ErrMalformedResponse", err)
+	}
+}
+
+func TestListStacksRejectsOutOfOrderPage(t *testing.T) {
+	t.Parallel()
+
+	stacks := []traits.Stack{
+		{ID: "stack_a", CreatedAt: time.Unix(100, 0)},
+		{ID: "stack_b", CreatedAt: time.Unix(100, 0)},
+	}
+	service := NewService(Service{Authorizer: &permissionAuthorizer{}, Stacks: &pagedStackRepository{stacks: stacks}})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
+
+	_, err := service.ListStacks(ctx, ListStacksCommand{TenantID: "tenant_123"})
+	if !errors.Is(err, authz.ErrMalformedResponse) {
+		t.Fatalf("error = %v, want ErrMalformedResponse", err)
+	}
+}
+
+func TestListStacksRejectsMalformedCandidateIDAsDependencyFailure(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{Authorizer: &permissionAuthorizer{}, Stacks: &pagedStackRepository{stacks: []traits.Stack{{ID: "bad:id"}}}})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
+
+	_, err := service.ListStacks(ctx, ListStacksCommand{TenantID: "tenant_123"})
+	if !errors.Is(err, authz.ErrMalformedResponse) {
+		t.Fatalf("error = %v, want ErrMalformedResponse", err)
+	}
+}
+
+func TestInheritedAuthorizationRequiresPrincipalBeforeRepositoryRead(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{}
+	service := NewService(Service{Authorizer: &permissionAuthorizer{}, TemplateRuns: runs})
+
+	_, err := service.GetTemplateRun(context.Background(), GetTemplateRunCommand{TenantID: "tenant_123", RunID: "run_123"})
+	if !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("error = %v, want ErrUnauthenticated", err)
+	}
+	if runs.gotGetRunID != "" {
+		t.Fatalf("repository run ID = %q, want no lookup", runs.gotGetRunID)
+	}
+}
+
 func TestStartTemplateRunDenialReturnsForbiddenBeforeMutation(t *testing.T) {
 	t.Parallel()
 
@@ -166,7 +225,7 @@ func TestStartTemplateRunDenialReturnsForbiddenBeforeMutation(t *testing.T) {
 func TestInheritedResourceMissingMutationReturnsForbidden(t *testing.T) {
 	t.Parallel()
 
-	service := NewService(Service{TemplateRuns: &recordingTemplateRunRepository{getErr: ErrNotFound}})
+	service := NewService(Service{Authorizer: &permissionAuthorizer{allowed: true}, TemplateRuns: &recordingTemplateRunRepository{getErr: ErrNotFound}})
 
 	err := service.ApproveRun(authenticatedContext(), ApproveRunCommand{TenantID: "tenant_123", RunID: "missing_run"})
 	if !errors.Is(err, ErrForbidden) {
@@ -233,9 +292,10 @@ func (authorizer *permissionAuthorizer) DeleteRelationships(context.Context, aut
 }
 
 type pagedStackRepository struct {
-	stacks     []traits.Stack
-	pageCalls  int
-	repeatPage bool
+	stacks      []traits.Stack
+	pageCalls   int
+	repeatPage  bool
+	ignoreLimit bool
 }
 
 func (*pagedStackRepository) CreateStack(context.Context, traits.Stack) error { return nil }
@@ -259,6 +319,9 @@ func (repository *pagedStackRepository) ListStacksPage(_ context.Context, _ trai
 			}
 		}
 	}
-	end := min(start+limit, len(repository.stacks))
+	end := len(repository.stacks)
+	if !repository.ignoreLimit {
+		end = min(start+limit, end)
+	}
 	return append([]traits.Stack(nil), repository.stacks[start:end]...), nil
 }

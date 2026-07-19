@@ -26,9 +26,9 @@
 | `internal/app/authorization.go` | Principal role helpers, OpenFGA stack checks, inherited-resource resolution, and authorization error mapping. |
 | `internal/app/service.go` | Calls authorization helpers from each catalog, stack, stack-template, run, and log use case; expands the stack repository contract for filtered listing. |
 | `internal/app/authorization_test.go` | Unit tests for global, direct-stack, inherited-resource, list, and dependency-failure behavior. |
-| `internal/postgres/repositories.go` | Implements tenant-scoped stack lookup constrained to an explicit set of authorized IDs. |
-| `internal/postgres/store_test.go` | Verifies the filtered stack query retains ordering, tenant isolation, and empty-ID behavior. |
-| `internal/api/server_test.go` | Proves representative HTTP routes return the matrix's stable `403`, protected `404`, and `503` outcomes with no mutation side effects. |
+| `internal/postgres/repositories.go` | Implements stable tenant-scoped keyset pages used as bounded authorization candidates. |
+| `internal/postgres/store_test.go` | Verifies page ordering, keyset progress, tenant isolation, and limit validation. |
+| `internal/api/server_test.go` | Proves every current route's role/permission mapping and stable `403`, protected `404`, and `503` outcomes without mutation side effects. |
 | `docs/authentication.md` | Publishes the endpoint matrix, list behavior, and error/non-disclosure rules. |
 | `docs/sprint/authn_and_authz/README.md` | Marks AUTH-013 complete only after all plan verification succeeds. |
 
@@ -353,7 +353,7 @@ git commit -m "feat(authz): restrict template catalog routes"
 
 - [ ] **Step 1: Add the runtime endpoint enforcement documentation**
 
-After the existing runtime authorization bullets in `docs/authentication.md`, add a concise table for every current route. State that catalog routes require `platform-admin` or `stack-creator`; describe `can_view`, `can_operate`, and `can_approve` mappings; state that `can_manage_access` has no current route; and document that non-admin lists use `ListObjects(can_view)` before a tenant-scoped ID query. State the protected-read `404`, denied-mutation `403`, and authorization-service `503` behavior.
+After the existing runtime authorization bullets in `docs/authentication.md`, add a concise table for every current route. State that catalog routes require `platform-admin` or `stack-creator`; describe `can_view`, `can_operate`, and `can_approve` mappings; state that `can_manage_access` has no current route; and document that non-admin lists use stable Postgres keyset pages with bounded `BatchCheck(can_view)` calls. State the protected-read `404`, denied-mutation `403`, and authorization-service `503` behavior.
 
 - [ ] **Step 2: Mark the backlog item done**
 

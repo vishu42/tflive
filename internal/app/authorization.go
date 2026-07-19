@@ -31,6 +31,17 @@ func requirePrincipal(ctx context.Context) (authn.Principal, error) {
 	return principal, nil
 }
 
+func requireAuthorizer(ctx context.Context, authorizer authz.Authorizer) (authn.Principal, error) {
+	principal, err := requirePrincipal(ctx)
+	if err != nil {
+		return authn.Principal{}, err
+	}
+	if authorizer == nil {
+		return authn.Principal{}, fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
+	}
+	return principal, nil
+}
+
 func requireTemplateCatalogAccess(ctx context.Context) error {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -43,12 +54,12 @@ func requireTemplateCatalogAccess(ctx context.Context) error {
 }
 
 func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID, permission authz.Permission, denied error) error {
-	principal, err := requirePrincipal(ctx)
-	if err != nil || isPlatformAdmin(principal) {
+	principal, err := requireAuthorizer(ctx, authorizer)
+	if err != nil {
 		return err
 	}
-	if authorizer == nil {
-		return fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
+	if isPlatformAdmin(principal) {
+		return nil
 	}
 	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
 	if err != nil {
@@ -72,15 +83,12 @@ func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID tr
 }
 
 func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repository StackRepository, tenantID traits.TenantID) ([]traits.Stack, error) {
-	principal, err := requirePrincipal(ctx)
+	principal, err := requireAuthorizer(ctx, authorizer)
 	if err != nil {
 		return nil, err
 	}
 	if isPlatformAdmin(principal) {
 		return repository.ListStacks(ctx, tenantID)
-	}
-	if authorizer == nil {
-		return nil, fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
 	}
 	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
 	if err != nil {
@@ -112,6 +120,9 @@ func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repo
 		checks := make([]authz.CheckRequest, len(candidates))
 		for i, candidate := range candidates {
 			stack, err := authz.StackFromID(string(candidate.ID))
+			if errors.Is(err, authz.ErrInvalidInput) {
+				return nil, fmt.Errorf("%w: stack candidate has invalid ID", authz.ErrMalformedResponse)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -145,12 +156,19 @@ func stackPageOrderBefore(left, right traits.Stack) bool {
 }
 
 func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID, permission authz.Permission, denied error) (traits.StackTemplate, error) {
+	principal, err := requireAuthorizer(ctx, service.Authorizer)
+	if err != nil {
+		return traits.StackTemplate{}, err
+	}
 	stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, tenantID, stackTemplateID)
 	if errors.Is(err, ErrNotFound) {
 		return traits.StackTemplate{}, denied
 	}
 	if err != nil {
 		return traits.StackTemplate{}, err
+	}
+	if isPlatformAdmin(principal) {
+		return stackTemplate, nil
 	}
 	if err := authorizeStack(ctx, service.Authorizer, stackTemplate.StackID, permission, denied); err != nil {
 		return traits.StackTemplate{}, err
@@ -159,14 +177,14 @@ func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID tr
 }
 
 func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, permission authz.Permission, denied error) (traits.TemplateRun, error) {
+	principal, err := requireAuthorizer(ctx, service.Authorizer)
+	if err != nil {
+		return traits.TemplateRun{}, err
+	}
 	run, err := service.TemplateRuns.GetTemplateRun(ctx, tenantID, runID)
 	if errors.Is(err, ErrNotFound) {
 		return traits.TemplateRun{}, denied
 	}
-	if err != nil {
-		return traits.TemplateRun{}, err
-	}
-	principal, err := requirePrincipal(ctx)
 	if err != nil {
 		return traits.TemplateRun{}, err
 	}

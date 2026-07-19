@@ -305,6 +305,7 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	}
 	installer := &recordingStackTemplateInstaller{}
 	service := NewService(Service{
+		Authorizer:               &permissionAuthorizer{allowed: true},
 		Stacks:                   stacks,
 		TemplateRevisionMetadata: templates,
 		TemplateRevisions:        templates,
@@ -372,6 +373,7 @@ func TestAddTemplateToStackRejectsMissingRequiredVariable(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
+		Authorizer: &permissionAuthorizer{allowed: true},
 		Stacks: &recordingStackRepository{
 			stack: traits.Stack{ID: traits.StackID("stack_123"), TenantID: traits.TenantID("tenant_123"), Slug: "acme-prod"},
 		},
@@ -401,6 +403,7 @@ func TestAddTemplateToStackRejectsUnknownVariable(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
+		Authorizer: &permissionAuthorizer{allowed: true},
 		Stacks: &recordingStackRepository{
 			stack: traits.Stack{ID: traits.StackID("stack_123"), TenantID: traits.TenantID("tenant_123"), Slug: "acme-prod"},
 		},
@@ -430,6 +433,7 @@ func TestAddTemplateToStackRejectsInactiveTemplate(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
+		Authorizer: &permissionAuthorizer{allowed: true},
 		Stacks: &recordingStackRepository{
 			stack: traits.Stack{ID: traits.StackID("stack_123"), TenantID: traits.TenantID("tenant_123"), Slug: "acme-prod"},
 		},
@@ -487,6 +491,7 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 	workflows := &recordingWorkflowDispatcher{}
 
 	service := NewService(Service{
+		Authorizer:               &permissionAuthorizer{allowed: true},
 		StackTemplates:           stackTemplates,
 		TemplateRuns:             runs,
 		TemplateRevisionMetadata: templates,
@@ -619,6 +624,7 @@ func TestUpdateStackTemplateConfigRejectsMissingDesiredRevision(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
+		Authorizer:        &permissionAuthorizer{allowed: true},
 		StackTemplates:    stackTemplates,
 		TemplateRevisions: &recordingTemplateRepository{},
 	})
@@ -662,6 +668,7 @@ func TestUpgradeStackTemplateCarriesForwardCompatibleConfig(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
+		Authorizer:               &permissionAuthorizer{allowed: true},
 		StackTemplates:           stackTemplates,
 		TemplateRevisionMetadata: templates,
 		TemplateRevisions:        templates,
@@ -707,6 +714,7 @@ func TestUpgradeStackTemplateRejectsDifferentSourceTemplate(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
+		Authorizer:               &permissionAuthorizer{allowed: true},
 		StackTemplates:           stackTemplates,
 		TemplateRevisionMetadata: templates,
 		TemplateRevisions:        templates,
@@ -758,6 +766,7 @@ func TestStartTemplateRunRejectsInactiveStackTemplate(t *testing.T) {
 	workflows := &recordingWorkflowDispatcher{}
 
 	service := NewService(Service{
+		Authorizer:     &permissionAuthorizer{allowed: true},
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
 		Workflows:      workflows,
@@ -798,6 +807,7 @@ func TestStartTemplateRunRejectsMissingDesiredRevision(t *testing.T) {
 	workflows := &recordingWorkflowDispatcher{}
 
 	service := NewService(Service{
+		Authorizer:     &permissionAuthorizer{allowed: true},
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
 		Workflows:      workflows,
@@ -841,6 +851,7 @@ func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
 	}
 	runs := &recordingTemplateRunRepository{}
 	service := NewService(Service{
+		Authorizer:     &permissionAuthorizer{allowed: true},
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
 		TemplateRevisionMetadata: &recordingTemplateRepository{
@@ -1054,6 +1065,7 @@ func TestCancelRunRecordsCancellationAndSignalsWorkflow(t *testing.T) {
 	workflows := &recordingWorkflowDispatcher{}
 
 	service := NewService(Service{
+		Authorizer:   &permissionAuthorizer{allowed: true},
 		TemplateRuns: runs,
 		Workflows:    workflows,
 		Clock:        fixedClock{now: now},
@@ -1253,6 +1265,7 @@ func TestGetTemplateRunLogChecksRunOwnershipBeforeReadingLog(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
+		Authorizer:             &permissionAuthorizer{allowed: true},
 		TemplateRuns:           runs,
 		TemplateRunLogs:        logs,
 		TemplateRunLogMetadata: metadata,
@@ -1296,6 +1309,7 @@ func TestGetTemplateRunLogDoesNotReadLogWhenRunIsMissing(t *testing.T) {
 	runs := &recordingTemplateRunRepository{getErr: ErrNotFound}
 	logs := &recordingTemplateRunLogReader{content: []byte("plan output\n")}
 	service := NewService(Service{
+		Authorizer:             &permissionAuthorizer{allowed: true},
 		TemplateRuns:           runs,
 		TemplateRunLogs:        logs,
 		TemplateRunLogMetadata: &recordingTemplateRunLogRepository{},
@@ -1367,6 +1381,7 @@ func TestGetTemplateRunLogMapsMissingLogToNotFound(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
+		Authorizer:             &permissionAuthorizer{allowed: true},
 		TemplateRuns:           runs,
 		TemplateRunLogs:        logs,
 		TemplateRunLogMetadata: metadata,
