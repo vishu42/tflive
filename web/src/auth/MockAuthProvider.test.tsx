@@ -54,4 +54,19 @@ describe("MockAuthProvider", () => {
     expect(result.current.status).toBe("authenticated");
     expect(result.current.me).toEqual(mockUsers.operator);
   });
+
+  it("keeps login/logout stable across re-renders, including across a logout/login cycle", () => {
+    const { result, rerender } = renderHook(() => useAuth(), { wrapper });
+
+    const { login: loginBeforeRerender, logout: logoutBeforeRerender } = result.current;
+    rerender();
+    expect(result.current.login).toBe(loginBeforeRerender);
+    expect(result.current.logout).toBe(logoutBeforeRerender);
+
+    act(() => result.current.logout());
+    expect(result.current.logout).toBe(logoutBeforeRerender);
+
+    act(() => result.current.login());
+    expect(result.current.login).toBe(loginBeforeRerender);
+  });
 });

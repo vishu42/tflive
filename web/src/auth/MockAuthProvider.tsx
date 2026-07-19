@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { AuthContext } from "./AuthContext";
 import type { AuthContextValue, AuthStatus } from "./AuthContext";
@@ -12,11 +12,14 @@ export default function MockAuthProvider({ children }: { children: ReactNode }) 
     status: "authenticated"
   });
 
+  const login = useCallback(() => setSession({ me: mockUser, status: "authenticated" }), [mockUser]);
+  const logout = useCallback(() => setSession({ me: null, status: "unauthenticated" }), []);
+
   const value: AuthContextValue = {
     me: session.me,
     status: session.status,
-    login: () => setSession({ me: mockUser, status: "authenticated" }),
-    logout: () => setSession({ me: null, status: "unauthenticated" })
+    login,
+    logout
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
