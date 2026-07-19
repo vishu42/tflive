@@ -399,6 +399,9 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		CreatedAt:            service.Clock.Now(),
 	}
 	authorizedStack, err := authz.StackFromID(string(stack.ID))
+	if errors.Is(err, authz.ErrInvalidInput) {
+		return traits.Stack{}, fmt.Errorf("%w: generated stack ID is invalid", authz.ErrMalformedResponse)
+	}
 	if err != nil {
 		return traits.Stack{}, fmt.Errorf("create owner stack: %w", err)
 	}

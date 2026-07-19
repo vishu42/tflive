@@ -1724,12 +1724,17 @@ func TestInheritedRouteMissingAndDeniedStatusesMatch(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		method string
-		path   string
-		body   string
-		status int
+		name     string
+		method   string
+		path     string
+		body     string
+		status   int
+		resource string
 	}{
+		{name: "config", method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusForbidden, resource: "stack-template"},
+		{name: "upgrade", method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusForbidden, resource: "stack-template"},
+		{name: "start run", method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusForbidden, resource: "stack-template"},
+		{name: "run detail", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusNotFound},
 		{name: "approval", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusForbidden},
 		{name: "cancellation", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusForbidden},
 		{name: "log list", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusNotFound},
@@ -1743,7 +1748,11 @@ func TestInheritedRouteMissingAndDeniedStatusesMatch(t *testing.T) {
 			for _, condition := range []string{"missing", "denied"} {
 				deps := newPermissionMatrixDependencies()
 				if condition == "missing" {
-					deps.templateRuns.getErr = app.ErrNotFound
+					if test.resource == "stack-template" {
+						deps.stackTemplates.getErr = app.ErrNotFound
+					} else {
+						deps.templateRuns.getErr = app.ErrNotFound
+					}
 				} else {
 					deps.authorizer.denied = true
 				}
@@ -1752,6 +1761,9 @@ func TestInheritedRouteMissingAndDeniedStatusesMatch(t *testing.T) {
 				request := ordinaryAuthenticatedRequest(test.method, test.path, strings.NewReader(test.body))
 				server.ServeHTTP(response, request)
 				statuses = append(statuses, response.Code)
+				if deps.stackTemplateInstaller.created.ID != "" || len(deps.stackTemplates.gotConfigJSON) != 0 || deps.stackTemplates.gotDesiredTemplateRevisionID != "" || deps.templateRuns.created.ID != "" || deps.templateRuns.approval.RunID != "" || deps.templateRuns.cancellation.RunID != "" || deps.workflows.approvalRunID != "" || deps.workflows.cancelRunID != "" {
+					t.Fatal("protected missing or denied request had side effects")
+				}
 			}
 			if statuses[0] != test.status || statuses[1] != test.status {
 				t.Fatalf("missing=%d denied=%d want=%d", statuses[0], statuses[1], test.status)
@@ -1868,10 +1880,18 @@ func TestPlatformAdminCannotBypassMissingAuthorizer(t *testing.T) {
 		path   string
 		body   string
 	}{
+		{name: "stack creation", method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks", body: `{"name":"Acme"}`},
 		{name: "stack list", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks"},
 		{name: "stack detail", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123"},
 		{name: "stack mutation", method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","selected_ref":"main","config":{}}`},
+		{name: "config mutation", method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`},
+		{name: "upgrade mutation", method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`},
+		{name: "start run", method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`},
 		{name: "inherited read", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123"},
+		{name: "approval", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`},
+		{name: "cancellation", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`},
+		{name: "log list", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs"},
+		{name: "log body", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan"},
 	}
 
 	for _, test := range tests {
@@ -1890,7 +1910,7 @@ func TestPlatformAdminCannotBypassMissingAuthorizer(t *testing.T) {
 			if response.Code != http.StatusServiceUnavailable {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
 			}
-			if stacks.gotStackID != "" || stacks.gotListTenantID != "" || runs.gotGetRunID != "" || installer.created.ID != "" {
+			if stacks.gotStackID != "" || stacks.gotListTenantID != "" || stacks.created.ID != "" || runs.gotGetRunID != "" || runs.created.ID != "" || runs.approval.RunID != "" || runs.cancellation.RunID != "" || installer.created.ID != "" {
 				t.Fatal("missing authorizer allowed repository access or mutation")
 			}
 		})
@@ -1909,6 +1929,64 @@ func TestMalformedStackIDReturnsProtectedNotFound(t *testing.T) {
 
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body.String())
+	}
+}
+
+func TestPlatformAdminMalformedStackIDReturnsProtectedNotFound(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := requestWithGlobalRole(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack:bad", nil, "platform-admin")
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body.String())
+	}
+}
+
+func TestMalformedPersistedOwningStackIDReturnsServiceUnavailable(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range []string{"", "platform-admin"} {
+		t.Run(role, func(t *testing.T) {
+			t.Parallel()
+			deps := newPermissionMatrixDependencies()
+			deps.stackTemplates.stackTemplate.StackID = "bad:id"
+			server := NewServer(deps.service(), configuredTenantID)
+			response := httptest.NewRecorder()
+			request := ordinaryAuthenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/template-runs/run_123", nil)
+			if role != "" {
+				request = requestWithGlobalRole(http.MethodGet, "/v1/tenants/tenant_123/template-runs/run_123", nil, role)
+			}
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestMalformedGeneratedStackIDReturnsServiceUnavailable(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stackID = "bad:id"
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := requestWithGlobalRole(http.MethodPost, "/v1/tenants/tenant_123/stacks", strings.NewReader(`{"name":"Acme"}`), "stack-creator")
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	}
+	if deps.stacks.created.ID != "" {
+		t.Fatalf("created stack = %#v, want no persistence", deps.stacks.created)
 	}
 }
 
@@ -2117,7 +2195,11 @@ func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.C
 	if repository.getErr != nil {
 		return traits.StackTemplate{}, repository.getErr
 	}
-	return repository.stackTemplate, nil
+	stackTemplate := repository.stackTemplate
+	if stackTemplate.StackID == "" {
+		stackTemplate.StackID = "stack_123"
+	}
+	return stackTemplate, nil
 }
 
 func (repository *recordingStackTemplateRepository) UpdateStackTemplateConfig(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {

@@ -666,7 +666,7 @@ func TestListStacksReturnsTenantScopedStacksNewestFirst(t *testing.T) {
 	if len(stacks) != 2 {
 		t.Fatalf("len(stacks) = %d, want 2: %#v", len(stacks), stacks)
 	}
-	if stacks[0].ID != traits.StackID("stack_newer") || stacks[1].ID != traits.StackID("stack_older") {
+	if stacks[0].ID != newer.ID || stacks[1].ID != older.ID {
 		t.Fatalf("stack order = %#v", stacks)
 	}
 }

@@ -32,7 +32,13 @@
 | `docs/authentication.md` | Publishes the endpoint matrix, list behavior, and error/non-disclosure rules. |
 | `docs/sprint/authn_and_authz/README.md` | Marks AUTH-013 complete only after all plan verification succeeds. |
 
-### Task 1: Add Filtered Stack Listing
+## Archived Initial Iteration
+
+Tasks 1-5 record the first implementation iteration and are retained only as
+execution history. Tasks 6-9 supersede their listing, non-disclosure, testing,
+and documentation instructions and define the current implementation.
+
+### Task 1: Add Filtered Stack Listing (Superseded)
 
 **Files:**
 - Modify: `internal/app/service.go:55-61`
@@ -42,8 +48,8 @@
 - Modify: `internal/api/server_test.go:1557-1603`
 
 **Interfaces:**
-- Produces: `StackRepository.ListStacksByIDs(ctx context.Context, tenantID traits.TenantID, stackIDs []traits.StackID) ([]traits.Stack, error)`.
-- Consumes: OpenFGA `ListAccessibleStacksResult.Stacks`, whose values render as `stack:<application-id>`.
+- Historical interface: `ListStacksByIDs`, removed and replaced by `ListStacksPage` in Task 6.
+- Historical flow: unary OpenFGA `ListAccessibleStacks`, removed from this endpoint by Task 6.
 
 - [ ] **Step 1: Write the failing Postgres and recording-repository tests**
 
@@ -116,7 +122,7 @@ git add internal/app/service.go internal/app/service_test.go internal/api/server
 git commit -m "feat(authz): query authorized stacks by ID"
 ```
 
-### Task 2: Add Application Authorization Primitives And Stack Lists
+### Task 2: Add Application Authorization Primitives And Stack Lists (Superseded)
 
 **Files:**
 - Create: `internal/app/authorization.go`
@@ -126,7 +132,7 @@ git commit -m "feat(authz): query authorized stacks by ID"
 **Interfaces:**
 - Produces: `authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID, permission authz.Permission, denied error) error`.
 - Produces: `listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repository StackRepository, tenantID traits.TenantID) ([]traits.Stack, error)`.
-- Consumes: `authn.PrincipalFromContext`, `authz.SubjectFromKeycloakSub`, `authz.StackFromID`, `authz.Authorizer.Check`, and `authz.Authorizer.ListAccessibleStacks`.
+- Current dependencies after Task 6: `authn.PrincipalFromContext`, `authz.SubjectFromKeycloakSub`, `authz.StackFromID`, `authz.Authorizer.Check`, and bounded `authz.Authorizer.BatchCheck`.
 
 - [ ] **Step 1: Write failing unit tests for direct checks and list filtering**
 

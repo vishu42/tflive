@@ -1061,14 +1061,15 @@ func TestCancelRunRecordsCancellationAndSignalsWorkflow(t *testing.T) {
 
 	ctx := authenticatedContext()
 	now := time.Date(2026, 7, 2, 10, 45, 0, 0, time.UTC)
-	runs := &recordingTemplateRunRepository{}
+	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
 	workflows := &recordingWorkflowDispatcher{}
 
 	service := NewService(Service{
-		Authorizer:   &permissionAuthorizer{allowed: true},
-		TemplateRuns: runs,
-		Workflows:    workflows,
-		Clock:        fixedClock{now: now},
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", StackID: "stack_123"}},
+		Workflows:      workflows,
+		Clock:          fixedClock{now: now},
 	})
 
 	err := service.CancelRun(ctx, CancelRunCommand{
@@ -1267,6 +1268,7 @@ func TestGetTemplateRunLogChecksRunOwnershipBeforeReadingLog(t *testing.T) {
 	service := NewService(Service{
 		Authorizer:             &permissionAuthorizer{allowed: true},
 		TemplateRuns:           runs,
+		StackTemplates:         &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", StackID: "stack_123"}},
 		TemplateRunLogs:        logs,
 		TemplateRunLogMetadata: metadata,
 	})
@@ -1367,8 +1369,9 @@ func TestGetTemplateRunLogMapsMissingLogToNotFound(t *testing.T) {
 
 	runs := &recordingTemplateRunRepository{
 		run: traits.TemplateRun{
-			ID:       traits.TemplateRunID("run_123"),
-			TenantID: traits.TenantID("tenant_123"),
+			ID:              traits.TemplateRunID("run_123"),
+			TenantID:        traits.TenantID("tenant_123"),
+			StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		},
 	}
 	logs := &recordingTemplateRunLogReader{err: os.ErrNotExist}
@@ -1383,6 +1386,7 @@ func TestGetTemplateRunLogMapsMissingLogToNotFound(t *testing.T) {
 	service := NewService(Service{
 		Authorizer:             &permissionAuthorizer{allowed: true},
 		TemplateRuns:           runs,
+		StackTemplates:         &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", StackID: "stack_123"}},
 		TemplateRunLogs:        logs,
 		TemplateRunLogMetadata: metadata,
 	})
@@ -1472,7 +1476,11 @@ type recordingStackTemplateRepository struct {
 func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error) {
 	repository.gotTenantID = tenantID
 	repository.gotID = id
-	return repository.stackTemplate, nil
+	stackTemplate := repository.stackTemplate
+	if stackTemplate.StackID == "" {
+		stackTemplate.StackID = "stack_123"
+	}
+	return stackTemplate, nil
 }
 
 func (repository *recordingStackTemplateRepository) UpdateStackTemplateConfig(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {

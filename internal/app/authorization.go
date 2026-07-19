@@ -58,17 +58,17 @@ func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID tr
 	if err != nil {
 		return err
 	}
-	if isPlatformAdmin(principal) {
-		return nil
-	}
-	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
-	if err != nil {
-		return err
-	}
 	stack, err := authz.StackFromID(string(stackID))
 	if errors.Is(err, authz.ErrInvalidInput) {
 		return denied
 	}
+	if err != nil {
+		return err
+	}
+	if isPlatformAdmin(principal) {
+		return nil
+	}
+	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
 	if err != nil {
 		return err
 	}
@@ -167,6 +167,11 @@ func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID tr
 	if err != nil {
 		return traits.StackTemplate{}, err
 	}
+	if _, err := authz.StackFromID(string(stackTemplate.StackID)); errors.Is(err, authz.ErrInvalidInput) {
+		return traits.StackTemplate{}, fmt.Errorf("%w: stack template has invalid owning stack ID", authz.ErrMalformedResponse)
+	} else if err != nil {
+		return traits.StackTemplate{}, err
+	}
 	if isPlatformAdmin(principal) {
 		return stackTemplate, nil
 	}
@@ -177,8 +182,7 @@ func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID tr
 }
 
 func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, permission authz.Permission, denied error) (traits.TemplateRun, error) {
-	principal, err := requireAuthorizer(ctx, service.Authorizer)
-	if err != nil {
+	if _, err := requireAuthorizer(ctx, service.Authorizer); err != nil {
 		return traits.TemplateRun{}, err
 	}
 	run, err := service.TemplateRuns.GetTemplateRun(ctx, tenantID, runID)
@@ -187,9 +191,6 @@ func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID trai
 	}
 	if err != nil {
 		return traits.TemplateRun{}, err
-	}
-	if isPlatformAdmin(principal) {
-		return run, nil
 	}
 	if _, err := service.authorizedStackTemplate(ctx, tenantID, run.StackTemplateID, permission, denied); err != nil {
 		return traits.TemplateRun{}, err
