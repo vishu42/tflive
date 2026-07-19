@@ -1,4 +1,4 @@
-import type { TemplateRegistrationStatus, TemplateRunStatus } from "./api/types";
+import type { TemplateRegistrationStatus, TemplateRunStatus } from "./types";
 
 export function isTerminalRegistrationStatus(status: TemplateRegistrationStatus): boolean {
   return status === "completed" || status === "invalid" || status === "failed";
