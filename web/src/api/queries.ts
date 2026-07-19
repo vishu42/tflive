@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as client from "./client";
 import { queryKeys } from "./queryKeys";
 import { isTerminalRegistrationStatus, isTerminalRunStatus } from "../polling";
@@ -30,7 +30,8 @@ export function useTemplateRevisionVariablesQuery(tenantID: string, templateRevi
   return useQuery({
     queryKey: queryKeys.templateRevisionVariables(tenantID, templateRevisionID),
     queryFn: () => client.getTemplateRevisionVariables(tenantID, templateRevisionID),
-    enabled: templateRevisionID !== ""
+    enabled: templateRevisionID !== "",
+    placeholderData: keepPreviousData
   });
 }
 
@@ -71,7 +72,8 @@ export function useTemplateRunLogsQuery(tenantID: string, runID: string, statusT
   return useQuery({
     queryKey: queryKeys.templateRunLogs(tenantID, runID, statusTag),
     queryFn: () => client.listTemplateRunLogs(tenantID, runID),
-    enabled: runID !== ""
+    enabled: runID !== "",
+    placeholderData: keepPreviousData
   });
 }
 
@@ -79,7 +81,8 @@ export function useTemplateRunLogQuery(tenantID: string, runID: string, phase: s
   return useQuery({
     queryKey: queryKeys.templateRunLog(tenantID, runID, phase, statusTag),
     queryFn: () => client.getTemplateRunLog(tenantID, runID, phase),
-    enabled: runID !== "" && phase !== ""
+    enabled: runID !== "" && phase !== "",
+    placeholderData: keepPreviousData
   });
 }
 

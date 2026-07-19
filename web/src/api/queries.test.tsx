@@ -150,6 +150,37 @@ describe("polling-aware query hooks", () => {
     );
   });
 
+  it("keeps showing the previous status's logs while the new status's fetch is in flight", async () => {
+    let resolveSecondFetch: ((response: Response) => void) | undefined;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementationOnce(() =>
+      Promise.resolve(jsonResponse([{ phase: "plan" }]))
+    );
+    const queryClient = testQueryClient();
+    const { result, rerender } = renderHook(
+      ({ statusTag }: { statusTag: string }) => useTemplateRunLogsQuery("tenant_123", "run_1", statusTag),
+      { wrapper: wrapper(queryClient), initialProps: { statusTag: "planned" } }
+    );
+    await waitFor(() => expect(result.current.data).toEqual([{ phase: "plan" }]));
+
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSecondFetch = resolve;
+        })
+    );
+    rerender({ statusTag: "completed" });
+
+    // The new status key's fetch is now in flight; without keepPreviousData this would
+    // momentarily be undefined, causing the logs panel to flash empty.
+    await waitFor(() => expect(result.current.isFetching).toBe(true));
+    expect(result.current.data).toEqual([{ phase: "plan" }]);
+    expect(result.current.isPlaceholderData).toBe(true);
+
+    resolveSecondFetch?.(jsonResponse([{ phase: "apply" }]));
+    await waitFor(() => expect(result.current.data).toEqual([{ phase: "apply" }]));
+    expect(result.current.isPlaceholderData).toBe(false);
+  });
+
   it("fetches a single log phase as text", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("plan output\n", { status: 200, headers: { "content-type": "text/plain" } })
