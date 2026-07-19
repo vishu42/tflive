@@ -1,5 +1,5 @@
 import type { Stack, StackTemplate, TemplateRevision, TemplateVariable } from "../../api/types";
-import { nextSelectedID } from "../../shared/listSelection";
+import { findSelectedID, nextSelectedID } from "../../shared/listSelection";
 
 export function nextSelectedStackID(stacks: Stack[], selectedStackID: string): string {
   return nextSelectedID(stacks, selectedStackID);
@@ -10,11 +10,11 @@ export function nextSelectedStackTemplateID(stackTemplates: StackTemplate[], sel
 }
 
 export function findSelectedStack(stacks: Stack[], selectedStackID: string): Stack | null {
-  return stacks.find((stack) => stack.id === selectedStackID) ?? null;
+  return findSelectedID(stacks, selectedStackID);
 }
 
 export function findSelectedStackTemplate(stackTemplates: StackTemplate[], selectedStackTemplateID: string): StackTemplate | null {
-  return stackTemplates.find((stackTemplate) => stackTemplate.id === selectedStackTemplateID) ?? null;
+  return findSelectedID(stackTemplates, selectedStackTemplateID);
 }
 
 export function stackLabel(stack: Stack): string {

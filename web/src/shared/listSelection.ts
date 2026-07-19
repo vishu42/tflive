@@ -8,3 +8,7 @@ export function nextSelectedID<T extends Identified>(items: T[], selectedID: str
   }
   return items[0]?.id ?? "";
 }
+
+export function findSelectedID<T extends Identified>(items: T[], selectedID: string): T | null {
+  return items.find((item) => item.id === selectedID) ?? null;
+}

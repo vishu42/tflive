@@ -1,12 +1,12 @@
 import type { TemplateRevision } from "../../api/types";
-import { nextSelectedID } from "../../shared/listSelection";
+import { findSelectedID, nextSelectedID } from "../../shared/listSelection";
 
 export function nextSelectedTemplateRevisionID(templateRevisions: TemplateRevision[], selectedTemplateRevisionID: string): string {
   return nextSelectedID(templateRevisions, selectedTemplateRevisionID);
 }
 
 export function findSelectedTemplateRevision(templateRevisions: TemplateRevision[], selectedTemplateRevisionID: string): TemplateRevision | null {
-  return templateRevisions.find((templateRevision) => templateRevision.id === selectedTemplateRevisionID) ?? null;
+  return findSelectedID(templateRevisions, selectedTemplateRevisionID);
 }
 
 export function templateRevisionLabel(templateRevision: TemplateRevision): string {
