@@ -1183,6 +1183,47 @@ func TestApproveRunCallsService(t *testing.T) {
 	}
 }
 
+func TestApproveRunRejectsSelfApproval(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.templateRuns.run = traits.TemplateRun{
+		ID:            "run_123",
+		TenantID:      "tenant_123",
+		StackTemplateID: "stack_template_123",
+		TriggerActor:  traits.UserID(apiKeycloakSubject),
+	}
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/template-runs/run_123/approval",
+		strings.NewReader(`{}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusForbidden, response.Body.String())
+	}
+	var errResp struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if errResp.Error != "self_approval_forbidden" {
+		t.Fatalf("error code = %q, want self_approval_forbidden", errResp.Error)
+	}
+	if deps.templateRuns.approval.RunID != "" {
+		t.Fatalf("approval was recorded, want no approval")
+	}
+	if deps.workflows.approvalRunID != "" {
+		t.Fatalf("workflow approval run ID = %q, want no signal", deps.workflows.approvalRunID)
+	}
+}
+
 func TestCancelRunCallsService(t *testing.T) {
 	t.Parallel()
 
