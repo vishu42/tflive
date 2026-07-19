@@ -261,6 +261,43 @@ administrator.
   Explicit OpenFGA denial remains distinct; when an authorization decision is
   required, dependency failures map to `503 authorization_unavailable`.
 
+### Endpoint Permission Matrix
+
+The API enforces permissions in the application layer. Frontend button
+visibility is never an authorization boundary.
+
+| Route | Required permission |
+|---|---|
+| `POST /v1/tenants/{tenant_id}/template-revisions` | Global `platform-admin` or `stack-creator` |
+| `GET /v1/tenants/{tenant_id}/template-revisions` | Global `platform-admin` or `stack-creator` |
+| `GET /v1/tenants/{tenant_id}/template-registrations/{registration_id}` | Global `platform-admin` or `stack-creator` |
+| `GET /v1/tenants/{tenant_id}/template-revisions/{template_revision_id}/variables` | Global `platform-admin` or `stack-creator` |
+| `POST /v1/tenants/{tenant_id}/stacks` | Global `platform-admin` or `stack-creator` |
+| `GET /v1/tenants/{tenant_id}/stacks` | OpenFGA `can_view` accessible-object list; `platform-admin` bypasses the ordinary stack list check |
+| `GET /v1/tenants/{tenant_id}/stacks/{stack_id}` | `can_view` |
+| `POST /v1/tenants/{tenant_id}/stacks/{stack_id}/templates` | `can_operate` |
+| `PATCH /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/config` | Owning stack `can_operate` |
+| `POST /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/upgrade` | Owning stack `can_operate` |
+| `POST /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/runs` | Owning stack `can_operate` |
+| `GET /v1/tenants/{tenant_id}/template-runs/{run_id}` | Owning stack `can_view` |
+| `GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs` | Owning stack `can_view` |
+| `GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs/{phase}` | Owning stack `can_view` |
+| `POST /v1/tenants/{tenant_id}/template-runs/{run_id}/approval` | Owning stack `can_approve` |
+| `POST /v1/tenants/{tenant_id}/template-runs/{run_id}/cancellation` | Owning stack `can_operate` |
+
+`can_manage_access` has no current route; the access-management API will use it.
+Stack templates, runs, logs, log artifacts, and credential identifiers returned
+with a stack inherit the owning stack decision. Non-administrator stack lists
+first call OpenFGA `ListObjects` through `ListAccessibleStacks(can_view)`, then
+query Postgres by only those returned stack IDs; an empty OpenFGA result never
+falls back to a tenant-wide query.
+
+Denied protected reads return `404 not_found` so they do not expose protected
+resource existence. Denied stack mutations return `403 forbidden`. OpenFGA
+timeouts, unavailable responses, and malformed responses fail closed as
+`503 authorization_unavailable` and never produce an allowed operation or an
+unfiltered list.
+
 ### Provisioning and Verification
 
 On a clean checkout, initialize OpenFGA with the two-phase workflow:
