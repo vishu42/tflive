@@ -32,8 +32,9 @@ type Config struct {
 	PlatformAdminPassword  string
 	PlatformAdminEmail     string
 	PlatformAdminFirstName string
-	PlatformAdminLastName  string
-	HTTPTimeout            time.Duration
+	PlatformAdminLastName       string
+	DirectoryReaderClientSecret string
+	HTTPTimeout                 time.Duration
 }
 
 // LoadConfig reads and validates Keycloak provisioning configuration.
@@ -86,6 +87,10 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	directoryReaderSecret, err := required(getenv, "KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
 
 	redirectURIs, err := parseBrowserURLs("KEYCLOAK_WEB_REDIRECT_URIS", redirectsRaw, false)
 	if err != nil {
@@ -121,8 +126,9 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		PlatformAdminPassword:  platformPassword,
 		PlatformAdminEmail:     platformEmail,
 		PlatformAdminFirstName: platformFirstName,
-		PlatformAdminLastName:  platformLastName,
-		HTTPTimeout:            timeout,
+		PlatformAdminLastName:       platformLastName,
+		DirectoryReaderClientSecret: directoryReaderSecret,
+		HTTPTimeout:                 timeout,
 	}, nil
 }
 

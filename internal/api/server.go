@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/vishu42/tflive/internal/app"
@@ -65,6 +67,10 @@ func NewServer(service *app.Service, tenantID traits.TenantID) *Server {
 	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs", server.handleListTemplateRunLogs)
 	// Reads the persisted log body for one template run phase.
 	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs/{phase}", server.handleGetTemplateRunLog)
+
+	// User search routes.
+	// Searches realm users by display name or username.
+	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/users/search", server.handleSearchUsers)
 
 	// Template run decision routes.
 	// Records approval for a waiting template run.
@@ -126,6 +132,61 @@ func decodeRequestBody(response http.ResponseWriter, request *http.Request, dest
 
 func (server *Server) handleHealth(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (server *Server) handleSearchUsers(response http.ResponseWriter, request *http.Request) {
+	q := strings.TrimSpace(request.URL.Query().Get("q"))
+	if q == "" {
+		writeError(response, http.StatusBadRequest, "invalid_request", "q is required")
+		return
+	}
+	if len(q) > 200 {
+		writeError(response, http.StatusBadRequest, "invalid_request", "q must be at most 200 characters")
+		return
+	}
+
+	first := 0
+	if raw := request.URL.Query().Get("first"); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 0 {
+			writeError(response, http.StatusBadRequest, "invalid_request", "first must be a non-negative integer")
+			return
+		}
+		first = v
+	}
+
+	max := 20
+	if raw := request.URL.Query().Get("max"); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 1 || v > 50 {
+			writeError(response, http.StatusBadRequest, "invalid_request", "max must be an integer between 1 and 50")
+			return
+		}
+		max = v
+	}
+
+	users, err := server.service.SearchUsers(request.Context(), app.SearchUsersCommand{
+		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+		Query:    q,
+		First:    first,
+		Max:      max,
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusOK, searchUsersResponse{
+		Users: users,
+		First: first,
+		Max:   max,
+	})
+}
+
+type searchUsersResponse struct {
+	Users []app.DirectoryUser `json:"users"`
+	First int                 `json:"first"`
+	Max   int                 `json:"max"`
 }
 
 func (server *Server) handleRegisterTemplate(response http.ResponseWriter, request *http.Request) {
@@ -590,6 +651,8 @@ func writeAppError(response http.ResponseWriter, err error) {
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, app.ErrNotFound):
 		writeError(response, http.StatusNotFound, "not_found", err.Error())
+	case errors.Is(err, app.ErrDirectoryUnavailable):
+		writeError(response, http.StatusServiceUnavailable, "directory_unavailable", "directory unavailable")
 	case errors.Is(err, app.ErrStackTemplateNotRunnable),
 		errors.Is(err, app.ErrRunNotApprovable),
 		errors.Is(err, app.ErrRunNotCancelable),

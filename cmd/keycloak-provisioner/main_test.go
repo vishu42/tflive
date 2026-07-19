@@ -48,6 +48,7 @@ func TestRunLogsOnlyNonSensitiveResultIdentifiers(t *testing.T) {
 			WebClientID:           cfg.WebClientID,
 			APIClientID:           cfg.APIClientID,
 			PlatformAdminUsername: cfg.PlatformAdminUsername,
+			DirectoryReaderClientID: "tflive-directory-reader",
 		}, nil
 	}, func(format string, args ...any) {
 		logLine = fmt.Sprintf(format, args...)
@@ -55,12 +56,12 @@ func TestRunLogsOnlyNonSensitiveResultIdentifiers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
-	for _, want := range []string{"tflive", "tflive-web", "tflive-api", "tflive-platform-admin"} {
+	for _, want := range []string{"tflive", "tflive-web", "tflive-api", "tflive-platform-admin", "tflive-directory-reader"} {
 		if !strings.Contains(logLine, want) {
 			t.Fatalf("log = %q, missing %q", logLine, want)
 		}
 	}
-	for _, secret := range []string{"master-local-only-secret", "platform-local-only-secret"} {
+	for _, secret := range []string{"master-local-only-secret", "platform-local-only-secret", "directory-reader-local-only-secret"} {
 		if strings.Contains(logLine, secret) {
 			t.Fatalf("log leaked secret %q: %q", secret, logLine)
 		}
@@ -82,16 +83,17 @@ func TestRunPassesCancellationToProvisioner(t *testing.T) {
 
 func commandTestEnv() func(string) string {
 	values := map[string]string{
-		"KEYCLOAK_ADMIN_URL":                 "http://keycloak:8080",
-		"KEYCLOAK_ADMIN_USERNAME":            "tflive-admin",
-		"KEYCLOAK_ADMIN_PASSWORD":            "master-local-only-secret",
-		"KEYCLOAK_WEB_REDIRECT_URIS":         "http://localhost:5173/",
-		"KEYCLOAK_WEB_ORIGINS":               "http://localhost:5173",
-		"KEYCLOAK_PLATFORM_ADMIN_USERNAME":   "tflive-platform-admin",
-		"KEYCLOAK_PLATFORM_ADMIN_PASSWORD":   "platform-local-only-secret",
-		"KEYCLOAK_PLATFORM_ADMIN_EMAIL":      "tflive-platform-admin@local.test",
-		"KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME": "tflive",
-		"KEYCLOAK_PLATFORM_ADMIN_LAST_NAME":  "Platform Administrator",
+		"KEYCLOAK_ADMIN_URL":                    "http://keycloak:8080",
+		"KEYCLOAK_ADMIN_USERNAME":               "tflive-admin",
+		"KEYCLOAK_ADMIN_PASSWORD":               "master-local-only-secret",
+		"KEYCLOAK_WEB_REDIRECT_URIS":            "http://localhost:5173/",
+		"KEYCLOAK_WEB_ORIGINS":                  "http://localhost:5173",
+		"KEYCLOAK_PLATFORM_ADMIN_USERNAME":      "tflive-platform-admin",
+		"KEYCLOAK_PLATFORM_ADMIN_PASSWORD":      "platform-local-only-secret",
+		"KEYCLOAK_PLATFORM_ADMIN_EMAIL":         "tflive-platform-admin@local.test",
+		"KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME":    "tflive",
+		"KEYCLOAK_PLATFORM_ADMIN_LAST_NAME":     "Platform Administrator",
+		"KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET": "directory-reader-local-only-secret",
 	}
 	return func(name string) string { return values[name] }
 }

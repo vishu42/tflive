@@ -176,6 +176,10 @@ func (c *Client) doJSONStatus(
 }
 
 func (c *Client) endpoint(segments []string, query url.Values) (*url.URL, error) {
+	return buildAdminURL(c.baseURL, segments, query)
+}
+
+func buildAdminURL(baseURL *url.URL, segments []string, query url.Values) (*url.URL, error) {
 	escaped := make([]string, len(segments))
 	for i, segment := range segments {
 		if segment == "" {
@@ -183,15 +187,15 @@ func (c *Client) endpoint(segments []string, query url.Values) (*url.URL, error)
 		}
 		escaped[i] = url.PathEscape(segment)
 	}
-	raw := strings.TrimRight(c.baseURL.String(), "/") + "/" + strings.Join(escaped, "/")
-	endpoint, err := url.Parse(raw)
+	raw := strings.TrimRight(baseURL.String(), "/") + "/" + strings.Join(escaped, "/")
+	parsed, err := url.Parse(raw)
 	if err != nil {
 		return nil, err
 	}
 	if query != nil {
-		endpoint.RawQuery = query.Encode()
+		parsed.RawQuery = query.Encode()
 	}
-	return endpoint, nil
+	return parsed, nil
 }
 
 func containsStatus(expected []int, actual int) bool {

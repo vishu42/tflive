@@ -183,6 +183,7 @@ type Service struct {
 	RegistrationIDs          TemplateRegistrationIDGenerator
 	Clock                    Clock
 	Audit                    AuditRepository
+	UserDirectory            UserDirectory
 }
 
 // NewService creates a Service from app-owned dependencies.
@@ -294,6 +295,14 @@ type CancelRunCommand struct {
 type GetStackCommand struct {
 	TenantID traits.TenantID
 	StackID  traits.StackID
+}
+
+// SearchUsersCommand asks the app to search realm users via the directory.
+type SearchUsersCommand struct {
+	TenantID traits.TenantID
+	Query    string
+	First    int
+	Max      int
 }
 
 // ListStacksCommand asks the app to list tenant-owned stacks.
@@ -771,6 +780,46 @@ func (service *Service) GetTemplateRegistration(ctx context.Context, command Get
 	}
 
 	return registration, nil
+}
+
+// SearchUsers queries the user directory for realm users matching the given criteria.
+func (service *Service) SearchUsers(ctx context.Context, command SearchUsersCommand) ([]DirectoryUser, error) {
+	principal, ok := authn.PrincipalFromContext(ctx)
+	if !ok || principal.Subject == "" {
+		return nil, ErrUnauthenticated
+	}
+	if !isPlatformAdmin(principal) {
+		return nil, ErrForbidden
+	}
+	if err := validateSearchUsersCommand(command); err != nil {
+		return nil, err
+	}
+	if service.UserDirectory == nil {
+		return nil, ErrDirectoryUnavailable
+	}
+	users, err := service.UserDirectory.SearchUsers(ctx, command.Query, command.First, command.Max)
+	if err != nil {
+		return nil, err
+	}
+	if users == nil {
+		return []DirectoryUser{}, nil
+	}
+	return users, nil
+}
+
+func validateSearchUsersCommand(command SearchUsersCommand) error {
+	switch {
+	case command.TenantID == "":
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	case strings.TrimSpace(command.Query) == "":
+		return fmt.Errorf("%w: query is required", ErrInvalidCommand)
+	case command.First < 0:
+		return fmt.Errorf("%w: first must be non-negative", ErrInvalidCommand)
+	case command.Max < 1 || command.Max > 50:
+		return fmt.Errorf("%w: max must be between 1 and 50", ErrInvalidCommand)
+	default:
+		return nil
+	}
 }
 
 // GetTemplateRevisionVariables returns inferred variables for one tenant-owned template revision.

@@ -46,6 +46,15 @@ func TestLoadSecurityConfigDevelopmentModes(t *testing.T) {
 			if cfg.OpenFGA.RequestTimeout != 10*time.Second {
 				t.Fatalf("RequestTimeout = %s, want 10s", cfg.OpenFGA.RequestTimeout)
 			}
+			if cfg.DirectoryReaderClientID != "" {
+				t.Fatalf("DirectoryReaderClientID = %q, want empty in development", cfg.DirectoryReaderClientID)
+			}
+			if !cfg.DirectoryReaderClientSecret.Empty() {
+				t.Fatal("DirectoryReaderClientSecret is not empty in development")
+			}
+			if cfg.DirectoryReaderHTTPTimeout != 10*time.Second {
+				t.Fatalf("DirectoryReaderHTTPTimeout = %s, want 10s", cfg.DirectoryReaderHTTPTimeout)
+			}
 		})
 	}
 }
@@ -58,6 +67,8 @@ func TestLoadSecurityConfigProductionAndSecretFormatting(t *testing.T) {
 	values["OIDC_ISSUER_URL"] = "https://id.example.com/realms/tflive"
 	values["OPENFGA_API_URL"] = "https://openfga.example.com"
 	values["OPENFGA_API_TOKEN"] = "openfga-token-sentinel"
+	values["KEYCLOAK_DIRECTORY_READER_CLIENT_ID"] = "tflive-directory-reader"
+	values["KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET"] = "directory-reader-secret-sentinel"
 
 	cfg, err := loadSecurityConfig(mapConfigEnv(values))
 	if err != nil {
@@ -69,13 +80,77 @@ func TestLoadSecurityConfigProductionAndSecretFormatting(t *testing.T) {
 	if got := cfg.OpenFGA.APIToken.Value(); got != "openfga-token-sentinel" {
 		t.Fatalf("APIToken.Value() = %q", got)
 	}
+	if cfg.DirectoryReaderClientID != "tflive-directory-reader" {
+		t.Fatalf("DirectoryReaderClientID = %q, want tflive-directory-reader", cfg.DirectoryReaderClientID)
+	}
+	if got := cfg.DirectoryReaderClientSecret.Value(); got != "directory-reader-secret-sentinel" {
+		t.Fatalf("DirectoryReaderClientSecret.Value() = %q", got)
+	}
 
 	formatted := fmt.Sprintf("%s\n%v\n%+v\n%#v", cfg.OpenFGA.APIToken, cfg.OpenFGA, cfg.OpenFGA, cfg)
 	if strings.Contains(formatted, "openfga-token-sentinel") {
 		t.Fatalf("formatted configuration leaked token: %s", formatted)
 	}
+	if strings.Contains(formatted, "directory-reader-secret-sentinel") {
+		t.Fatalf("formatted configuration leaked directory reader secret: %s", formatted)
+	}
 	if !strings.Contains(formatted, "[REDACTED]") {
 		t.Fatalf("formatted configuration did not show redaction marker: %s", formatted)
+	}
+}
+
+func TestLoadSecurityConfigDirectoryReaderSecretRedacted(t *testing.T) {
+	t.Parallel()
+
+	secret := newSecret("my-secret-value")
+	if got := secret.String(); got != "[REDACTED]" {
+		t.Fatalf("Secret.String() = %q, want [REDACTED]", got)
+	}
+	if got := fmt.Sprintf("%v", secret); got != "[REDACTED]" {
+		t.Fatalf("Secret via %%v = %q, want [REDACTED]", got)
+	}
+	if got := fmt.Sprintf("%+v", secret); got != "[REDACTED]" {
+		t.Fatalf("Secret via %%+v = %q, want [REDACTED]", got)
+	}
+}
+
+func TestLoadSecurityConfigRejectsProductionMissingDirectoryReaderClientID(t *testing.T) {
+	t.Parallel()
+
+	values := validSecurityValues()
+	values["TFLIVE_ENVIRONMENT"] = "production"
+	values["OIDC_ISSUER_URL"] = "https://id.example.com/realms/tflive"
+	values["OPENFGA_API_URL"] = "https://openfga.example.com"
+	values["OPENFGA_API_TOKEN"] = "production-token-sentinel"
+	values["KEYCLOAK_DIRECTORY_READER_CLIENT_ID"] = ""
+	values["KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET"] = "some-secret"
+
+	_, err := loadSecurityConfig(mapConfigEnv(values))
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("error = %v, want ErrInvalidConfig", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "KEYCLOAK_DIRECTORY_READER_CLIENT_ID is required in production") {
+		t.Fatalf("error = %v, want containing KEYCLOAK_DIRECTORY_READER_CLIENT_ID is required in production", err)
+	}
+}
+
+func TestLoadSecurityConfigRejectsProductionMissingDirectoryReaderSecret(t *testing.T) {
+	t.Parallel()
+
+	values := validSecurityValues()
+	values["TFLIVE_ENVIRONMENT"] = "production"
+	values["OIDC_ISSUER_URL"] = "https://id.example.com/realms/tflive"
+	values["OPENFGA_API_URL"] = "https://openfga.example.com"
+	values["OPENFGA_API_TOKEN"] = "production-token-sentinel"
+	values["KEYCLOAK_DIRECTORY_READER_CLIENT_ID"] = "tflive-directory-reader"
+	values["KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET"] = ""
+
+	_, err := loadSecurityConfig(mapConfigEnv(values))
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("error = %v, want ErrInvalidConfig", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET is required in production") {
+		t.Fatalf("error = %v, want containing KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET is required in production", err)
 	}
 }
 
@@ -113,6 +188,9 @@ func TestLoadSecurityConfigRejectsMissingAndMalformedValues(t *testing.T) {
 		{name: "zero timeout", key: "OPENFGA_HTTP_TIMEOUT", value: "0s", want: "OPENFGA_HTTP_TIMEOUT must be a positive duration"},
 		{name: "negative timeout", key: "OPENFGA_HTTP_TIMEOUT", value: "-1s", want: "OPENFGA_HTTP_TIMEOUT must be a positive duration"},
 		{name: "unsafe token", key: "OPENFGA_API_TOKEN", value: "api token sentinel", want: "OPENFGA_API_TOKEN must not contain whitespace or control characters"},
+		{name: "malformed directory reader timeout", key: "KEYCLOAK_DIRECTORY_READER_HTTP_TIMEOUT", value: "forever", want: "KEYCLOAK_DIRECTORY_READER_HTTP_TIMEOUT must be a positive duration"},
+		{name: "zero directory reader timeout", key: "KEYCLOAK_DIRECTORY_READER_HTTP_TIMEOUT", value: "0s", want: "KEYCLOAK_DIRECTORY_READER_HTTP_TIMEOUT must be a positive duration"},
+		{name: "negative directory reader timeout", key: "KEYCLOAK_DIRECTORY_READER_HTTP_TIMEOUT", value: "-1s", want: "KEYCLOAK_DIRECTORY_READER_HTTP_TIMEOUT must be a positive duration"},
 	}
 
 	for _, test := range tests {

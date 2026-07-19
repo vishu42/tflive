@@ -100,6 +100,7 @@ func TestTenantScopedRoutesRejectOtherTenantBeforeHandler(t *testing.T) {
 		{name: "get run log artifact", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-runs/run_123/logs/plan"},
 		{name: "approve run", method: http.MethodPost, path: "/v1/tenants/tenant_other/template-runs/run_123/approval"},
 		{name: "cancel run", method: http.MethodPost, path: "/v1/tenants/tenant_other/template-runs/run_123/cancellation"},
+		{name: "search users", method: http.MethodGet, path: "/v1/tenants/tenant_other/users/search?q=test"},
 	}
 
 	for _, test := range tests {
@@ -2031,6 +2032,156 @@ func TestMalformedGeneratedStackIDReturnsServiceUnavailable(t *testing.T) {
 	}
 }
 
+func TestSearchUsersPlatformAdminAllowed(t *testing.T) {
+	t.Parallel()
+
+	expected := []app.DirectoryUser{
+		{ID: "u1", Username: "alice", Email: "alice@example.com", FirstName: "Alice", LastName: "Smith"},
+		{ID: "u2", Username: "bob", Email: "bob@example.com", FirstName: "Bob", LastName: "Jones"},
+	}
+	deps := newAPITestDependencies()
+	deps.userDirectory = apiFakeUserDirectory{users: expected}
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/users/search?q=ali", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body searchUsersResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Users) != 2 {
+		t.Fatalf("users = %d, want 2", len(body.Users))
+	}
+	if body.Users[0].Username != "alice" {
+		t.Fatalf("first user = %q, want alice", body.Users[0].Username)
+	}
+	if body.First != 0 {
+		t.Fatalf("first = %d, want 0", body.First)
+	}
+	if body.Max != 20 {
+		t.Fatalf("max = %d, want 20", body.Max)
+	}
+}
+
+func TestSearchUsersNonAdminForbidden(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := ordinaryAuthenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/users/search?q=ali", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusForbidden, response.Body.String())
+	}
+}
+
+func TestSearchUsersMissingQuery(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "no q param", url: "/v1/tenants/tenant_123/users/search"},
+		{name: "empty q", url: "/v1/tenants/tenant_123/users/search?q="},
+		{name: "whitespace q", url: "/v1/tenants/tenant_123/users/search?q=+"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newAPITestDependencies()
+			server := NewServer(deps.service(), configuredTenantID)
+			response := httptest.NewRecorder()
+			request := authenticatedRequest(http.MethodGet, test.url, nil)
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestSearchUsersInvalidPagination(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "negative first", url: "/v1/tenants/tenant_123/users/search?q=test&first=-1"},
+		{name: "max=0", url: "/v1/tenants/tenant_123/users/search?q=test&max=0"},
+		{name: "max=51", url: "/v1/tenants/tenant_123/users/search?q=test&max=51"},
+		{name: "non-numeric first", url: "/v1/tenants/tenant_123/users/search?q=test&first=abc"},
+		{name: "non-numeric max", url: "/v1/tenants/tenant_123/users/search?q=test&max=abc"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newAPITestDependencies()
+			server := NewServer(deps.service(), configuredTenantID)
+			response := httptest.NewRecorder()
+			request := authenticatedRequest(http.MethodGet, test.url, nil)
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestSearchUsersDirectoryUnavailable(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.userDirectory = apiFakeUserDirectory{err: app.ErrDirectoryUnavailable}
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/users/search?q=test", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	}
+	var body errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error != "directory_unavailable" {
+		t.Fatalf("error = %q, want directory_unavailable", body.Error)
+	}
+}
+
+func TestSearchUsersUnauthenticated(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/users/search?q=test", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnauthorized, response.Body.String())
+	}
+}
+
 type apiTestDependencies struct {
 	authorizer             *apiAuthorizer
 	stacks                 recordingStackRepository
@@ -2042,6 +2193,7 @@ type apiTestDependencies struct {
 	logs                   recordingTemplateRunLogReader
 	logMetadata            recordingTemplateRunLogRepository
 	workflows              recordingWorkflowDispatcher
+	userDirectory          apiFakeUserDirectory
 	stackID                traits.StackID
 	stackTemplateID        traits.StackTemplateID
 	runID                  traits.TemplateRunID
@@ -2073,6 +2225,7 @@ func (deps *apiTestDependencies) service() *app.Service {
 		TemplateRunLogs:          &deps.logs,
 		TemplateRunLogMetadata:   &deps.logMetadata,
 		Workflows:                &deps.workflows,
+		UserDirectory:            &deps.userDirectory,
 		StackIDs:                 fixedStackIDGenerator{id: deps.stackID},
 		StackTemplateIDs:         fixedStackTemplateIDGenerator{id: deps.stackTemplateID},
 		RunIDs:                   fixedTemplateRunIDGenerator{runID: deps.runID},
@@ -2527,4 +2680,13 @@ type fixedClock struct {
 
 func (clock fixedClock) Now() time.Time {
 	return clock.now
+}
+
+type apiFakeUserDirectory struct {
+	users []app.DirectoryUser
+	err   error
+}
+
+func (f *apiFakeUserDirectory) SearchUsers(_ context.Context, _ string, _, _ int) ([]app.DirectoryUser, error) {
+	return f.users, f.err
 }

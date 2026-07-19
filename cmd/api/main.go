@@ -19,6 +19,7 @@ import (
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/keycloak"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/temporal"
@@ -174,6 +175,18 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 	if err != nil {
 		return fmt.Errorf("wire log reader: %w", err)
 	}
+	var directoryClient app.UserDirectory
+	if !cfg.Security.DirectoryReaderClientSecret.Empty() {
+		client := keycloak.NewDirectoryClient(keycloak.DirectoryClientConfig{
+			AdminURL:     cfg.Security.KeycloakAdminURL,
+			Realm:        cfg.Security.KeycloakRealm,
+			ClientID:     cfg.Security.DirectoryReaderClientID,
+			ClientSecret: cfg.Security.DirectoryReaderClientSecret.Value(),
+			HTTPTimeout:  cfg.Security.DirectoryReaderHTTPTimeout,
+		})
+		directoryClient = &directoryClientAdapter{client: client}
+	}
+
 	service, err := deps.newService(app.Service{
 		Authorizer:               authorizer,
 		AuthorizationOutbox:      store,
@@ -188,6 +201,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		TemplateRunLogMetadata:   store,
 		Workflows:                dispatcher,
 		Audit:                    store,
+		UserDirectory:            directoryClient,
 	})
 	if err != nil {
 		return fmt.Errorf("wire service: %w", err)
@@ -224,4 +238,29 @@ func listenAndServe(ctx context.Context, address string, handler http.Handler) e
 		return nil
 	}
 	return err
+}
+
+type directoryClientAdapter struct {
+	client *keycloak.DirectoryClient
+}
+
+func (a *directoryClientAdapter) SearchUsers(ctx context.Context, query string, first, max int) ([]app.DirectoryUser, error) {
+	if err := a.client.Authenticate(ctx); err != nil {
+		return nil, fmt.Errorf("authenticate directory client: %w", err)
+	}
+	users, err := a.client.SearchUsers(ctx, query, first, max)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]app.DirectoryUser, len(users))
+	for i, u := range users {
+		result[i] = app.DirectoryUser{
+			ID:        u.ID,
+			Username:  u.Username,
+			Email:     u.Email,
+			FirstName: u.FirstName,
+			LastName:  u.LastName,
+		}
+	}
+	return result, nil
 }

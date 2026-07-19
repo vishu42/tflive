@@ -35,11 +35,12 @@ func run(ctx context.Context, getenv func(string) string, provision provisionFun
 		return fmt.Errorf("provision Keycloak: %w", err)
 	}
 	logf(
-		"Keycloak realm %s provisioned: browser client %s, API audience %s, platform administrator %s",
+		"Keycloak realm %s provisioned: browser client %s, API audience %s, platform administrator %s, directory reader %s",
 		result.Realm,
 		result.WebClientID,
 		result.APIClientID,
 		result.PlatformAdminUsername,
+		result.DirectoryReaderClientID,
 	)
 	return nil
 }
