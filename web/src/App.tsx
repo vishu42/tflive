@@ -13,28 +13,29 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { ApiRequestError } from "./api/client";
+import { queryKeys } from "./api/queryKeys";
 import {
-  addTemplateToStack,
-  ApiRequestError,
-  approveRun,
-  cancelRun,
-  createStack,
-  getStack,
-  getTemplateRegistration,
-  getTemplateRun,
-  getTemplateRunLog,
-  getTemplateRevisionVariables,
-  listStacks,
-  listTemplateRevisions,
-  listTemplateRunLogs,
-  registerTemplate,
-  startTemplateRun,
-  updateStackTemplateConfig,
-  upgradeStackTemplate
-} from "./api/client";
-import type { Stack, StackTemplate, TemplateRevision, TemplateRegistration, TemplateRun, TemplateRunLog, TemplateVariable } from "./api/types";
+  useAddTemplateToStackMutation,
+  useApproveRunMutation,
+  useCancelRunMutation,
+  useCreateStackMutation,
+  useRegisterTemplateMutation,
+  useStackQuery,
+  useStacksQuery,
+  useStartTemplateRunMutation,
+  useTemplateRegistrationQuery,
+  useTemplateRevisionVariablesQuery,
+  useTemplateRevisionsQuery,
+  useTemplateRunLogQuery,
+  useTemplateRunLogsQuery,
+  useTemplateRunQuery,
+  useUpdateStackTemplateConfigMutation,
+  useUpgradeStackTemplateMutation
+} from "./api/queries";
 import { tenantID } from "./config";
-import { isTerminalRegistrationStatus, isTerminalRunStatus, nextPollDelayMs } from "./polling";
+import { isTerminalRunStatus } from "./polling";
 import {
   canUpgradeStackTemplate,
   canSaveStackTemplateConfig,
@@ -48,7 +49,6 @@ import {
   stackLabel,
   stackTemplateLabel,
   templateRevisionLabel,
-  upsertStackTemplate,
   variableValuesFromConfig
 } from "./workflowState";
 
@@ -57,31 +57,55 @@ export default function App() {
   const [repoName, setRepoName] = useState("");
   const [sourceRef, setSourceRef] = useState("main");
   const [rootPath, setRootPath] = useState(".");
-  const [registration, setRegistration] = useState<TemplateRegistration | null>(null);
-  const [templateRevisions, setTemplateRevisions] = useState<TemplateRevision[]>([]);
+  const [registrationID, setRegistrationID] = useState("");
   const [selectedTemplateRevisionID, setSelectedTemplateRevisionID] = useState("");
-  const [variables, setVariables] = useState<TemplateVariable[]>([]);
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
   const [stackName, setStackName] = useState("Acme Prod");
   const [stackSlug, setStackSlug] = useState("");
-  const [stacks, setStacks] = useState<Stack[]>([]);
   const [selectedStackID, setSelectedStackID] = useState("");
-  const [stack, setStack] = useState<Stack | null>(null);
-  const [stackTemplates, setStackTemplates] = useState<StackTemplate[]>([]);
   const [selectedStackTemplateID, setSelectedStackTemplateID] = useState("");
-  const [planRun, setPlanRun] = useState<TemplateRun | null>(null);
-  const [applyRun, setApplyRun] = useState<TemplateRun | null>(null);
+  const [planRunID, setPlanRunID] = useState("");
+  const [applyRunID, setApplyRunID] = useState("");
   const [selectedRunKind, setSelectedRunKind] = useState<"plan" | "apply">("plan");
-  const [logs, setLogs] = useState<TemplateRunLog[]>([]);
   const [selectedPhase, setSelectedPhase] = useState("plan");
-  const [logBody, setLogBody] = useState("");
   const [busyAction, setBusyAction] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+
+  const queryClient = useQueryClient();
+
+  const stacksQuery = useStacksQuery(tenantID);
+  const templateRevisionsQuery = useTemplateRevisionsQuery(tenantID);
+  const stackQuery = useStackQuery(tenantID, selectedStackID);
+  const registrationQuery = useTemplateRegistrationQuery(tenantID, registrationID);
+
+  const stacks = stacksQuery.data ?? [];
+  const templateRevisions = templateRevisionsQuery.data ?? [];
+  const stack = stackQuery.data?.stack ?? null;
+  const stackTemplates = stackQuery.data?.templates ?? [];
+  const registration = registrationQuery.data ?? null;
 
   const selectedTemplateRevision = findSelectedTemplateRevision(templateRevisions, selectedTemplateRevisionID);
   const selectedStack = findSelectedStack(stacks, selectedStackID);
   const installedTemplate = findSelectedStackTemplate(stackTemplates, selectedStackTemplateID);
+
+  const variablesQuery = useTemplateRevisionVariablesQuery(
+    tenantID,
+    selectedTemplateRevision?.status === "active" ? selectedTemplateRevision.id : ""
+  );
+  const variables = variablesQuery.data ?? [];
+
+  const planRunQuery = useTemplateRunQuery(tenantID, planRunID, { poll: selectedRunKind === "plan" });
+  const applyRunQuery = useTemplateRunQuery(tenantID, applyRunID, { poll: selectedRunKind === "apply" });
+  const planRun = planRunQuery.data ?? null;
+  const applyRun = applyRunQuery.data ?? null;
   const currentRun = selectedRunKind === "apply" ? applyRun : planRun;
+  const currentRunID = selectedRunKind === "apply" ? applyRunID : planRunID;
+
+  const logsQuery = useTemplateRunLogsQuery(tenantID, currentRunID, currentRun?.status ?? "");
+  const logQuery = useTemplateRunLogQuery(tenantID, currentRunID, selectedPhase, currentRun?.status ?? "");
+  const logs = logsQuery.data ?? [];
+  const logBody = logQuery.data ?? "";
+
   const canInstall = Boolean(selectedTemplateRevision?.status === "active" && stack);
   const canSaveConfig = canSaveStackTemplateConfig(installedTemplate, selectedTemplateRevision, variables, variableValues);
   const canUpgrade = canUpgradeStackTemplate(installedTemplate, selectedTemplateRevision);
@@ -91,148 +115,29 @@ export default function App() {
   const canCancel = Boolean(currentRun && !isTerminalRunStatus(currentRun.status));
 
   useEffect(() => {
-    let canceled = false;
-
-    setStacks([]);
-    setTemplateRevisions([]);
-    setSelectedStackID("");
-    setSelectedTemplateRevisionID("");
-    setStack(null);
-    setRegistration(null);
-    setStackTemplates([]);
-    setSelectedStackTemplateID("");
-    setVariables([]);
-    setVariableValues({});
-    resetRunState();
-
-    Promise.all([listStacks(tenantID), listTemplateRevisions(tenantID)])
-      .then(([nextStacks, nextTemplateRevisions]) => {
-        if (canceled) {
-          return;
-        }
-        setStacks(nextStacks);
-        setTemplateRevisions(nextTemplateRevisions);
-        setSelectedStackID(nextSelectedStackID(nextStacks, ""));
-        setSelectedTemplateRevisionID(nextSelectedTemplateRevisionID(nextTemplateRevisions, ""));
-      })
-      .catch((error) => {
-        if (!canceled) {
-          setErrorMessage(messageFromError(error));
-        }
-      });
-
-    return () => {
-      canceled = true;
-    };
-  }, [tenantID]);
+    if (stacksQuery.data) {
+      setSelectedStackID((current) => nextSelectedStackID(stacksQuery.data, current));
+    }
+  }, [stacksQuery.data]);
 
   useEffect(() => {
-    if (!selectedStackID) {
-      setStack(null);
-      setStackTemplates([]);
-      setSelectedStackTemplateID("");
-      resetRunState();
-      return;
+    if (templateRevisionsQuery.data) {
+      setSelectedTemplateRevisionID((current) => nextSelectedTemplateRevisionID(templateRevisionsQuery.data, current));
     }
-
-    let canceled = false;
-    setStack(null);
-    setStackTemplates([]);
-    setSelectedStackTemplateID("");
-    resetRunState();
-
-    getStack(tenantID, selectedStackID)
-      .then((view) => {
-        if (canceled) {
-          return;
-        }
-        setStack(view.stack);
-        setStackTemplates(view.templates);
-        setSelectedStackTemplateID((current) => nextSelectedStackTemplateID(view.templates, current));
-        resetRunState();
-      })
-      .catch((error) => {
-        if (!canceled) {
-          setStack((current) => current?.id === selectedStackID ? current : null);
-          setStackTemplates([]);
-          setSelectedStackTemplateID("");
-          setErrorMessage(messageFromError(error));
-        }
-      });
-
-    return () => {
-      canceled = true;
-    };
-  }, [selectedStackID, tenantID]);
+  }, [templateRevisionsQuery.data]);
 
   useEffect(() => {
-    if (!registration || isTerminalRegistrationStatus(registration.status)) {
-      return;
-    }
-
-    let canceled = false;
-    let failureCount = 0;
-    let timer: number | undefined;
-
-    const poll = async () => {
-      if (canceled) {
-        return;
-      }
-      try {
-        const next = await getTemplateRegistration(tenantID, registration.id);
-        if (!canceled) {
-          setRegistration(next);
-          failureCount = 0;
-          if (!isTerminalRegistrationStatus(next.status)) {
-            schedule();
-          }
-        }
-      } catch (error) {
-        if (!canceled) {
-          failureCount += 1;
-          setErrorMessage(messageFromError(error));
-          schedule();
-        }
-      }
-    };
-
-    const schedule = () => {
-      timer = window.setTimeout(poll, nextPollDelayMs(failureCount));
-    };
-
-    schedule();
-    return () => {
-      canceled = true;
-      if (timer) {
-        window.clearTimeout(timer);
-      }
-    };
-  }, [registration, tenantID]);
+    setPlanRunID("");
+    setApplyRunID("");
+    setSelectedRunKind("plan");
+  }, [selectedStackID]);
 
   useEffect(() => {
-    if (registration?.status !== "completed" || !registration.template_revision_id) {
-      return;
+    const templates = stackQuery.data?.templates;
+    if (templates) {
+      setSelectedStackTemplateID((current) => nextSelectedStackTemplateID(templates, current));
     }
-
-    let canceled = false;
-    listTemplateRevisions(tenantID)
-      .then((nextTemplateRevisions) => {
-        if (canceled) {
-          return;
-        }
-        setTemplateRevisions(nextTemplateRevisions);
-        setSelectedTemplateRevisionID(nextSelectedTemplateRevisionID(nextTemplateRevisions, registration.template_revision_id));
-      })
-      .catch((error) => {
-        if (!canceled) {
-          setErrorMessage(messageFromError(error));
-        }
-      });
-
-    return () => {
-      canceled = true;
-    };
-  }, [registration?.status, registration?.template_revision_id, tenantID]);
+  }, [stackQuery.data]);
 
   useEffect(() => {
     if (!installedTemplate?.desired_template_revision_id) {
@@ -242,158 +147,73 @@ export default function App() {
   }, [installedTemplate?.id, installedTemplate?.desired_template_revision_id]);
 
   useEffect(() => {
+    const nextVariables = variablesQuery.data;
+    if (!nextVariables) {
+      return;
+    }
+    setVariableValues((current) => {
+      const next = installedTemplate
+        ? variableValuesFromConfig(installedTemplate.config, nextVariables)
+        : { ...current };
+      for (const variable of nextVariables) {
+        if (!(variable.name in next)) {
+          next[variable.name] = "";
+        }
+      }
+      return next;
+    });
+  }, [variablesQuery.data, installedTemplate]);
+
+  useEffect(() => {
     if (!selectedTemplateRevision || selectedTemplateRevision.status !== "active") {
-      setVariables([]);
       setVariableValues({});
-      return;
     }
-
-    let canceled = false;
-    getTemplateRevisionVariables(tenantID, selectedTemplateRevision.id)
-      .then((nextVariables) => {
-        if (canceled) {
-          return;
-        }
-        setVariables(nextVariables);
-        setVariableValues((current) => {
-          const next = installedTemplate
-            ? variableValuesFromConfig(installedTemplate.config, nextVariables)
-            : { ...current };
-          for (const variable of nextVariables) {
-            if (!(variable.name in next)) {
-              next[variable.name] = "";
-            }
-          }
-          return next;
-        });
-      })
-      .catch((error) => {
-        if (!canceled) {
-          setErrorMessage(messageFromError(error));
-        }
-      });
-
-    return () => {
-      canceled = true;
-    };
-  }, [selectedTemplateRevision?.id, selectedTemplateRevision?.status, tenantID, installedTemplate]);
+  }, [selectedTemplateRevision?.id, selectedTemplateRevision?.status]);
 
   useEffect(() => {
-    const run = currentRun;
-    if (!run || isTerminalRunStatus(run.status)) {
+    const data = registrationQuery.data;
+    if (data?.status !== "completed" || !data.template_revision_id) {
       return;
     }
-
-    let canceled = false;
-    let failureCount = 0;
-    let timer: number | undefined;
-
-    const poll = async () => {
-      if (canceled) {
-        return;
-      }
-      try {
-        const next = await getTemplateRun(tenantID, run.id);
-        if (!canceled) {
-          if (next.operation === "apply") {
-            setApplyRun(next);
-          } else {
-            setPlanRun(next);
-          }
-          failureCount = 0;
-          if (!isTerminalRunStatus(next.status)) {
-            schedule();
-          }
-        }
-      } catch (error) {
-        if (!canceled) {
-          failureCount += 1;
-          setErrorMessage(messageFromError(error));
-          schedule();
-        }
-      }
-    };
-
-    const schedule = () => {
-      timer = window.setTimeout(poll, nextPollDelayMs(failureCount));
-    };
-
-    schedule();
-    return () => {
-      canceled = true;
-      if (timer) {
-        window.clearTimeout(timer);
-      }
-    };
-  }, [currentRun?.id, currentRun?.status, tenantID]);
+    queryClient.invalidateQueries({ queryKey: queryKeys.templateRevisions(tenantID) });
+    setSelectedTemplateRevisionID(data.template_revision_id);
+  }, [registrationQuery.data?.status, registrationQuery.data?.template_revision_id, queryClient]);
 
   useEffect(() => {
-    if (!applyRun || !selectedStackID || !isTerminalRunStatus(applyRun.status)) {
+    const status = applyRunQuery.data?.status;
+    if (!applyRunID || !selectedStackID || !status || !isTerminalRunStatus(status)) {
       return;
     }
-
-    let canceled = false;
-    getStack(tenantID, selectedStackID)
-      .then((view) => {
-        if (canceled) {
-          return;
-        }
-        setStack(view.stack);
-        setStackTemplates(view.templates);
-        setSelectedStackTemplateID((current) => nextSelectedStackTemplateID(view.templates, current || installedTemplate?.id || ""));
-      })
-      .catch((error) => {
-        if (!canceled) {
-          setErrorMessage(messageFromError(error));
-        }
-      });
-
-    return () => {
-      canceled = true;
-    };
-  }, [applyRun?.id, applyRun?.status, installedTemplate?.id, selectedStackID, tenantID]);
+    queryClient.invalidateQueries({ queryKey: queryKeys.stack(tenantID, selectedStackID) });
+  }, [applyRunQuery.data?.status, applyRunID, selectedStackID, queryClient]);
 
   useEffect(() => {
-    if (!currentRun) {
-      setLogs([]);
-      setLogBody("");
-      return;
+    const nextLogs = logsQuery.data;
+    if (nextLogs && nextLogs.length > 0 && !nextLogs.some((log) => log.phase === selectedPhase)) {
+      setSelectedPhase(nextLogs[0].phase);
     }
+  }, [logsQuery.data, selectedPhase]);
 
-    listTemplateRunLogs(tenantID, currentRun.id)
-      .then((nextLogs) => {
-        setLogs(nextLogs);
-        if (nextLogs.length > 0 && !nextLogs.some((log) => log.phase === selectedPhase)) {
-          setSelectedPhase(nextLogs[0].phase);
-        }
-      })
-      .catch(() => setLogs([]));
-  }, [currentRun?.id, currentRun?.status, tenantID, selectedPhase]);
-
-  useEffect(() => {
-    if (!currentRun || !selectedPhase) {
-      setLogBody("");
-      return;
-    }
-
-    getTemplateRunLog(tenantID, currentRun.id, selectedPhase)
-      .then(setLogBody)
-      .catch(() => setLogBody(""));
-  }, [currentRun?.id, currentRun?.status, selectedPhase, tenantID]);
+  const registerTemplateMutation = useRegisterTemplateMutation(tenantID);
+  const createStackMutation = useCreateStackMutation(tenantID);
+  const addTemplateToStackMutation = useAddTemplateToStackMutation(tenantID, selectedStackID);
+  const updateStackTemplateConfigMutation = useUpdateStackTemplateConfigMutation(tenantID, selectedStackID);
+  const upgradeStackTemplateMutation = useUpgradeStackTemplateMutation(tenantID, selectedStackID);
+  const startTemplateRunMutation = useStartTemplateRunMutation(tenantID);
+  const approveRunMutation = useApproveRunMutation(tenantID);
+  const cancelRunMutation = useCancelRunMutation(tenantID);
 
   async function handleRegister(event: FormEvent) {
     event.preventDefault();
     await runAction("register", async () => {
-      const next = await registerTemplate(tenantID, {
+      const next = await registerTemplateMutation.mutateAsync({
         repo_owner: repoOwner,
         repo_name: repoName,
         source_ref: sourceRef,
         root_path: rootPath
       });
-      setRegistration(next);
+      setRegistrationID(next.id);
       setSelectedTemplateRevisionID("");
-      setVariables([]);
-      setVariableValues({});
       resetRunState();
     });
   }
@@ -401,25 +221,14 @@ export default function App() {
   async function handleCreateStack(event: FormEvent) {
     event.preventDefault();
     await runAction("stack", async () => {
-      const next = await createStack(tenantID, {
+      const next = await createStackMutation.mutateAsync({
         name: stackName,
         slug: stackSlug,
         tags: {},
         default_credential_ids: []
       });
-      setStack(next);
-      setStacks((current) => [next, ...current.filter((item) => item.id !== next.id)]);
       setSelectedStackID(next.id);
-      setStackTemplates([]);
-      setSelectedStackTemplateID("");
       resetRunState();
-
-      const refreshed = await listStacks(tenantID);
-      const hydrated = refreshed.some((item) => item.id === next.id)
-        ? refreshed
-        : [next, ...refreshed];
-      setStacks(hydrated);
-      setSelectedStackID(nextSelectedStackID(hydrated, next.id));
     });
   }
 
@@ -430,12 +239,11 @@ export default function App() {
 
     await runAction("install", async () => {
       const config = configFromVariableValues(variables, variableValues);
-      const next = await addTemplateToStack(tenantID, stack.id, {
+      const next = await addTemplateToStackMutation.mutateAsync({
         template_revision_id: selectedTemplateRevision.id,
         selected_ref: selectedTemplateRevision.source_ref,
         config
       });
-      setStackTemplates((current) => upsertStackTemplate(current, next));
       setSelectedStackTemplateID(next.id);
       resetRunState();
     });
@@ -447,10 +255,10 @@ export default function App() {
     }
 
     await runAction("config", async () => {
-      const next = await updateStackTemplateConfig(tenantID, installedTemplate.id, {
-        config: configFromVariableValues(variables, variableValues)
+      const next = await updateStackTemplateConfigMutation.mutateAsync({
+        stackTemplateID: installedTemplate.id,
+        body: { config: configFromVariableValues(variables, variableValues) }
       });
-      setStackTemplates((current) => upsertStackTemplate(current, next));
       setSelectedStackTemplateID(next.id);
       resetRunState();
     });
@@ -462,11 +270,13 @@ export default function App() {
     }
 
     await runAction("upgrade", async () => {
-      const next = await upgradeStackTemplate(tenantID, installedTemplate.id, {
-        target_template_revision_id: selectedTemplateRevision.id,
-        config: configFromVariableValues(variables, variableValues)
+      const next = await upgradeStackTemplateMutation.mutateAsync({
+        stackTemplateID: installedTemplate.id,
+        body: {
+          target_template_revision_id: selectedTemplateRevision.id,
+          config: configFromVariableValues(variables, variableValues)
+        }
       });
-      setStackTemplates((current) => upsertStackTemplate(current, next));
       setSelectedStackTemplateID(next.id);
       resetRunState();
     });
@@ -486,54 +296,46 @@ export default function App() {
     }
 
     await runAction(operation, async () => {
-      const next = await startTemplateRun(tenantID, installedTemplate.id, {
-        operation
+      const next = await startTemplateRunMutation.mutateAsync({
+        stackTemplateID: installedTemplate.id,
+        body: { operation }
       });
       if (operation === "apply") {
-        setApplyRun(next);
+        setApplyRunID(next.id);
         setSelectedRunKind("apply");
       } else {
-        setPlanRun(next);
+        setPlanRunID(next.id);
         setSelectedRunKind("plan");
       }
     });
   }
 
   async function handleApproveApply() {
-    if (!applyRun) {
+    if (!applyRunID) {
       return;
     }
 
     await runAction("approve", async () => {
-      await approveRun(tenantID, applyRun.id);
-      const next = await getTemplateRun(tenantID, applyRun.id);
-      setApplyRun(next);
+      await approveRunMutation.mutateAsync(applyRunID);
     });
   }
 
   async function handleCancelRun() {
-    if (!currentRun) {
+    if (!currentRunID) {
       return;
     }
 
     await runAction("cancel", async () => {
-      await cancelRun(tenantID, currentRun.id, {
-        reason: "canceled from workflow console"
+      await cancelRunMutation.mutateAsync({
+        runID: currentRunID,
+        body: { reason: "canceled from workflow console" }
       });
-      const next = await getTemplateRun(tenantID, currentRun.id);
-      if (next.operation === "apply") {
-        setApplyRun(next);
-      } else {
-        setPlanRun(next);
-      }
     });
   }
 
   function resetRunState() {
-    setPlanRun(null);
-    setApplyRun(null);
-    setLogs([]);
-    setLogBody("");
+    setPlanRunID("");
+    setApplyRunID("");
     setSelectedRunKind("plan");
   }
 

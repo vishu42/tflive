@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,9 +12,14 @@ describe("routeConfig", () => {
   it("renders the existing workflow console unchanged at the index route", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
+    const queryClient = new QueryClient();
 
     const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/"] });
-    const markup = renderToStaticMarkup(<RouterProvider router={testRouter} />);
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={testRouter} />
+      </QueryClientProvider>
+    );
 
     expect(markup).toContain("Terraform workflow console");
     expect(markup).toContain('data-testid="tenant-context"');
