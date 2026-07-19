@@ -31,6 +31,7 @@ var (
 	ErrStackTemplateNotRunnable           = errors.New("stack template is not runnable")
 	ErrRunNotApprovable                   = errors.New("run is not approvable")
 	ErrRunNotCancelable                   = errors.New("run is not cancelable")
+	ErrSelfApprovalForbidden              = errors.New("self-approval forbidden")
 )
 
 func authenticatedActor(ctx context.Context) (traits.UserID, error) {
@@ -802,9 +803,22 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 		return err
 	}
 
-	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionApprove, ErrForbidden); err != nil {
+	run, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionApprove, ErrForbidden)
+	if err != nil {
 		return err
 	}
+
+	if actor == run.TriggerActor {
+		service.auditError(ctx, traits.SecurityAuditEvent{
+			ActorSubject:  string(actor),
+			Action:        traits.AuditActionSelfApprovalRejected,
+			TenantID:      command.TenantID,
+			Outcome:       traits.AuditOutcomeFailure,
+			CorrelationID: "",
+		})
+		return ErrSelfApprovalForbidden
+	}
+
 	approval := traits.TemplateRunApproval{
 		RunID:      command.RunID,
 		TenantID:   command.TenantID,
@@ -815,6 +829,14 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 	if err := service.TemplateRuns.ApproveTemplateRun(ctx, approval); err != nil {
 		return fmt.Errorf("approve template run: %w", err)
 	}
+
+	service.auditError(ctx, traits.SecurityAuditEvent{
+		ActorSubject:  string(actor),
+		Action:        traits.AuditActionApprovalGranted,
+		TenantID:      command.TenantID,
+		Outcome:       traits.AuditOutcomeSuccess,
+		CorrelationID: "",
+	})
 
 	// TODO: Consider an outbox-backed approval signal so a persisted approval cannot
 	// be lost if the Temporal signal call fails.

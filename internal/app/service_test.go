@@ -986,7 +986,12 @@ func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 
 	ctx := authenticatedContext()
 	now := time.Date(2026, 7, 2, 10, 15, 0, 0, time.UTC)
-	runs := &recordingTemplateRunRepository{}
+	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{
+		ID:            "run_123",
+		TenantID:      "tenant_123",
+		StackTemplateID: "stack_template_123",
+		TriggerActor:  traits.UserID("different-user"),
+	}}
 	workflows := &recordingWorkflowDispatcher{}
 
 	service := NewService(Service{
@@ -1054,6 +1059,132 @@ func TestApproveRunDoesNotSignalWhenRunIsNotApprovable(t *testing.T) {
 
 	if workflows.approvalRunID != "" {
 		t.Fatalf("workflow approval run ID = %q, want no workflow signal", workflows.approvalRunID)
+	}
+}
+
+func TestApproveRunRejectsSelfApproval(t *testing.T) {
+	t.Parallel()
+
+	ctx := authenticatedContext()
+	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{
+		ID:            "run_123",
+		TenantID:      "tenant_123",
+		StackTemplateID: "stack_template_123",
+		TriggerActor:  traits.UserID(keycloakSubject),
+	}}
+	workflows := &recordingWorkflowDispatcher{}
+	audit := &recordingAuditRepository{}
+
+	service := NewService(Service{
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
+		Workflows:      workflows,
+		Audit:          audit,
+	})
+
+	err := service.ApproveRun(ctx, ApproveRunCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
+	})
+	if !errors.Is(err, ErrSelfApprovalForbidden) {
+		t.Fatalf("error = %v, want ErrSelfApprovalForbidden", err)
+	}
+
+	if runs.approval.RunID != "" {
+		t.Fatalf("approval was recorded, want no approval")
+	}
+
+	if workflows.approvalRunID != "" {
+		t.Fatalf("workflow approval run ID = %q, want no workflow signal", workflows.approvalRunID)
+	}
+
+	if len(audit.events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(audit.events))
+	}
+	if audit.events[0].Action != traits.AuditActionSelfApprovalRejected {
+		t.Fatalf("audit action = %q, want %q", audit.events[0].Action, traits.AuditActionSelfApprovalRejected)
+	}
+	if audit.events[0].Outcome != traits.AuditOutcomeFailure {
+		t.Fatalf("audit outcome = %q, want %q", audit.events[0].Outcome, traits.AuditOutcomeFailure)
+	}
+}
+
+func TestApproveRunSelfApprovalAppliesToPlatformAdmins(t *testing.T) {
+	t.Parallel()
+
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{
+		Subject: keycloakSubject, RealmRoles: []string{"platform-admin"},
+	})
+	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{
+		ID:            "run_123",
+		TenantID:      "tenant_123",
+		StackTemplateID: "stack_template_123",
+		TriggerActor:  traits.UserID(keycloakSubject),
+	}}
+	workflows := &recordingWorkflowDispatcher{}
+	audit := &recordingAuditRepository{}
+
+	service := NewService(Service{
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
+		Workflows:      workflows,
+		Audit:          audit,
+	})
+
+	err := service.ApproveRun(ctx, ApproveRunCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
+	})
+	if !errors.Is(err, ErrSelfApprovalForbidden) {
+		t.Fatalf("error = %v, want ErrSelfApprovalForbidden", err)
+	}
+
+	if workflows.approvalRunID != "" {
+		t.Fatalf("workflow approval run ID = %q, want no workflow signal", workflows.approvalRunID)
+	}
+}
+
+func TestApproveRunAuditsSuccessfulApproval(t *testing.T) {
+	t.Parallel()
+
+	ctx := authenticatedContext()
+	now := time.Date(2026, 7, 2, 10, 15, 0, 0, time.UTC)
+	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{
+		ID:            "run_123",
+		TenantID:      "tenant_123",
+		StackTemplateID: "stack_template_123",
+		TriggerActor:  traits.UserID("different-user"),
+	}}
+	workflows := &recordingWorkflowDispatcher{}
+	audit := &recordingAuditRepository{}
+
+	service := NewService(Service{
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
+		Workflows:      workflows,
+		Clock:          fixedClock{now: now},
+		Audit:          audit,
+	})
+
+	err := service.ApproveRun(ctx, ApproveRunCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		RunID:    traits.TemplateRunID("run_123"),
+	})
+	if err != nil {
+		t.Fatalf("ApproveRun returned error: %v", err)
+	}
+
+	if len(audit.events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(audit.events))
+	}
+	if audit.events[0].Action != traits.AuditActionApprovalGranted {
+		t.Fatalf("audit action = %q, want %q", audit.events[0].Action, traits.AuditActionApprovalGranted)
+	}
+	if audit.events[0].Outcome != traits.AuditOutcomeSuccess {
+		t.Fatalf("audit outcome = %q, want %q", audit.events[0].Outcome, traits.AuditOutcomeSuccess)
 	}
 }
 

@@ -584,6 +584,8 @@ func writeAppError(response http.ResponseWriter, err error) {
 		writeError(response, http.StatusUnauthorized, "unauthorized", "authentication required")
 	case errors.Is(err, app.ErrForbidden):
 		writeError(response, http.StatusForbidden, "forbidden", "forbidden")
+	case errors.Is(err, app.ErrSelfApprovalForbidden):
+		writeError(response, http.StatusForbidden, "self_approval_forbidden", "self-approval forbidden")
 	case errors.Is(err, app.ErrInvalidCommand):
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, app.ErrNotFound):
