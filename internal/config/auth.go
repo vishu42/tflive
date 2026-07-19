@@ -24,6 +24,12 @@ type SecurityConfig struct {
 	TenantID traits.TenantID
 	OIDC     OIDCConfig
 	OpenFGA  OpenFGAConfig
+
+	KeycloakAdminURL             *url.URL
+	KeycloakRealm                string
+	DirectoryReaderClientID      string
+	DirectoryReaderClientSecret  Secret
+	DirectoryReaderHTTPTimeout   time.Duration
 }
 
 type OIDCConfig struct {
@@ -80,18 +86,25 @@ func (cfg OpenFGAConfig) GoString() string {
 
 func (cfg SecurityConfig) String() string {
 	return fmt.Sprintf(
-		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v Audience:%q} OpenFGA:%s}",
+		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v Audience:%q} OpenFGA:%s KeycloakAdminURL:%v KeycloakRealm:%q DirectoryReaderClientID:%q DirectoryReaderClientSecret:%s DirectoryReaderHTTPTimeout:%s}",
 		cfg.Mode,
 		cfg.TenantID,
 		cfg.OIDC.IssuerURL,
 		cfg.OIDC.Audience,
 		cfg.OpenFGA,
+		cfg.KeycloakAdminURL,
+		cfg.KeycloakRealm,
+		cfg.DirectoryReaderClientID,
+		cfg.DirectoryReaderClientSecret,
+		cfg.DirectoryReaderHTTPTimeout,
 	)
 }
 
 func (cfg SecurityConfig) GoString() string {
 	return cfg.String()
 }
+
+const DefaultDirectoryReaderHTTPTimeout = 10 * time.Second
 
 func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 	mode, err := parseRuntimeMode(getenv("TFLIVE_ENVIRONMENT"))
@@ -135,6 +148,32 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 		}
 	}
 
+	keycloakAdminURL, err := parseOptionalConfigURL("KEYCLOAK_ADMIN_URL", getenv("KEYCLOAK_ADMIN_URL"))
+	if err != nil {
+		return SecurityConfig{}, err
+	}
+	keycloakRealm := strings.TrimSpace(getenv("KEYCLOAK_REALM"))
+	if keycloakRealm == "" {
+		keycloakRealm = "tflive"
+	}
+	directoryReaderClientID := strings.TrimSpace(getenv("KEYCLOAK_DIRECTORY_READER_CLIENT_ID"))
+	directoryReaderSecret := newSecret(getenv("KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET"))
+	directoryReaderTimeout := DefaultDirectoryReaderHTTPTimeout
+	if raw := strings.TrimSpace(getenv("KEYCLOAK_DIRECTORY_READER_HTTP_TIMEOUT")); raw != "" {
+		directoryReaderTimeout, err = time.ParseDuration(raw)
+		if err != nil || directoryReaderTimeout <= 0 {
+			return SecurityConfig{}, authConfigError("KEYCLOAK_DIRECTORY_READER_HTTP_TIMEOUT must be a positive duration")
+		}
+	}
+	if mode == RuntimeProduction {
+		if directoryReaderClientID == "" {
+			return SecurityConfig{}, authConfigError("KEYCLOAK_DIRECTORY_READER_CLIENT_ID is required in production")
+		}
+		if directoryReaderSecret.Empty() {
+			return SecurityConfig{}, authConfigError("KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET is required in production")
+		}
+	}
+
 	return SecurityConfig{
 		Mode:     mode,
 		TenantID: traits.TenantID(tenantID),
@@ -143,6 +182,12 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 			Audience:  audience,
 		},
 		OpenFGA: openFGA,
+
+		KeycloakAdminURL:            keycloakAdminURL,
+		KeycloakRealm:               keycloakRealm,
+		DirectoryReaderClientID:     directoryReaderClientID,
+		DirectoryReaderClientSecret: directoryReaderSecret,
+		DirectoryReaderHTTPTimeout:  directoryReaderTimeout,
 	}, nil
 }
 
@@ -195,6 +240,18 @@ func parseConfigURL(name, raw string) (*url.URL, error) {
 	if raw == "" {
 		return nil, authConfigError("%s is required", name)
 	}
+	return parseAbsoluteURL(name, raw)
+}
+
+func parseOptionalConfigURL(name, raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	return parseAbsoluteURL(name, raw)
+}
+
+func parseAbsoluteURL(name, raw string) (*url.URL, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return nil, authConfigError("%s must be an absolute HTTP or HTTPS URL", name)
