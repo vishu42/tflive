@@ -671,7 +671,7 @@ func TestListStacksReturnsTenantScopedStacksNewestFirst(t *testing.T) {
 	}
 }
 
-func TestListStacksByIDsReturnsRequestedTenantStacksNewestFirst(t *testing.T) {
+func TestListStacksPageReturnsTenantStacksWithStableKeyset(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -707,41 +707,39 @@ func TestListStacksByIDsReturnsRequestedTenantStacksNewestFirst(t *testing.T) {
 		}
 	}
 
-	stacks, err := store.ListStacksByIDs(ctx, traits.TenantID("tenant_123"), []traits.StackID{"stack_older", "stack_newer", "stack_other"})
+	stacks, err := store.ListStacksPage(ctx, traits.TenantID("tenant_123"), nil, 1)
 	if err != nil {
-		t.Fatalf("ListStacksByIDs returned error: %v", err)
+		t.Fatalf("ListStacksPage first page returned error: %v", err)
 	}
-	if len(stacks) != 2 {
-		t.Fatalf("len(stacks) = %d, want 2: %#v", len(stacks), stacks)
+	if len(stacks) != 1 || stacks[0].ID != newer.ID {
+		t.Fatalf("first page = %#v, want newer stack", stacks)
 	}
-	if stacks[0].ID != newer.ID || stacks[1].ID != older.ID {
-		t.Fatalf("stack order = %#v", stacks)
+	cursor := &app.StackPageCursor{CreatedAt: stacks[0].CreatedAt, ID: stacks[0].ID}
+	stacks, err = store.ListStacksPage(ctx, traits.TenantID("tenant_123"), cursor, 1)
+	if err != nil {
+		t.Fatalf("ListStacksPage second page returned error: %v", err)
+	}
+	if len(stacks) != 1 || stacks[0].ID != older.ID {
+		t.Fatalf("second page = %#v, want older stack", stacks)
+	}
+	cursor = &app.StackPageCursor{CreatedAt: stacks[0].CreatedAt, ID: stacks[0].ID}
+	stacks, err = store.ListStacksPage(ctx, traits.TenantID("tenant_123"), cursor, 1)
+	if err != nil {
+		t.Fatalf("ListStacksPage final page returned error: %v", err)
+	}
+	if len(stacks) != 0 {
+		t.Fatalf("final page = %#v, want empty", stacks)
 	}
 }
 
-func TestListStacksByIDsReturnsEmptyForNoIDs(t *testing.T) {
+func TestListStacksPageRejectsNonPositiveLimit(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	if err := store.CreateStack(ctx, traits.Stack{
-		ID:        traits.StackID("stack_123"),
-		TenantID:  traits.TenantID("tenant_123"),
-		Name:      "Acme",
-		Slug:      "acme",
-		CreatedBy: traits.UserID("user_123"),
-		CreatedAt: time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("CreateStack returned error: %v", err)
-	}
-
-	stacks, err := store.ListStacksByIDs(ctx, traits.TenantID("tenant_123"), nil)
-	if err != nil {
-		t.Fatalf("ListStacksByIDs returned error: %v", err)
-	}
-	if len(stacks) != 0 {
-		t.Fatalf("stacks = %#v, want empty", stacks)
+	if _, err := store.ListStacksPage(ctx, traits.TenantID("tenant_123"), nil, 0); err == nil {
+		t.Fatal("ListStacksPage() error = nil, want invalid limit error")
 	}
 }
 

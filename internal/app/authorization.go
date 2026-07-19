@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"errors"
-	"strings"
+	"fmt"
 
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
@@ -83,15 +83,44 @@ func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repo
 	if err != nil {
 		return nil, err
 	}
-	result, err := authorizer.ListAccessibleStacks(ctx, authz.ListAccessibleStacksRequest{Subject: subject, Permission: authz.PermissionView})
-	if err != nil {
-		return nil, err
+	const pageSize = 50
+	var cursor *StackPageCursor
+	var accessible []traits.Stack
+	for {
+		candidates, err := repository.ListStacksPage(ctx, tenantID, cursor, pageSize)
+		if err != nil {
+			return nil, fmt.Errorf("list stack candidates: %w", err)
+		}
+		if len(candidates) == 0 {
+			return accessible, nil
+		}
+
+		checks := make([]authz.CheckRequest, len(candidates))
+		for i, candidate := range candidates {
+			stack, err := authz.StackFromID(string(candidate.ID))
+			if err != nil {
+				return nil, err
+			}
+			checks[i] = authz.CheckRequest{Subject: subject, Stack: stack, Permission: authz.PermissionView}
+		}
+		result, err := authorizer.BatchCheck(ctx, authz.BatchCheckRequest{Checks: checks})
+		if err != nil {
+			return nil, err
+		}
+		if len(result.Results) != len(candidates) {
+			return nil, fmt.Errorf("%w: batch result count does not match stack candidates", authz.ErrMalformedResponse)
+		}
+		for i, decision := range result.Results {
+			if decision.Allowed {
+				accessible = append(accessible, candidates[i])
+			}
+		}
+		if len(candidates) < pageSize {
+			return accessible, nil
+		}
+		last := candidates[len(candidates)-1]
+		cursor = &StackPageCursor{CreatedAt: last.CreatedAt, ID: last.ID}
 	}
-	stackIDs := make([]traits.StackID, 0, len(result.Stacks))
-	for _, stack := range result.Stacks {
-		stackIDs = append(stackIDs, traits.StackID(strings.TrimPrefix(stack.String(), "stack:")))
-	}
-	return repository.ListStacksByIDs(ctx, tenantID, stackIDs)
 }
 
 func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID, permission authz.Permission, denied error) (traits.StackTemplate, error) {

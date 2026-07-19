@@ -573,7 +573,7 @@ func (recordingStore) ListStacks(context.Context, traits.TenantID) ([]traits.Sta
 	return nil, nil
 }
 
-func (recordingStore) ListStacksByIDs(context.Context, traits.TenantID, []traits.StackID) ([]traits.Stack, error) {
+func (recordingStore) ListStacksPage(context.Context, traits.TenantID, *app.StackPageCursor, int) ([]traits.Stack, error) {
 	return nil, nil
 }
 

@@ -1529,9 +1529,22 @@ func (repository *recordingStackRepository) ListStacks(_ context.Context, tenant
 	return repository.list, nil
 }
 
-func (repository *recordingStackRepository) ListStacksByIDs(_ context.Context, tenantID traits.TenantID, stackIDs []traits.StackID) ([]traits.Stack, error) {
-	repository.gotListStackIDs = append([]traits.StackID(nil), stackIDs...)
-	return repository.ListStacks(context.Background(), tenantID)
+func (repository *recordingStackRepository) ListStacksPage(_ context.Context, tenantID traits.TenantID, after *StackPageCursor, limit int) ([]traits.Stack, error) {
+	repository.gotListTenantID = tenantID
+	if repository.listErr != nil {
+		return nil, repository.listErr
+	}
+	start := 0
+	if after != nil {
+		for i, stack := range repository.list {
+			if stack.ID == after.ID && stack.CreatedAt.Equal(after.CreatedAt) {
+				start = i + 1
+				break
+			}
+		}
+	}
+	end := min(start+limit, len(repository.list))
+	return append([]traits.Stack(nil), repository.list[start:end]...), nil
 }
 
 type recordingTemplateRunRepository struct {

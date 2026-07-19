@@ -1674,8 +1674,16 @@ func (authorizer *apiAuthorizer) Check(_ context.Context, request authz.CheckReq
 	}
 	return authz.CheckResult{Allowed: !authorizer.denied}, nil
 }
-func (apiAuthorizer) BatchCheck(context.Context, authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
-	return authz.BatchCheckResult{}, nil
+func (authorizer *apiAuthorizer) BatchCheck(ctx context.Context, request authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
+	result := authz.BatchCheckResult{Results: make([]authz.CheckResult, len(request.Checks))}
+	for i, check := range request.Checks {
+		decision, err := authorizer.Check(ctx, check)
+		if err != nil {
+			return authz.BatchCheckResult{}, err
+		}
+		result.Results[i] = decision
+	}
+	return result, nil
 }
 func (authorizer apiAuthorizer) ListAccessibleStacks(context.Context, authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
 	if authorizer.denied {
@@ -1740,8 +1748,22 @@ func (repository *recordingStackRepository) ListStacks(_ context.Context, tenant
 	return repository.list, nil
 }
 
-func (repository *recordingStackRepository) ListStacksByIDs(_ context.Context, tenantID traits.TenantID, _ []traits.StackID) ([]traits.Stack, error) {
-	return repository.ListStacks(context.Background(), tenantID)
+func (repository *recordingStackRepository) ListStacksPage(_ context.Context, tenantID traits.TenantID, after *app.StackPageCursor, limit int) ([]traits.Stack, error) {
+	repository.gotListTenantID = tenantID
+	if repository.listErr != nil {
+		return nil, repository.listErr
+	}
+	start := 0
+	if after != nil {
+		for i, stack := range repository.list {
+			if stack.ID == after.ID && stack.CreatedAt.Equal(after.CreatedAt) {
+				start = i + 1
+				break
+			}
+		}
+	}
+	end := min(start+limit, len(repository.list))
+	return append([]traits.Stack(nil), repository.list[start:end]...), nil
 }
 
 type recordingStackTemplateRepository struct {

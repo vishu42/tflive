@@ -53,12 +53,17 @@ func canCreateStack(principal authn.Principal) bool {
 }
 
 // StackRepository persists and reads tenant-owned stacks.
+type StackPageCursor struct {
+	CreatedAt time.Time
+	ID        traits.StackID
+}
+
 type StackRepository interface {
 	CreateStack(ctx context.Context, stack traits.Stack) error
 	GetStack(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error)
 	GetStackWithTemplates(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (StackView, error)
 	ListStacks(ctx context.Context, tenantID traits.TenantID) ([]traits.Stack, error)
-	ListStacksByIDs(ctx context.Context, tenantID traits.TenantID, stackIDs []traits.StackID) ([]traits.Stack, error)
+	ListStacksPage(ctx context.Context, tenantID traits.TenantID, after *StackPageCursor, limit int) ([]traits.Stack, error)
 }
 
 type stackOwnerIntentRepository interface {
