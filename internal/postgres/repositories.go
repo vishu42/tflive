@@ -457,6 +457,51 @@ func (store *Store) ListStacks(ctx context.Context, tenantID traits.TenantID) ([
 	return stacks, nil
 }
 
+func (store *Store) ListStacksPage(ctx context.Context, tenantID traits.TenantID, after *app.StackPageCursor, limit int) ([]traits.Stack, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("stack page limit must be positive")
+	}
+	var afterCreatedAt any
+	var afterID traits.StackID
+	if after != nil {
+		afterCreatedAt = after.CreatedAt
+		afterID = after.ID
+	}
+	rows, err := store.pool.Query(ctx, `
+		select
+			id,
+			tenant_id,
+			name,
+			slug,
+			tags_json,
+			default_credential_ids_json,
+			created_by,
+			created_at
+		from stacks
+		where tenant_id = $1
+			and ($2::timestamptz is null or (created_at, id) < ($2, $3))
+		order by created_at desc, id desc
+		limit $4
+	`, tenantID, afterCreatedAt, afterID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list stack page: %w", err)
+	}
+	defer rows.Close()
+
+	stacks := make([]traits.Stack, 0, limit)
+	for rows.Next() {
+		stack, err := scanStack(rows)
+		if err != nil {
+			return nil, err
+		}
+		stacks = append(stacks, stack)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate stack page: %w", err)
+	}
+	return stacks, nil
+}
+
 func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (app.StackView, error) {
 	stack, err := store.getStack(ctx, tenantID, stackID)
 	if err != nil {

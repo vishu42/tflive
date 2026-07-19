@@ -629,7 +629,7 @@ func TestListStacksReturnsTenantScopedStacksNewestFirst(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 	older := traits.Stack{
-		ID:        traits.StackID("stack_older"),
+		ID:        traits.StackID("stack_a"),
 		TenantID:  traits.TenantID("tenant_123"),
 		Name:      "Older Stack",
 		Slug:      "older-stack",
@@ -637,12 +637,12 @@ func TestListStacksReturnsTenantScopedStacksNewestFirst(t *testing.T) {
 		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
 	}
 	newer := traits.Stack{
-		ID:        traits.StackID("stack_newer"),
+		ID:        traits.StackID("stack_b"),
 		TenantID:  traits.TenantID("tenant_123"),
 		Name:      "Newer Stack",
 		Slug:      "newer-stack",
 		CreatedBy: traits.UserID("user_123"),
-		CreatedAt: time.Date(2026, 7, 6, 11, 0, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
 	}
 	otherTenant := traits.Stack{
 		ID:        traits.StackID("stack_other"),
@@ -666,8 +666,80 @@ func TestListStacksReturnsTenantScopedStacksNewestFirst(t *testing.T) {
 	if len(stacks) != 2 {
 		t.Fatalf("len(stacks) = %d, want 2: %#v", len(stacks), stacks)
 	}
-	if stacks[0].ID != traits.StackID("stack_newer") || stacks[1].ID != traits.StackID("stack_older") {
+	if stacks[0].ID != newer.ID || stacks[1].ID != older.ID {
 		t.Fatalf("stack order = %#v", stacks)
+	}
+}
+
+func TestListStacksPageReturnsTenantStacksWithStableKeyset(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	older := traits.Stack{
+		ID:        traits.StackID("stack_a"),
+		TenantID:  traits.TenantID("tenant_123"),
+		Name:      "Older Stack",
+		Slug:      "older-stack",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
+	}
+	newer := traits.Stack{
+		ID:        traits.StackID("stack_b"),
+		TenantID:  traits.TenantID("tenant_123"),
+		Name:      "Newer Stack",
+		Slug:      "newer-stack",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
+	}
+	otherTenant := traits.Stack{
+		ID:        traits.StackID("stack_other"),
+		TenantID:  traits.TenantID("tenant_456"),
+		Name:      "Other Stack",
+		Slug:      "other-stack",
+		CreatedBy: traits.UserID("user_456"),
+		CreatedAt: time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
+	}
+	for _, stack := range []traits.Stack{older, newer, otherTenant} {
+		if err := store.CreateStack(ctx, stack); err != nil {
+			t.Fatalf("CreateStack(%s) returned error: %v", stack.ID, err)
+		}
+	}
+
+	stacks, err := store.ListStacksPage(ctx, traits.TenantID("tenant_123"), nil, 1)
+	if err != nil {
+		t.Fatalf("ListStacksPage first page returned error: %v", err)
+	}
+	if len(stacks) != 1 || stacks[0].ID != newer.ID {
+		t.Fatalf("first page = %#v, want newer stack", stacks)
+	}
+	cursor := &app.StackPageCursor{CreatedAt: stacks[0].CreatedAt, ID: stacks[0].ID}
+	stacks, err = store.ListStacksPage(ctx, traits.TenantID("tenant_123"), cursor, 1)
+	if err != nil {
+		t.Fatalf("ListStacksPage second page returned error: %v", err)
+	}
+	if len(stacks) != 1 || stacks[0].ID != older.ID {
+		t.Fatalf("second page = %#v, want older stack", stacks)
+	}
+	cursor = &app.StackPageCursor{CreatedAt: stacks[0].CreatedAt, ID: stacks[0].ID}
+	stacks, err = store.ListStacksPage(ctx, traits.TenantID("tenant_123"), cursor, 1)
+	if err != nil {
+		t.Fatalf("ListStacksPage final page returned error: %v", err)
+	}
+	if len(stacks) != 0 {
+		t.Fatalf("final page = %#v, want empty", stacks)
+	}
+}
+
+func TestListStacksPageRejectsNonPositiveLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	if _, err := store.ListStacksPage(ctx, traits.TenantID("tenant_123"), nil, 0); err == nil {
+		t.Fatal("ListStacksPage() error = nil, want invalid limit error")
 	}
 }
 

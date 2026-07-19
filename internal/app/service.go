@@ -53,11 +53,17 @@ func canCreateStack(principal authn.Principal) bool {
 }
 
 // StackRepository persists and reads tenant-owned stacks.
+type StackPageCursor struct {
+	CreatedAt time.Time
+	ID        traits.StackID
+}
+
 type StackRepository interface {
 	CreateStack(ctx context.Context, stack traits.Stack) error
 	GetStack(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error)
 	GetStackWithTemplates(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (StackView, error)
 	ListStacks(ctx context.Context, tenantID traits.TenantID) ([]traits.Stack, error)
+	ListStacksPage(ctx context.Context, tenantID traits.TenantID, after *StackPageCursor, limit int) ([]traits.Stack, error)
 }
 
 type stackOwnerIntentRepository interface {
@@ -314,6 +320,9 @@ type GetTemplateRevisionVariablesCommand struct {
 
 // RegisterTemplate creates a pending registration attempt and dispatches its sync workflow.
 func (service *Service) RegisterTemplate(ctx context.Context, command RegisterTemplateCommand) (traits.TemplateRegistration, error) {
+	if err := requireTemplateCatalogAccess(ctx); err != nil {
+		return traits.TemplateRegistration{}, err
+	}
 	actor, err := authenticatedActor(ctx)
 	if err != nil {
 		return traits.TemplateRegistration{}, err
@@ -367,7 +376,7 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		return traits.Stack{}, err
 	}
 	if service.Authorizer == nil {
-		return traits.Stack{}, errors.New("authorization not configured")
+		return traits.Stack{}, fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
 	}
 	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
 	if err != nil {
@@ -390,6 +399,9 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		CreatedAt:            service.Clock.Now(),
 	}
 	authorizedStack, err := authz.StackFromID(string(stack.ID))
+	if errors.Is(err, authz.ErrInvalidInput) {
+		return traits.Stack{}, fmt.Errorf("%w: generated stack ID is invalid", authz.ErrMalformedResponse)
+	}
 	if err != nil {
 		return traits.Stack{}, fmt.Errorf("create owner stack: %w", err)
 	}
@@ -436,6 +448,9 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 		return traits.StackTemplate{}, err
 	}
 
+	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionOperate, ErrForbidden); err != nil {
+		return traits.StackTemplate{}, err
+	}
 	stack, err := service.Stacks.GetStack(ctx, command.TenantID, command.StackID)
 	if err != nil {
 		return traits.StackTemplate{}, fmt.Errorf("get stack: %w", err)
@@ -491,7 +506,7 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 		return traits.TemplateRun{}, err
 	}
 
-	stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, command.TenantID, command.StackTemplateID)
+	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionOperate, ErrForbidden)
 	if err != nil {
 		return traits.TemplateRun{}, fmt.Errorf("get stack template: %w", err)
 	}
@@ -550,7 +565,7 @@ func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command U
 		return traits.StackTemplate{}, err
 	}
 
-	stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, command.TenantID, command.StackTemplateID)
+	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionOperate, ErrForbidden)
 	if err != nil {
 		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
 	}
@@ -587,7 +602,7 @@ func (service *Service) UpgradeStackTemplate(ctx context.Context, command Upgrad
 		return traits.StackTemplate{}, err
 	}
 
-	stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, command.TenantID, command.StackTemplateID)
+	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionOperate, ErrForbidden)
 	if err != nil {
 		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
 	}
@@ -634,6 +649,9 @@ func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (
 	if err := validateGetStackCommand(command); err != nil {
 		return StackView{}, err
 	}
+	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionView, ErrNotFound); err != nil {
+		return StackView{}, err
+	}
 
 	view, err := service.Stacks.GetStackWithTemplates(ctx, command.TenantID, command.StackID)
 	if err != nil {
@@ -651,7 +669,7 @@ func (service *Service) ListStacks(ctx context.Context, command ListStacksComman
 		return nil, err
 	}
 
-	stacks, err := service.Stacks.ListStacks(ctx, command.TenantID)
+	stacks, err := listAccessibleStacks(ctx, service.Authorizer, service.Stacks, command.TenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list stacks: %w", err)
 	}
@@ -664,6 +682,9 @@ func (service *Service) ListStacks(ctx context.Context, command ListStacksComman
 // ListTemplateRevisions returns tenant-owned registered template revisions ordered for UI selection.
 func (service *Service) ListTemplateRevisions(ctx context.Context, command ListTemplateRevisionsCommand) ([]traits.TemplateRevision, error) {
 	if err := validateListTemplateRevisionsCommand(command); err != nil {
+		return nil, err
+	}
+	if err := requireTemplateCatalogAccess(ctx); err != nil {
 		return nil, err
 	}
 
@@ -682,6 +703,9 @@ func (service *Service) GetTemplateRegistration(ctx context.Context, command Get
 	if err := validateGetTemplateRegistrationCommand(command); err != nil {
 		return traits.TemplateRegistration{}, err
 	}
+	if err := requireTemplateCatalogAccess(ctx); err != nil {
+		return traits.TemplateRegistration{}, err
+	}
 
 	registration, err := service.TemplateRegistrations.GetTemplateRegistration(ctx, command.TenantID, command.RegistrationID)
 	if err != nil {
@@ -694,6 +718,9 @@ func (service *Service) GetTemplateRegistration(ctx context.Context, command Get
 // GetTemplateRevisionVariables returns inferred variables for one tenant-owned template revision.
 func (service *Service) GetTemplateRevisionVariables(ctx context.Context, command GetTemplateRevisionVariablesCommand) ([]traits.TemplateVariable, error) {
 	if err := validateGetTemplateRevisionVariablesCommand(command); err != nil {
+		return nil, err
+	}
+	if err := requireTemplateCatalogAccess(ctx); err != nil {
 		return nil, err
 	}
 
@@ -718,6 +745,9 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 		return err
 	}
 
+	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionApprove, ErrForbidden); err != nil {
+		return err
+	}
 	approval := traits.TemplateRunApproval{
 		RunID:      command.RunID,
 		TenantID:   command.TenantID,
@@ -749,6 +779,9 @@ func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand)
 		return err
 	}
 
+	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionOperate, ErrForbidden); err != nil {
+		return err
+	}
 	cancellation := traits.TemplateRunCancellation{
 		RunID:       command.RunID,
 		TenantID:    command.TenantID,
@@ -780,7 +813,7 @@ func (service *Service) GetTemplateRun(ctx context.Context, command GetTemplateR
 		return traits.TemplateRun{}, err
 	}
 
-	run, err := service.TemplateRuns.GetTemplateRun(ctx, command.TenantID, command.RunID)
+	run, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionView, ErrNotFound)
 	if err != nil {
 		return traits.TemplateRun{}, fmt.Errorf("get template run: %w", err)
 	}
@@ -794,10 +827,7 @@ func (service *Service) GetTemplateRunLog(ctx context.Context, command GetTempla
 		return nil, err
 	}
 
-	if _, err := service.GetTemplateRun(ctx, GetTemplateRunCommand{
-		TenantID: command.TenantID,
-		RunID:    command.RunID,
-	}); err != nil {
+	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionView, ErrNotFound); err != nil {
 		return nil, err
 	}
 	log, err := service.TemplateRunLogMetadata.GetTemplateRunLog(ctx, command.TenantID, command.RunID, command.Phase)
@@ -825,10 +855,7 @@ func (service *Service) ListTemplateRunLogs(ctx context.Context, command ListTem
 		return nil, err
 	}
 
-	if _, err := service.GetTemplateRun(ctx, GetTemplateRunCommand{
-		TenantID: command.TenantID,
-		RunID:    command.RunID,
-	}); err != nil {
+	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionView, ErrNotFound); err != nil {
 		return nil, err
 	}
 
