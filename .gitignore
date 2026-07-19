@@ -7,3 +7,5 @@ tmp
 .claude/settings.local.json
 .claude/agents/
 CLAUDE.local.md
+
+worktrees
