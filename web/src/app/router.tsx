@@ -4,10 +4,13 @@ import App from "../App";
 import AppShell from "./AppShell";
 import NotFound from "./NotFound";
 import RoutePlaceholder from "./RoutePlaceholder";
+import RequireCapability from "../auth/RequireCapability";
 
 // The legacy console renders unchanged at "/" until UI-007 extracts it into
 // feature screens; every other route below is a reserved slot this ticket
-// only scaffolds.
+// only scaffolds. Routes with a capability in the parent spec's route map
+// are wrapped in a <RequireCapability mode="route"> layout route — see
+// docs/superpowers/specs/2026-07-19-capability-gating-primitives-design.md.
 export const routeConfig: RouteObject[] = [
   {
     path: "/",
@@ -15,12 +18,26 @@ export const routeConfig: RouteObject[] = [
     children: [
       { index: true, element: <App /> },
       { path: "stacks", element: <RoutePlaceholder title="Stacks" /> },
-      { path: "stacks/new", element: <RoutePlaceholder title="Create stack" /> },
-      { path: "stacks/:stackId", element: <RoutePlaceholder title="Stack detail" /> },
-      { path: "stacks/:stackId/template", element: <RoutePlaceholder title="Stack template" /> },
-      { path: "stacks/:stackId/runs", element: <RoutePlaceholder title="Runs" /> },
-      { path: "stacks/:stackId/runs/:runId", element: <RoutePlaceholder title="Run detail" /> },
-      { path: "stacks/:stackId/access", element: <RoutePlaceholder title="Access" /> },
+      {
+        path: "stacks/new",
+        element: <RequireCapability capability="canCreateStack" mode="route" />,
+        children: [{ index: true, element: <RoutePlaceholder title="Create stack" /> }]
+      },
+      {
+        path: "stacks/:stackId",
+        element: <RequireCapability capability="canView" mode="route" />,
+        children: [
+          { index: true, element: <RoutePlaceholder title="Stack detail" /> },
+          { path: "template", element: <RoutePlaceholder title="Stack template" /> },
+          { path: "runs", element: <RoutePlaceholder title="Runs" /> },
+          { path: "runs/:runId", element: <RoutePlaceholder title="Run detail" /> },
+          {
+            path: "access",
+            element: <RequireCapability capability="canManageAccess" mode="route" />,
+            children: [{ index: true, element: <RoutePlaceholder title="Access" /> }]
+          }
+        ]
+      },
       { path: "templates", element: <RoutePlaceholder title="Template registry" /> },
       { path: "auth/callback", element: <RoutePlaceholder title="Signing in" /> },
       { path: "*", element: <NotFound /> }
