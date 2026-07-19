@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as client from "./client";
 import { queryKeys } from "./queryKeys";
 import { isTerminalRegistrationStatus, isTerminalRunStatus } from "../polling";
@@ -80,5 +80,89 @@ export function useTemplateRunLogQuery(tenantID: string, runID: string, phase: s
     queryKey: queryKeys.templateRunLog(tenantID, runID, phase, statusTag),
     queryFn: () => client.getTemplateRunLog(tenantID, runID, phase),
     enabled: runID !== "" && phase !== ""
+  });
+}
+
+export function useRegisterTemplateMutation(tenantID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Parameters<typeof client.registerTemplate>[1]) => client.registerTemplate(tenantID, body),
+    onSuccess: (registration) => {
+      queryClient.setQueryData(queryKeys.templateRegistration(tenantID, registration.id), registration);
+    }
+  });
+}
+
+export function useCreateStackMutation(tenantID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Parameters<typeof client.createStack>[1]) => client.createStack(tenantID, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.stacks(tenantID) });
+    }
+  });
+}
+
+export function useAddTemplateToStackMutation(tenantID: string, stackID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Parameters<typeof client.addTemplateToStack>[2]) => client.addTemplateToStack(tenantID, stackID, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.stack(tenantID, stackID) });
+    }
+  });
+}
+
+export function useUpdateStackTemplateConfigMutation(tenantID: string, stackID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (variables: { stackTemplateID: string; body: Parameters<typeof client.updateStackTemplateConfig>[2] }) =>
+      client.updateStackTemplateConfig(tenantID, variables.stackTemplateID, variables.body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.stack(tenantID, stackID) });
+    }
+  });
+}
+
+export function useUpgradeStackTemplateMutation(tenantID: string, stackID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (variables: { stackTemplateID: string; body: Parameters<typeof client.upgradeStackTemplate>[2] }) =>
+      client.upgradeStackTemplate(tenantID, variables.stackTemplateID, variables.body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.stack(tenantID, stackID) });
+    }
+  });
+}
+
+export function useStartTemplateRunMutation(tenantID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (variables: { stackTemplateID: string; body: Parameters<typeof client.startTemplateRun>[2] }) =>
+      client.startTemplateRun(tenantID, variables.stackTemplateID, variables.body),
+    onSuccess: (run) => {
+      queryClient.setQueryData(queryKeys.templateRun(tenantID, run.id), run);
+    }
+  });
+}
+
+export function useApproveRunMutation(tenantID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (runID: string) => client.approveRun(tenantID, runID),
+    onSuccess: (_data, runID) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.templateRun(tenantID, runID) });
+    }
+  });
+}
+
+export function useCancelRunMutation(tenantID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (variables: { runID: string; body: Parameters<typeof client.cancelRun>[2] }) =>
+      client.cancelRun(tenantID, variables.runID, variables.body),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.templateRun(tenantID, variables.runID) });
+    }
   });
 }

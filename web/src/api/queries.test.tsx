@@ -1,20 +1,29 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   registrationRefetchInterval,
   runRefetchInterval,
+  useAddTemplateToStackMutation,
+  useApproveRunMutation,
+  useCancelRunMutation,
+  useCreateStackMutation,
+  useRegisterTemplateMutation,
   useStacksQuery,
   useStackQuery,
+  useStartTemplateRunMutation,
   useTemplateRegistrationQuery,
   useTemplateRevisionVariablesQuery,
   useTemplateRevisionsQuery,
   useTemplateRunLogQuery,
   useTemplateRunLogsQuery,
-  useTemplateRunQuery
+  useTemplateRunQuery,
+  useUpdateStackTemplateConfigMutation,
+  useUpgradeStackTemplateMutation
 } from "./queries";
+import { queryKeys } from "./queryKeys";
 
 function wrapper(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -150,5 +159,125 @@ describe("polling-aware query hooks", () => {
     });
 
     await waitFor(() => expect(result.current.data).toBe("plan output\n"));
+  });
+});
+
+describe("mutation hooks", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("registers a template and seeds the registration query cache", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: "reg_1", status: "pending" }));
+    const queryClient = testQueryClient();
+    const { result } = renderHook(() => useRegisterTemplateMutation("tenant_123"), { wrapper: wrapper(queryClient) });
+
+    await act(async () => {
+      await result.current.mutateAsync({ repo_owner: "acme", repo_name: "infra", source_ref: "main", root_path: "." });
+    });
+
+    expect(queryClient.getQueryData(queryKeys.templateRegistration("tenant_123", "reg_1"))).toEqual({
+      id: "reg_1",
+      status: "pending"
+    });
+  });
+
+  it("creates a stack and invalidates the stacks list", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: "stack_1" }));
+    const queryClient = testQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(() => useCreateStackMutation("tenant_123"), { wrapper: wrapper(queryClient) });
+
+    await act(async () => {
+      await result.current.mutateAsync({ name: "Acme Prod", slug: "", tags: {}, default_credential_ids: [] });
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.stacks("tenant_123") });
+  });
+
+  it("installs a template on a stack and invalidates that stack's detail", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: "stack_template_1" }));
+    const queryClient = testQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(() => useAddTemplateToStackMutation("tenant_123", "stack_1"), {
+      wrapper: wrapper(queryClient)
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync({ template_revision_id: "rev_1", selected_ref: "main", config: {} });
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.stack("tenant_123", "stack_1") });
+  });
+
+  it("saves stack template config and invalidates that stack's detail", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: "stack_template_1" }));
+    const queryClient = testQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(() => useUpdateStackTemplateConfigMutation("tenant_123", "stack_1"), {
+      wrapper: wrapper(queryClient)
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync({ stackTemplateID: "stack_template_1", body: { config: { region: "us-west-2" } } });
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.stack("tenant_123", "stack_1") });
+  });
+
+  it("upgrades a stack template and invalidates that stack's detail", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: "stack_template_1" }));
+    const queryClient = testQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(() => useUpgradeStackTemplateMutation("tenant_123", "stack_1"), {
+      wrapper: wrapper(queryClient)
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync({ stackTemplateID: "stack_template_1", body: { target_template_revision_id: "rev_2" } });
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.stack("tenant_123", "stack_1") });
+  });
+
+  it("starts a run and seeds that run's query cache", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: "run_1", status: "queued" }));
+    const queryClient = testQueryClient();
+    const { result } = renderHook(() => useStartTemplateRunMutation("tenant_123"), { wrapper: wrapper(queryClient) });
+
+    await act(async () => {
+      await result.current.mutateAsync({ stackTemplateID: "stack_template_1", body: { operation: "plan" } });
+    });
+
+    expect(queryClient.getQueryData(queryKeys.templateRun("tenant_123", "run_1"))).toEqual({
+      id: "run_1",
+      status: "queued"
+    });
+  });
+
+  it("approves a run and invalidates that run's query", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
+    const queryClient = testQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(() => useApproveRunMutation("tenant_123"), { wrapper: wrapper(queryClient) });
+
+    await act(async () => {
+      await result.current.mutateAsync("run_1");
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.templateRun("tenant_123", "run_1") });
+  });
+
+  it("cancels a run and invalidates that run's query", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
+    const queryClient = testQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(() => useCancelRunMutation("tenant_123"), { wrapper: wrapper(queryClient) });
+
+    await act(async () => {
+      await result.current.mutateAsync({ runID: "run_1", body: { reason: "manual stop" } });
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.templateRun("tenant_123", "run_1") });
   });
 });
