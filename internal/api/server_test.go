@@ -33,6 +33,12 @@ func ordinaryAuthenticatedRequest(method, target string, body io.Reader) *http.R
 	return request.WithContext(ctx)
 }
 
+func requestWithGlobalRole(method, target string, body io.Reader, role string) *http.Request {
+	request := httptest.NewRequest(method, target, body)
+	ctx := authn.ContextWithPrincipal(request.Context(), authn.Principal{Subject: apiKeycloakSubject, RealmRoles: []string{role}})
+	return request.WithContext(ctx)
+}
+
 func TestHealthzReturnsOK(t *testing.T) {
 	t.Parallel()
 
@@ -1498,6 +1504,41 @@ func TestTemplateCatalogRoutesRejectOrdinaryUser(t *testing.T) {
 	}
 }
 
+func TestTemplateCatalogRoutesAllowGlobalRoles(t *testing.T) {
+	t.Parallel()
+
+	routes := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		status int
+	}{
+		{name: "register", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-revisions", body: `{"repo_owner":"acme","repo_name":"infra","source_ref":"main","root_path":"."}`, status: http.StatusAccepted},
+		{name: "list revisions", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-revisions", status: http.StatusOK},
+		{name: "registration status", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-registrations/registration_123", status: http.StatusOK},
+		{name: "revision variables", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-revisions/revision_123/variables", status: http.StatusOK},
+	}
+
+	for _, role := range []string{"platform-admin", "stack-creator"} {
+		for _, route := range routes {
+			t.Run(role+" "+route.name, func(t *testing.T) {
+				t.Parallel()
+				deps := newAPITestDependencies()
+				server := NewServer(deps.service(), configuredTenantID)
+				response := httptest.NewRecorder()
+				request := requestWithGlobalRole(route.method, route.path, strings.NewReader(route.body), role)
+
+				server.ServeHTTP(response, request)
+
+				if response.Code != route.status {
+					t.Fatalf("status = %d, want %d; body = %s", response.Code, route.status, response.Body.String())
+				}
+			})
+		}
+	}
+}
+
 func TestStackRoleRoutesUseInheritedPermissions(t *testing.T) {
 	t.Parallel()
 
@@ -1510,30 +1551,25 @@ func TestStackRoleRoutesUseInheritedPermissions(t *testing.T) {
 		status     int
 		permission authz.Permission
 	}{
+		{name: "viewer lists stacks", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks", status: http.StatusOK, permission: authz.PermissionView},
+		{name: "viewer reads stack", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123", status: http.StatusOK, permission: authz.PermissionView},
+		{name: "operator installs template", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","selected_ref":"main","config":{}}`, status: http.StatusCreated, permission: authz.PermissionOperate},
 		{name: "owner operates config", role: authz.RoleOwner, method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusOK, permission: authz.PermissionOperate},
+		{name: "operator upgrades template", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusOK, permission: authz.PermissionOperate},
 		{name: "operator starts run", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusCreated, permission: authz.PermissionOperate},
 		{name: "approver approves run", role: authz.RoleApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusNoContent, permission: authz.PermissionApprove},
+		{name: "owner cancels run", role: authz.RoleOwner, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusNoContent, permission: authz.PermissionOperate},
 		{name: "viewer reads run", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusOK, permission: authz.PermissionView},
-		{name: "unassigned cannot read run", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusNotFound, permission: authz.PermissionView},
+		{name: "approver lists run logs", role: authz.RoleApprover, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusOK, permission: authz.PermissionView},
+		{name: "viewer reads run log", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusOK, permission: authz.PermissionView},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			deps := newAPITestDependencies()
+			deps := newPermissionMatrixDependencies()
 			deps.authorizer.enforceRole = true
 			deps.authorizer.role = test.role
-			deps.stackTemplates.stackTemplate = traits.StackTemplate{
-				ID:                        "stack_template_123",
-				TenantID:                  "tenant_123",
-				StackID:                   "stack_123",
-				DesiredTemplateRevisionID: "revision_123",
-				SelectedRef:               "main",
-				WorkspaceName:             "acme-vpc",
-				Lifecycle:                 traits.StackTemplateActive,
-			}
-			deps.templates.template = traits.TemplateRevision{ID: "revision_123", TenantID: "tenant_123", Status: traits.TemplateRevisionActive}
-			deps.templateRuns.run = traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}
 			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := ordinaryAuthenticatedRequest(test.method, test.path, strings.NewReader(test.body))
@@ -1548,6 +1584,79 @@ func TestStackRoleRoutesUseInheritedPermissions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStackRoleRoutesDenyInsufficientRoles(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		role       authz.Role
+		method     string
+		path       string
+		body       string
+		status     int
+		permission authz.Permission
+	}{
+		{name: "unassigned list is empty", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks", status: http.StatusOK, permission: authz.PermissionView},
+		{name: "unassigned cannot read stack", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123", status: http.StatusNotFound, permission: authz.PermissionView},
+		{name: "viewer cannot install template", role: authz.RoleViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","selected_ref":"main","config":{}}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
+		{name: "approver cannot update config", role: authz.RoleApprover, method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
+		{name: "viewer cannot upgrade template", role: authz.RoleViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
+		{name: "approver cannot start run", role: authz.RoleApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
+		{name: "operator cannot approve run", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusForbidden, permission: authz.PermissionApprove},
+		{name: "approver cannot cancel run", role: authz.RoleApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
+		{name: "unassigned cannot read run", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusNotFound, permission: authz.PermissionView},
+		{name: "unassigned cannot list logs", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusNotFound, permission: authz.PermissionView},
+		{name: "unassigned cannot read log", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusNotFound, permission: authz.PermissionView},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			deps := newPermissionMatrixDependencies()
+			deps.authorizer.enforceRole = true
+			deps.authorizer.role = test.role
+			server := NewServer(deps.service(), configuredTenantID)
+			response := httptest.NewRecorder()
+			request := ordinaryAuthenticatedRequest(test.method, test.path, strings.NewReader(test.body))
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.status, response.Body.String())
+			}
+			if deps.authorizer.check.Permission != test.permission {
+				t.Fatalf("permission = %q, want %q", deps.authorizer.check.Permission, test.permission)
+			}
+			if deps.stackTemplateInstaller.created.ID != "" || deps.templateRuns.created.ID != "" || deps.templateRuns.approval.RunID != "" || deps.templateRuns.cancellation.RunID != "" {
+				t.Fatal("denied mutation had side effects")
+			}
+		})
+	}
+}
+
+func newPermissionMatrixDependencies() *apiTestDependencies {
+	deps := newAPITestDependencies()
+	stack := traits.Stack{ID: "stack_123", TenantID: "tenant_123", Name: "Acme", Slug: "acme", CreatedAt: time.Unix(1, 0)}
+	deps.stacks.stack = stack
+	deps.stacks.list = []traits.Stack{stack}
+	deps.stacks.view = app.StackView{Stack: stack}
+	deps.stackTemplates.stackTemplate = traits.StackTemplate{
+		ID:                        "stack_template_123",
+		TenantID:                  "tenant_123",
+		StackID:                   "stack_123",
+		DesiredTemplateRevisionID: "revision_123",
+		SelectedRef:               "main",
+		WorkspaceName:             "acme-vpc",
+		Lifecycle:                 traits.StackTemplateActive,
+	}
+	deps.templates.template = traits.TemplateRevision{ID: "revision_123", TenantID: "tenant_123", Status: traits.TemplateRevisionActive}
+	deps.templateRuns.run = traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}
+	deps.logMetadata.logs = []traits.TemplateRunLog{{TenantID: "tenant_123", RunID: "run_123", Phase: "plan"}}
+	deps.logMetadata.log = traits.TemplateRunLog{TenantID: "tenant_123", RunID: "run_123", Phase: "plan", ObjectKey: "runs/run_123/plan.log"}
+	deps.logs.content = []byte("plan output")
+	return deps
 }
 
 func TestDeniedStackMutationReturnsForbiddenWithoutSideEffects(t *testing.T) {
