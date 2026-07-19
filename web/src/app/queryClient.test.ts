@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextPollDelayMs } from "../polling";
+import { nextPollDelayMs } from "../api/polling";
 import { createQueryClient } from "./queryClient";
 
 describe("createQueryClient", () => {

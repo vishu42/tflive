@@ -1,23 +1,20 @@
 import { describe, expect, it } from "vitest";
-import type { Stack, StackTemplate, TemplateRevision, TemplateVariable } from "./api/types";
+import type { Stack, StackTemplate, TemplateRevision, TemplateVariable } from "../../api/types";
 import {
   canUpgradeStackTemplate,
   canSaveStackTemplateConfig,
   configFromVariableValues,
   findSelectedStack,
   findSelectedStackTemplate,
-  findSelectedTemplateRevision,
   nextSelectedStackID,
   nextSelectedStackTemplateID,
-  nextSelectedTemplateRevisionID,
   stackLabel,
   stackTemplateLabel,
-  templateRevisionLabel,
   upsertStackTemplate,
   variableValuesFromConfig
-} from "./workflowState";
+} from "./stackWorkflow";
 
-describe("workflow state helpers", () => {
+describe("stack workflow helpers", () => {
   it("keeps a newly created stack selected after refreshing from the database", () => {
     const oldStack = stack({ id: "stack_old", name: "Old Stack", slug: "old-stack" });
     const createdStack = stack({ id: "stack_new", name: "New Stack", slug: "new-stack" });
@@ -27,28 +24,16 @@ describe("workflow state helpers", () => {
     expect(findSelectedStack(stacks, createdStack.id)).toEqual(createdStack);
   });
 
-  it("falls back to the first hydrated stack and template revision when the current selection is absent", () => {
+  it("falls back to the first hydrated stack when the current selection is absent", () => {
     const stacks = [stack({ id: "stack_123", name: "Prod", slug: "prod" })];
-    const templateRevisions = [templateRevision({ id: "template_123", repo_name: "infra" })];
 
     expect(nextSelectedStackID(stacks, "missing_stack")).toBe("stack_123");
-    expect(nextSelectedTemplateRevisionID(templateRevisions, "missing_template")).toBe("template_123");
   });
 
-  it("formats menu labels from persisted stack and template revision rows", () => {
+  it("formats menu labels from persisted stack rows", () => {
     const selectedStack = stack({ id: "stack_123", name: "Prod", slug: "prod" });
-    const selectedTemplateRevision = templateRevision({
-      id: "template_123",
-      repo_owner: "acme",
-      repo_name: "infra",
-      source_ref: "main",
-      resolved_commit_sha: "abcdef1234567890",
-      name: ""
-    });
 
     expect(stackLabel(selectedStack)).toBe("Prod (prod)");
-    expect(templateRevisionLabel(selectedTemplateRevision)).toBe("acme/infra @ main · abcdef1");
-    expect(findSelectedTemplateRevision([selectedTemplateRevision], selectedTemplateRevision.id)).toEqual(selectedTemplateRevision);
   });
 
   it("keeps the active stack template when it still belongs to the selected stack", () => {

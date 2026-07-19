@@ -1,15 +1,8 @@
-import type { Stack, StackTemplate, TemplateRevision, TemplateVariable } from "./api/types";
-
-type Identified = {
-  id: string;
-};
+import type { Stack, StackTemplate, TemplateRevision, TemplateVariable } from "../../api/types";
+import { nextSelectedID } from "../../shared/listSelection";
 
 export function nextSelectedStackID(stacks: Stack[], selectedStackID: string): string {
   return nextSelectedID(stacks, selectedStackID);
-}
-
-export function nextSelectedTemplateRevisionID(templateRevisions: TemplateRevision[], selectedTemplateRevisionID: string): string {
-  return nextSelectedID(templateRevisions, selectedTemplateRevisionID);
 }
 
 export function nextSelectedStackTemplateID(stackTemplates: StackTemplate[], selectedStackTemplateID: string): string {
@@ -20,22 +13,12 @@ export function findSelectedStack(stacks: Stack[], selectedStackID: string): Sta
   return stacks.find((stack) => stack.id === selectedStackID) ?? null;
 }
 
-export function findSelectedTemplateRevision(templateRevisions: TemplateRevision[], selectedTemplateRevisionID: string): TemplateRevision | null {
-  return templateRevisions.find((templateRevision) => templateRevision.id === selectedTemplateRevisionID) ?? null;
-}
-
 export function findSelectedStackTemplate(stackTemplates: StackTemplate[], selectedStackTemplateID: string): StackTemplate | null {
   return stackTemplates.find((stackTemplate) => stackTemplate.id === selectedStackTemplateID) ?? null;
 }
 
 export function stackLabel(stack: Stack): string {
   return stack.slug ? `${stack.name} (${stack.slug})` : stack.name;
-}
-
-export function templateRevisionLabel(templateRevision: TemplateRevision): string {
-  const name = templateRevision.name.trim() || `${templateRevision.repo_owner}/${templateRevision.repo_name}`;
-  const shortSHA = shortCommitSHA(templateRevision.resolved_commit_sha);
-  return shortSHA ? `${name} @ ${templateRevision.source_ref} · ${shortSHA}` : `${name} @ ${templateRevision.source_ref}`;
 }
 
 export function stackTemplateLabel(stackTemplate: StackTemplate): string {
@@ -106,15 +89,4 @@ function areStringRecordEqual(left: Record<string, string>, right: Record<string
     }
   }
   return true;
-}
-
-function shortCommitSHA(commitSHA: string): string {
-  return commitSHA.trim().slice(0, 7);
-}
-
-function nextSelectedID<T extends Identified>(items: T[], selectedID: string): string {
-  if (selectedID && items.some((item) => item.id === selectedID)) {
-    return selectedID;
-  }
-  return items[0]?.id ?? "";
 }

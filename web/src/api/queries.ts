@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as client from "./client";
 import { queryKeys } from "./queryKeys";
-import { isTerminalRegistrationStatus, isTerminalRunStatus } from "../polling";
+import { isTerminalRegistrationStatus, isTerminalRunStatus } from "./polling";
 import type { TemplateRegistration, TemplateRegistrationStatus, TemplateRun, TemplateRunStatus } from "./types";
 
 export function useStacksQuery(tenantID: string) {

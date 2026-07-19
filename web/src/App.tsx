@@ -1,20 +1,8 @@
-import {
-  ArrowUpCircle,
-  CheckCircle2,
-  CircleStop,
-  Loader2,
-  Play,
-  RefreshCw,
-  Save,
-  Send,
-  ShieldCheck,
-  SquareTerminal,
-  XCircle
-} from "lucide-react";
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ApiRequestError } from "./api/client";
+import { isTerminalRunStatus } from "./api/polling";
 import { queryKeys } from "./api/queryKeys";
 import {
   useAddTemplateToStackMutation,
@@ -35,22 +23,24 @@ import {
   useUpgradeStackTemplateMutation
 } from "./api/queries";
 import { tenantID } from "./config";
-import { isTerminalRunStatus } from "./polling";
+import InstalledTemplatePanel from "./features/stacks/InstalledTemplatePanel";
+import StackPanel from "./features/stacks/StackPanel";
+import VariablesPanel from "./features/stacks/VariablesPanel";
 import {
   canUpgradeStackTemplate,
   canSaveStackTemplateConfig,
   configFromVariableValues,
   findSelectedStack,
   findSelectedStackTemplate,
-  findSelectedTemplateRevision,
   nextSelectedStackID,
   nextSelectedStackTemplateID,
-  nextSelectedTemplateRevisionID,
-  stackLabel,
-  stackTemplateLabel,
-  templateRevisionLabel,
   variableValuesFromConfig
-} from "./workflowState";
+} from "./features/stacks/stackWorkflow";
+import TemplateRegistryPanel from "./features/templates/TemplateRegistryPanel";
+import { findSelectedTemplateRevision, nextSelectedTemplateRevisionID } from "./features/templates/templateWorkflow";
+import RunLogsPanel from "./features/runs/RunLogsPanel";
+import RunsPanel from "./features/runs/RunsPanel";
+import IdsPanel from "./shared/IdsPanel";
 
 export default function App() {
   const [repoOwner, setRepoOwner] = useState("hashicorp");
@@ -370,271 +360,96 @@ export default function App() {
         {errorMessage && <div className="alert">{errorMessage}</div>}
 
         <div className="workflow-grid">
-          <section className="panel">
-            <h2>Template</h2>
-            <label className="selector-label">
-              Saved template
-              <select value={selectedTemplateRevisionID} onChange={(event) => setSelectedTemplateRevisionID(event.target.value)}>
-                <option value="">Select template</option>
-                {templateRevisions.map((templateRevision) => (
-                  <option key={templateRevision.id} value={templateRevision.id}>
-                    {templateRevisionLabel(templateRevision)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <form className="form-grid" onSubmit={handleRegister}>
-              <label>
-                Owner
-                <input value={repoOwner} onChange={(event) => setRepoOwner(event.target.value)} />
-              </label>
-              <label>
-                Repository
-                <input value={repoName} onChange={(event) => setRepoName(event.target.value)} />
-              </label>
-              <label>
-                Ref
-                <input value={sourceRef} onChange={(event) => setSourceRef(event.target.value)} />
-              </label>
-              <label>
-                Root path
-                <input value={rootPath} onChange={(event) => setRootPath(event.target.value)} />
-              </label>
-              <button className="primary-button" disabled={busyAction === "register"} type="submit">
-                {busyAction === "register" ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
-                Register
-              </button>
-            </form>
-            <StatusRow label="Template revision" value={selectedTemplateRevision?.status ?? "not selected"} />
-            <StatusRow label="Registration" value={registration?.status ?? "not started"} />
-            {registration?.error_summary && <p className="error-text">{registration.error_summary}</p>}
-          </section>
+          <TemplateRegistryPanel
+            templateRevisions={templateRevisions}
+            selectedTemplateRevisionID={selectedTemplateRevisionID}
+            onSelectTemplateRevision={setSelectedTemplateRevisionID}
+            repoOwner={repoOwner}
+            onRepoOwnerChange={setRepoOwner}
+            repoName={repoName}
+            onRepoNameChange={setRepoName}
+            sourceRef={sourceRef}
+            onSourceRefChange={setSourceRef}
+            rootPath={rootPath}
+            onRootPathChange={setRootPath}
+            onSubmit={handleRegister}
+            busy={busyAction === "register"}
+            templateRevisionStatus={selectedTemplateRevision?.status ?? "not selected"}
+            registrationStatus={registration?.status ?? "not started"}
+            registrationErrorSummary={registration?.error_summary ?? ""}
+          />
 
-          <section className="panel">
-            <h2>Stack</h2>
-            <label className="selector-label">
-              Saved stack
-              <select value={selectedStackID} onChange={(event) => setSelectedStackID(event.target.value)}>
-                <option value="">Select stack</option>
-                {stacks.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {stackLabel(item)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <form className="form-grid" onSubmit={handleCreateStack}>
-              <label>
-                Name
-                <input value={stackName} onChange={(event) => setStackName(event.target.value)} />
-              </label>
-              <label>
-                Slug
-                <input value={stackSlug} onChange={(event) => setStackSlug(event.target.value)} placeholder="optional" />
-              </label>
-              <button className="primary-button" disabled={busyAction === "stack"} type="submit">
-                {busyAction === "stack" ? <Loader2 size={16} className="spin" /> : <CheckCircle2 size={16} />}
-                Create stack
-              </button>
-            </form>
-            <StatusRow label="Stack" value={stack?.slug || selectedStack?.slug || "not selected"} />
-            <div className="stack-template-list">
-              <div className="stack-template-list-header">
-                <h3>Stack templates</h3>
-                <span>{stackTemplates.length}</span>
-              </div>
-              {stackTemplates.length === 0 ? (
-                <p className="muted">No stack templates installed</p>
-              ) : (
-                <div className="stack-template-items">
-                  {stackTemplates.map((item) => (
-                    <button
-                      className={item.id === selectedStackTemplateID ? "active" : ""}
-                      key={item.id}
-                      onClick={() => handleSelectStackTemplate(item.id)}
-                      type="button"
-                    >
-                      <span>{stackTemplateLabel(item)}</span>
-                      <small>{item.desired_template_revision_id}</small>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </section>
+          <StackPanel
+            stacks={stacks}
+            selectedStackID={selectedStackID}
+            onSelectStack={setSelectedStackID}
+            stackName={stackName}
+            onStackNameChange={setStackName}
+            stackSlug={stackSlug}
+            onStackSlugChange={setStackSlug}
+            onSubmit={handleCreateStack}
+            busy={busyAction === "stack"}
+            stackStatus={stack?.slug || selectedStack?.slug || "not selected"}
+            stackTemplates={stackTemplates}
+            selectedStackTemplateID={selectedStackTemplateID}
+            onSelectStackTemplate={handleSelectStackTemplate}
+          />
 
-          <section className="panel">
-            <h2>Installed template</h2>
-            {installedTemplate ? (
-              <dl className="revision-grid">
-                <dt>Source</dt>
-                <dd>{installedTemplate.source_template_id || "-"}</dd>
-                <dt>Desired</dt>
-                <dd>{installedTemplate.desired_template_revision_id || "-"}</dd>
-                <dt>Applied</dt>
-                <dd>{installedTemplate.last_applied_template_revision_id || "-"}</dd>
-                <dt>Last run</dt>
-                <dd>{installedTemplate.last_applied_run_id || "-"}</dd>
-              </dl>
-            ) : (
-              <p className="muted">No stack template selected</p>
-            )}
-          </section>
+          <InstalledTemplatePanel installedTemplate={installedTemplate} />
 
-          <section className="panel wide">
-            <h2>Variables</h2>
-            {variables.length === 0 ? (
-              <p className="muted">No variables loaded</p>
-            ) : (
-              <div className="variable-grid">
-                {variables.map((variable) => (
-                  <label key={variable.name}>
-                    {variable.name}
-                    {variable.required ? " *" : ""}
-                    <input
-                      value={variableValues[variable.name] ?? ""}
-                      onChange={(event) => {
-                        setVariableValues((current) => ({ ...current, [variable.name]: event.target.value }))
-                      }}
-                      placeholder={variable.type_expression || "value"}
-                    />
-                  </label>
-                ))}
-              </div>
-            )}
-            <div className="button-row form-actions">
-              <button className="secondary-button" disabled={!canInstall || busyAction === "install"} onClick={handleInstallTemplate} type="button">
-                {busyAction === "install" ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
-                Install template
-              </button>
-              <button className="secondary-button" disabled={!canSaveConfig || busyAction === "config"} onClick={handleSaveStackTemplateConfig} type="button">
-                {busyAction === "config" ? <Loader2 size={16} className="spin" /> : <Save size={16} />}
-                Save config
-              </button>
-              <button className="primary-button" disabled={!canUpgrade || busyAction === "upgrade"} onClick={handleUpgradeStackTemplate} type="button">
-                {busyAction === "upgrade" ? <Loader2 size={16} className="spin" /> : <ArrowUpCircle size={16} />}
-                Upgrade
-              </button>
-            </div>
-            <StatusRow label="Installed template" value={installedTemplate?.workspace_name ?? "not installed"} />
-          </section>
+          <VariablesPanel
+            variables={variables}
+            variableValues={variableValues}
+            onVariableValueChange={(name, value) => {
+              setVariableValues((current) => ({ ...current, [name]: value }));
+            }}
+            canInstall={canInstall}
+            onInstall={handleInstallTemplate}
+            installBusy={busyAction === "install"}
+            canSaveConfig={canSaveConfig}
+            onSaveConfig={handleSaveStackTemplateConfig}
+            configBusy={busyAction === "config"}
+            canUpgrade={canUpgrade}
+            onUpgrade={handleUpgradeStackTemplate}
+            upgradeBusy={busyAction === "upgrade"}
+            installedTemplateStatus={installedTemplate?.workspace_name ?? "not installed"}
+          />
 
-          <section className="panel">
-            <h2>Runs</h2>
-            <div className="button-row">
-              <button className="primary-button" disabled={!canPlan || busyAction === "plan"} onClick={() => handleStartRun("plan")} type="button">
-                {busyAction === "plan" ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
-                Plan
-              </button>
-              <button className="primary-button" disabled={!canApply || busyAction === "apply"} onClick={() => handleStartRun("apply")} type="button">
-                {busyAction === "apply" ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
-                Apply
-              </button>
-              <button className="secondary-button" disabled={!canApprove || busyAction === "approve"} onClick={handleApproveApply} type="button">
-                {busyAction === "approve" ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
-                Approve
-              </button>
-              <button className="secondary-button" disabled={!canCancel || busyAction === "cancel"} onClick={handleCancelRun} type="button">
-                {busyAction === "cancel" ? <Loader2 size={16} className="spin" /> : <CircleStop size={16} />}
-                Cancel
-              </button>
-            </div>
-            <div className="run-tabs">
-              <button className={selectedRunKind === "plan" ? "active" : ""} onClick={() => setSelectedRunKind("plan")} type="button">
-                Plan
-              </button>
-              <button className={selectedRunKind === "apply" ? "active" : ""} onClick={() => setSelectedRunKind("apply")} type="button">
-                Apply
-              </button>
-            </div>
-            <StatusRow label="Current run" value={currentRun?.status ?? "not started"} />
-            {currentRun?.error_summary && <p className="error-text">{currentRun.error_summary}</p>}
-          </section>
+          <RunsPanel
+            canPlan={canPlan}
+            onPlan={() => handleStartRun("plan")}
+            planBusy={busyAction === "plan"}
+            canApply={canApply}
+            onApply={() => handleStartRun("apply")}
+            applyBusy={busyAction === "apply"}
+            canApprove={canApprove}
+            onApprove={handleApproveApply}
+            approveBusy={busyAction === "approve"}
+            canCancel={canCancel}
+            onCancel={handleCancelRun}
+            cancelBusy={busyAction === "cancel"}
+            selectedRunKind={selectedRunKind}
+            onSelectRunKind={setSelectedRunKind}
+            currentRunStatus={currentRun?.status ?? "not started"}
+            currentRunErrorSummary={currentRun?.error_summary ?? ""}
+          />
 
-          <section className="panel wide log-panel">
-            <h2>
-              <SquareTerminal size={18} />
-              Logs
-            </h2>
-            <div className="phase-row">
-              {logs.map((log) => (
-                <button className={selectedPhase === log.phase ? "active" : ""} key={log.phase} onClick={() => setSelectedPhase(log.phase)} type="button">
-                  {log.phase}
-                </button>
-              ))}
-            </div>
-            <pre>{logBody || "No log body"}</pre>
-          </section>
+          <RunLogsPanel logs={logs} selectedPhase={selectedPhase} onSelectPhase={setSelectedPhase} logBody={logBody} />
 
-          <section className="panel wide">
-            <h2>IDs</h2>
-            <dl className="id-grid">
-              <dt>Registration</dt>
-              <dd>{registration?.id ?? "-"}</dd>
-              <dt>Template revision</dt>
-              <dd>{selectedTemplateRevision?.id ?? registration?.template_revision_id ?? "-"}</dd>
-              <dt>Stack</dt>
-              <dd>{(stack?.id ?? selectedStackID) || "-"}</dd>
-              <dt>Stack template</dt>
-              <dd>{installedTemplate?.id ?? "-"}</dd>
-              <dt>Desired revision</dt>
-              <dd>{installedTemplate?.desired_template_revision_id ?? "-"}</dd>
-              <dt>Applied revision</dt>
-              <dd>{installedTemplate?.last_applied_template_revision_id || "-"}</dd>
-              <dt>Plan run</dt>
-              <dd>{planRun?.id ?? "-"}</dd>
-              <dt>Apply run</dt>
-              <dd>{applyRun?.id ?? "-"}</dd>
-            </dl>
-          </section>
+          <IdsPanel
+            registrationID={registration?.id ?? "-"}
+            templateRevisionID={selectedTemplateRevision?.id ?? registration?.template_revision_id ?? "-"}
+            stackID={(stack?.id ?? selectedStackID) || "-"}
+            stackTemplateID={installedTemplate?.id ?? "-"}
+            desiredRevisionID={installedTemplate?.desired_template_revision_id ?? "-"}
+            appliedRevisionID={installedTemplate?.last_applied_template_revision_id || "-"}
+            planRunID={planRun?.id ?? "-"}
+            applyRunID={applyRun?.id ?? "-"}
+          />
         </div>
       </section>
     </main>
   );
-}
-
-function StatusRow({ label, value }: { label: string; value: string }) {
-  let icon = <CheckCircle2 size={15} />;
-  if (value === "failed" || value === "invalid") {
-    icon = <XCircle size={15} />;
-  } else if (value.startsWith("not ") || inProgressStatus(value)) {
-    icon = <RefreshCw size={15} />;
-  }
-
-  return (
-    <div className="status-row">
-      <span>{label}</span>
-      <strong>
-        {icon}
-        {value}
-      </strong>
-    </div>
-  );
-}
-
-function inProgressStatus(value: string): boolean {
-  return [
-    "pending",
-    "pending_validation",
-    "running",
-    "validating",
-    "queued",
-    "locked",
-    "workspace_prepared",
-    "source_fetched",
-    "init",
-    "workspace_selected",
-    "planned",
-    "waiting_approval",
-    "approved",
-    "apply_started",
-    "applied",
-    "destroy_started",
-    "destroyed",
-    "cancel_requested",
-    "canceling",
-    "lock_released"
-  ].includes(value);
 }
 
 function messageFromError(error: unknown): string {
