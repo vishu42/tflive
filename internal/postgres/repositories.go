@@ -1228,6 +1228,18 @@ func (store *Store) RequestTemplateRunCancellation(ctx context.Context, cancella
 	return nil
 }
 
+func (store *Store) AppendAuditEvent(ctx context.Context, event traits.SecurityAuditEvent) error {
+	_, err := store.pool.Exec(ctx,
+		`INSERT INTO security_audit_log
+			(actor_subject, action, target_user, tenant_id, stack_id, old_role, new_role, outcome, correlation_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		event.ActorSubject, event.Action, event.TargetUser,
+		event.TenantID, event.StackID, event.OldRole, event.NewRole,
+		event.Outcome, event.CorrelationID,
+	)
+	return err
+}
+
 func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.TemplateRunStatusActivityInput) error {
 	if recordsStackTemplateLastApplied(input) {
 		tx, err := store.pool.Begin(ctx)

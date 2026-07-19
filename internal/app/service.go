@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,6 +126,12 @@ type WorkflowDispatcher interface {
 	CancelTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, signal traits.CancelSignal) error
 }
 
+// AuditRepository appends security audit events. It exposes no update or
+// delete methods, enforcing append-only semantics through the interface.
+type AuditRepository interface {
+	AppendAuditEvent(ctx context.Context, event traits.SecurityAuditEvent) error
+}
+
 // TemplateRunIDGenerator creates TemplateRun identifiers.
 type TemplateRunIDGenerator interface {
 	NewTemplateRunID() traits.TemplateRunID
@@ -174,6 +181,7 @@ type Service struct {
 	RunIDs                   TemplateRunIDGenerator
 	RegistrationIDs          TemplateRegistrationIDGenerator
 	Clock                    Clock
+	Audit                    AuditRepository
 }
 
 // NewService creates a Service from app-owned dependencies.
@@ -199,6 +207,16 @@ func NewService(service Service) *Service {
 	}
 
 	return &service
+}
+
+func (service *Service) auditError(ctx context.Context, event traits.SecurityAuditEvent) {
+	if service.Audit == nil {
+		return
+	}
+	if err := service.Audit.AppendAuditEvent(ctx, event); err != nil {
+		log.Printf("security audit write failed: action=%s actor=%s outcome=%s err=%v",
+			event.Action, event.ActorSubject, event.Outcome, err)
+	}
 }
 
 // RegisterTemplateCommand asks the app to register a Terraform template source.
@@ -431,6 +449,17 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		}
 	}
 
+	service.auditError(ctx, traits.SecurityAuditEvent{
+		ActorSubject:  string(actor),
+		Action:        traits.AuditActionGrant,
+		TargetUser:    string(actor),
+		TenantID:      command.TenantID,
+		StackID:       stack.ID,
+		NewRole:       "owner",
+		Outcome:       traits.AuditOutcomeSuccess,
+		CorrelationID: "",
+	})
+
 	return stack, nil
 }
 
@@ -449,6 +478,13 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 	}
 
 	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionOperate, ErrForbidden); err != nil {
+		service.auditError(ctx, traits.SecurityAuditEvent{
+			ActorSubject:  string(actor),
+			Action:        traits.AuditActionFailedAccessAttempt,
+			TenantID:      command.TenantID,
+			StackID:       command.StackID,
+			Outcome:       traits.AuditOutcomeFailure,
+		})
 		return traits.StackTemplate{}, err
 	}
 	stack, err := service.Stacks.GetStack(ctx, command.TenantID, command.StackID)
@@ -508,6 +544,13 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 
 	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionOperate, ErrForbidden)
 	if err != nil {
+		service.auditError(ctx, traits.SecurityAuditEvent{
+			ActorSubject:  string(actor),
+			Action:        traits.AuditActionFailedAccessAttempt,
+			TenantID:      command.TenantID,
+			StackID:       "",
+			Outcome:       traits.AuditOutcomeFailure,
+		})
 		return traits.TemplateRun{}, fmt.Errorf("get stack template: %w", err)
 	}
 	if stackTemplate.Lifecycle != traits.StackTemplateActive {
@@ -558,7 +601,8 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 
 // UpdateStackTemplateConfig validates and saves desired config for an installed template.
 func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command UpdateStackTemplateConfigCommand) (traits.StackTemplate, error) {
-	if _, err := authenticatedActor(ctx); err != nil {
+	actor, err := authenticatedActor(ctx)
+	if err != nil {
 		return traits.StackTemplate{}, err
 	}
 	if err := validateUpdateStackTemplateConfigCommand(command); err != nil {
@@ -567,6 +611,12 @@ func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command U
 
 	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionOperate, ErrForbidden)
 	if err != nil {
+		service.auditError(ctx, traits.SecurityAuditEvent{
+			ActorSubject:  string(actor),
+			Action:        traits.AuditActionFailedAccessAttempt,
+			TenantID:      command.TenantID,
+			Outcome:       traits.AuditOutcomeFailure,
+		})
 		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
 	}
 	if stackTemplate.Lifecycle != traits.StackTemplateActive {
@@ -595,7 +645,8 @@ func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command U
 
 // UpgradeStackTemplate changes desired revision for an existing installed template.
 func (service *Service) UpgradeStackTemplate(ctx context.Context, command UpgradeStackTemplateCommand) (traits.StackTemplate, error) {
-	if _, err := authenticatedActor(ctx); err != nil {
+	actor, err := authenticatedActor(ctx)
+	if err != nil {
 		return traits.StackTemplate{}, err
 	}
 	if err := validateUpgradeStackTemplateCommand(command); err != nil {
@@ -604,6 +655,12 @@ func (service *Service) UpgradeStackTemplate(ctx context.Context, command Upgrad
 
 	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionOperate, ErrForbidden)
 	if err != nil {
+		service.auditError(ctx, traits.SecurityAuditEvent{
+			ActorSubject:  string(actor),
+			Action:        traits.AuditActionFailedAccessAttempt,
+			TenantID:      command.TenantID,
+			Outcome:       traits.AuditOutcomeFailure,
+		})
 		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
 	}
 	if stackTemplate.Lifecycle != traits.StackTemplateActive {
