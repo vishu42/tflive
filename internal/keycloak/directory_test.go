@@ -278,8 +278,7 @@ func TestDirectoryClientRedactsSecrets(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		body, _ := io.ReadAll(io.LimitReader(r.Body, 1024))
-		_ = body
+		_, _ = io.ReadAll(io.LimitReader(r.Body, 1024))
 		_, _ = io.WriteString(w, "my-secret-value in error response")
 	}))
 	defer server.Close()

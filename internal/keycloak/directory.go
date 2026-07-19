@@ -119,6 +119,7 @@ func (c *DirectoryClient) SearchUsers(ctx context.Context, query string, first, 
 		return nil, fmt.Errorf("build search request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.accessToken)
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -146,20 +147,5 @@ func (c *DirectoryClient) SearchUsers(ctx context.Context, query string, first, 
 }
 
 func (c *DirectoryClient) buildURL(segments []string, query url.Values) (*url.URL, error) {
-	escaped := make([]string, len(segments))
-	for i, segment := range segments {
-		if segment == "" {
-			return nil, fmt.Errorf("path segment %d is empty", i)
-		}
-		escaped[i] = url.PathEscape(segment)
-	}
-	raw := strings.TrimRight(c.adminURL.String(), "/") + "/" + strings.Join(escaped, "/")
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return nil, err
-	}
-	if query != nil {
-		parsed.RawQuery = query.Encode()
-	}
-	return parsed, nil
+	return buildAdminURL(c.adminURL, segments, query)
 }
