@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/authn"
+	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -1462,6 +1463,189 @@ func TestListTemplateRunLogsChecksRunOwnershipBeforeListingMetadata(t *testing.T
 	}
 	if metadata.gotListRunID != traits.TemplateRunID("run_123") {
 		t.Fatalf("metadata run lookup = %q, want run_123", metadata.gotListRunID)
+	}
+}
+
+type recordingAuditRepository struct {
+	events []traits.SecurityAuditEvent
+}
+
+func (repository *recordingAuditRepository) AppendAuditEvent(_ context.Context, event traits.SecurityAuditEvent) error {
+	repository.events = append(repository.events, event)
+	return nil
+}
+
+type failingAuditRepository struct{}
+
+func (failingAuditRepository) AppendAuditEvent(_ context.Context, _ traits.SecurityAuditEvent) error {
+	return errors.New("database unavailable")
+}
+
+func TestCreateStackAuditsOwnerGrant(t *testing.T) {
+	t.Parallel()
+
+	ctx := authenticatedContext()
+	now := time.Date(2026, 7, 6, 13, 30, 0, 0, time.UTC)
+	audit := &recordingAuditRepository{}
+	service := NewService(Service{
+		Stacks:     &recordingStackRepository{},
+		Authorizer: &recordingAuthorizer{},
+		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
+		Clock:      fixedClock{now: now},
+		Audit:      audit,
+	})
+
+	_, err := service.CreateStack(ctx, CreateStackCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		Name:     "Acme Prod",
+		Tags:     map[string]string{"env": "prod"},
+	})
+	if err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+
+	if len(audit.events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(audit.events))
+	}
+	event := audit.events[0]
+	if event.ActorSubject != keycloakSubject {
+		t.Fatalf("actor_subject = %q, want %q", event.ActorSubject, keycloakSubject)
+	}
+	if event.Action != traits.AuditActionGrant {
+		t.Fatalf("action = %q, want %q", event.Action, traits.AuditActionGrant)
+	}
+	if event.TargetUser != keycloakSubject {
+		t.Fatalf("target_user = %q, want %q", event.TargetUser, keycloakSubject)
+	}
+	if event.TenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant_id = %q, want tenant_123", event.TenantID)
+	}
+	if event.StackID != traits.StackID("stack_123") {
+		t.Fatalf("stack_id = %q, want stack_123", event.StackID)
+	}
+	if event.NewRole != "owner" {
+		t.Fatalf("new_role = %q, want owner", event.NewRole)
+	}
+	if event.Outcome != traits.AuditOutcomeSuccess {
+		t.Fatalf("outcome = %q, want %q", event.Outcome, traits.AuditOutcomeSuccess)
+	}
+}
+
+func TestCreateStackAuditWriteFailureDoesNotBlockMutation(t *testing.T) {
+	t.Parallel()
+
+	ctx := authenticatedContext()
+	service := NewService(Service{
+		Stacks:     &recordingStackRepository{},
+		Authorizer: &recordingAuthorizer{},
+		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
+		Clock:      fixedClock{now: time.Now()},
+		Audit:      failingAuditRepository{},
+	})
+
+	stack, err := service.CreateStack(ctx, CreateStackCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		Name:     "Acme Prod",
+		Tags:     map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+	if stack.ID != traits.StackID("stack_123") {
+		t.Fatalf("stack ID = %q, want stack_123", stack.ID)
+	}
+}
+
+func TestCreateStackWithNilAuditRepositoryDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	ctx := authenticatedContext()
+	service := NewService(Service{
+		Stacks:     &recordingStackRepository{},
+		Authorizer: &recordingAuthorizer{},
+		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
+		Clock:      fixedClock{now: time.Now()},
+		Audit:      nil,
+	})
+
+	_, err := service.CreateStack(ctx, CreateStackCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		Name:     "Acme Prod",
+		Tags:     map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+}
+
+type denyingAuthorizer struct{}
+
+func (denyingAuthorizer) Check(_ context.Context, _ authz.CheckRequest) (authz.CheckResult, error) {
+	return authz.CheckResult{Allowed: false}, nil
+}
+func (denyingAuthorizer) BatchCheck(_ context.Context, _ authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
+	return authz.BatchCheckResult{}, nil
+}
+func (denyingAuthorizer) ListAccessibleStacks(_ context.Context, _ authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
+	return authz.ListAccessibleStacksResult{}, nil
+}
+func (denyingAuthorizer) ListGrants(_ context.Context, _ authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
+	return authz.ListGrantsResult{}, nil
+}
+func (denyingAuthorizer) WriteRelationships(_ context.Context, _ authz.Mutation) error {
+	return nil
+}
+func (denyingAuthorizer) DeleteRelationships(_ context.Context, _ authz.Mutation) error {
+	return nil
+}
+
+func TestAddTemplateToStackAuditsAuthorizationDenial(t *testing.T) {
+	t.Parallel()
+
+	audit := &recordingAuditRepository{}
+	service := NewService(Service{
+		Authorizer: &denyingAuthorizer{},
+		Stacks: &recordingStackRepository{
+			stack: traits.Stack{ID: "stack_123", TenantID: "tenant_123", Slug: "acme-prod"},
+		},
+		TemplateRevisionMetadata: &recordingTemplateRepository{
+			template: traits.TemplateRevision{ID: "template_123", TenantID: "tenant_123", Status: traits.TemplateRevisionActive},
+		},
+		TemplateRevisions: &recordingTemplateRepository{
+			variables: []traits.TemplateVariable{{Name: "region", Required: true, HasDefault: true}},
+		},
+		StackTemplateInstaller: &recordingStackTemplateInstaller{},
+		StackTemplateIDs:       fixedStackTemplateIDGenerator{id: traits.StackTemplateID("stack_template_a1b2c3d4")},
+		Audit:                  audit,
+	})
+
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{
+		Subject: keycloakSubject, RealmRoles: []string{"stack-creator"},
+	})
+
+	_, err := service.AddTemplateToStack(ctx, AddTemplateToStackCommand{
+		TenantID:           traits.TenantID("tenant_123"),
+		StackID:            traits.StackID("stack_123"),
+		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+		SelectedRef:        "main",
+		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+	})
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("error = %v, want ErrForbidden", err)
+	}
+
+	if len(audit.events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(audit.events))
+	}
+	event := audit.events[0]
+	if event.Action != traits.AuditActionFailedAccessAttempt {
+		t.Fatalf("action = %q, want %q", event.Action, traits.AuditActionFailedAccessAttempt)
+	}
+	if event.Outcome != traits.AuditOutcomeFailure {
+		t.Fatalf("outcome = %q, want %q", event.Outcome, traits.AuditOutcomeFailure)
+	}
+	if event.ActorSubject != keycloakSubject {
+		t.Fatalf("actor_subject = %q, want %q", event.ActorSubject, keycloakSubject)
 	}
 }
 

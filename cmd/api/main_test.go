@@ -649,6 +649,10 @@ func (recordingStore) GetTemplateRevisionVariables(context.Context, traits.Tenan
 	return nil, nil
 }
 
+func (recordingStore) AppendAuditEvent(context.Context, traits.SecurityAuditEvent) error {
+	return nil
+}
+
 type recordingTemplateRunLogReader struct{}
 
 func (recordingTemplateRunLogReader) ReadTemplateRunLog(context.Context, traits.TemplateRunLog) ([]byte, error) {

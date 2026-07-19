@@ -32,6 +32,7 @@ var (
 	_ app.TemplateRunRepository              = (*Store)(nil)
 	_ app.TemplateRegistrationRepository     = (*Store)(nil)
 	_ app.TemplateRevisionRepository         = (*Store)(nil)
+	_ app.AuditRepository                     = (*Store)(nil)
 	_ dispatch.Outbox                        = (*Store)(nil)
 	_ interface {
 		RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error
@@ -62,6 +63,7 @@ func TestMigrateAppliesSchema(t *testing.T) {
 		"template_registrations",
 		"template_variables",
 		"workflow_outbox",
+		"security_audit_log",
 	} {
 		table := table
 		t.Run(table, func(t *testing.T) {
@@ -135,6 +137,38 @@ func TestAuthorizationOutboxMigrationDefinesDurablePendingQueue(t *testing.T) {
 	} {
 		if !strings.Contains(sql, snippet) {
 			t.Fatalf("migration 0008 is missing durable outbox snippet %q", snippet)
+		}
+	}
+}
+
+func TestSecurityAuditLogMigrationDefinesAppendOnlyTable(t *testing.T) {
+	t.Parallel()
+
+	migration, err := migrationFiles.ReadFile("migrations/0009_security_audit.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	sql := strings.ToLower(string(migration))
+
+	for _, snippet := range []string{
+		"create table security_audit_log",
+		"id              bigserial primary key",
+		"recorded_at     timestamptz not null default now()",
+		"actor_subject   text not null",
+		"action          text not null",
+		"target_user     text not null default ''",
+		"tenant_id       text not null",
+		"stack_id        text not null default ''",
+		"old_role        text not null default ''",
+		"new_role        text not null default ''",
+		"outcome         text not null check (outcome in ('success', 'failure'))",
+		"correlation_id  text not null default ''",
+		"security_audit_log_actor_idx",
+		"security_audit_log_tenant_idx",
+		"security_audit_log_stack_idx",
+	} {
+		if !strings.Contains(sql, snippet) {
+			t.Fatalf("migration 0009 is missing snippet %q", snippet)
 		}
 	}
 }
@@ -2124,4 +2158,133 @@ func openTestPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Cleanup(pool.Close)
 
 	return pool
+}
+
+func TestAppendAuditEventSuccess(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+
+	event := traits.SecurityAuditEvent{
+		ActorSubject:  "user:6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91",
+		Action:        traits.AuditActionGrant,
+		TargetUser:    "user:target-subject",
+		TenantID:      traits.TenantID("tenant_123"),
+		StackID:       traits.StackID("stack_123"),
+		OldRole:       "",
+		NewRole:       "owner",
+		Outcome:       traits.AuditOutcomeSuccess,
+		CorrelationID: "req_abc123",
+	}
+
+	if err := store.AppendAuditEvent(ctx, event); err != nil {
+		t.Fatalf("AppendAuditEvent returned error: %v", err)
+	}
+
+	var got struct {
+		ID            int64
+		ActorSubject  string
+		Action        string
+		TargetUser    string
+		TenantID      string
+		StackID       string
+		OldRole       string
+		NewRole       string
+		Outcome       string
+		CorrelationID string
+		RecordedAt    time.Time
+	}
+	err := pool.QueryRow(ctx, `
+		SELECT id, actor_subject, action, target_user, tenant_id, stack_id,
+		       old_role, new_role, outcome, correlation_id, recorded_at
+		FROM security_audit_log
+		ORDER BY id DESC LIMIT 1
+	`).Scan(
+		&got.ID, &got.ActorSubject, &got.Action, &got.TargetUser,
+		&got.TenantID, &got.StackID, &got.OldRole, &got.NewRole,
+		&got.Outcome, &got.CorrelationID, &got.RecordedAt,
+	)
+	if err != nil {
+		t.Fatalf("read audit event: %v", err)
+	}
+
+	if got.ActorSubject != event.ActorSubject {
+		t.Fatalf("actor_subject = %q, want %q", got.ActorSubject, event.ActorSubject)
+	}
+	if got.Action != "grant" {
+		t.Fatalf("action = %q, want grant", got.Action)
+	}
+	if got.TargetUser != "user:target-subject" {
+		t.Fatalf("target_user = %q, want user:target-subject", got.TargetUser)
+	}
+	if got.TenantID != "tenant_123" {
+		t.Fatalf("tenant_id = %q, want tenant_123", got.TenantID)
+	}
+	if got.StackID != "stack_123" {
+		t.Fatalf("stack_id = %q, want stack_123", got.StackID)
+	}
+	if got.OldRole != "" {
+		t.Fatalf("old_role = %q, want empty", got.OldRole)
+	}
+	if got.NewRole != "owner" {
+		t.Fatalf("new_role = %q, want owner", got.NewRole)
+	}
+	if got.Outcome != "success" {
+		t.Fatalf("outcome = %q, want success", got.Outcome)
+	}
+	if got.CorrelationID != "req_abc123" {
+		t.Fatalf("correlation_id = %q, want req_abc123", got.CorrelationID)
+	}
+	if got.RecordedAt.IsZero() {
+		t.Fatal("recorded_at is zero, want populated by database default")
+	}
+	if got.ID <= 0 {
+		t.Fatalf("id = %d, want positive", got.ID)
+	}
+}
+
+func TestAppendAuditEventEmptyOptionalFields(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+
+	event := traits.SecurityAuditEvent{
+		ActorSubject: "user:actor",
+		Action:       traits.AuditActionFailedAccessAttempt,
+		TenantID:     traits.TenantID("tenant_123"),
+		Outcome:      traits.AuditOutcomeFailure,
+	}
+
+	if err := store.AppendAuditEvent(ctx, event); err != nil {
+		t.Fatalf("AppendAuditEvent returned error: %v", err)
+	}
+
+	var targetUser, stackID, oldRole, newRole, correlationID string
+	err := pool.QueryRow(ctx, `
+		SELECT target_user, stack_id, old_role, new_role, correlation_id
+		FROM security_audit_log ORDER BY id DESC LIMIT 1
+	`).Scan(&targetUser, &stackID, &oldRole, &newRole, &correlationID)
+	if err != nil {
+		t.Fatalf("read audit event: %v", err)
+	}
+
+	if targetUser != "" {
+		t.Fatalf("target_user = %q, want empty", targetUser)
+	}
+	if stackID != "" {
+		t.Fatalf("stack_id = %q, want empty", stackID)
+	}
+	if oldRole != "" {
+		t.Fatalf("old_role = %q, want empty", oldRole)
+	}
+	if newRole != "" {
+		t.Fatalf("new_role = %q, want empty", newRole)
+	}
+	if correlationID != "" {
+		t.Fatalf("correlation_id = %q, want empty", correlationID)
+	}
 }
