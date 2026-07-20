@@ -2,19 +2,25 @@
 import { render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { ReactNode } from "react";
+import { ApiRequestError } from "../api/client";
+
+let meQueryOverride: { data: unknown; error: unknown; isLoading: boolean } | null = null;
 
 vi.mock("./useMeQuery", () => ({
-  useMeQuery: vi.fn((options?: { enabled?: boolean }) => ({
-    data: options?.enabled
-      ? {
-          sub: "user-1",
-          displayName: "testuser",
-          globalCapabilities: { isPlatformAdmin: true, canCreateStack: true },
-        }
-      : null,
-    error: null,
-    isLoading: false,
-  })),
+  useMeQuery: vi.fn((options?: { enabled?: boolean }) => {
+    if (meQueryOverride) return meQueryOverride;
+    return {
+      data: options?.enabled
+        ? {
+            sub: "user-1",
+            displayName: "testuser",
+            globalCapabilities: { isPlatformAdmin: true, canCreateStack: true },
+          }
+        : null,
+      error: null,
+      isLoading: false,
+    };
+  }),
 }));
 
 const mockGetUser = vi.fn();
@@ -72,12 +78,13 @@ function userFixture() {
 describe("OidcAuthProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    meQueryOverride = null;
     currentPathname = "/";
     currentSearch = "";
   });
 
   afterEach(() => {
-    vi.resetModules();
+    vi.clearAllMocks();
   });
 
   async function renderProvider(children: React.ReactNode) {
@@ -172,6 +179,37 @@ describe("OidcAuthProvider", () => {
     });
     await waitFor(() => {
       expect(mockSigninRedirect).toHaveBeenCalled();
+    });
+  });
+
+  it("redirects to login when /v1/me fails with 401", async () => {
+    mockGetUser.mockResolvedValue(userFixture());
+    meQueryOverride = {
+      data: null,
+      error: new ApiRequestError(401, "unauthorized", "Token expired"),
+      isLoading: false,
+    };
+
+    const OidcAuthProvider = await importProvider();
+    await renderProvider(<OidcAuthProvider />);
+    await waitFor(() => {
+      expect(mockSigninRedirect).toHaveBeenCalled();
+    });
+  });
+
+  it("shows error UI when /v1/me fails with non-401 error", async () => {
+    mockGetUser.mockResolvedValue(userFixture());
+    meQueryOverride = {
+      data: null,
+      error: new Error("Network error"),
+      isLoading: false,
+    };
+
+    const OidcAuthProvider = await importProvider();
+    const { container } = await renderProvider(<OidcAuthProvider />);
+    await waitFor(() => {
+      expect(container.innerHTML).toContain('data-testid="auth-error"');
+      expect(container.innerHTML).toContain('data-testid="auth-retry-button"');
     });
   });
 });

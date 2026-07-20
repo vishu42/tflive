@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { ApiRequestError } from "../api/client";
 import { AuthContext } from "./AuthContext";
 import { getUserManager } from "./userManager";
 import { useMeQuery } from "./useMeQuery";
@@ -89,9 +90,13 @@ export default function OidcAuthProvider() {
   }
 
   if (meError) {
-    if (!loginCalled.current) {
-      loginCalled.current = true;
-      login();
+    if (meError instanceof ApiRequestError && meError.status === 401) {
+      if (!loginCalled.current) {
+        loginCalled.current = true;
+        login();
+      }
+    } else {
+      setStatus("error");
     }
     return null;
   }
