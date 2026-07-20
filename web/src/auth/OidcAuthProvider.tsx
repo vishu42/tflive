@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { AuthContext } from "./AuthContext";
-import type { AuthStatus } from "./AuthContext";
-import type { Me } from "./types";
 import { getUserManager } from "./userManager";
-import { convertUserToMe } from "./convertUser";
+import { useMeQuery } from "./useMeQuery";
 
 export default function OidcAuthProvider() {
-  const [me, setMe] = useState<Me | null>(null);
-  const [status, setStatus] = useState<AuthStatus>("loading");
+  const [oidcResolved, setOidcResolved] = useState(false);
+  const [status, setStatus] = useState<"loading" | "unauthenticated" | "error">("loading");
   const location = useLocation();
   const navigate = useNavigate();
+
+  const { data: me, error: meError, isLoading: meLoading } = useMeQuery({ enabled: oidcResolved });
 
   useEffect(() => {
     const isCallbackPath = location.pathname === "/auth/callback";
@@ -21,7 +21,6 @@ export default function OidcAuthProvider() {
       if (isSignoutCallback) {
         getUserManager().signoutRedirectCallback()
           .then(() => {
-            setMe(null);
             setStatus("unauthenticated");
             getUserManager().signinRedirect();
           })
@@ -29,10 +28,7 @@ export default function OidcAuthProvider() {
       } else {
         getUserManager().signinRedirectCallback()
           .then((user) => {
-            setMe(convertUserToMe(user));
-            setStatus("authenticated");
-            // Navigate to the original requested route (or / as fallback).
-            // oidc-client-ts stores the original URL in session; we use / as default.
+            setOidcResolved(true);
             const target = (user.state as string) ?? "/stacks";
             navigate(target, { replace: true });
           })
@@ -44,14 +40,12 @@ export default function OidcAuthProvider() {
     getUserManager().getUser()
       .then((user) => {
         if (user && !user.expired) {
-          setMe(convertUserToMe(user));
-          setStatus("authenticated");
+          setOidcResolved(true);
         } else if (user?.expired && user.refresh_token) {
           getUserManager().signinSilent()
             .then((refreshedUser) => {
               if (refreshedUser) {
-                setMe(convertUserToMe(refreshedUser));
-                setStatus("authenticated");
+                setOidcResolved(true);
               } else {
                 setStatus("unauthenticated");
                 getUserManager().signinRedirect();
@@ -78,7 +72,7 @@ export default function OidcAuthProvider() {
     getUserManager().signoutRedirect();
   }, []);
 
-  if (status === "loading") {
+  if (meLoading) {
     return null;
   }
 
@@ -93,8 +87,17 @@ export default function OidcAuthProvider() {
     );
   }
 
+  if (meError) {
+    login();
+    return null;
+  }
+
+  if (!me) {
+    return null;
+  }
+
   return (
-    <AuthContext.Provider value={{ me, status, login, logout }}>
+    <AuthContext.Provider value={{ me, status: "authenticated", login, logout }}>
       <Outlet />
     </AuthContext.Provider>
   );

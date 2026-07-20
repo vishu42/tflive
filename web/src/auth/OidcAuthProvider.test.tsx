@@ -3,6 +3,20 @@ import { render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { ReactNode } from "react";
 
+vi.mock("./useMeQuery", () => ({
+  useMeQuery: vi.fn((options?: { enabled?: boolean }) => ({
+    data: options?.enabled
+      ? {
+          sub: "user-1",
+          displayName: "testuser",
+          globalCapabilities: { isPlatformAdmin: true, canCreateStack: true },
+        }
+      : null,
+    error: null,
+    isLoading: false,
+  })),
+}));
+
 const mockGetUser = vi.fn();
 const mockSigninRedirect = vi.fn();
 const mockSigninRedirectCallback = vi.fn();
