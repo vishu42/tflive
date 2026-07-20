@@ -3,7 +3,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import MockAuthProvider from "../../auth/MockAuthProvider";
+import { AuthContext } from "../../auth/AuthContext";
+import type { AuthContextValue } from "../../auth/AuthContext";
 import StacksListScreen from "./StacksListScreen";
 import { queryKeys } from "../../api/queryKeys";
 import type { Stack } from "../../api/types";
@@ -29,14 +30,24 @@ function testQueryClient(): QueryClient {
   return new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
 }
 
-function renderScreen(queryClient: QueryClient) {
+function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
+  return {
+    me: { sub: "user_1", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } },
+    status: "authenticated",
+    login: () => {},
+    logout: () => {},
+    ...overrides,
+  };
+}
+
+function renderScreen(queryClient: QueryClient, auth?: AuthContextValue) {
   return render(
     <QueryClientProvider client={queryClient}>
-      <MockAuthProvider>
+      <AuthContext.Provider value={auth ?? authValue()}>
         <MemoryRouter initialEntries={["/stacks"]}>
           <StacksListScreen />
         </MemoryRouter>
-      </MockAuthProvider>
+      </AuthContext.Provider>
     </QueryClientProvider>
   );
 }
@@ -120,11 +131,10 @@ describe("StacksListScreen", () => {
   });
 
   it("hides the create-stack action for a role without canCreateStack", () => {
-    vi.stubEnv("VITE_TFLIVE_MOCK_USER_ROLE", "viewer");
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.stacks("tenant_123"), [stack()]);
 
-    renderScreen(queryClient);
+    renderScreen(queryClient, authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: false } } }));
 
     expect(screen.getByTestId("stacks-list")).toBeTruthy();
     expect(screen.queryByTestId("create-stack-link")).toBeNull();

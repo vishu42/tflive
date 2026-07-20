@@ -5,8 +5,6 @@ import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../auth/AuthContext";
 import type { AuthContextValue } from "../auth/AuthContext";
-import MockAuthProvider from "../auth/MockAuthProvider";
-import { useAuth } from "../auth/AuthContext";
 import { ApiRequestError } from "../api/client";
 import { classifyQueryError, useQueryErrorBoundary } from "./queryErrorBoundary";
 import AccessDenied from "../app/AccessDenied";
@@ -107,20 +105,5 @@ describe("useQueryErrorBoundary", () => {
     expect(logout).toHaveBeenCalledTimes(1);
   });
 
-  it("end-to-end with the real MockAuthProvider: a 401 flips status to unauthenticated without looping", async () => {
-    function useHarness(error: unknown) {
-      const auth = useAuth();
-      const boundary = useQueryErrorBoundary(error);
-      return { auth, boundary };
-    }
 
-    const realWrapper = ({ children }: { children: ReactNode }) => <MockAuthProvider>{children}</MockAuthProvider>;
-    const { result } = renderHook(() => useHarness(new ApiRequestError(401, "unauthorized", "expired")), {
-      wrapper: realWrapper
-    });
-
-    await waitFor(() => expect(result.current.auth.status).toBe("unauthenticated"));
-    expect(result.current.auth.me).toBeNull();
-    expect(result.current.boundary).toBeNull();
-  });
 });

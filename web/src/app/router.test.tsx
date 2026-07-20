@@ -2,6 +2,18 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AuthContext } from "../auth/AuthContext";
+import type { AuthContextValue } from "../auth/AuthContext";
+
+function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
+  return {
+    me: { sub: "user_1", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false } },
+    status: "authenticated",
+    login: () => {},
+    logout: () => {},
+    ...overrides,
+  };
+}
 
 describe("routeConfig", () => {
   afterEach(() => {
@@ -12,15 +24,15 @@ describe("routeConfig", () => {
   it("renders the existing workflow console unchanged at the index route", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
-    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
+
     const queryClient = new QueryClient();
 
     const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/"] });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
-        <MockAuthProvider>
+        <AuthContext.Provider value={authValue()}>
           <RouterProvider router={testRouter} />
-        </MockAuthProvider>
+        </AuthContext.Provider>
       </QueryClientProvider>
     );
 
@@ -31,7 +43,7 @@ describe("routeConfig", () => {
   it("renders a placeholder for every reserved screen a signed-in operator can reach", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
-    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
+
     const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
     const { queryKeys } = await import("../api/queryKeys");
 
@@ -42,9 +54,9 @@ describe("routeConfig", () => {
       const testRouter = createMemoryRouter(routeConfig, { initialEntries: [path] });
       const markup = renderToStaticMarkup(
         <QueryClientProvider client={new QueryClient()}>
-          <MockAuthProvider>
+          <AuthContext.Provider value={authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } } })}>
             <RouterProvider router={testRouter} />
-          </MockAuthProvider>
+          </AuthContext.Provider>
         </QueryClientProvider>
       );
       expect(markup, `expected a placeholder at ${path}`).toContain('data-testid="route-placeholder"');
@@ -81,9 +93,9 @@ describe("routeConfig", () => {
       const testRouter = createMemoryRouter(routeConfig, { initialEntries: [path] });
       const markup = renderToStaticMarkup(
         <QueryClientProvider client={queryClient}>
-          <MockAuthProvider>
+          <AuthContext.Provider value={authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } } })}>
             <RouterProvider router={testRouter} />
-          </MockAuthProvider>
+          </AuthContext.Provider>
         </QueryClientProvider>
       );
       expect(markup, `expected a placeholder at ${path}`).toContain('data-testid="route-placeholder"');
@@ -93,7 +105,7 @@ describe("routeConfig", () => {
   it("renders the stacks list screen at /stacks", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
-    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
+
     const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
     const { queryKeys } = await import("../api/queryKeys");
 
@@ -118,9 +130,9 @@ describe("routeConfig", () => {
     const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks"] });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
-        <MockAuthProvider>
+        <AuthContext.Provider value={authValue()}>
           <RouterProvider router={testRouter} />
-        </MockAuthProvider>
+        </AuthContext.Provider>
       </QueryClientProvider>
     );
 
@@ -132,7 +144,7 @@ describe("routeConfig", () => {
   it("renders the template registry screen at /templates", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
-    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
+
     const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
     const { queryKeys } = await import("../api/queryKeys");
 
@@ -160,9 +172,9 @@ describe("routeConfig", () => {
     const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/templates"] });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
-        <MockAuthProvider>
+        <AuthContext.Provider value={authValue()}>
           <RouterProvider router={testRouter} />
-        </MockAuthProvider>
+        </AuthContext.Provider>
       </QueryClientProvider>
     );
 
@@ -174,7 +186,7 @@ describe("routeConfig", () => {
   it("renders a 404, not a permission leak, when canView is denied for a stack route", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
-    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
+
     const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
     const { queryKeys } = await import("../api/queryKeys");
 
@@ -201,9 +213,9 @@ describe("routeConfig", () => {
     const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1"] });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
-        <MockAuthProvider>
+        <AuthContext.Provider value={authValue()}>
           <RouterProvider router={testRouter} />
-        </MockAuthProvider>
+        </AuthContext.Provider>
       </QueryClientProvider>
     );
 
@@ -213,7 +225,7 @@ describe("routeConfig", () => {
   it("renders AccessDenied for /stacks/:stackId/access when canManageAccess is denied but canView is allowed", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
-    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
+
     const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
     const { queryKeys } = await import("../api/queryKeys");
 
@@ -240,9 +252,9 @@ describe("routeConfig", () => {
     const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/access"] });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
-        <MockAuthProvider>
+        <AuthContext.Provider value={authValue()}>
           <RouterProvider router={testRouter} />
-        </MockAuthProvider>
+        </AuthContext.Provider>
       </QueryClientProvider>
     );
 
@@ -253,15 +265,15 @@ describe("routeConfig", () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     vi.stubEnv("VITE_TFLIVE_MOCK_USER_ROLE", "viewer");
     const { routeConfig } = await import("./router");
-    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
+
     const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 
     const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/new"] });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={new QueryClient()}>
-        <MockAuthProvider>
+        <AuthContext.Provider value={authValue()}>
           <RouterProvider router={testRouter} />
-        </MockAuthProvider>
+        </AuthContext.Provider>
       </QueryClientProvider>
     );
 
@@ -271,13 +283,13 @@ describe("routeConfig", () => {
   it("renders the 404 screen for unknown paths", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
-    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
+
 
     const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/nonexistent"] });
     const markup = renderToStaticMarkup(
-      <MockAuthProvider>
+      <AuthContext.Provider value={authValue()}>
         <RouterProvider router={testRouter} />
-      </MockAuthProvider>
+      </AuthContext.Provider>
     );
 
     expect(markup).toContain('data-testid="route-not-found"');
