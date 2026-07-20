@@ -3,13 +3,23 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import MockAuthProvider from "../../auth/MockAuthProvider";
+import { AuthContext } from "../../auth/AuthContext";
+import type { AuthContextValue } from "../../auth/AuthContext";
 import StackTemplateScreen from "./StackTemplateScreen";
 import { queryKeys } from "../../api/queryKeys";
 import type { StackTemplate, StackView, TemplateRevision, TemplateVariable } from "../../api/types";
 import type { StackCapabilities } from "../../auth/types";
 
 const allAllowed: StackCapabilities = { canView: true, canOperate: true, canApprove: true, canManageAccess: true };
+
+function authValue(): AuthContextValue {
+  return {
+    me: { sub: "user_1", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false } },
+    status: "authenticated",
+    login: () => {},
+    logout: () => {}
+  };
+}
 
 function stackView(capabilities: StackCapabilities, templates: StackTemplate[]): StackView {
   return {
@@ -99,13 +109,13 @@ function seedDefaultData(queryClient: QueryClient, capabilities: StackCapabiliti
 function renderScreen(queryClient: QueryClient) {
   return render(
     <QueryClientProvider client={queryClient}>
-      <MockAuthProvider>
+      <AuthContext.Provider value={authValue()}>
         <MemoryRouter initialEntries={["/stacks/stack_1/template"]}>
           <Routes>
             <Route path="/stacks/:stackId/template" element={<StackTemplateScreen />} />
           </Routes>
         </MemoryRouter>
-      </MockAuthProvider>
+      </AuthContext.Provider>
     </QueryClientProvider>
   );
 }
