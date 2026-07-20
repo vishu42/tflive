@@ -671,6 +671,10 @@ func writeAppError(response http.ResponseWriter, err error) {
 		writeError(response, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, app.ErrDirectoryUnavailable):
 		writeError(response, http.StatusServiceUnavailable, "directory_unavailable", "directory unavailable")
+	case errors.Is(err, app.ErrLastOwnerProtected):
+		writeError(response, http.StatusConflict, "last_owner_protected", "removing the last stack owner is not permitted")
+	case errors.Is(err, app.ErrTargetUserNotFound):
+		writeError(response, http.StatusConflict, "conflict", "target user not found or disabled")
 	case errors.Is(err, app.ErrStackTemplateNotRunnable),
 		errors.Is(err, app.ErrRunNotApprovable),
 		errors.Is(err, app.ErrRunNotCancelable),
