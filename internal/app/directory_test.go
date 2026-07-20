@@ -32,12 +32,28 @@ func (f *fakeUserDirectory) SearchUsers(_ context.Context, _ string, _, _ int) (
 	return f.users, f.err
 }
 
+func (f *fakeUserDirectory) GetUserByID(_ context.Context, id string) (DirectoryUser, error) {
+	if f.err != nil {
+		return DirectoryUser{}, f.err
+	}
+	for _, u := range f.users {
+		if u.ID == id {
+			return u, nil
+		}
+	}
+	return DirectoryUser{}, nil
+}
+
 type fakeErrorDirectory struct {
 	err error
 }
 
 func (f *fakeErrorDirectory) SearchUsers(_ context.Context, _ string, _, _ int) ([]DirectoryUser, error) {
 	return nil, f.err
+}
+
+func (f *fakeErrorDirectory) GetUserByID(_ context.Context, _ string) (DirectoryUser, error) {
+	return DirectoryUser{}, f.err
 }
 
 func TestSearchUsersReturnsResults(t *testing.T) {
