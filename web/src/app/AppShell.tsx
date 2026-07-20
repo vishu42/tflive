@@ -8,7 +8,7 @@ const navItems: { to: string; label: string }[] = [
 ];
 
 export default function AppShell() {
-  const { me, logout } = useAuth();
+  const { me, logout, status } = useAuth();
 
   return (
     <div className="app-frame">
@@ -22,6 +22,9 @@ export default function AppShell() {
         </nav>
         <div className="app-frame-identity">
           <div className="identity-menu" data-testid="identity-menu">
+            {status === "loading" && (
+              <span data-testid="identity-loading">Loading...</span>
+            )}
             {me && (
               <>
                 <span data-testid="identity-display-name">{me.displayName}</span>

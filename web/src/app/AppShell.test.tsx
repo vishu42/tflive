@@ -1,17 +1,36 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+import { AuthContext } from "../auth/AuthContext";
+import type { AuthContextValue } from "../auth/AuthContext";
+
+function authValue(): AuthContextValue {
+  return {
+    me: {
+      sub: "user_1",
+      displayName: "Otto Operator",
+      globalCapabilities: { isPlatformAdmin: false, canCreateStack: true },
+    },
+    status: "authenticated",
+    login: () => {},
+    logout: () => {},
+  };
+}
+
+function TestAuthWrapper({ children }: { children: ReactNode }) {
+  return <AuthContext.Provider value={authValue()}>{children}</AuthContext.Provider>;
+}
 
 describe("AppShell", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
-    vi.resetModules();
   });
 
   it("renders nav, an identity slot, a static tenant indicator, and routed content", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { default: AppShell } = await import("./AppShell");
-    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
 
     const testRouter = createMemoryRouter(
       [
@@ -25,9 +44,9 @@ describe("AppShell", () => {
     );
 
     const markup = renderToStaticMarkup(
-      <MockAuthProvider>
+      <TestAuthWrapper>
         <RouterProvider router={testRouter} />
-      </MockAuthProvider>
+      </TestAuthWrapper>
     );
 
     expect(markup).toContain('href="/stacks"');
@@ -39,11 +58,9 @@ describe("AppShell", () => {
     expect(markup).toContain('data-testid="outlet-content"');
   });
 
-  it("displays the mock user's display name and a logout control", async () => {
+  it("displays the user's display name and a logout control", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { default: AppShell } = await import("./AppShell");
-    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
-    const { mockUsers } = await import("../auth/mockUsers");
 
     const testRouter = createMemoryRouter(
       [{ path: "/", element: <AppShell />, children: [{ index: true, element: <div /> }] }],
@@ -51,12 +68,12 @@ describe("AppShell", () => {
     );
 
     const markup = renderToStaticMarkup(
-      <MockAuthProvider>
+      <TestAuthWrapper>
         <RouterProvider router={testRouter} />
-      </MockAuthProvider>
+      </TestAuthWrapper>
     );
 
-    expect(markup).toContain(mockUsers.operator.displayName);
+    expect(markup).toContain("Otto Operator");
     expect(markup).toContain('data-testid="logout-button"');
   });
 });
