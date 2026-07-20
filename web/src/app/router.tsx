@@ -6,6 +6,7 @@ import NotFound from "./NotFound";
 import RoutePlaceholder from "./RoutePlaceholder";
 import RequireCapability from "../auth/RequireCapability";
 import StacksListScreen from "../features/stacks/StacksListScreen";
+import TemplateRegistryScreen from "../features/templates/TemplateRegistryScreen";
 
 // The legacy console renders unchanged at "/" until the feature screens
 // fully replace it; routes still rendering RoutePlaceholder are reserved
@@ -39,7 +40,7 @@ export const routeConfig: RouteObject[] = [
           }
         ]
       },
-      { path: "templates", element: <RoutePlaceholder title="Template registry" /> },
+      { path: "templates", element: <TemplateRegistryScreen /> },
       { path: "auth/callback", element: <RoutePlaceholder title="Signing in" /> },
       { path: "*", element: <NotFound /> }
     ]
