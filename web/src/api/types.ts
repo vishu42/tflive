@@ -148,3 +148,28 @@ export interface TemplateRunLog {
   size_bytes: number;
   uploaded_at: string;
 }
+
+export interface GrantView {
+  userSub: string;
+  role: string;
+  displayName: string;
+  email: string;
+}
+
+export interface ListGrantsResponse {
+  grants: GrantView[];
+}
+
+export interface DirectoryUser {
+  id: string;
+  username: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+}
+
+export interface SearchUsersResponse {
+  users: DirectoryUser[];
+  first: number;
+  max: number;
+}
