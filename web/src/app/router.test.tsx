@@ -47,8 +47,7 @@ describe("routeConfig", () => {
     const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
     const { queryKeys } = await import("../api/queryKeys");
 
-    // The default mock role ("operator") has canCreateStack: true (see auth/mockUsers.ts),
-    // so /stacks/new needs no seeded query data — it resolves from useAuth() alone.
+    // canCreateStack: true override allows /stacks/new to resolve from useAuth() alone.
     const ungatedAndGloballyAllowedPaths = ["/stacks/new", "/auth/callback"];
     for (const path of ungatedAndGloballyAllowedPaths) {
       const testRouter = createMemoryRouter(routeConfig, { initialEntries: [path] });
@@ -263,7 +262,6 @@ describe("routeConfig", () => {
 
   it("renders AccessDenied at /stacks/new for a role without canCreateStack", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
-    vi.stubEnv("VITE_TFLIVE_MOCK_USER_ROLE", "viewer");
     const { routeConfig } = await import("./router");
 
     const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
