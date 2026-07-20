@@ -75,6 +75,14 @@ func NewServer(service *app.Service, tenantID traits.TenantID) *Server {
 	// Searches realm users by display name or username.
 	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/users/search", server.handleSearchUsers)
 
+	// Stack grant routes.
+	// Lists role assignments on a stack.
+	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/stacks/{stack_id}/grants", server.handleListStackGrants)
+	// Assigns or replaces a role for a user on a stack.
+	server.handleTenantRoute("PUT /v1/tenants/{tenant_id}/stacks/{stack_id}/grants", server.handlePutStackGrant)
+	// Revokes a user's role on a stack.
+	server.handleTenantRoute("DELETE /v1/tenants/{tenant_id}/stacks/{stack_id}/grants/{user_id}", server.handleRevokeStackGrant)
+
 	// Template run decision routes.
 	// Records approval for a waiting template run.
 	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/approval", server.handleApproveRun)

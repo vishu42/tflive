@@ -2318,6 +2318,208 @@ func TestGetStackCapabilitiesReflectRole(t *testing.T) {
 	}
 }
 
+func TestListGrantsCallsService(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack_123/grants", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+}
+
+func TestPutGrantCallsService(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(
+		http.MethodPut,
+		"/v1/tenants/tenant_123/stacks/stack_123/grants",
+		strings.NewReader(`{"user_id":"target-123","role":"operator"}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+}
+
+func TestDeleteGrantCallsService(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodDelete, "/v1/tenants/tenant_123/stacks/stack_123/grants/target-123", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNoContent, response.Body.String())
+	}
+}
+
+func TestPutGrantRejectsInvalidBody(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing user_id", body: `{"role":"operator"}`},
+		{name: "missing role", body: `{"user_id":"target-123"}`},
+		{name: "invalid role", body: `{"user_id":"target-123","role":"superadmin"}`},
+		{name: "empty user_id", body: `{"user_id":"","role":"operator"}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			deps := newAPITestDependencies()
+			server := NewServer(deps.service(), configuredTenantID)
+			response := httptest.NewRecorder()
+			request := authenticatedRequest(
+				http.MethodPut,
+				"/v1/tenants/tenant_123/stacks/stack_123/grants",
+				strings.NewReader(test.body),
+			)
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestGrantRoutesRequireAuthentication(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "list", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123/grants"},
+		{name: "put", method: http.MethodPut, path: "/v1/tenants/tenant_123/stacks/stack_123/grants", body: `{"user_id":"u","role":"viewer"}`},
+		{name: "delete", method: http.MethodDelete, path: "/v1/tenants/tenant_123/stacks/stack_123/grants/u"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			deps := newAPITestDependencies()
+			server := NewServer(deps.service(), configuredTenantID)
+			response := httptest.NewRecorder()
+			var request *http.Request
+			if test.body != "" {
+				request = httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+			} else {
+				request = httptest.NewRequest(test.method, test.path, nil)
+			}
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
+			}
+		})
+	}
+}
+
+func TestTenantBoundaryEnforcedOnGrantRoutes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "list", method: http.MethodGet, path: "/v1/tenants/tenant_other/stacks/stack_123/grants"},
+		{name: "put", method: http.MethodPut, path: "/v1/tenants/tenant_other/stacks/stack_123/grants", body: `{"user_id":"u","role":"viewer"}`},
+		{name: "delete", method: http.MethodDelete, path: "/v1/tenants/tenant_other/stacks/stack_123/grants/u"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			deps := newAPITestDependencies()
+			server := NewServer(deps.service(), configuredTenantID)
+			response := httptest.NewRecorder()
+			var request *http.Request
+			if test.body != "" {
+				request = authenticatedRequest(test.method, test.path, strings.NewReader(test.body))
+			} else {
+				request = authenticatedRequest(test.method, test.path, nil)
+			}
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestGrantRoutesRequireManageAccess(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		role       authz.Role
+		method     string
+		path       string
+		body       string
+		status     int
+		permission authz.Permission
+	}{
+		{name: "owner lists", role: authz.RoleOwner, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123/grants", status: http.StatusOK, permission: authz.PermissionManageAccess},
+		{name: "owner puts", role: authz.RoleOwner, method: http.MethodPut, path: "/v1/tenants/tenant_123/stacks/stack_123/grants", body: `{"user_id":"u","role":"viewer"}`, status: http.StatusOK, permission: authz.PermissionManageAccess},
+		{name: "owner deletes", role: authz.RoleOwner, method: http.MethodDelete, path: "/v1/tenants/tenant_123/stacks/stack_123/grants/u", status: http.StatusNoContent, permission: authz.PermissionManageAccess},
+		{name: "operator denied", role: authz.RoleOperator, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123/grants", status: http.StatusForbidden, permission: authz.PermissionManageAccess},
+		{name: "viewer denied", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123/grants", status: http.StatusForbidden, permission: authz.PermissionManageAccess},
+		{name: "approver denied", role: authz.RoleApprover, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123/grants", status: http.StatusForbidden, permission: authz.PermissionManageAccess},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			deps := newPermissionMatrixDependencies()
+			deps.authorizer.enforceRole = true
+			deps.authorizer.role = test.role
+			server := NewServer(deps.service(), configuredTenantID)
+			response := httptest.NewRecorder()
+			var request *http.Request
+			if test.body != "" {
+				request = ordinaryAuthenticatedRequest(test.method, test.path, strings.NewReader(test.body))
+			} else {
+				request = ordinaryAuthenticatedRequest(test.method, test.path, nil)
+			}
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.status, response.Body.String())
+			}
+			if deps.authorizer.check.Permission != test.permission {
+				t.Fatalf("permission = %q, want %q", deps.authorizer.check.Permission, test.permission)
+			}
+		})
+	}
+}
+
 type apiTestDependencies struct {
 	authorizer             *apiAuthorizer
 	stacks                 recordingStackRepository
