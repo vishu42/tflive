@@ -9,7 +9,6 @@ export function getUserManager(): UserManager {
     userManager = new UserManager({
       ...oidcConfig,
       userStore: new WebStorageStateStore({ store }),
-      stateStore: new WebStorageStateStore({ store }),
     });
   }
   return userManager;

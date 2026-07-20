@@ -13,11 +13,20 @@ export default function OidcAuthProvider() {
 
   const { data: me, error: meError, isLoading: meLoading } = useMeQuery({ enabled: oidcResolved });
   const loginCalled = useRef(false);
+  const callbackHandled = useRef(false);
 
   useEffect(() => {
     const isCallbackPath = location.pathname === "/auth/callback";
 
     if (isCallbackPath) {
+      // Guard against React StrictMode's double effect invocation in dev: the
+      // authorization code is single-use, so handling the callback twice
+      // fails the second exchange and can clobber a successful first one.
+      if (callbackHandled.current) {
+        return;
+      }
+      callbackHandled.current = true;
+
       const isSignoutCallback = location.search.includes("state=") && !location.search.includes("code=");
 
       if (isSignoutCallback) {
