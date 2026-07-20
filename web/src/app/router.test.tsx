@@ -49,11 +49,12 @@ describe("routeConfig", () => {
     const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
     const { queryKeys } = await import("../api/queryKeys");
 
-    // canCreateStack: true override allows /stacks/new to resolve from useAuth() alone.
-    // Note: /auth/callback is no longer a placeholder — it renders the real CallbackPage.
-    const ungatedAndGloballyAllowedPaths = ["/stacks/new"];
-    for (const path of ungatedAndGloballyAllowedPaths) {
-      const testRouter = createMemoryRouter(routeConfig, { initialEntries: [path] });
+    // /stacks/new now renders the real CreateStackScreen (Task 2 of
+    // create-stack-ui), and /auth/callback renders the real CallbackPage.
+    // No reserved screens remain that are reachable purely via global
+    // capabilities — the rest require a stack scoped query.
+    {
+      const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/new"] });
       const markup = renderToStaticMarkup(
         <QueryClientProvider client={new QueryClient()}>
           <AuthContext.Provider value={authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } } })}>
@@ -61,7 +62,8 @@ describe("routeConfig", () => {
           </AuthContext.Provider>
         </QueryClientProvider>
       );
-      expect(markup, `expected a placeholder at ${path}`).toContain('data-testid="route-placeholder"');
+      expect(markup).toContain("Create stack");
+      expect(markup).not.toContain('data-testid="route-placeholder"');
     }
 
     // canView-gated stack routes resolve once the stack query cache has effectiveCapabilities.
@@ -317,7 +319,7 @@ describe("routeConfig", () => {
     expect(markup).toContain('data-testid="route-access-denied"');
   });
 
-  it("renders the create-stack placeholder when canCreateStack is allowed", async () => {
+  it("renders the CreateStackScreen when canCreateStack is allowed", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
 
@@ -332,8 +334,8 @@ describe("routeConfig", () => {
       </QueryClientProvider>
     );
 
-    expect(markup).toContain('data-testid="route-placeholder"');
     expect(markup).toContain("Create stack");
+    expect(markup).not.toContain('data-testid="route-placeholder"');
   });
 
   it("renders the 404 screen for unknown paths", async () => {
