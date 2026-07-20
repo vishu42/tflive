@@ -5,19 +5,20 @@ import AppShell from "./AppShell";
 import NotFound from "./NotFound";
 import RoutePlaceholder from "./RoutePlaceholder";
 import RequireCapability from "../auth/RequireCapability";
+import StacksListScreen from "../features/stacks/StacksListScreen";
 
-// The legacy console renders unchanged at "/" until UI-007 extracts it into
-// feature screens; every other route below is a reserved slot this ticket
-// only scaffolds. Routes with a capability in the parent spec's route map
-// are wrapped in a <RequireCapability mode="route"> layout route — see
-// docs/superpowers/specs/2026-07-19-capability-gating-primitives-design.md.
+// The legacy console renders unchanged at "/" until the feature screens
+// fully replace it; routes still rendering RoutePlaceholder are reserved
+// slots for upcoming tickets. Routes with a capability in the parent spec's
+// route map are wrapped in a <RequireCapability mode="route"> layout route —
+// see docs/superpowers/specs/2026-07-19-capability-gating-primitives-design.md.
 export const routeConfig: RouteObject[] = [
   {
     path: "/",
     element: <AppShell />,
     children: [
       { index: true, element: <App /> },
-      { path: "stacks", element: <RoutePlaceholder title="Stacks" /> },
+      { path: "stacks", element: <StacksListScreen /> },
       {
         path: "stacks/new",
         element: <RequireCapability capability="canCreateStack" mode="route" />,
