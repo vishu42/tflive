@@ -264,3 +264,20 @@ func (a *directoryClientAdapter) SearchUsers(ctx context.Context, query string, 
 	}
 	return result, nil
 }
+
+func (a *directoryClientAdapter) GetUserByID(ctx context.Context, id string) (app.DirectoryUser, error) {
+	if err := a.client.Authenticate(ctx); err != nil {
+		return app.DirectoryUser{}, fmt.Errorf("authenticate directory client: %w", err)
+	}
+	user, err := a.client.GetUserByID(ctx, id)
+	if err != nil {
+		return app.DirectoryUser{}, err
+	}
+	return app.DirectoryUser{
+		ID:        user.ID,
+		Username:  user.Username,
+		Email:     user.Email,
+		FirstName: user.FirstName,
+		LastName:  user.LastName,
+	}, nil
+}

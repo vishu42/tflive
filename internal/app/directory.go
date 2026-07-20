@@ -17,4 +17,5 @@ type DirectoryUser struct {
 
 type UserDirectory interface {
 	SearchUsers(ctx context.Context, query string, first, max int) ([]DirectoryUser, error)
+	GetUserByID(ctx context.Context, id string) (DirectoryUser, error)
 }
