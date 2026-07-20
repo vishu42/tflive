@@ -6,6 +6,7 @@ import NotFound from "./NotFound";
 import RoutePlaceholder from "./RoutePlaceholder";
 import RequireCapability from "../auth/RequireCapability";
 import StacksListScreen from "../features/stacks/StacksListScreen";
+import StackDetailShell from "../features/stacks/StackDetailShell";
 import TemplateRegistryScreen from "../features/templates/TemplateRegistryScreen";
 
 // The legacy console renders unchanged at "/" until the feature screens
@@ -29,14 +30,19 @@ export const routeConfig: RouteObject[] = [
         path: "stacks/:stackId",
         element: <RequireCapability capability="canView" mode="route" />,
         children: [
-          { index: true, element: <RoutePlaceholder title="Stack detail" /> },
-          { path: "template", element: <RoutePlaceholder title="Stack template" /> },
-          { path: "runs", element: <RoutePlaceholder title="Runs" /> },
-          { path: "runs/:runId", element: <RoutePlaceholder title="Run detail" /> },
           {
-            path: "access",
-            element: <RequireCapability capability="canManageAccess" mode="route" />,
-            children: [{ index: true, element: <RoutePlaceholder title="Access" /> }]
+            element: <StackDetailShell />,
+            children: [
+              { index: true, element: <RoutePlaceholder title="Stack overview" /> },
+              { path: "template", element: <RoutePlaceholder title="Stack template" /> },
+              { path: "runs", element: <RoutePlaceholder title="Runs" /> },
+              { path: "runs/:runId", element: <RoutePlaceholder title="Run detail" /> },
+              {
+                path: "access",
+                element: <RequireCapability capability="canManageAccess" mode="route" />,
+                children: [{ index: true, element: <RoutePlaceholder title="Access" /> }]
+              }
+            ]
           }
         ]
       },
