@@ -7,6 +7,7 @@ import { AuthContext } from "../../auth/AuthContext";
 import type { AuthContextValue } from "../../auth/AuthContext";
 import { queryKeys } from "../../api/queryKeys";
 import type { Stack, StackTemplate } from "../../api/types";
+import type { StackCapabilities } from "../../auth/types";
 import RunsListScreen from "./RunsListScreen";
 
 function stack(overrides: Partial<Stack> = {}): Stack {
@@ -131,5 +132,39 @@ describe("RunsListScreen", () => {
     expect(screen.getByTestId("runs-list")).toBeTruthy();
     expect(screen.getByTestId("runs-row-stpl_1")).toBeTruthy();
     expect(screen.getByTestId("runs-row-stpl_2")).toBeTruthy();
+  });
+
+  function seedStackView(queryClient: QueryClient, capabilities: StackCapabilities) {
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), {
+      stack: stack({ effectiveCapabilities: capabilities }),
+      templates: [stackTemplate()]
+    });
+  }
+
+  function isDisabled(element: HTMLElement): boolean {
+    return (element as HTMLButtonElement).disabled;
+  }
+
+  it("disables Plan, Apply, and Cancel with a reason when canOperate is denied", async () => {
+    const queryClient = testQueryClient();
+    seedStackView(queryClient, { canView: true, canOperate: false, canApprove: true, canManageAccess: false });
+
+    renderScreen(queryClient);
+
+    await waitFor(() => expect(screen.getByTestId("runs-row-actions-disabled-reason")).toBeTruthy());
+    expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(true);
+  });
+
+  it("disables Approve with a reason when canApprove is denied but canOperate is allowed", async () => {
+    const queryClient = testQueryClient();
+    seedStackView(queryClient, { canView: true, canOperate: true, canApprove: false, canManageAccess: false });
+
+    renderScreen(queryClient);
+
+    await waitFor(() => expect(screen.getByTestId("runs-row-approve-disabled-reason")).toBeTruthy());
+    expect(isDisabled(screen.getByRole("button", { name: /Approve/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(false);
   });
 });

@@ -5,8 +5,7 @@ import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 
-// The list is authz-filtered by the backend (mocked today, real
-// ListObjects-based filtering once AUTH-013 lands) — the screen renders
+// The list is authz-filtered by the backend (AUTH-013) — the screen renders
 // whatever listStacks returns and never filters client-side.
 export default function StacksListScreen() {
   const { data: stacks, status, error, refetch } = useStacksQuery(tenantID);
