@@ -8,6 +8,8 @@ export default function OidcAuthProvider() {
         me: {
           sub: "test",
           displayName: "Test",
+          email: "test@example.com",
+          tenantID: "tenant_123",
           globalCapabilities: { isPlatformAdmin: false, canCreateStack: true },
         },
         status: "authenticated" as const,
