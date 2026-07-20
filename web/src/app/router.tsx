@@ -14,6 +14,7 @@ import TemplateRegistryScreen from "../features/templates/TemplateRegistryScreen
 import RunsListScreen from "../features/runs/RunsListScreen";
 import RunDetailScreen from "../features/runs/RunDetailScreen";
 import StackAccessScreen from "../features/stacks/StackAccessScreen";
+import CreateStackScreen from "../features/stacks/CreateStackScreen";
 
 // The legacy console renders unchanged at "/" until the feature screens
 // fully replace it; routes still rendering RoutePlaceholder are reserved
@@ -33,7 +34,7 @@ export const routeConfig: RouteObject[] = [
           {
             path: "stacks/new",
             element: <RequireCapability capability="canCreateStack" mode="route" />,
-            children: [{ index: true, element: <RoutePlaceholder title="Create stack" /> }]
+            children: [{ index: true, element: <CreateStackScreen /> }]
           },
           {
             path: "stacks/:stackId",
