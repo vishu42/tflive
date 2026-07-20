@@ -2690,3 +2690,103 @@ type apiFakeUserDirectory struct {
 func (f *apiFakeUserDirectory) SearchUsers(_ context.Context, _ string, _, _ int) ([]app.DirectoryUser, error) {
 	return f.users, f.err
 }
+
+func TestMeReturnsIdentityWithGlobalCapabilities(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(app.NewService(app.Service{}), configuredTenantID)
+	tests := []struct {
+		name       string
+		roles      []string
+		wantAdmin  bool
+		wantCreate bool
+	}{
+		{name: "platform admin", roles: []string{"platform-admin"}, wantAdmin: true, wantCreate: false},
+		{name: "stack creator", roles: []string{"stack-creator"}, wantAdmin: false, wantCreate: true},
+		{name: "both roles", roles: []string{"platform-admin", "stack-creator"}, wantAdmin: true, wantCreate: true},
+		{name: "no roles", roles: nil, wantAdmin: false, wantCreate: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+			ctx := authn.ContextWithPrincipal(request.Context(), authn.Principal{
+				Subject:    apiKeycloakSubject,
+				Name:       "Test User",
+				Email:      "test@example.com",
+				RealmRoles: test.roles,
+			})
+			request = request.WithContext(ctx)
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+			}
+
+			var body struct {
+				Sub         string `json:"sub"`
+				DisplayName string `json:"displayName"`
+				Email       string `json:"email"`
+				GlobalCapabilities struct {
+					IsPlatformAdmin bool `json:"isPlatformAdmin"`
+					CanCreateStack  bool `json:"canCreateStack"`
+				} `json:"globalCapabilities"`
+				TenantID string `json:"tenantID"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+
+			if body.Sub != apiKeycloakSubject {
+				t.Errorf("sub = %q, want %q", body.Sub, apiKeycloakSubject)
+			}
+			if body.DisplayName != "Test User" {
+				t.Errorf("displayName = %q, want %q", body.DisplayName, "Test User")
+			}
+			if body.Email != "test@example.com" {
+				t.Errorf("email = %q, want %q", body.Email, "test@example.com")
+			}
+			if body.GlobalCapabilities.IsPlatformAdmin != test.wantAdmin {
+				t.Errorf("isPlatformAdmin = %t, want %t", body.GlobalCapabilities.IsPlatformAdmin, test.wantAdmin)
+			}
+			if body.GlobalCapabilities.CanCreateStack != test.wantCreate {
+				t.Errorf("canCreateStack = %t, want %t", body.GlobalCapabilities.CanCreateStack, test.wantCreate)
+			}
+			if body.TenantID != string(configuredTenantID) {
+				t.Errorf("tenantID = %q, want %q", body.TenantID, string(configuredTenantID))
+			}
+		})
+	}
+}
+
+func TestMeReturnsUnauthorizedWithoutPrincipal(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(app.NewService(app.Service{}), configuredTenantID)
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnauthorized, response.Body.String())
+	}
+}
+
+func TestAuthenticatedServerProtectsMeRoute(t *testing.T) {
+	server := NewAuthenticatedServer(app.NewService(app.Service{}), apiTestVerifier{}, configuredTenantID)
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnauthorized, response.Body.String())
+	}
+}
