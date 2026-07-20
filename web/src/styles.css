@@ -267,7 +267,8 @@ button:disabled {
 
 .button-row,
 .phase-row,
-.run-tabs {
+.run-tabs,
+.stack-detail-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -279,7 +280,8 @@ button:disabled {
 }
 
 .run-tabs button,
-.phase-row button {
+.phase-row button,
+.stack-detail-tabs a {
   min-height: 32px;
   border: 1px solid #c8cfc4;
   border-radius: 6px;
@@ -290,10 +292,24 @@ button:disabled {
 }
 
 .run-tabs button.active,
-.phase-row button.active {
+.phase-row button.active,
+.stack-detail-tabs a.active {
   border-color: #315b9a;
   color: #24467c;
   background: #eef4ff;
+}
+
+.stack-detail-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.stack-detail-tabs a {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }
 
 .status-row {
