@@ -77,4 +77,27 @@ describe("AppShell", () => {
     expect(markup).toContain("Otto Operator");
     expect(markup).toContain('data-testid="logout-button"');
   });
+
+  it("renders the debug IDs panel when in dev mode", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const { default: AppShell } = await import("./AppShell");
+
+    const testRouter = createMemoryRouter(
+      [{ path: "/", element: <AppShell />, children: [{ index: true, element: <div /> }] }],
+      { initialEntries: ["/"] }
+    );
+
+    const markup = renderToStaticMarkup(
+      <TestAuthWrapper>
+        <RouterProvider router={testRouter} />
+      </TestAuthWrapper>
+    );
+
+    expect(markup).toContain('data-testid="debug-panel"');
+    expect(markup).toContain("IDs (debug)");
+    expect(markup).toContain('data-testid="debug-user-sub"');
+    expect(markup).toContain("user_1");
+    expect(markup).toContain('data-testid="debug-tenant"');
+    expect(markup).toContain("tenant_123");
+  });
 });

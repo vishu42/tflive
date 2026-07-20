@@ -7,6 +7,8 @@ const navItems: { to: string; label: string }[] = [
   { to: "/templates", label: "Templates" }
 ];
 
+const isDebug = import.meta.env.DEV || import.meta.env.VITE_DEBUG === "true";
+
 export default function AppShell() {
   const { me, logout, status } = useAuth();
 
@@ -45,6 +47,25 @@ export default function AppShell() {
       <main className="app-frame-content">
         <Outlet />
       </main>
+      {isDebug && (
+        <details className="debug-panel" data-testid="debug-panel">
+          <summary>IDs (debug)</summary>
+          <dl className="id-grid">
+            <dt>Auth status</dt>
+            <dd data-testid="debug-auth-status">{status}</dd>
+            <dt>User sub</dt>
+            <dd data-testid="debug-user-sub">{me?.sub ?? "-"}</dd>
+            <dt>Display name</dt>
+            <dd data-testid="debug-display-name">{me?.displayName ?? "-"}</dd>
+            <dt>Tenant</dt>
+            <dd data-testid="debug-tenant">{tenantID}</dd>
+            <dt>isPlatformAdmin</dt>
+            <dd data-testid="debug-is-platform-admin">{me?.globalCapabilities.isPlatformAdmin.toString() ?? "-"}</dd>
+            <dt>canCreateStack</dt>
+            <dd data-testid="debug-can-create-stack">{me?.globalCapabilities.canCreateStack.toString() ?? "-"}</dd>
+          </dl>
+        </details>
+      )}
     </div>
   );
 }

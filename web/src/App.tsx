@@ -40,7 +40,6 @@ import TemplateRegistryPanel from "./features/templates/TemplateRegistryPanel";
 import { findSelectedTemplateRevision, nextSelectedTemplateRevisionID } from "./features/templates/templateWorkflow";
 import RunLogsPanel from "./features/runs/RunLogsPanel";
 import RunsPanel from "./features/runs/RunsPanel";
-import IdsPanel from "./shared/IdsPanel";
 
 export default function App() {
   const [repoOwner, setRepoOwner] = useState("hashicorp");
@@ -436,16 +435,7 @@ export default function App() {
 
           <RunLogsPanel logs={logs} selectedPhase={selectedPhase} onSelectPhase={setSelectedPhase} logBody={logBody} />
 
-          <IdsPanel
-            registrationID={registration?.id ?? "-"}
-            templateRevisionID={selectedTemplateRevision?.id ?? registration?.template_revision_id ?? "-"}
-            stackID={(stack?.id ?? selectedStackID) || "-"}
-            stackTemplateID={installedTemplate?.id ?? "-"}
-            desiredRevisionID={installedTemplate?.desired_template_revision_id ?? "-"}
-            appliedRevisionID={installedTemplate?.last_applied_template_revision_id || "-"}
-            planRunID={planRun?.id ?? "-"}
-            applyRunID={applyRun?.id ?? "-"}
-          />
+
         </div>
       </section>
     </main>
