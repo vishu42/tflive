@@ -151,6 +151,17 @@ describe("CreateStackScreen", () => {
     });
   });
 
+  it("does not submit when the name contains only whitespace", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    renderScreen();
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "   " } });
+    fireEvent.click(screen.getByRole("button", { name: /create stack/i }));
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("trims whitespace from the name before submitting", async () => {
     const created = stack({ name: "My Stack" });
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(created));
@@ -166,7 +177,7 @@ describe("CreateStackScreen", () => {
     });
   });
 
-  it("renders the shared boundary screen for a handled API error status", async () => {
+  it("shows an inline error message for a handled API error status", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({ error: "unavailable", message: "service unavailable" }, 503)
     );
