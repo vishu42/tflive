@@ -10,6 +10,7 @@ function authValue(): AuthContextValue {
   return {
     me: {
       sub: "user_1",
+      tenantID: "tenant_123",
       displayName: "Otto Operator",
       globalCapabilities: { isPlatformAdmin: false, canCreateStack: true },
     },

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/auth"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/traits"
@@ -33,6 +34,10 @@ func NewServer(service *app.Service, tenantID traits.TenantID) *Server {
 	// Health routes.
 	// Reports process liveness for probes and local smoke checks.
 	server.mux.HandleFunc("GET /healthz", server.handleHealth)
+
+	// Identity route.
+	// Returns the authenticated principal's identity, global capabilities, and configured tenant.
+	server.mux.HandleFunc("GET /v1/me", server.handleMe)
 
 	// Template revision registration routes.
 	// Starts async registration for a public GitHub Terraform template source.
@@ -86,6 +91,17 @@ func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier, tenan
 	server := NewServer(service, tenantID)
 	server.handler = authn.RequireAuthentication(verifier, "/healthz")(server.mux)
 	return server
+}
+
+// handleMe returns the authenticated principal's identity, global capabilities,
+// and the configured tenant ID.
+func (server *Server) handleMe(response http.ResponseWriter, request *http.Request) {
+	principal, ok := authn.PrincipalFromContext(request.Context())
+	if !ok || principal.Subject == "" {
+		writeError(response, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	writeJSON(response, http.StatusOK, auth.MeFromPrincipal(principal, server.tenantID))
 }
 
 func (server *Server) handleTenantRoute(pattern string, handler http.HandlerFunc) {

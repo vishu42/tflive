@@ -8,6 +8,7 @@ export interface Me {
   sub: string;
   displayName: string;
   email?: string;
+  tenantID: string;
   globalCapabilities: {
     isPlatformAdmin: boolean;
     canCreateStack: boolean;
