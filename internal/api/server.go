@@ -34,6 +34,9 @@ func NewServer(service *app.Service, tenantID traits.TenantID) *Server {
 	// Reports process liveness for probes and local smoke checks.
 	server.mux.HandleFunc("GET /healthz", server.handleHealth)
 
+	// Current user route.
+	server.mux.HandleFunc("GET /v1/me", server.handleGetMe)
+
 	// Template revision registration routes.
 	// Starts async registration for a public GitHub Terraform template source.
 	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/template-revisions", server.handleRegisterTemplate)

@@ -2182,6 +2182,44 @@ func TestSearchUsersUnauthenticated(t *testing.T) {
 	}
 }
 
+func TestGetMeReturnsAuthenticatedUser(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodGet, "/v1/me", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body meResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Subject != apiKeycloakSubject {
+		t.Fatalf("subject = %q, want %q", body.Subject, apiKeycloakSubject)
+	}
+	if !body.GlobalCapabilities.IsPlatformAdmin {
+		t.Fatal("is_platform_admin = false, want true (test principal has platform-admin)")
+	}
+}
+
+func TestGetMeUnauthenticated(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+}
+
 type apiTestDependencies struct {
 	authorizer             *apiAuthorizer
 	stacks                 recordingStackRepository
@@ -2689,4 +2727,16 @@ type apiFakeUserDirectory struct {
 
 func (f *apiFakeUserDirectory) SearchUsers(_ context.Context, _ string, _, _ int) ([]app.DirectoryUser, error) {
 	return f.users, f.err
+}
+
+func (f *apiFakeUserDirectory) GetUserByID(_ context.Context, id string) (app.DirectoryUser, error) {
+	if f.err != nil {
+		return app.DirectoryUser{}, f.err
+	}
+	for _, u := range f.users {
+		if u.ID == id {
+			return u, nil
+		}
+	}
+	return app.DirectoryUser{}, nil
 }
