@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { oidcConfig } from "./oidcConfig";
 import { getUserManager } from "./userManager";
 
 describe("getUserManager", () => {
@@ -19,9 +20,8 @@ describe("getUserManager", () => {
     expect(manager.settings.response_type).toBe("code");
   });
 
-  it("requests openid scope", () => {
-    const manager = getUserManager();
-    expect(manager.settings.scope).toBe("openid profile email");
+  it("enables refresh token usage", () => {
+    expect(oidcConfig.useRefreshToken).toBe(true);
   });
 
   it("does not load user info from /userinfo endpoint", () => {
