@@ -23,6 +23,51 @@ func isPlatformAdmin(principal authn.Principal) bool {
 	return hasRealmRole(principal, "platform-admin")
 }
 
+// StackCapabilities reports which derived permissions the caller has on a stack.
+type StackCapabilities struct {
+	CanView         bool `json:"can_view"`
+	CanOperate      bool `json:"can_operate"`
+	CanApprove      bool `json:"can_approve"`
+	CanManageAccess bool `json:"can_manage_access"`
+}
+
+// AllCapabilities returns a capabilities struct with all permissions granted (for platform admins).
+func AllCapabilities() StackCapabilities {
+	return StackCapabilities{
+		CanView:         true,
+		CanOperate:      true,
+		CanApprove:      true,
+		CanManageAccess: true,
+	}
+}
+
+// ComputeStackCapabilities checks all four permissions for a subject on a stack.
+func ComputeStackCapabilities(ctx context.Context, authorizer authz.Authorizer, subject authz.Subject, stack authz.Stack) (StackCapabilities, error) {
+	if authorizer == nil {
+		return StackCapabilities{}, fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
+	}
+	result, err := authorizer.BatchCheck(ctx, authz.BatchCheckRequest{
+		Checks: []authz.CheckRequest{
+			{Subject: subject, Stack: stack, Permission: authz.PermissionView},
+			{Subject: subject, Stack: stack, Permission: authz.PermissionOperate},
+			{Subject: subject, Stack: stack, Permission: authz.PermissionApprove},
+			{Subject: subject, Stack: stack, Permission: authz.PermissionManageAccess},
+		},
+	})
+	if err != nil {
+		return StackCapabilities{}, err
+	}
+	if len(result.Results) != 4 {
+		return StackCapabilities{}, fmt.Errorf("%w: batch check returned %d results, want 4", authz.ErrMalformedResponse, len(result.Results))
+	}
+	return StackCapabilities{
+		CanView:         result.Results[0].Allowed,
+		CanOperate:      result.Results[1].Allowed,
+		CanApprove:      result.Results[2].Allowed,
+		CanManageAccess: result.Results[3].Allowed,
+	}, nil
+}
+
 func requirePrincipal(ctx context.Context) (authn.Principal, error) {
 	principal, ok := authn.PrincipalFromContext(ctx)
 	if !ok || principal.Subject == "" {

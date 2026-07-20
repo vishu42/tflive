@@ -1482,3 +1482,30 @@ func (randomStackTemplateIDGenerator) NewStackTemplateID() traits.StackTemplateI
 	}
 	return traits.StackTemplateID("stack_template_" + hex.EncodeToString(bytes[:]))
 }
+
+// StackCapabilitiesFor returns effective capabilities for the caller on a given stack.
+// Platform admins receive all capabilities without authorization checks.
+func (service *Service) StackCapabilitiesFor(ctx context.Context, stackID traits.StackID) (StackCapabilities, error) {
+	principal, err := requirePrincipal(ctx)
+	if err != nil {
+		return StackCapabilities{}, err
+	}
+	if service.Authorizer == nil {
+		return StackCapabilities{}, fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
+	}
+	if isPlatformAdmin(principal) {
+		return AllCapabilities(), nil
+	}
+	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
+	if err != nil {
+		return StackCapabilities{}, err
+	}
+	stack, err := authz.StackFromID(string(stackID))
+	if errors.Is(err, authz.ErrInvalidInput) {
+		return StackCapabilities{}, nil
+	}
+	if err != nil {
+		return StackCapabilities{}, err
+	}
+	return ComputeStackCapabilities(ctx, service.Authorizer, subject, stack)
+}

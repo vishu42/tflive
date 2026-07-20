@@ -1610,8 +1610,6 @@ func TestStackRoleRoutesUseInheritedPermissions(t *testing.T) {
 		status     int
 		permission authz.Permission
 	}{
-		{name: "viewer lists stacks", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks", status: http.StatusOK, permission: authz.PermissionView},
-		{name: "viewer reads stack", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123", status: http.StatusOK, permission: authz.PermissionView},
 		{name: "operator installs template", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","selected_ref":"main","config":{}}`, status: http.StatusCreated, permission: authz.PermissionOperate},
 		{name: "owner operates config", role: authz.RoleOwner, method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusOK, permission: authz.PermissionOperate},
 		{name: "operator upgrades template", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusOK, permission: authz.PermissionOperate},
@@ -2217,6 +2215,106 @@ func TestGetMeUnauthenticated(t *testing.T) {
 
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestGetStackIncludesEffectiveCapabilities(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stacks.view = app.StackView{
+		Stack: traits.Stack{
+			ID:       traits.StackID("stack_123"),
+			TenantID: configuredTenantID,
+			Name:     "Acme",
+			Slug:     "acme",
+		},
+	}
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack_123", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body stackViewResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !body.EffectiveCapabilities.CanView {
+		t.Fatal("can_view = false, want true (platform-admin)")
+	}
+	if !body.EffectiveCapabilities.CanOperate {
+		t.Fatal("can_operate = false, want true (platform-admin)")
+	}
+	if !body.EffectiveCapabilities.CanApprove {
+		t.Fatal("can_approve = false, want true (platform-admin)")
+	}
+	if !body.EffectiveCapabilities.CanManageAccess {
+		t.Fatal("can_manage_access = false, want true (platform-admin)")
+	}
+}
+
+func TestListStacksIncludesEffectiveCapabilities(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stacks.list = []traits.Stack{
+		{ID: "stack_123", TenantID: configuredTenantID, Name: "Acme", Slug: "acme", CreatedAt: time.Unix(1, 0)},
+	}
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body []stackResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body) != 1 {
+		t.Fatalf("len(stacks) = %d, want 1", len(body))
+	}
+	if !body[0].EffectiveCapabilities.CanView {
+		t.Fatal("can_view = false, want true (platform-admin)")
+	}
+}
+
+func TestGetStackCapabilitiesReflectRole(t *testing.T) {
+	t.Parallel()
+
+	deps := newPermissionMatrixDependencies()
+	deps.authorizer.enforceRole = true
+	deps.authorizer.role = authz.RoleViewer
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := ordinaryAuthenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack_123", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body stackViewResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !body.EffectiveCapabilities.CanView {
+		t.Fatal("can_view = false, want true")
+	}
+	if body.EffectiveCapabilities.CanOperate {
+		t.Fatal("can_operate = true, want false for viewer")
+	}
+	if body.EffectiveCapabilities.CanApprove {
+		t.Fatal("can_approve = true, want false for viewer")
+	}
+	if body.EffectiveCapabilities.CanManageAccess {
+		t.Fatal("can_manage_access = true, want false for viewer")
 	}
 }
 
