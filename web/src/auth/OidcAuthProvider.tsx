@@ -74,6 +74,18 @@ export default function OidcAuthProvider() {
     getUserManager().signoutRedirect();
   }, []);
 
+  useEffect(() => {
+    if (!meError) return;
+    if (meError instanceof ApiRequestError && meError.status === 401) {
+      if (!loginCalled.current) {
+        loginCalled.current = true;
+        login();
+      }
+    } else {
+      setStatus("error");
+    }
+  }, [meError]);
+
   if (meLoading) {
     return null;
   }
@@ -90,14 +102,6 @@ export default function OidcAuthProvider() {
   }
 
   if (meError) {
-    if (meError instanceof ApiRequestError && meError.status === 401) {
-      if (!loginCalled.current) {
-        loginCalled.current = true;
-        login();
-      }
-    } else {
-      setStatus("error");
-    }
     return null;
   }
 

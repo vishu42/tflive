@@ -9,7 +9,7 @@ vi.mock("../auth/OidcAuthProvider");
 
 function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
   return {
-    me: { sub: "user_1", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false } },
+    me: { sub: "user_1", tenantID: "tenant_123", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false } },
     status: "authenticated",
     login: () => {},
     logout: () => {},
@@ -106,7 +106,6 @@ describe("routeConfig", () => {
   it("renders the stack template screen at /stacks/:stackId/template", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
-    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
     const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
     const { queryKeys } = await import("../api/queryKeys");
 
@@ -130,9 +129,9 @@ describe("routeConfig", () => {
     const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/template"] });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
-        <MockAuthProvider>
+        <AuthContext.Provider value={authValue()}>
           <RouterProvider router={testRouter} />
-        </MockAuthProvider>
+        </AuthContext.Provider>
       </QueryClientProvider>
     );
 

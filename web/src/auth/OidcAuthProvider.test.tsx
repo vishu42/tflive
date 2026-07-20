@@ -12,9 +12,10 @@ vi.mock("./useMeQuery", () => ({
     return {
       data: options?.enabled
         ? {
-            sub: "user-1",
-            displayName: "testuser",
-            globalCapabilities: { isPlatformAdmin: true, canCreateStack: true },
+          sub: "user-1",
+          tenantID: "tenant_123",
+          displayName: "testuser",
+          globalCapabilities: { isPlatformAdmin: true, canCreateStack: true },
           }
         : null,
       error: null,

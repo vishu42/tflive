@@ -13,7 +13,7 @@ import ServiceUnavailable from "../app/ServiceUnavailable";
 
 function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
   return {
-    me: { sub: "s1", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false } },
+    me: { sub: "s1", tenantID: "tenant_123", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false } },
     status: "authenticated",
     login: () => {},
     logout: () => {},

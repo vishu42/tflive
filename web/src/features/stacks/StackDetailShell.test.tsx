@@ -9,7 +9,7 @@ vi.mock("../../auth/OidcAuthProvider");
 
 function authValue(): AuthContextValue {
   return {
-    me: { sub: "user_1", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false } },
+    me: { sub: "user_1", tenantID: "tenant_123", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false } },
     status: "authenticated",
     login: () => {},
     logout: () => {},

@@ -13,6 +13,7 @@ function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue 
   return {
     me: {
       sub: "user_1",
+      tenantID: "tenant_123",
       displayName: "Test User",
       globalCapabilities: { isPlatformAdmin: false, canCreateStack: false }
     },
