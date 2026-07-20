@@ -49,8 +49,13 @@ export default function OidcAuthProvider() {
         } else if (user?.expired && user.refresh_token) {
           getUserManager().signinSilent()
             .then((refreshedUser) => {
-              setMe(convertUserToMe(refreshedUser));
-              setStatus("authenticated");
+              if (refreshedUser) {
+                setMe(convertUserToMe(refreshedUser));
+                setStatus("authenticated");
+              } else {
+                setStatus("unauthenticated");
+                getUserManager().signinRedirect();
+              }
             })
             .catch(() => {
               setStatus("unauthenticated");

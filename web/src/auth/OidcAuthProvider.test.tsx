@@ -66,8 +66,8 @@ describe("OidcAuthProvider", () => {
     vi.resetModules();
   });
 
-  function renderProvider(children: React.ReactNode) {
-    const { createMemoryRouter, RouterProvider } = require("react-router-dom");
+  async function renderProvider(children: React.ReactNode) {
+    const { createMemoryRouter, RouterProvider } = await import("react-router-dom");
     const router = createMemoryRouter(
       [
         {
@@ -101,8 +101,7 @@ describe("OidcAuthProvider", () => {
     currentPathname = "/stacks";
 
     const OidcAuthProvider = await importProvider();
-    const { container } = renderProvider(<OidcAuthProvider />);
-
+    const { container } = await renderProvider(<OidcAuthProvider />);
     await waitFor(() => {
       expect(container.innerHTML).toContain('data-testid="child"');
     });
@@ -114,8 +113,7 @@ describe("OidcAuthProvider", () => {
     mockSigninRedirect.mockResolvedValue(undefined);
 
     const OidcAuthProvider = await importProvider();
-    renderProvider(<OidcAuthProvider />);
-
+    await renderProvider(<OidcAuthProvider />);
     await waitFor(() => {
       expect(mockSigninRedirect).toHaveBeenCalled();
     });
@@ -125,8 +123,7 @@ describe("OidcAuthProvider", () => {
     mockGetUser.mockRejectedValue(new Error("Network error"));
 
     const OidcAuthProvider = await importProvider();
-    const { container } = renderProvider(<OidcAuthProvider />);
-
+    const { container } = await renderProvider(<OidcAuthProvider />);
     await waitFor(() => {
       expect(container.innerHTML).toContain('data-testid="auth-error"');
       expect(container.innerHTML).toContain('data-testid="auth-retry-button"');
@@ -139,8 +136,7 @@ describe("OidcAuthProvider", () => {
     mockSigninRedirectCallback.mockResolvedValue(userFixture());
 
     const OidcAuthProvider = await importProvider();
-    renderProvider(<OidcAuthProvider />);
-
+    await renderProvider(<OidcAuthProvider />);
     await waitFor(() => {
       expect(mockSigninRedirectCallback).toHaveBeenCalled();
     });
@@ -156,8 +152,7 @@ describe("OidcAuthProvider", () => {
     mockSigninRedirect.mockResolvedValue(undefined);
 
     const OidcAuthProvider = await importProvider();
-    renderProvider(<OidcAuthProvider />);
-
+    await renderProvider(<OidcAuthProvider />);
     await waitFor(() => {
       expect(mockSignoutRedirectCallback).toHaveBeenCalled();
     });
