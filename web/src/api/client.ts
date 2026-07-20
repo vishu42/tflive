@@ -182,6 +182,8 @@ async function fetchWithAuth(path: string, init: RequestInit): Promise<Response>
         retryHeaders.set("authorization", `Bearer ${retryUser.access_token}`);
         return fetch(path, { method: "GET", ...init, headers: retryHeaders });
       }
+      getUserManager().signinRedirect();
+      return response;
     } catch {
       getUserManager().signinRedirect();
       return response;
