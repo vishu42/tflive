@@ -1,9 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter, Outlet, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StackCapabilities } from "../../auth/types";
 import { AuthContext } from "../../auth/AuthContext";
 import type { AuthContextValue } from "../../auth/AuthContext";
+
+vi.mock("../../auth/OidcAuthProvider", () => ({
+  default: () => <Outlet />,
+}));
 
 function authValue(): AuthContextValue {
   return {
