@@ -107,10 +107,10 @@ function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue 
   };
 }
 
-function renderScreen(queryClient: QueryClient) {
+function renderScreen(queryClient: QueryClient, auth?: AuthContextValue) {
   return render(
     <QueryClientProvider client={queryClient}>
-      <AuthContext.Provider value={authValue()}>
+      <AuthContext.Provider value={auth ?? authValue()}>
         <MemoryRouter initialEntries={["/stacks/stack_1/template"]}>
           <Routes>
             <Route path="/stacks/:stackId/template" element={<StackTemplateScreen />} />
@@ -217,5 +217,50 @@ describe("StackTemplateScreen", () => {
     renderScreen(queryClient);
 
     await waitFor(() => expect(screen.getByTestId("route-service-unavailable")).toBeTruthy());
+  });
+
+  it("renders the generic error state when the API returns 401", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "unauthorized", message: "unauthorized" }), {
+        status: 401,
+        headers: { "content-type": "application/json" }
+      })
+    );
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), stackView(allAllowed, [stackTemplate()]));
+
+    renderScreen(queryClient);
+
+    await waitFor(() => expect(screen.getByTestId("stack-template-error")).toBeTruthy());
+  });
+
+  it("renders AccessDenied when the API returns 403", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "forbidden", message: "forbidden" }), {
+        status: 403,
+        headers: { "content-type": "application/json" }
+      })
+    );
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), stackView(allAllowed, [stackTemplate()]));
+
+    renderScreen(queryClient);
+
+    await waitFor(() => expect(screen.getByTestId("route-access-denied")).toBeTruthy());
+  });
+
+  it("renders NotFound when the API returns 404", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "not_found", message: "not found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" }
+      })
+    );
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), stackView(allAllowed, [stackTemplate()]));
+
+    renderScreen(queryClient);
+
+    await waitFor(() => expect(screen.getByTestId("route-not-found")).toBeTruthy());
   });
 });

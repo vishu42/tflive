@@ -78,10 +78,10 @@ function seedCapabilities(queryClient: QueryClient, capabilities: StackCapabilit
   queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), { stack: stack(capabilities), templates: [] });
 }
 
-function renderScreen(queryClient: QueryClient) {
+function renderScreen(queryClient: QueryClient, auth?: AuthContextValue) {
   return render(
     <QueryClientProvider client={queryClient}>
-      <AuthContext.Provider value={authValue()}>
+      <AuthContext.Provider value={auth ?? authValue()}>
         <MemoryRouter initialEntries={["/stacks/stack_1/runs/run_1"]}>
           <Routes>
             <Route path="/stacks/:stackId/runs/:runId" element={<RunDetailScreen />} />
@@ -120,6 +120,30 @@ describe("RunDetailScreen", () => {
     renderScreen(testQueryClient());
 
     await waitFor(() => expect(screen.getByTestId("route-service-unavailable")).toBeTruthy());
+  });
+
+  it("renders the generic error state when the API returns 401", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ error: "unauthorized", message: "unauthorized" }, 401));
+
+    renderScreen(testQueryClient());
+
+    await waitFor(() => expect(screen.getByTestId("run-detail-error")).toBeTruthy());
+  });
+
+  it("renders AccessDenied when the API returns 403", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ error: "forbidden", message: "forbidden" }, 403));
+
+    renderScreen(testQueryClient());
+
+    await waitFor(() => expect(screen.getByTestId("route-access-denied")).toBeTruthy());
+  });
+
+  it("renders NotFound when the API returns 404", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ error: "not_found", message: "not found" }, 404));
+
+    renderScreen(testQueryClient());
+
+    await waitFor(() => expect(screen.getByTestId("route-not-found")).toBeTruthy());
   });
 
   it("renders a retryable generic error state for unhandled failures", async () => {
