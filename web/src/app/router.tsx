@@ -11,6 +11,8 @@ import StacksListScreen from "../features/stacks/StacksListScreen";
 import StackDetailShell from "../features/stacks/StackDetailShell";
 import StackTemplateScreen from "../features/stacks/StackTemplateScreen";
 import TemplateRegistryScreen from "../features/templates/TemplateRegistryScreen";
+import RunsListScreen from "../features/runs/RunsListScreen";
+import RunDetailScreen from "../features/runs/RunDetailScreen";
 
 // The legacy console renders unchanged at "/" until the feature screens
 // fully replace it; routes still rendering RoutePlaceholder are reserved
@@ -41,8 +43,8 @@ export const routeConfig: RouteObject[] = [
                 children: [
                   { index: true, element: <RoutePlaceholder title="Stack overview" /> },
                   { path: "template", element: <StackTemplateScreen /> },
-                  { path: "runs", element: <RoutePlaceholder title="Runs" /> },
-                  { path: "runs/:runId", element: <RoutePlaceholder title="Run detail" /> },
+                  { path: "runs", element: <RunsListScreen /> },
+                  { path: "runs/:runId", element: <RunDetailScreen /> },
                   {
                     path: "access",
                     element: <RequireCapability capability="canManageAccess" mode="route" />,

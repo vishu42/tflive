@@ -81,16 +81,28 @@ describe("StackDetailShell", () => {
 
   it("renders each nested route's content inside the shell", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
-    for (const path of ["/stacks/stack_1/runs", "/stacks/stack_1/runs/run_1", "/stacks/stack_1/access"]) {
+    for (const path of ["/stacks/stack_1/access"]) {
       const markup = await renderStackRoute(path, allAllowed);
       expect(markup, `expected shell chrome at ${path}`).toContain('data-testid="stack-detail-shell"');
       expect(markup, `expected nested content at ${path}`).toContain('data-testid="route-placeholder"');
     }
     // The template tab is a real screen now; its revisions query is unseeded
     // here, so the shell renders its loading state as the nested content.
-    const markup = await renderStackRoute("/stacks/stack_1/template", allAllowed);
-    expect(markup).toContain('data-testid="stack-detail-shell"');
-    expect(markup).toContain('data-testid="stack-template-loading"');
+    const templateMarkup = await renderStackRoute("/stacks/stack_1/template", allAllowed);
+    expect(templateMarkup).toContain('data-testid="stack-detail-shell"');
+    expect(templateMarkup).toContain('data-testid="stack-template-loading"');
+
+    // Runs list is a real screen too; the seeded stack view has no installed
+    // templates, so it renders its empty state as the nested content.
+    const runsMarkup = await renderStackRoute("/stacks/stack_1/runs", allAllowed);
+    expect(runsMarkup).toContain('data-testid="stack-detail-shell"');
+    expect(runsMarkup).toContain('data-testid="runs-list-empty"');
+
+    // Run detail's run query is unseeded here (no run has been started in
+    // this test), so the shell renders its loading state as the nested content.
+    const runDetailMarkup = await renderStackRoute("/stacks/stack_1/runs/run_1", allAllowed);
+    expect(runDetailMarkup).toContain('data-testid="stack-detail-shell"');
+    expect(runDetailMarkup).toContain('data-testid="run-detail-loading"');
   });
 
   it("marks the tab matching the current route as current", async () => {

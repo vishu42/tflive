@@ -84,12 +84,7 @@ describe("routeConfig", () => {
       },
       templates: []
     });
-    const stackScopedPaths = [
-      "/stacks/stack_1",
-      "/stacks/stack_1/runs",
-      "/stacks/stack_1/runs/run_1",
-      "/stacks/stack_1/access"
-    ];
+    const stackScopedPaths = ["/stacks/stack_1", "/stacks/stack_1/access"];
     for (const path of stackScopedPaths) {
       const testRouter = createMemoryRouter(routeConfig, { initialEntries: [path] });
       const markup = renderToStaticMarkup(
@@ -101,6 +96,29 @@ describe("routeConfig", () => {
       );
       expect(markup, `expected a placeholder at ${path}`).toContain('data-testid="route-placeholder"');
     }
+
+    // Runs list and run detail are real screens now (not reserved
+    // placeholders) — the seeded stack view has no installed templates, and
+    // no run has been started, so each renders its own empty/loading state.
+    const runsRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/runs"] });
+    const runsMarkup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } } })}>
+          <RouterProvider router={runsRouter} />
+        </AuthContext.Provider>
+      </QueryClientProvider>
+    );
+    expect(runsMarkup).toContain('data-testid="runs-list-empty"');
+
+    const runDetailRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/runs/run_1"] });
+    const runDetailMarkup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } } })}>
+          <RouterProvider router={runDetailRouter} />
+        </AuthContext.Provider>
+      </QueryClientProvider>
+    );
+    expect(runDetailMarkup).toContain('data-testid="run-detail-loading"');
   });
 
   it("renders the stack template screen at /stacks/:stackId/template", async () => {
