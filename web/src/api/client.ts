@@ -1,4 +1,5 @@
 import { getUserManager } from "../auth/userManager";
+import type { Me } from "../auth/types";
 import type {
   ApiErrorBody,
   Operation,
@@ -59,6 +60,10 @@ interface StartRunRequest {
 
 interface CancelRunRequest {
   reason: string;
+}
+
+export function getMe(): Promise<Me> {
+  return requestJSON("/v1/me");
 }
 
 export function registerTemplate(tenantID: string, body: RegisterTemplateRequest): Promise<TemplateRegistration> {
