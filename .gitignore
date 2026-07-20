@@ -1,6 +1,6 @@
 .env
 .worktrees/
-web/node_modules/
+node_modules
 web/dist/
 tmp
 
@@ -9,3 +9,7 @@ tmp
 CLAUDE.local.md
 
 worktrees
+
+
+
+.vite
