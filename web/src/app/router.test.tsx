@@ -37,7 +37,7 @@ describe("routeConfig", () => {
 
     // The default mock role ("operator") has canCreateStack: true (see auth/mockUsers.ts),
     // so /stacks/new needs no seeded query data — it resolves from useAuth() alone.
-    const ungatedAndGloballyAllowedPaths = ["/stacks", "/stacks/new", "/templates", "/auth/callback"];
+    const ungatedAndGloballyAllowedPaths = ["/stacks/new", "/templates", "/auth/callback"];
     for (const path of ungatedAndGloballyAllowedPaths) {
       const testRouter = createMemoryRouter(routeConfig, { initialEntries: [path] });
       const markup = renderToStaticMarkup(
@@ -88,6 +88,45 @@ describe("routeConfig", () => {
       );
       expect(markup, `expected a placeholder at ${path}`).toContain('data-testid="route-placeholder"');
     }
+  });
+
+  it("renders the stacks list screen at /stacks", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const { routeConfig } = await import("./router");
+    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const { queryKeys } = await import("../api/queryKeys");
+
+    // retry: false + staleTime: Infinity: this test seeds the cache directly and
+    // must never let TanStack Query's default refetch-on-mount fire a real,
+    // unmocked fetch() for stale data — see useStackCapabilities.test.tsx.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    queryClient.setQueryData(queryKeys.stacks("tenant_123"), [
+      {
+        id: "stack_1",
+        tenant_id: "tenant_123",
+        name: "Payments",
+        slug: "payments",
+        tags: {},
+        default_credential_ids: [],
+        created_by: "user_123",
+        created_at: "2026-07-19T00:00:00Z",
+        effectiveCapabilities: { canView: true, canOperate: false, canApprove: false, canManageAccess: false }
+      }
+    ]);
+
+    const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks"] });
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <MockAuthProvider>
+          <RouterProvider router={testRouter} />
+        </MockAuthProvider>
+      </QueryClientProvider>
+    );
+
+    expect(markup).toContain('data-testid="stacks-list"');
+    expect(markup).toContain("Payments");
+    expect(markup).not.toContain('data-testid="route-placeholder"');
   });
 
   it("renders a 404, not a permission leak, when canView is denied for a stack route", async () => {
