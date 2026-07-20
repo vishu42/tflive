@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 import type { Me } from "./types";
 
-export type AuthStatus = "loading" | "authenticated" | "unauthenticated";
+export type AuthStatus = "loading" | "authenticated" | "unauthenticated" | "error";
 
 export interface AuthContextValue {
   me: Me | null;
