@@ -16,6 +16,9 @@ interface VariablesPanelProps {
   onUpgrade: () => void;
   upgradeBusy: boolean;
   installedTemplateStatus: string;
+  // When set, every input and action renders disabled and the reason is
+  // shown — the capability gate's denied-with-reason state (AUTH-020).
+  disabledReason?: string;
 }
 
 export default function VariablesPanel({
@@ -31,8 +34,10 @@ export default function VariablesPanel({
   canUpgrade,
   onUpgrade,
   upgradeBusy,
-  installedTemplateStatus
+  installedTemplateStatus,
+  disabledReason
 }: VariablesPanelProps) {
+  const locked = Boolean(disabledReason);
   return (
     <section className="panel wide">
       <h2>Variables</h2>
@@ -48,25 +53,31 @@ export default function VariablesPanel({
                 value={variableValues[variable.name] ?? ""}
                 onChange={(event) => onVariableValueChange(variable.name, event.target.value)}
                 placeholder={variable.type_expression || "value"}
+                disabled={locked}
               />
             </label>
           ))}
         </div>
       )}
       <div className="button-row form-actions">
-        <button className="secondary-button" disabled={!canInstall || installBusy} onClick={onInstall} type="button">
+        <button className="secondary-button" disabled={locked || !canInstall || installBusy} onClick={onInstall} type="button">
           {installBusy ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
           Install template
         </button>
-        <button className="secondary-button" disabled={!canSaveConfig || configBusy} onClick={onSaveConfig} type="button">
+        <button className="secondary-button" disabled={locked || !canSaveConfig || configBusy} onClick={onSaveConfig} type="button">
           {configBusy ? <Loader2 size={16} className="spin" /> : <Save size={16} />}
           Save config
         </button>
-        <button className="primary-button" disabled={!canUpgrade || upgradeBusy} onClick={onUpgrade} type="button">
+        <button className="primary-button" disabled={locked || !canUpgrade || upgradeBusy} onClick={onUpgrade} type="button">
           {upgradeBusy ? <Loader2 size={16} className="spin" /> : <ArrowUpCircle size={16} />}
           Upgrade
         </button>
       </div>
+      {disabledReason && (
+        <p className="muted" data-testid="variables-disabled-reason">
+          {disabledReason}
+        </p>
+      )}
       <StatusRow label="Installed template" value={installedTemplateStatus} />
     </section>
   );

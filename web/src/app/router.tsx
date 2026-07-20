@@ -9,6 +9,7 @@ import OidcAuthProvider from "../auth/OidcAuthProvider";
 import CallbackPage from "../auth/CallbackPage";
 import StacksListScreen from "../features/stacks/StacksListScreen";
 import StackDetailShell from "../features/stacks/StackDetailShell";
+import StackTemplateScreen from "../features/stacks/StackTemplateScreen";
 import TemplateRegistryScreen from "../features/templates/TemplateRegistryScreen";
 
 // The legacy console renders unchanged at "/" until the feature screens
@@ -39,7 +40,7 @@ export const routeConfig: RouteObject[] = [
                 element: <StackDetailShell />,
                 children: [
                   { index: true, element: <RoutePlaceholder title="Stack overview" /> },
-                  { path: "template", element: <RoutePlaceholder title="Stack template" /> },
+                  { path: "template", element: <StackTemplateScreen /> },
                   { path: "runs", element: <RoutePlaceholder title="Runs" /> },
                   { path: "runs/:runId", element: <RoutePlaceholder title="Run detail" /> },
                   {

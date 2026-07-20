@@ -86,7 +86,6 @@ describe("routeConfig", () => {
     });
     const stackScopedPaths = [
       "/stacks/stack_1",
-      "/stacks/stack_1/template",
       "/stacks/stack_1/runs",
       "/stacks/stack_1/runs/run_1",
       "/stacks/stack_1/access"
@@ -102,6 +101,44 @@ describe("routeConfig", () => {
       );
       expect(markup, `expected a placeholder at ${path}`).toContain('data-testid="route-placeholder"');
     }
+  });
+
+  it("renders the stack template screen at /stacks/:stackId/template", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const { routeConfig } = await import("./router");
+    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const { queryKeys } = await import("../api/queryKeys");
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), {
+      stack: {
+        id: "stack_1",
+        tenant_id: "tenant_123",
+        name: "Stack",
+        slug: "stack",
+        tags: {},
+        default_credential_ids: [],
+        created_by: "user_123",
+        created_at: "2026-07-19T00:00:00Z",
+        effectiveCapabilities: { canView: true, canOperate: true, canApprove: true, canManageAccess: true }
+      },
+      templates: []
+    });
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), []);
+
+    const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/template"] });
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <MockAuthProvider>
+          <RouterProvider router={testRouter} />
+        </MockAuthProvider>
+      </QueryClientProvider>
+    );
+
+    expect(markup).toContain('data-testid="stack-template-screen"');
+    expect(markup).toContain("Template revision");
+    expect(markup).not.toContain('data-testid="route-placeholder"');
   });
 
   it("renders the stacks list screen at /stacks", async () => {
