@@ -34,6 +34,90 @@ button svg {
   padding: 24px;
 }
 
+.app-frame {
+  min-height: 100vh;
+}
+
+.app-frame-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  border-bottom: 1px solid #d2d7cc;
+  padding: 12px 24px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(31 41 51 / 0.05);
+}
+
+.app-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.app-nav a {
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #293541;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.app-nav a:hover {
+  color: #1f2933;
+  background: #eef1ea;
+}
+
+.app-frame-identity {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+}
+
+.identity-menu {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #293541;
+  font-weight: 650;
+}
+
+.identity-menu button {
+  border: 1px solid #c0c8bc;
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: #293541;
+  background: #f8faf7;
+  cursor: pointer;
+}
+
+.app-frame-identity .runtime-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-frame-identity .runtime-value {
+  min-height: 0;
+  padding: 5px 8px;
+  font-size: 0.8rem;
+}
+
+.app-frame-content {
+  width: min(1280px, 100%);
+  margin: 0 auto;
+  padding: 24px;
+}
+
+/* The legacy console still carries its own standalone shell padding; zero it
+   out when nested inside the router frame so "/" doesn't double-pad. */
+.app-frame-content .app-shell {
+  min-height: 0;
+  padding: 0;
+}
+
 .workspace {
   width: min(1280px, 100%);
   margin: 0 auto;
@@ -452,6 +536,18 @@ a.primary-button {
 @media (max-width: 760px) {
   .app-shell {
     padding: 16px;
+  }
+
+  .app-frame-header {
+    padding: 12px 16px;
+  }
+
+  .app-frame-content {
+    padding: 16px;
+  }
+
+  .app-frame-content .app-shell {
+    padding: 0;
   }
 
   .workspace-header {
