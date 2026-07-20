@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { AuthContext } from "./AuthContext";
 import { getUserManager } from "./userManager";
@@ -11,6 +11,7 @@ export default function OidcAuthProvider() {
   const navigate = useNavigate();
 
   const { data: me, error: meError, isLoading: meLoading } = useMeQuery({ enabled: oidcResolved });
+  const loginCalled = useRef(false);
 
   useEffect(() => {
     const isCallbackPath = location.pathname === "/auth/callback";
@@ -88,7 +89,10 @@ export default function OidcAuthProvider() {
   }
 
   if (meError) {
-    login();
+    if (!loginCalled.current) {
+      loginCalled.current = true;
+      login();
+    }
     return null;
   }
 
