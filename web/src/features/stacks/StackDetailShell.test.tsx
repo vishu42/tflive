@@ -1,14 +1,26 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter, Outlet, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StackCapabilities } from "../../auth/types";
+import { AuthContext } from "../../auth/AuthContext";
+import type { AuthContextValue } from "../../auth/AuthContext";
+
+vi.mock("../../auth/OidcAuthProvider");
+
+function authValue(): AuthContextValue {
+  return {
+    me: { sub: "user_1", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false } },
+    status: "authenticated",
+    login: () => {},
+    logout: () => {},
+  };
+}
 
 // Renders the app's real routeConfig at a stack-scoped path with the stack
 // query cache pre-seeded, mirroring router.test.tsx: retry: false +
 // staleTime: Infinity so the seeded data never triggers a real fetch().
 async function renderStackRoute(path: string, capabilities: StackCapabilities) {
   const { routeConfig } = await import("../../app/router");
-  const { default: MockAuthProvider } = await import("../../auth/MockAuthProvider");
   const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
   const { queryKeys } = await import("../../api/queryKeys");
 
@@ -31,9 +43,9 @@ async function renderStackRoute(path: string, capabilities: StackCapabilities) {
   const testRouter = createMemoryRouter(routeConfig, { initialEntries: [path] });
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>
-      <MockAuthProvider>
+      <AuthContext.Provider value={authValue()}>
         <RouterProvider router={testRouter} />
-      </MockAuthProvider>
+      </AuthContext.Provider>
     </QueryClientProvider>
   );
 }

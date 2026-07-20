@@ -5,6 +5,8 @@ import AppShell from "./AppShell";
 import NotFound from "./NotFound";
 import RoutePlaceholder from "./RoutePlaceholder";
 import RequireCapability from "../auth/RequireCapability";
+import OidcAuthProvider from "../auth/OidcAuthProvider";
+import CallbackPage from "../auth/CallbackPage";
 import StacksListScreen from "../features/stacks/StacksListScreen";
 import StackDetailShell from "../features/stacks/StackDetailShell";
 import TemplateRegistryScreen from "../features/templates/TemplateRegistryScreen";
@@ -17,38 +19,43 @@ import TemplateRegistryScreen from "../features/templates/TemplateRegistryScreen
 export const routeConfig: RouteObject[] = [
   {
     path: "/",
-    element: <AppShell />,
+    element: <OidcAuthProvider />,
     children: [
-      { index: true, element: <App /> },
-      { path: "stacks", element: <StacksListScreen /> },
       {
-        path: "stacks/new",
-        element: <RequireCapability capability="canCreateStack" mode="route" />,
-        children: [{ index: true, element: <RoutePlaceholder title="Create stack" /> }]
-      },
-      {
-        path: "stacks/:stackId",
-        element: <RequireCapability capability="canView" mode="route" />,
+        element: <AppShell />,
         children: [
+          { index: true, element: <App /> },
+          { path: "stacks", element: <StacksListScreen /> },
           {
-            element: <StackDetailShell />,
+            path: "stacks/new",
+            element: <RequireCapability capability="canCreateStack" mode="route" />,
+            children: [{ index: true, element: <RoutePlaceholder title="Create stack" /> }]
+          },
+          {
+            path: "stacks/:stackId",
+            element: <RequireCapability capability="canView" mode="route" />,
             children: [
-              { index: true, element: <RoutePlaceholder title="Stack overview" /> },
-              { path: "template", element: <RoutePlaceholder title="Stack template" /> },
-              { path: "runs", element: <RoutePlaceholder title="Runs" /> },
-              { path: "runs/:runId", element: <RoutePlaceholder title="Run detail" /> },
               {
-                path: "access",
-                element: <RequireCapability capability="canManageAccess" mode="route" />,
-                children: [{ index: true, element: <RoutePlaceholder title="Access" /> }]
+                element: <StackDetailShell />,
+                children: [
+                  { index: true, element: <RoutePlaceholder title="Stack overview" /> },
+                  { path: "template", element: <RoutePlaceholder title="Stack template" /> },
+                  { path: "runs", element: <RoutePlaceholder title="Runs" /> },
+                  { path: "runs/:runId", element: <RoutePlaceholder title="Run detail" /> },
+                  {
+                    path: "access",
+                    element: <RequireCapability capability="canManageAccess" mode="route" />,
+                    children: [{ index: true, element: <RoutePlaceholder title="Access" /> }]
+                  }
+                ]
               }
             ]
-          }
+          },
+          { path: "templates", element: <TemplateRegistryScreen /> },
+          { path: "auth/callback", element: <CallbackPage /> },
+          { path: "*", element: <NotFound /> }
         ]
-      },
-      { path: "templates", element: <TemplateRegistryScreen /> },
-      { path: "auth/callback", element: <RoutePlaceholder title="Signing in" /> },
-      { path: "*", element: <NotFound /> }
+      }
     ]
   }
 ];

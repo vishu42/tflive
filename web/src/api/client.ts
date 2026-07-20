@@ -1,3 +1,4 @@
+import { getUserManager } from "../auth/userManager";
 import type {
   ApiErrorBody,
   Operation,
@@ -148,33 +149,65 @@ export function cancelRun(tenantID: string, runID: string, body: CancelRunReques
   });
 }
 
+async function authHeaders(): Promise<HeadersInit> {
+  const user = await getUserManager().getUser();
+  if (!user?.access_token) {
+    return {};
+  }
+  return { authorization: `Bearer ${user.access_token}` };
+}
+
+async function fetchWithAuth(path: string, init: RequestInit): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (!headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+
+  const authHdrs = await authHeaders();
+  for (const [key, value] of Object.entries(authHdrs)) {
+    headers.set(key, value);
+  }
+
+  const response = await fetch(path, { method: "GET", ...init, headers });
+
+  if (response.status === 401) {
+    try {
+      await getUserManager().signinSilent();
+      const retryUser = await getUserManager().getUser();
+      if (retryUser?.access_token) {
+        const retryHeaders = new Headers(init.headers);
+        if (!retryHeaders.has("content-type")) {
+          retryHeaders.set("content-type", "application/json");
+        }
+        retryHeaders.set("authorization", `Bearer ${retryUser.access_token}`);
+        return fetch(path, { method: "GET", ...init, headers: retryHeaders });
+      }
+      getUserManager().signinRedirect();
+      return response;
+    } catch {
+      getUserManager().signinRedirect();
+      return response;
+    }
+  }
+
+  return response;
+}
+
 async function requestJSON<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, withJSONHeaders(init));
+  const response = await fetchWithAuth(path, init);
   await throwForError(response);
   return response.json() as Promise<T>;
 }
 
 async function requestText(path: string, init: RequestInit = {}): Promise<string> {
-  const response = await fetch(path, withJSONHeaders(init));
+  const response = await fetchWithAuth(path, init);
   await throwForError(response);
   return response.text();
 }
 
 async function requestNoContent(path: string, init: RequestInit = {}): Promise<void> {
-  const response = await fetch(path, withJSONHeaders(init));
+  const response = await fetchWithAuth(path, init);
   await throwForError(response);
-}
-
-function withJSONHeaders(init: RequestInit): RequestInit {
-  const headers = new Headers(init.headers);
-  if (!headers.has("content-type")) {
-    headers.set("content-type", "application/json");
-  }
-  return {
-    method: "GET",
-    ...init,
-    headers
-  };
 }
 
 async function throwForError(response: Response): Promise<void> {
