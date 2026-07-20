@@ -67,7 +67,8 @@ export default function OidcAuthProvider() {
         }
       })
       .catch(() => setStatus("error"));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const login = useCallback(() => {
     getUserManager().signinRedirect();
