@@ -32,6 +32,7 @@ var (
 	ErrRunNotApprovable                   = errors.New("run is not approvable")
 	ErrRunNotCancelable                   = errors.New("run is not cancelable")
 	ErrSelfApprovalForbidden              = errors.New("self-approval forbidden")
+	ErrLastOwner                          = errors.New("cannot remove the last stack owner")
 )
 
 func authenticatedActor(ctx context.Context) (traits.UserID, error) {
@@ -161,6 +162,35 @@ type StackTemplateIDGenerator interface {
 // Clock provides current time for app use cases.
 type Clock interface {
 	Now() time.Time
+}
+
+type ListStackGrantsCommand struct {
+	TenantID traits.TenantID
+	StackID  traits.StackID
+}
+
+type GrantView struct {
+	UserSub     string `json:"userSub"`
+	Role        string `json:"role"`
+	DisplayName string `json:"displayName"`
+	Email       string `json:"email"`
+}
+
+type ListStackGrantsResult struct {
+	Grants []GrantView
+}
+
+type AssignStackRoleCommand struct {
+	TenantID traits.TenantID
+	StackID  traits.StackID
+	UserSub  string
+	Role     string
+}
+
+type RevokeStackRoleCommand struct {
+	TenantID traits.TenantID
+	StackID  traits.StackID
+	UserSub  string
 }
 
 // Service owns app use cases and the dependencies wired by cmd packages.
@@ -840,6 +870,51 @@ func (service *Service) GetTemplateRevisionVariables(ctx context.Context, comman
 	}
 
 	return variables, nil
+}
+
+func (service *Service) ListStackGrants(ctx context.Context, command ListStackGrantsCommand) (ListStackGrantsResult, error) {
+	if _, err := requireAuthorizer(ctx, service.Authorizer); err != nil {
+		return ListStackGrantsResult{}, err
+	}
+	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+		return ListStackGrantsResult{}, err
+	}
+	stack, err := authz.StackFromID(string(command.StackID))
+	if err != nil {
+		return ListStackGrantsResult{}, fmt.Errorf("list grants stack: %w", err)
+	}
+	result, err := service.Authorizer.ListGrants(ctx, authz.ListGrantsRequest{Stack: stack})
+	if err != nil {
+		return ListStackGrantsResult{}, err
+	}
+
+	grants := make([]GrantView, 0, len(result.Grants))
+	for _, grant := range result.Grants {
+		userSub := strings.TrimPrefix(grant.Subject().String(), "user:")
+		role := grant.Role().String()
+		gv := GrantView{UserSub: userSub, Role: role}
+
+		if service.UserDirectory != nil {
+			users, searchErr := service.UserDirectory.SearchUsers(ctx, userSub, 0, 1)
+			if searchErr == nil && len(users) > 0 {
+				gv.DisplayName = displayNameFromUser(users[0])
+				gv.Email = users[0].Email
+			}
+		}
+		if gv.DisplayName == "" {
+			gv.DisplayName = userSub
+		}
+		grants = append(grants, gv)
+	}
+
+	return ListStackGrantsResult{Grants: grants}, nil
+}
+
+func displayNameFromUser(user DirectoryUser) string {
+	if user.FirstName != "" || user.LastName != "" {
+		return strings.TrimSpace(user.FirstName + " " + user.LastName)
+	}
+	return user.Username
 }
 
 // ApproveRun records an approval decision and signals the waiting workflow.
