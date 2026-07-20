@@ -37,7 +37,7 @@ describe("routeConfig", () => {
 
     // The default mock role ("operator") has canCreateStack: true (see auth/mockUsers.ts),
     // so /stacks/new needs no seeded query data — it resolves from useAuth() alone.
-    const ungatedAndGloballyAllowedPaths = ["/stacks/new", "/templates", "/auth/callback"];
+    const ungatedAndGloballyAllowedPaths = ["/stacks/new", "/auth/callback"];
     for (const path of ungatedAndGloballyAllowedPaths) {
       const testRouter = createMemoryRouter(routeConfig, { initialEntries: [path] });
       const markup = renderToStaticMarkup(
@@ -126,6 +126,48 @@ describe("routeConfig", () => {
 
     expect(markup).toContain('data-testid="stacks-list"');
     expect(markup).toContain("Payments");
+    expect(markup).not.toContain('data-testid="route-placeholder"');
+  });
+
+  it("renders the template registry screen at /templates", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const { routeConfig } = await import("./router");
+    const { default: MockAuthProvider } = await import("../auth/MockAuthProvider");
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const { queryKeys } = await import("../api/queryKeys");
+
+    // retry: false + staleTime: Infinity: this test seeds the cache directly and
+    // must never let TanStack Query's default refetch-on-mount fire a real,
+    // unmocked fetch() for stale data — see useStackCapabilities.test.tsx.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      {
+        id: "rev_1",
+        tenant_id: "tenant_123",
+        source_template_id: "tpl_1",
+        repo_owner: "hashicorp",
+        repo_name: "terraform-aws-vpc",
+        source_ref: "main",
+        resolved_commit_sha: "abcdef1234567890",
+        root_path: ".",
+        name: "VPC",
+        description: "",
+        tags: [],
+        status: "active"
+      }
+    ]);
+
+    const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/templates"] });
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <MockAuthProvider>
+          <RouterProvider router={testRouter} />
+        </MockAuthProvider>
+      </QueryClientProvider>
+    );
+
+    expect(markup).toContain("Saved template");
+    expect(markup).toContain("VPC");
     expect(markup).not.toContain('data-testid="route-placeholder"');
   });
 
