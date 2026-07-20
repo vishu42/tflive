@@ -2212,6 +2212,11 @@ func newAPITestDependencies() *apiTestDependencies {
 	}
 }
 
+func (deps *apiTestDependencies) withGrants(grants ...authz.Grant) *apiTestDependencies {
+	deps.authorizer.grants = grants
+	return deps
+}
+
 func (deps *apiTestDependencies) service() *app.Service {
 	return app.NewService(app.Service{
 		Authorizer:               deps.authorizer,
@@ -2246,6 +2251,9 @@ type apiAuthorizer struct {
 	batchCalls          int
 	batchDecisions      []bool
 	truncateBatchResult bool
+	grants              []authz.Grant
+	listGrantsErr       error
+	deleteErr           error
 }
 
 func (authorizer *apiAuthorizer) Check(_ context.Context, request authz.CheckRequest) (authz.CheckResult, error) {
@@ -2300,13 +2308,21 @@ func (authorizer apiAuthorizer) ListAccessibleStacks(context.Context, authz.List
 	stack, _ := authz.StackFromID("stack_123")
 	return authz.ListAccessibleStacksResult{Stacks: []authz.Stack{stack}}, nil
 }
-func (apiAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
-	return authz.ListGrantsResult{}, nil
+func (authorizer *apiAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
+	if authorizer.listGrantsErr != nil {
+		return authz.ListGrantsResult{}, authorizer.listGrantsErr
+	}
+	if authorizer.grants == nil {
+		return authz.ListGrantsResult{Grants: []authz.Grant{}}, nil
+	}
+	return authz.ListGrantsResult{Grants: authorizer.grants}, nil
 }
 func (authorizer *apiAuthorizer) WriteRelationships(context.Context, authz.Mutation) error {
 	return authorizer.writeErr
 }
-func (apiAuthorizer) DeleteRelationships(context.Context, authz.Mutation) error { return nil }
+func (authorizer *apiAuthorizer) DeleteRelationships(context.Context, authz.Mutation) error {
+	return authorizer.deleteErr
+}
 
 type recordingStackRepository struct {
 	created         traits.Stack
@@ -2775,6 +2791,204 @@ func TestMeReturnsUnauthorizedWithoutPrincipal(t *testing.T) {
 
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnauthorized, response.Body.String())
+	}
+}
+
+func testGrant(t *testing.T, sub, stackID, role string) authz.Grant {
+	t.Helper()
+	subject, err := authz.SubjectFromKeycloakSub(sub)
+	if err != nil {
+		t.Fatalf("subject from sub: %v", err)
+	}
+	stack, err := authz.StackFromID(stackID)
+	if err != nil {
+		t.Fatalf("stack from id: %v", err)
+	}
+	r, err := authz.RoleFromDirectRelation(role)
+	if err != nil {
+		t.Fatalf("role from relation: %v", err)
+	}
+	grant, err := authz.NewGrant(subject, stack, r)
+	if err != nil {
+		t.Fatalf("new grant: %v", err)
+	}
+	return grant
+}
+
+func TestListStackGrantsListsGrants(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.userDirectory = apiFakeUserDirectory{
+		users: []app.DirectoryUser{{ID: "user-1", Username: "alice", Email: "alice@example.com", FirstName: "Alice"}},
+	}
+	deps.withGrants(testGrant(t, "user-1", "stack_123", "owner"))
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack_123/grants", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body listStackGrantsResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Grants) != 1 {
+		t.Fatalf("len(grants) = %d, want 1", len(body.Grants))
+	}
+	if body.Grants[0].UserSub != "user-1" || body.Grants[0].Role != "owner" {
+		t.Fatalf("grant = %#v", body.Grants[0])
+	}
+	if body.Grants[0].DisplayName != "Alice" {
+		t.Fatalf("display name = %q, want Alice", body.Grants[0].DisplayName)
+	}
+}
+
+func TestListStackGrantsReturnsEmptyOnNoGrants(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack_123/grants", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body listStackGrantsResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Grants) != 0 {
+		t.Fatalf("len(grants) = %d, want 0", len(body.Grants))
+	}
+}
+
+func TestAssignStackRoleAssignsRoleAndReturnsGrantView(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.userDirectory = apiFakeUserDirectory{
+		users: []app.DirectoryUser{{ID: "user-2", Username: "bob", Email: "bob@example.com"}},
+	}
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/stacks/stack_123/grants",
+		strings.NewReader(`{"user_sub":"user-2","role":"operator"}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body app.GrantView
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.UserSub != "user-2" || body.Role != "operator" {
+		t.Fatalf("grant view = %#v", body)
+	}
+}
+
+func TestAssignStackRoleRejectsInvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/stacks/stack_123/grants",
+		strings.NewReader(`{"user_sub":`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
+	}
+}
+
+func TestAssignStackRoleRequiresManageAccess(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.authorizer.denied = true
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := ordinaryAuthenticatedRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/stacks/stack_123/grants",
+		strings.NewReader(`{"user_sub":"user-2","role":"viewer"}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusForbidden, response.Body.String())
+	}
+}
+
+func TestRevokeStackRoleRemovesGrant(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.withGrants(testGrant(t, "user-3", "stack_123", "viewer"))
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodDelete, "/v1/tenants/tenant_123/stacks/stack_123/grants/user-3", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNoContent, response.Body.String())
+	}
+}
+
+func TestRevokeStackRoleLastOwnerReturnsConflict(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.withGrants(testGrant(t, apiKeycloakSubject, "stack_123", "owner"))
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodDelete, "/v1/tenants/tenant_123/stacks/stack_123/grants/"+apiKeycloakSubject, nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusConflict, response.Body.String())
+	}
+}
+
+func TestAssignStackRoleLastOwnerDemotionReturnsConflict(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.userDirectory = apiFakeUserDirectory{
+		users: []app.DirectoryUser{{ID: apiKeycloakSubject, Username: "admin", Email: "admin@example.com"}},
+	}
+	deps.withGrants(testGrant(t, apiKeycloakSubject, "stack_123", "owner"))
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/stacks/stack_123/grants",
+		strings.NewReader(`{"user_sub":"`+apiKeycloakSubject+`","role":"viewer"}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusConflict, response.Body.String())
 	}
 }
 

@@ -169,3 +169,39 @@ export function useCancelRunMutation(tenantID: string) {
     }
   });
 }
+
+export function useStackGrantsQuery(tenantID: string, stackID: string) {
+  return useQuery({
+    queryKey: queryKeys.stackGrants(tenantID, stackID),
+    queryFn: () => client.listStackGrants(tenantID, stackID),
+    enabled: stackID !== ""
+  });
+}
+
+export function useSearchUsersQuery(tenantID: string, query: string) {
+  return useQuery({
+    queryKey: queryKeys.userSearch(tenantID, query),
+    queryFn: () => client.searchUsers(tenantID, query, 0, 20),
+    enabled: query.length >= 2
+  });
+}
+
+export function useAssignStackRoleMutation(tenantID: string, stackID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Parameters<typeof client.assignStackRole>[2]) => client.assignStackRole(tenantID, stackID, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.stackGrants(tenantID, stackID) });
+    }
+  });
+}
+
+export function useRevokeStackRoleMutation(tenantID: string, stackID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (userSub: string) => client.revokeStackRole(tenantID, stackID, userSub),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.stackGrants(tenantID, stackID) });
+    }
+  });
+}

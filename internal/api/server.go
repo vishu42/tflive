@@ -77,6 +77,14 @@ func NewServer(service *app.Service, tenantID traits.TenantID) *Server {
 	// Searches realm users by display name or username.
 	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/users/search", server.handleSearchUsers)
 
+	// Stack grant routes.
+	// Lists grants for a stack.
+	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/stacks/{stack_id}/grants", server.handleListStackGrants)
+	// Assigns a role on a stack.
+	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/stacks/{stack_id}/grants", server.handleAssignStackRole)
+	// Revokes a role from a stack.
+	server.handleTenantRoute("DELETE /v1/tenants/{tenant_id}/stacks/{stack_id}/grants/{user_sub}", server.handleRevokeStackRole)
+
 	// Template run decision routes.
 	// Records approval for a waiting template run.
 	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/approval", server.handleApproveRun)
@@ -655,6 +663,64 @@ func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateR
 	return response
 }
 
+func (server *Server) handleListStackGrants(response http.ResponseWriter, request *http.Request) {
+	result, err := server.service.ListStackGrants(request.Context(), app.ListStackGrantsCommand{
+		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+		StackID:  traits.StackID(request.PathValue("stack_id")),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusOK, listStackGrantsResponse{
+		Grants: result.Grants,
+	})
+}
+
+type listStackGrantsResponse struct {
+	Grants []app.GrantView `json:"grants"`
+}
+
+func (server *Server) handleAssignStackRole(response http.ResponseWriter, request *http.Request) {
+	var body assignStackRoleRequest
+	if !decodeRequestBody(response, request, &body) {
+		return
+	}
+
+	grant, err := server.service.AssignStackRole(request.Context(), app.AssignStackRoleCommand{
+		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+		StackID:  traits.StackID(request.PathValue("stack_id")),
+		UserSub:  body.UserSub,
+		Role:     body.Role,
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusOK, grant)
+}
+
+type assignStackRoleRequest struct {
+	UserSub string `json:"user_sub"`
+	Role    string `json:"role"`
+}
+
+func (server *Server) handleRevokeStackRole(response http.ResponseWriter, request *http.Request) {
+	err := server.service.RevokeStackRole(request.Context(), app.RevokeStackRoleCommand{
+		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+		StackID:  traits.StackID(request.PathValue("stack_id")),
+		UserSub:  request.PathValue("user_sub"),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	response.WriteHeader(http.StatusNoContent)
+}
+
 func writeAppError(response http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, app.ErrUnauthenticated):
@@ -675,7 +741,8 @@ func writeAppError(response http.ResponseWriter, err error) {
 		errors.Is(err, app.ErrDuplicateStackSlug),
 		errors.Is(err, app.ErrTemplateNotInstallable),
 		errors.Is(err, app.ErrStackTemplateConfigInvalid),
-		errors.Is(err, app.ErrStackTemplateUpgradeInvalid):
+		errors.Is(err, app.ErrStackTemplateUpgradeInvalid),
+		errors.Is(err, app.ErrLastOwner):
 		writeError(response, http.StatusConflict, "conflict", err.Error())
 	default:
 		if status, code, ok := authz.HTTPStatus(err); ok {

@@ -2,12 +2,16 @@ import { getUserManager } from "../auth/userManager";
 import type { Me } from "../auth/types";
 import type {
   ApiErrorBody,
+  DirectoryUser,
+  GrantView,
+  ListGrantsResponse,
   Operation,
+  SearchUsersResponse,
   Stack,
   StackTemplate,
   StackView,
-  TemplateRevision,
   TemplateRegistration,
+  TemplateRevision,
   TemplateRun,
   TemplateRunLog,
   TemplateVariable
@@ -152,6 +156,37 @@ export function cancelRun(tenantID: string, runID: string, body: CancelRunReques
     method: "POST",
     body: JSON.stringify(body)
   });
+}
+
+interface AssignStackRoleBody {
+  userSub: string;
+  role: string;
+}
+
+export function listStackGrants(tenantID: string, stackID: string): Promise<ListGrantsResponse> {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stacks/${encodeURIComponent(stackID)}/grants`);
+}
+
+export function assignStackRole(tenantID: string, stackID: string, body: AssignStackRoleBody): Promise<GrantView> {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stacks/${encodeURIComponent(stackID)}/grants`, {
+    method: "PUT",
+    body: JSON.stringify(body)
+  });
+}
+
+export function revokeStackRole(tenantID: string, stackID: string, userSub: string): Promise<void> {
+  return requestNoContent(`/v1/tenants/${encodeURIComponent(tenantID)}/stacks/${encodeURIComponent(stackID)}/grants/${encodeURIComponent(userSub)}`, {
+    method: "DELETE"
+  });
+}
+
+export function searchUsers(tenantID: string, q: string, first: number, max: number): Promise<SearchUsersResponse> {
+  const params = new URLSearchParams({ q });
+  if (first > 0) {
+    params.set("first", String(first));
+  }
+  params.set("max", String(max));
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/users/search?${params.toString()}`);
 }
 
 async function authHeaders(): Promise<HeadersInit> {

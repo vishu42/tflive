@@ -32,6 +32,7 @@ var (
 	ErrRunNotApprovable                   = errors.New("run is not approvable")
 	ErrRunNotCancelable                   = errors.New("run is not cancelable")
 	ErrSelfApprovalForbidden              = errors.New("self-approval forbidden")
+	ErrLastOwner                          = errors.New("cannot remove the last stack owner")
 )
 
 func authenticatedActor(ctx context.Context) (traits.UserID, error) {
@@ -161,6 +162,35 @@ type StackTemplateIDGenerator interface {
 // Clock provides current time for app use cases.
 type Clock interface {
 	Now() time.Time
+}
+
+type ListStackGrantsCommand struct {
+	TenantID traits.TenantID
+	StackID  traits.StackID
+}
+
+type GrantView struct {
+	UserSub     string `json:"userSub"`
+	Role        string `json:"role"`
+	DisplayName string `json:"displayName"`
+	Email       string `json:"email"`
+}
+
+type ListStackGrantsResult struct {
+	Grants []GrantView
+}
+
+type AssignStackRoleCommand struct {
+	TenantID traits.TenantID
+	StackID  traits.StackID
+	UserSub  string
+	Role     string
+}
+
+type RevokeStackRoleCommand struct {
+	TenantID traits.TenantID
+	StackID  traits.StackID
+	UserSub  string
 }
 
 // Service owns app use cases and the dependencies wired by cmd packages.
@@ -840,6 +870,219 @@ func (service *Service) GetTemplateRevisionVariables(ctx context.Context, comman
 	}
 
 	return variables, nil
+}
+
+func (service *Service) ListStackGrants(ctx context.Context, command ListStackGrantsCommand) (ListStackGrantsResult, error) {
+	if _, err := requireAuthorizer(ctx, service.Authorizer); err != nil {
+		return ListStackGrantsResult{}, err
+	}
+	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+		return ListStackGrantsResult{}, err
+	}
+	stack, err := authz.StackFromID(string(command.StackID))
+	if err != nil {
+		return ListStackGrantsResult{}, fmt.Errorf("list grants stack: %w", err)
+	}
+	result, err := service.Authorizer.ListGrants(ctx, authz.ListGrantsRequest{Stack: stack})
+	if err != nil {
+		return ListStackGrantsResult{}, err
+	}
+
+	grants := make([]GrantView, 0, len(result.Grants))
+	for _, grant := range result.Grants {
+		userSub := strings.TrimPrefix(grant.Subject().String(), "user:")
+		role := grant.Role().String()
+		gv := GrantView{UserSub: userSub, Role: role}
+
+		if service.UserDirectory != nil {
+			users, searchErr := service.UserDirectory.SearchUsers(ctx, userSub, 0, 1)
+			if searchErr == nil && len(users) > 0 {
+				gv.DisplayName = displayNameFromUser(users[0])
+				gv.Email = users[0].Email
+			}
+		}
+		if gv.DisplayName == "" {
+			gv.DisplayName = userSub
+		}
+		grants = append(grants, gv)
+	}
+
+	return ListStackGrantsResult{Grants: grants}, nil
+}
+
+func displayNameFromUser(user DirectoryUser) string {
+	if user.FirstName != "" || user.LastName != "" {
+		return strings.TrimSpace(user.FirstName + " " + user.LastName)
+	}
+	return user.Username
+}
+
+func (service *Service) listGrantsForStack(ctx context.Context, stack authz.Stack) (authz.ListGrantsResult, error) {
+	return service.Authorizer.ListGrants(ctx, authz.ListGrantsRequest{Stack: stack})
+}
+
+func (service *Service) AssignStackRole(ctx context.Context, command AssignStackRoleCommand) (GrantView, error) {
+	principal, err := requirePrincipal(ctx)
+	if err != nil {
+		return GrantView{}, err
+	}
+	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+		return GrantView{}, err
+	}
+
+	role, err := authz.RoleFromDirectRelation(command.Role)
+	if err != nil {
+		return GrantView{}, fmt.Errorf("%w: %v", ErrInvalidCommand, err)
+	}
+
+	if service.UserDirectory != nil {
+		users, searchErr := service.UserDirectory.SearchUsers(ctx, command.UserSub, 0, 1)
+		if searchErr != nil || len(users) == 0 {
+			return GrantView{}, fmt.Errorf("%w: target user not found in directory", ErrInvalidCommand)
+		}
+	}
+
+	stack, err := authz.StackFromID(string(command.StackID))
+	if err != nil {
+		return GrantView{}, fmt.Errorf("assign role stack: %w", err)
+	}
+	subject, err := authz.SubjectFromKeycloakSub(command.UserSub)
+	if err != nil {
+		return GrantView{}, fmt.Errorf("%w: invalid user sub", ErrInvalidCommand)
+	}
+
+	currentGrants, err := service.listGrantsForStack(ctx, stack)
+	if err != nil {
+		return GrantView{}, err
+	}
+
+	var currentRole string
+	for _, g := range currentGrants.Grants {
+		if g.Subject().String() == subject.String() {
+			currentRole = g.Role().String()
+			break
+		}
+	}
+
+	if currentRole == "owner" && command.Role != "owner" {
+		ownerCount := 0
+		for _, g := range currentGrants.Grants {
+			if g.Role() == authz.RoleOwner {
+				ownerCount++
+			}
+		}
+		if ownerCount == 1 {
+			return GrantView{}, fmt.Errorf("%w: assign another owner before changing this role", ErrLastOwner)
+		}
+	}
+
+	if currentRole == command.Role {
+		return GrantView{UserSub: command.UserSub, Role: command.Role}, nil
+	}
+
+	grant, err := authz.NewGrant(subject, stack, role)
+	if err != nil {
+		return GrantView{}, fmt.Errorf("create assign grant: %w", err)
+	}
+	addMutation, err := authz.NewMutation([]authz.Grant{grant}, true)
+	if err != nil {
+		return GrantView{}, fmt.Errorf("create assign mutation: %w", err)
+	}
+
+	if currentRole != "" {
+		oldRole, _ := authz.RoleFromDirectRelation(currentRole)
+		oldGrant, _ := authz.NewGrant(subject, stack, oldRole)
+		delMutation, delErr := authz.NewMutation([]authz.Grant{oldGrant}, false)
+		if delErr != nil {
+			return GrantView{}, fmt.Errorf("create remove-old-role mutation: %w", delErr)
+		}
+		if err := service.Authorizer.DeleteRelationships(ctx, delMutation); err != nil {
+			return GrantView{}, fmt.Errorf("remove existing role: %w", err)
+		}
+	}
+
+	if err := service.Authorizer.WriteRelationships(ctx, addMutation); err != nil {
+		return GrantView{}, fmt.Errorf("assign stack role: %w", err)
+	}
+
+	service.auditError(ctx, traits.SecurityAuditEvent{
+		ActorSubject: principal.Subject,
+		Action:       traits.AuditActionGrant,
+		TargetUser:   command.UserSub,
+		TenantID:     command.TenantID,
+		StackID:      command.StackID,
+		OldRole:      currentRole,
+		NewRole:      command.Role,
+		Outcome:      traits.AuditOutcomeSuccess,
+	})
+
+	return GrantView{UserSub: command.UserSub, Role: command.Role}, nil
+}
+
+func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStackRoleCommand) error {
+	principal, err := requirePrincipal(ctx)
+	if err != nil {
+		return err
+	}
+	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+		return err
+	}
+
+	stack, err := authz.StackFromID(string(command.StackID))
+	if err != nil {
+		return fmt.Errorf("revoke role stack: %w", err)
+	}
+	subject, err := authz.SubjectFromKeycloakSub(command.UserSub)
+	if err != nil {
+		return fmt.Errorf("%w: invalid user sub", ErrInvalidCommand)
+	}
+
+	currentGrants, err := service.listGrantsForStack(ctx, stack)
+	if err != nil {
+		return err
+	}
+
+	var targetRole string
+	ownerCount := 0
+	for _, g := range currentGrants.Grants {
+		if g.Role() == authz.RoleOwner {
+			ownerCount++
+		}
+		if g.Subject().String() == subject.String() {
+			targetRole = g.Role().String()
+		}
+	}
+
+	if targetRole == "" {
+		return nil
+	}
+
+	if targetRole == "owner" && ownerCount == 1 {
+		return fmt.Errorf("%w: cannot remove the last owner; assign another owner first", ErrLastOwner)
+	}
+
+	role, _ := authz.RoleFromDirectRelation(targetRole)
+	grant, _ := authz.NewGrant(subject, stack, role)
+	mutation, err := authz.NewMutation([]authz.Grant{grant}, true)
+	if err != nil {
+		return fmt.Errorf("create revoke mutation: %w", err)
+	}
+
+	if err := service.Authorizer.DeleteRelationships(ctx, mutation); err != nil {
+		return fmt.Errorf("revoke stack role: %w", err)
+	}
+
+	service.auditError(ctx, traits.SecurityAuditEvent{
+		ActorSubject: principal.Subject,
+		Action:       traits.AuditActionRevoke,
+		TargetUser:   command.UserSub,
+		TenantID:     command.TenantID,
+		StackID:      command.StackID,
+		OldRole:      targetRole,
+		Outcome:      traits.AuditOutcomeSuccess,
+	})
+
+	return nil
 }
 
 // ApproveRun records an approval decision and signals the waiting workflow.
