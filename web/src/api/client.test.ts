@@ -202,6 +202,32 @@ describe("api client", () => {
       });
     }
   });
+
+  it("never includes actor identity fields in request bodies", async () => {
+    const forbiddenFields = ["actor", "actor_id", "sub", "user_id", "on_behalf_of"];
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(jsonResponse({ id: "ok" })));
+
+    await registerTemplate("tenant_123", { repo_owner: "a", repo_name: "b", source_ref: "main", root_path: "." });
+    await createStack("tenant_123", { name: "s", slug: "", tags: {}, default_credential_ids: [] });
+    await addTemplateToStack("tenant_123", "stack_1", { template_revision_id: "rev_1", selected_ref: "main", config: {} });
+    await updateStackTemplateConfig("tenant_123", "st_1", { config: {} });
+    await upgradeStackTemplate("tenant_123", "st_1", { target_template_revision_id: "rev_2" });
+    await startTemplateRun("tenant_123", "st_1", { operation: "plan" });
+    await approveRun("tenant_123", "run_1");
+    await cancelRun("tenant_123", "run_2", { reason: "stop" });
+
+    for (const call of fetchMock.mock.calls) {
+      const init = call[1] as RequestInit | undefined;
+      if (init?.body && typeof init.body === "string") {
+        const parsed = JSON.parse(init.body);
+        for (const field of forbiddenFields) {
+          const hasField = Object.prototype.hasOwnProperty.call(parsed, field);
+          expect(hasField, `request body contains forbidden field "${field}": ${JSON.stringify(parsed)}`).toBe(false);
+        }
+      }
+    }
+  });
 });
 import { getUserManager } from "../auth/userManager";
 
