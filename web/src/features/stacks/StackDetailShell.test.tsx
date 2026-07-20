@@ -5,18 +5,7 @@ import type { StackCapabilities } from "../../auth/types";
 import { AuthContext } from "../../auth/AuthContext";
 import type { AuthContextValue } from "../../auth/AuthContext";
 
-vi.mock("../../auth/OidcAuthProvider", () => ({
-  default: () => (
-    <AuthContext.Provider value={{
-      me: { sub: "test", displayName: "Test", globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } },
-      status: "authenticated" as const,
-      login: () => {},
-      logout: () => {},
-    }}>
-      <Outlet />
-    </AuthContext.Provider>
-  ),
-}));
+vi.mock("../../auth/OidcAuthProvider");
 
 function authValue(): AuthContextValue {
   return {

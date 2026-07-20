@@ -5,18 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../auth/AuthContext";
 import type { AuthContextValue } from "../auth/AuthContext";
 
-vi.mock("../auth/OidcAuthProvider", () => ({
-  default: () => (
-    <AuthContext.Provider value={{
-      me: { sub: "test", displayName: "Test", globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } },
-      status: "authenticated" as const,
-      login: () => {},
-      logout: () => {},
-    }}>
-      <Outlet />
-    </AuthContext.Provider>
-  ),
-}));
+vi.mock("../auth/OidcAuthProvider");
 
 function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
   return {
@@ -61,7 +50,8 @@ describe("routeConfig", () => {
     const { queryKeys } = await import("../api/queryKeys");
 
     // canCreateStack: true override allows /stacks/new to resolve from useAuth() alone.
-    const ungatedAndGloballyAllowedPaths = ["/stacks/new", "/auth/callback"];
+    // Note: /auth/callback is no longer a placeholder — it renders the real CallbackPage.
+    const ungatedAndGloballyAllowedPaths = ["/stacks/new"];
     for (const path of ungatedAndGloballyAllowedPaths) {
       const testRouter = createMemoryRouter(routeConfig, { initialEntries: [path] });
       const markup = renderToStaticMarkup(
@@ -273,7 +263,7 @@ describe("routeConfig", () => {
     expect(markup).toContain('data-testid="route-access-denied"');
   });
 
-  it("renders AccessDenied at /stacks/new for a role without canCreateStack", async () => {
+  it("renders the create-stack placeholder when canCreateStack is allowed", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
 
@@ -288,7 +278,8 @@ describe("routeConfig", () => {
       </QueryClientProvider>
     );
 
-    expect(markup).toContain('data-testid="route-access-denied"');
+    expect(markup).toContain('data-testid="route-placeholder"');
+    expect(markup).toContain("Create stack");
   });
 
   it("renders the 404 screen for unknown paths", async () => {
