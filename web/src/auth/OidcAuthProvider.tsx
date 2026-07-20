@@ -16,7 +16,7 @@ export default function OidcAuthProvider() {
     const isCallbackPath = location.pathname === "/auth/callback";
 
     if (isCallbackPath) {
-      const isSignoutCallback = !location.search.includes("code=");
+      const isSignoutCallback = location.search.includes("state=") && !location.search.includes("code=");
 
       if (isSignoutCallback) {
         getUserManager().signoutRedirectCallback()
