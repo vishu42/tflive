@@ -43,7 +43,10 @@ export default function OidcAuthProvider() {
             const target = (user.state as string) ?? "/stacks";
             navigate(target, { replace: true });
           })
-          .catch(() => setStatus("error"));
+          .catch((err) => {
+            console.error("OIDC signin redirect callback failed", err);
+            setStatus("error");
+          });
       }
       return;
     }
