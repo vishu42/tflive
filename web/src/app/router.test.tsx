@@ -84,7 +84,7 @@ describe("routeConfig", () => {
       },
       templates: []
     });
-    const stackScopedPaths = ["/stacks/stack_1", "/stacks/stack_1/access"];
+    const stackScopedPaths = ["/stacks/stack_1"];
     for (const path of stackScopedPaths) {
       const testRouter = createMemoryRouter(routeConfig, { initialEntries: [path] });
       const markup = renderToStaticMarkup(

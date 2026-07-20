@@ -81,11 +81,13 @@ describe("StackDetailShell", () => {
 
   it("renders each nested route's content inside the shell", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
-    for (const path of ["/stacks/stack_1/access"]) {
-      const markup = await renderStackRoute(path, allAllowed);
-      expect(markup, `expected shell chrome at ${path}`).toContain('data-testid="stack-detail-shell"');
-      expect(markup, `expected nested content at ${path}`).toContain('data-testid="route-placeholder"');
-    }
+    // The access tab is a real screen now with its own loading state; the
+    // grants query is unseeded here, so the shell renders the StackAccessScreen
+    // component as the nested content.
+    const accessMarkup = await renderStackRoute("/stacks/stack_1/access", allAllowed);
+    expect(accessMarkup).toContain('data-testid="stack-detail-shell"');
+    expect(accessMarkup).toContain("Current Grants");
+
     // The template tab is a real screen now; its revisions query is unseeded
     // here, so the shell renders its loading state as the nested content.
     const templateMarkup = await renderStackRoute("/stacks/stack_1/template", allAllowed);
