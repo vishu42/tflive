@@ -12,15 +12,6 @@ import type { StackCapabilities } from "../../auth/types";
 
 const allAllowed: StackCapabilities = { canView: true, canOperate: true, canApprove: true, canManageAccess: true };
 
-function authValue(): AuthContextValue {
-  return {
-    me: { sub: "user_1", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false } },
-    status: "authenticated",
-    login: () => {},
-    logout: () => {}
-  };
-}
-
 function stackView(capabilities: StackCapabilities, templates: StackTemplate[]): StackView {
   return {
     stack: {
