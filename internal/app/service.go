@@ -271,8 +271,9 @@ type CreateStackCommand struct {
 
 // StackView returns one stack with its installed templates.
 type StackView struct {
-	Stack     traits.Stack
-	Templates []traits.StackTemplate
+	Stack        traits.Stack
+	Templates    []traits.StackTemplate
+	Capabilities StackCapabilities
 }
 
 // AddTemplateToStackCommand asks the app to install one template into a stack.
@@ -757,6 +758,12 @@ func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (
 	if view.Templates == nil {
 		view.Templates = []traits.StackTemplate{}
 	}
+
+	caps, err := ResolveStackCapabilities(ctx, service.Authorizer, command.StackID)
+	if err != nil {
+		return StackView{}, fmt.Errorf("resolve stack capabilities: %w", err)
+	}
+	view.Capabilities = caps
 	return view, nil
 }
 

@@ -181,6 +181,105 @@ func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID tr
 	return stackTemplate, nil
 }
 
+type StackCapabilities struct {
+	CanView         bool
+	CanOperate      bool
+	CanApprove      bool
+	CanManageAccess bool
+}
+
+func ResolveStackCapabilities(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID) (StackCapabilities, error) {
+	principal, err := requireAuthorizer(ctx, authorizer)
+	if err != nil {
+		return StackCapabilities{}, err
+	}
+	if isPlatformAdmin(principal) {
+		return StackCapabilities{CanView: true, CanOperate: true, CanApprove: true, CanManageAccess: true}, nil
+	}
+	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
+	if err != nil {
+		return StackCapabilities{}, err
+	}
+	stack, err := authz.StackFromID(string(stackID))
+	if err != nil {
+		return StackCapabilities{}, err
+	}
+
+	permissions := []authz.Permission{
+		authz.PermissionView, authz.PermissionOperate, authz.PermissionApprove, authz.PermissionManageAccess,
+	}
+	checks := make([]authz.CheckRequest, len(permissions))
+	for i, perm := range permissions {
+		checks[i] = authz.CheckRequest{Subject: subject, Stack: stack, Permission: perm}
+	}
+	result, err := authorizer.BatchCheck(ctx, authz.BatchCheckRequest{Checks: checks})
+	if err != nil {
+		return StackCapabilities{}, err
+	}
+	if len(result.Results) != len(permissions) {
+		return StackCapabilities{}, fmt.Errorf("%w: batch result count does not match permissions", authz.ErrMalformedResponse)
+	}
+	return StackCapabilities{
+		CanView:         result.Results[0].Allowed,
+		CanOperate:      result.Results[1].Allowed,
+		CanApprove:      result.Results[2].Allowed,
+		CanManageAccess: result.Results[3].Allowed,
+	}, nil
+}
+
+func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer, stacks []traits.Stack) (map[traits.StackID]StackCapabilities, error) {
+	if len(stacks) == 0 {
+		return map[traits.StackID]StackCapabilities{}, nil
+	}
+	principal, err := requireAuthorizer(ctx, authorizer)
+	if err != nil {
+		return nil, err
+	}
+	if isPlatformAdmin(principal) {
+		all := StackCapabilities{CanView: true, CanOperate: true, CanApprove: true, CanManageAccess: true}
+		result := make(map[traits.StackID]StackCapabilities, len(stacks))
+		for _, s := range stacks {
+			result[s.ID] = all
+		}
+		return result, nil
+	}
+	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
+	if err != nil {
+		return nil, err
+	}
+	permissions := []authz.Permission{
+		authz.PermissionView, authz.PermissionOperate, authz.PermissionApprove, authz.PermissionManageAccess,
+	}
+	checks := make([]authz.CheckRequest, 0, len(stacks)*len(permissions))
+	for _, s := range stacks {
+		stack, err := authz.StackFromID(string(s.ID))
+		if err != nil {
+			return nil, err
+		}
+		for _, perm := range permissions {
+			checks = append(checks, authz.CheckRequest{Subject: subject, Stack: stack, Permission: perm})
+		}
+	}
+	result, err := authorizer.BatchCheck(ctx, authz.BatchCheckRequest{Checks: checks})
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Results) != len(checks) {
+		return nil, fmt.Errorf("%w: batch result count does not match checks", authz.ErrMalformedResponse)
+	}
+	caps := make(map[traits.StackID]StackCapabilities, len(stacks))
+	for i, s := range stacks {
+		base := i * len(permissions)
+		caps[s.ID] = StackCapabilities{
+			CanView:         result.Results[base+0].Allowed,
+			CanOperate:      result.Results[base+1].Allowed,
+			CanApprove:      result.Results[base+2].Allowed,
+			CanManageAccess: result.Results[base+3].Allowed,
+		}
+	}
+	return caps, nil
+}
+
 func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, permission authz.Permission, denied error) (traits.TemplateRun, error) {
 	if _, err := requireAuthorizer(ctx, service.Authorizer); err != nil {
 		return traits.TemplateRun{}, err

@@ -295,7 +295,13 @@ func (server *Server) handleCreateStack(response http.ResponseWriter, request *h
 		return
 	}
 
-	writeJSON(response, http.StatusCreated, newStackResponse(stack))
+	caps, err := app.ResolveStackCapabilities(request.Context(), server.service.Authorizer, traits.StackID(stack.ID))
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusCreated, newStackResponse(stack, caps))
 }
 
 func (server *Server) handleListStacks(response http.ResponseWriter, request *http.Request) {
@@ -307,9 +313,15 @@ func (server *Server) handleListStacks(response http.ResponseWriter, request *ht
 		return
 	}
 
+	capsByID, err := app.ResolveStacksCapabilities(request.Context(), server.service.Authorizer, stacks)
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
 	body := make([]stackResponse, 0, len(stacks))
 	for _, stack := range stacks {
-		body = append(body, newStackResponse(stack))
+		body = append(body, newStackResponse(stack, capsByID[stack.ID]))
 	}
 	writeJSON(response, http.StatusOK, body)
 }
@@ -563,14 +575,22 @@ type stackViewResponse struct {
 }
 
 type stackResponse struct {
-	ID                   string            `json:"id"`
-	TenantID             string            `json:"tenant_id"`
-	Name                 string            `json:"name"`
-	Slug                 string            `json:"slug"`
-	Tags                 map[string]string `json:"tags"`
-	DefaultCredentialIDs []string          `json:"default_credential_ids"`
-	CreatedBy            string            `json:"created_by"`
-	CreatedAt            string            `json:"created_at"`
+	ID                    string                      `json:"id"`
+	TenantID              string                      `json:"tenant_id"`
+	Name                  string                      `json:"name"`
+	Slug                  string                      `json:"slug"`
+	Tags                  map[string]string           `json:"tags"`
+	DefaultCredentialIDs  []string                    `json:"default_credential_ids"`
+	CreatedBy             string                      `json:"created_by"`
+	CreatedAt             string                      `json:"created_at"`
+	EffectiveCapabilities stackCapabilitiesResponse `json:"effectiveCapabilities"`
+}
+
+type stackCapabilitiesResponse struct {
+	CanView         bool `json:"canView"`
+	CanOperate      bool `json:"canOperate"`
+	CanApprove      bool `json:"canApprove"`
+	CanManageAccess bool `json:"canManageAccess"`
 }
 
 type stackTemplateResponse struct {
@@ -601,12 +621,12 @@ func newStackViewResponse(view app.StackView) stackViewResponse {
 		templates = append(templates, newStackTemplateResponse(stackTemplate))
 	}
 	return stackViewResponse{
-		Stack:     newStackResponse(view.Stack),
+		Stack:     newStackResponse(view.Stack, view.Capabilities),
 		Templates: templates,
 	}
 }
 
-func newStackResponse(stack traits.Stack) stackResponse {
+func newStackResponse(stack traits.Stack, capabilities app.StackCapabilities) stackResponse {
 	credentialIDs := make([]string, 0, len(stack.DefaultCredentialIDs))
 	for _, id := range stack.DefaultCredentialIDs {
 		credentialIDs = append(credentialIDs, string(id))
@@ -626,6 +646,12 @@ func newStackResponse(stack traits.Stack) stackResponse {
 		DefaultCredentialIDs: credentialIDs,
 		CreatedBy:            string(stack.CreatedBy),
 		CreatedAt:            stack.CreatedAt.Format(time.RFC3339Nano),
+		EffectiveCapabilities: stackCapabilitiesResponse{
+			CanView:         capabilities.CanView,
+			CanOperate:      capabilities.CanOperate,
+			CanApprove:      capabilities.CanApprove,
+			CanManageAccess: capabilities.CanManageAccess,
+		},
 	}
 }
 

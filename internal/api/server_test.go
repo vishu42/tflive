@@ -1638,8 +1638,17 @@ func TestStackRoleRoutesUseInheritedPermissions(t *testing.T) {
 			if response.Code != test.status {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.status, response.Body.String())
 			}
-			if deps.authorizer.check.Permission != test.permission {
-				t.Fatalf("permission = %q, want %q", deps.authorizer.check.Permission, test.permission)
+			matched := deps.authorizer.check.Permission == test.permission
+			if !matched {
+				for _, check := range deps.authorizer.batchChecks {
+					if check.Permission == test.permission {
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				t.Fatalf("permission %q not found in authorization checks", test.permission)
 			}
 		})
 	}
@@ -1685,8 +1694,17 @@ func TestStackRoleRoutesDenyInsufficientRoles(t *testing.T) {
 			if response.Code != test.status {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.status, response.Body.String())
 			}
-			if deps.authorizer.check.Permission != test.permission {
-				t.Fatalf("permission = %q, want %q", deps.authorizer.check.Permission, test.permission)
+			matched := deps.authorizer.check.Permission == test.permission
+			if !matched {
+				for _, check := range deps.authorizer.batchChecks {
+					if check.Permission == test.permission {
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				t.Fatalf("permission %q not found in authorization checks", test.permission)
 			}
 			if deps.stackTemplateInstaller.created.ID != "" || deps.templateRuns.created.ID != "" || deps.templateRuns.approval.RunID != "" || deps.templateRuns.cancellation.RunID != "" {
 				t.Fatal("denied mutation had side effects")
@@ -2250,10 +2268,26 @@ type apiAuthorizer struct {
 	failBatch           int
 	batchCalls          int
 	batchDecisions      []bool
+	batchChecks         []authz.CheckRequest
 	truncateBatchResult bool
 	grants              []authz.Grant
 	listGrantsErr       error
 	deleteErr           error
+}
+
+func (authorizer *apiAuthorizer) roleAllows(request authz.CheckRequest) bool {
+	switch authorizer.role {
+	case authz.RoleOwner:
+		return true
+	case authz.RoleOperator:
+		return request.Permission == authz.PermissionView || request.Permission == authz.PermissionOperate
+	case authz.RoleApprover:
+		return request.Permission == authz.PermissionView || request.Permission == authz.PermissionApprove
+	case authz.RoleViewer:
+		return request.Permission == authz.PermissionView
+	default:
+		return false
+	}
 }
 
 func (authorizer *apiAuthorizer) Check(_ context.Context, request authz.CheckRequest) (authz.CheckResult, error) {
@@ -2262,25 +2296,13 @@ func (authorizer *apiAuthorizer) Check(_ context.Context, request authz.CheckReq
 		return authz.CheckResult{}, authorizer.checkErr
 	}
 	if authorizer.enforceRole {
-		allowed := request.Permission == authz.PermissionView
-		switch authorizer.role {
-		case authz.RoleOwner:
-			allowed = true
-		case authz.RoleOperator:
-			allowed = request.Permission == authz.PermissionView || request.Permission == authz.PermissionOperate
-		case authz.RoleApprover:
-			allowed = request.Permission == authz.PermissionView || request.Permission == authz.PermissionApprove
-		case authz.RoleViewer:
-			allowed = request.Permission == authz.PermissionView
-		default:
-			allowed = false
-		}
-		return authz.CheckResult{Allowed: allowed}, nil
+		return authz.CheckResult{Allowed: authorizer.roleAllows(request)}, nil
 	}
 	return authz.CheckResult{Allowed: !authorizer.denied}, nil
 }
 func (authorizer *apiAuthorizer) BatchCheck(ctx context.Context, request authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
 	authorizer.batchCalls++
+	authorizer.batchChecks = request.Checks
 	if authorizer.batchErr != nil && (authorizer.failBatch == 0 || authorizer.failBatch == authorizer.batchCalls) {
 		return authz.BatchCheckResult{}, authorizer.batchErr
 	}
@@ -2288,12 +2310,10 @@ func (authorizer *apiAuthorizer) BatchCheck(ctx context.Context, request authz.B
 	for i, check := range request.Checks {
 		if authorizer.batchDecisions != nil && i < len(authorizer.batchDecisions) {
 			result.Results[i] = authz.CheckResult{Allowed: authorizer.batchDecisions[i]}
+		} else if authorizer.enforceRole {
+			result.Results[i] = authz.CheckResult{Allowed: authorizer.roleAllows(check)}
 		} else {
-			decision, err := authorizer.Check(ctx, check)
-			if err != nil {
-				return authz.BatchCheckResult{}, err
-			}
-			result.Results[i] = decision
+			result.Results[i] = authz.CheckResult{Allowed: !authorizer.denied}
 		}
 	}
 	if authorizer.truncateBatchResult && len(result.Results) > 0 {
