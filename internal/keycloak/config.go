@@ -34,6 +34,7 @@ type Config struct {
 	PlatformAdminFirstName string
 	PlatformAdminLastName       string
 	DirectoryReaderClientSecret string
+	Environment                 string
 	HTTPTimeout                 time.Duration
 }
 
@@ -112,6 +113,14 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		}
 	}
 
+	environment := strings.TrimSpace(getenv("TFLIVE_ENVIRONMENT"))
+	if environment == "" {
+		environment = "development"
+	}
+	if environment != "development" && environment != "production" {
+		return Config{}, fmt.Errorf("invalid Keycloak config: TFLIVE_ENVIRONMENT must be development or production")
+	}
+
 	return Config{
 		AdminURL:               adminURL,
 		AdminRealm:             valueOrDefault(getenv("KEYCLOAK_ADMIN_REALM"), defaultAdminRealm),
@@ -128,6 +137,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		PlatformAdminFirstName: platformFirstName,
 		PlatformAdminLastName:       platformLastName,
 		DirectoryReaderClientSecret: directoryReaderSecret,
+		Environment:                 environment,
 		HTTPTimeout:                 timeout,
 	}, nil
 }

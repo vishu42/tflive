@@ -154,7 +154,8 @@ func TestLoadConfigRequiresDistinctAdminUsers(t *testing.T) {
 
 func validConfigEnv() map[string]string {
 	return map[string]string{
-		"KEYCLOAK_ADMIN_URL":                 "http://keycloak:8080/",
+		"TFLIVE_ENVIRONMENT":                         "production",
+		"KEYCLOAK_ADMIN_URL":                         "http://keycloak:8080/",
 		"KEYCLOAK_ADMIN_REALM":               "master",
 		"KEYCLOAK_ADMIN_USERNAME":            "tflive-admin",
 		"KEYCLOAK_ADMIN_PASSWORD":            "master-local-only-secret",

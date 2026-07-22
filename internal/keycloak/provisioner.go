@@ -121,11 +121,15 @@ type provisionBackend interface {
 }
 
 func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBackend) (Result, error) {
+	sslRequired := "external"
+	if cfg.Environment == "development" {
+		sslRequired = "none"
+	}
 	realmSpec := RealmSpec{
 		Name:                cfg.Realm,
 		Enabled:             true,
 		AccessTokenLifespan: 300,
-		SSLRequired:         "external",
+		SSLRequired:         sslRequired,
 		RegistrationAllowed: false,
 	}
 	if err := backend.EnsureRealm(ctx, realmSpec); err != nil {
