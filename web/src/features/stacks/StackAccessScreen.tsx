@@ -46,7 +46,7 @@ export default function StackAccessScreen() {
     setMutationError("");
     try {
       await assignMutation.mutateAsync({
-        userSub: selectedUser.id,
+        user_sub: selectedUser.id,
         role: selectedRole
       });
       setSelectedUser(null);
