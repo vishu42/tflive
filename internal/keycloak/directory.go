@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,6 +17,7 @@ type DirectoryClientConfig struct {
 	ClientID     string
 	ClientSecret string
 	HTTPTimeout  time.Duration
+	Debug        bool
 }
 
 type DirectoryUser struct {
@@ -34,6 +36,7 @@ type DirectoryClient struct {
 	secrets      []string
 	httpClient   *http.Client
 	accessToken  string
+	debug        bool
 }
 
 func NewDirectoryClient(cfg DirectoryClientConfig) *DirectoryClient {
@@ -43,6 +46,7 @@ func NewDirectoryClient(cfg DirectoryClientConfig) *DirectoryClient {
 		clientID:     cfg.ClientID,
 		clientSecret: cfg.ClientSecret,
 		secrets:      []string{cfg.ClientSecret},
+		debug:        cfg.Debug,
 		httpClient: &http.Client{
 			Timeout: cfg.HTTPTimeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -61,6 +65,9 @@ func (c *DirectoryClient) Authenticate(ctx context.Context) error {
 	endpoint, err := c.buildURL([]string{"realms", c.realm, "protocol", "openid-connect", "token"}, nil)
 	if err != nil {
 		return fmt.Errorf("build authentication endpoint: %w", err)
+	}
+	if c.debug {
+		log.Printf("[DEBUG] DirectoryClient.Authenticate client_id=%s endpoint=%s", c.clientID, endpoint.String())
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(form.Encode()))
 	if err != nil {
@@ -114,6 +121,9 @@ func (c *DirectoryClient) SearchUsers(ctx context.Context, query string, first, 
 	if err != nil {
 		return nil, fmt.Errorf("build search endpoint: %w", err)
 	}
+	if c.debug {
+		log.Printf("[DEBUG] DirectoryClient.SearchUsers realm=%s endpoint=%s", c.realm, endpoint.String())
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("build search request: %w", err)
@@ -142,6 +152,9 @@ func (c *DirectoryClient) SearchUsers(ctx context.Context, query string, first, 
 	var users []DirectoryUser
 	if err := json.Unmarshal(body, &users); err != nil {
 		return nil, fmt.Errorf("decode search response: %w", err)
+	}
+	if c.debug {
+		log.Printf("[DEBUG] DirectoryClient.SearchUsers returned %d users", len(users))
 	}
 	return users, nil
 }

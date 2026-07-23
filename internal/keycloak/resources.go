@@ -378,6 +378,9 @@ func applyClientSpec(resource map[string]any, spec ClientSpec) map[string]any {
 	resource["redirectUris"] = append([]string(nil), spec.RedirectURIs...)
 	resource["webOrigins"] = append([]string(nil), spec.WebOrigins...)
 	setOwnedAttributes(resource, spec.Attributes)
+	if spec.Secret != "" {
+		resource["secret"] = spec.Secret
+	}
 	return resource
 }
 

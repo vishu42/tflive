@@ -24,6 +24,7 @@ type APIConfig struct {
 	WorkerRunRoot     string
 	ArtifactStore     ArtifactStoreConfig
 	Security          SecurityConfig
+	Debug             bool
 }
 
 type WorkerConfig struct {
@@ -87,6 +88,8 @@ func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
 	if cfg.WorkerRunRoot == "" {
 		cfg.WorkerRunRoot = DefaultWorkerRunRoot
 	}
+
+	cfg.Debug = parseBool(getenv("TFLIVE_DEBUG"))
 
 	if cfg.DatabaseURL == "" {
 		return APIConfig{}, fmt.Errorf("%w: DATABASE_URL is required", ErrInvalidConfig)

@@ -183,8 +183,9 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 			ClientID:     cfg.Security.DirectoryReaderClientID,
 			ClientSecret: cfg.Security.DirectoryReaderClientSecret.Value(),
 			HTTPTimeout:  cfg.Security.DirectoryReaderHTTPTimeout,
+			Debug:        cfg.Debug,
 		})
-		directoryClient = &directoryClientAdapter{client: client}
+		directoryClient = &directoryClientAdapter{client: client, debug: cfg.Debug}
 	}
 
 	service, err := deps.newService(app.Service{
@@ -207,7 +208,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire service: %w", err)
 	}
 
-	handler := api.NewAuthenticatedServer(service, verifier, cfg.Security.TenantID)
+	handler := api.NewAuthenticatedServer(service, verifier, cfg.Security.TenantID, cfg.Debug)
 	if err := deps.listenAndServe(ctx, cfg.HTTPAddress, handler); err != nil {
 		return fmt.Errorf("listen and serve api: %w", err)
 	}
@@ -242,14 +243,27 @@ func listenAndServe(ctx context.Context, address string, handler http.Handler) e
 
 type directoryClientAdapter struct {
 	client *keycloak.DirectoryClient
+	debug  bool
 }
 
 func (a *directoryClientAdapter) SearchUsers(ctx context.Context, query string, first, max int) ([]app.DirectoryUser, error) {
+	if a.debug {
+		log.Printf("[DEBUG] directoryClientAdapter.SearchUsers query=%q first=%d max=%d", query, first, max)
+	}
 	if err := a.client.Authenticate(ctx); err != nil {
+		if a.debug {
+			log.Printf("[DEBUG] directoryClientAdapter.Authenticate failed: %v", err)
+		}
 		return nil, fmt.Errorf("authenticate directory client: %w", err)
+	}
+	if a.debug {
+		log.Printf("[DEBUG] directoryClientAdapter.Authenticate succeeded")
 	}
 	users, err := a.client.SearchUsers(ctx, query, first, max)
 	if err != nil {
+		if a.debug {
+			log.Printf("[DEBUG] directoryClientAdapter.SearchUsers failed: %v", err)
+		}
 		return nil, err
 	}
 	result := make([]app.DirectoryUser, len(users))
@@ -261,6 +275,9 @@ func (a *directoryClientAdapter) SearchUsers(ctx context.Context, query string, 
 			FirstName: u.FirstName,
 			LastName:  u.LastName,
 		}
+	}
+	if a.debug {
+		log.Printf("[DEBUG] directoryClientAdapter.SearchUsers returned %d users", len(result))
 	}
 	return result, nil
 }

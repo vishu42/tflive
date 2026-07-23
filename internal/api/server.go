@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ type Server struct {
 	tenantID traits.TenantID
 	mux      *http.ServeMux
 	handler  http.Handler
+	debug    bool
 }
 
 func NewServer(service *app.Service, tenantID traits.TenantID) *Server {
@@ -95,8 +97,9 @@ func NewServer(service *app.Service, tenantID traits.TenantID) *Server {
 }
 
 // NewAuthenticatedServer protects all /v1 routes and leaves health probes public.
-func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier, tenantID traits.TenantID) *Server {
+func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier, tenantID traits.TenantID, debug bool) *Server {
 	server := NewServer(service, tenantID)
+	server.debug = debug
 	server.handler = authn.RequireAuthentication(verifier, "/healthz")(server.mux)
 	return server
 }
@@ -127,7 +130,14 @@ func (server *Server) requireConfiguredTenant(next http.Handler) http.Handler {
 }
 
 func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	server.debugf("%s %s", request.Method, request.URL.Path)
 	server.handler.ServeHTTP(response, request)
+}
+
+func (server *Server) debugf(format string, args ...any) {
+	if server.debug {
+		log.Printf("[DEBUG] "+format, args...)
+	}
 }
 
 func decodeRequestBody(response http.ResponseWriter, request *http.Request, destination any) bool {
@@ -196,6 +206,7 @@ func (server *Server) handleSearchUsers(response http.ResponseWriter, request *h
 		Max:      max,
 	})
 	if err != nil {
+		server.debugf("handleSearchUsers error: %v", err)
 		writeAppError(response, err)
 		return
 	}

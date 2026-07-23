@@ -58,7 +58,7 @@ func TestHealthzReturnsOK(t *testing.T) {
 }
 
 func TestAuthenticatedServerProtectsV1AndLeavesHealthPublic(t *testing.T) {
-	server := NewAuthenticatedServer(app.NewService(app.Service{}), apiTestVerifier{}, configuredTenantID)
+	server := NewAuthenticatedServer(app.NewService(app.Service{}), apiTestVerifier{}, configuredTenantID, false)
 
 	for _, test := range []struct {
 		path   string
@@ -145,7 +145,7 @@ func TestTenantBoundaryRejectsMissingAndMalformedPaths(t *testing.T) {
 func TestAuthenticatedServerEvaluatesTenantAfterAuthentication(t *testing.T) {
 	t.Parallel()
 
-	server := NewAuthenticatedServer(nil, apiTestVerifier{}, configuredTenantID)
+	server := NewAuthenticatedServer(nil, apiTestVerifier{}, configuredTenantID, false)
 	path := "/v1/tenants/tenant_other/stacks"
 
 	unauthenticated := httptest.NewRecorder()
@@ -173,7 +173,7 @@ func TestAuthenticatedServerAllowsConfiguredTenantToReachService(t *testing.T) {
 		Name:     "Acme Prod",
 		Slug:     "acme-prod",
 	}}
-	server := NewAuthenticatedServer(deps.service(), apiTestVerifier{}, configuredTenantID)
+	server := NewAuthenticatedServer(deps.service(), apiTestVerifier{}, configuredTenantID, false)
 	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
 	request.Header.Set("Authorization", "Bearer test-token")
 	response := httptest.NewRecorder()
@@ -3013,7 +3013,7 @@ func TestAssignStackRoleLastOwnerDemotionReturnsConflict(t *testing.T) {
 }
 
 func TestAuthenticatedServerProtectsMeRoute(t *testing.T) {
-	server := NewAuthenticatedServer(app.NewService(app.Service{}), apiTestVerifier{}, configuredTenantID)
+	server := NewAuthenticatedServer(app.NewService(app.Service{}), apiTestVerifier{}, configuredTenantID, false)
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)

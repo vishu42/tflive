@@ -44,6 +44,7 @@ type RoleSpec struct {
 type ClientSpec struct {
 	ClientID                     string
 	Name                         string
+	Secret                       string
 	Enabled                      bool
 	Protocol                     string
 	BearerOnly                   bool
@@ -265,6 +266,7 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 	if _, err := backend.EnsureClient(ctx, cfg.Realm, ClientSpec{
 		ClientID:                     directoryReaderClientID,
 		Name:                         "tflive directory reader",
+		Secret:                       cfg.DirectoryReaderClientSecret,
 		Enabled:                      true,
 		Protocol:                     "openid-connect",
 		BearerOnly:                   false,
