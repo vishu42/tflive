@@ -159,7 +159,7 @@ export function cancelRun(tenantID: string, runID: string, body: CancelRunReques
 }
 
 interface AssignStackRoleBody {
-  userSub: string;
+  user_sub: string;
   role: string;
 }
 
@@ -169,7 +169,7 @@ export function listStackGrants(tenantID: string, stackID: string): Promise<List
 
 export function assignStackRole(tenantID: string, stackID: string, body: AssignStackRoleBody): Promise<GrantView> {
   return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stacks/${encodeURIComponent(stackID)}/grants`, {
-    method: "PUT",
+    method: "POST",
     body: JSON.stringify(body)
   });
 }
