@@ -320,6 +320,18 @@ func (c *Client) EnsureClientRoleMapping(ctx context.Context, realm string, user
 	)
 }
 
+func (c *Client) EnsureClientScopeMapping(ctx context.Context, realm string, client, roleClient ResourceRef, roles []ResourceRef) error {
+	return c.doJSON(
+		ctx,
+		http.MethodPost,
+		[]string{"admin", "realms", realm, "clients", client.ID, "scope-mappings", "clients", roleClient.ID},
+		nil,
+		rolePayload(roles),
+		[]int{http.StatusNoContent},
+		nil,
+	)
+}
+
 func (c *Client) ExampleAccessToken(ctx context.Context, realm string, client, user ResourceRef) (ExampleAccessToken, error) {
 	var response struct {
 		Audience    json.RawMessage `json:"aud"`
