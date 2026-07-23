@@ -119,6 +119,15 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 	if !backend.clientRoleMappings[saUser]["realm-management"]["view-realm"] {
 		t.Fatalf("directory reader missing view-realm role")
 	}
+	if !backend.clientScopeMappings[directoryReaderClientID]["realm-management"]["query-users"] {
+		t.Fatalf("directory reader client scope roles = %#v", backend.clientScopeMappings[directoryReaderClientID]["realm-management"])
+	}
+	if !backend.clientScopeMappings[directoryReaderClientID]["realm-management"]["view-users"] {
+		t.Fatalf("directory reader client scope roles = %#v", backend.clientScopeMappings[directoryReaderClientID]["realm-management"])
+	}
+	if !backend.clientScopeMappings[directoryReaderClientID]["realm-management"]["view-realm"] {
+		t.Fatalf("directory reader client scope roles = %#v", backend.clientScopeMappings[directoryReaderClientID]["realm-management"])
+	}
 }
 
 func TestProvisionWithBackendRejectsInvalidEffectiveToken(t *testing.T) {
@@ -176,16 +185,17 @@ func TestProvisionWithBackendRequiresKeycloakBuiltins(t *testing.T) {
 }
 
 type fakeProvisionBackend struct {
-	realms             map[string]RealmSpec
-	roles              map[string]RoleSpec
-	clients            map[string]ClientSpec
-	scopes             map[string]ClientScopeSpec
-	mappers            map[string]ProtocolMapperSpec
-	users              map[string]UserSpec
-	defaultScopes      map[string]map[string]bool
-	realmRoleMappings  map[string]map[string]bool
-	clientRoleMappings map[string]map[string]map[string]bool
-	exampleToken       ExampleAccessToken
+	realms              map[string]RealmSpec
+	roles               map[string]RoleSpec
+	clients             map[string]ClientSpec
+	scopes              map[string]ClientScopeSpec
+	mappers             map[string]ProtocolMapperSpec
+	users               map[string]UserSpec
+	defaultScopes       map[string]map[string]bool
+	realmRoleMappings   map[string]map[string]bool
+	clientRoleMappings  map[string]map[string]map[string]bool
+	clientScopeMappings map[string]map[string]map[string]bool
+	exampleToken        ExampleAccessToken
 
 	createdRealms  int
 	createdRoles   int
@@ -202,8 +212,9 @@ func newFakeProvisionBackend(cfg Config) *fakeProvisionBackend {
 		scopes:  map[string]ClientScopeSpec{"roles": {Name: "roles", Protocol: "openid-connect"}},
 		mappers: map[string]ProtocolMapperSpec{}, users: map[string]UserSpec{},
 		defaultScopes: map[string]map[string]bool{}, realmRoleMappings: map[string]map[string]bool{},
-		clientRoleMappings: map[string]map[string]map[string]bool{},
-		exampleToken:       ExampleAccessToken{Audience: []string{cfg.APIClientID}, RealmRoles: []string{"platform-admin"}},
+		clientRoleMappings:  map[string]map[string]map[string]bool{},
+		clientScopeMappings: map[string]map[string]map[string]bool{},
+		exampleToken:        ExampleAccessToken{Audience: []string{cfg.APIClientID}, RealmRoles: []string{"platform-admin"}},
 	}
 }
 
@@ -301,6 +312,19 @@ func (f *fakeProvisionBackend) EnsureClientRoleMapping(_ context.Context, _ stri
 	}
 	for _, role := range roles {
 		f.clientRoleMappings[user.Name][client.Name][role.Name] = true
+	}
+	return nil
+}
+
+func (f *fakeProvisionBackend) EnsureClientScopeMapping(_ context.Context, _ string, client, roleClient ResourceRef, roles []ResourceRef) error {
+	if f.clientScopeMappings[client.Name] == nil {
+		f.clientScopeMappings[client.Name] = map[string]map[string]bool{}
+	}
+	if f.clientScopeMappings[client.Name][roleClient.Name] == nil {
+		f.clientScopeMappings[client.Name][roleClient.Name] = map[string]bool{}
+	}
+	for _, role := range roles {
+		f.clientScopeMappings[client.Name][roleClient.Name][role.Name] = true
 	}
 	return nil
 }
