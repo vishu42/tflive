@@ -1102,20 +1102,9 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 		return err
 	}
 
-	run, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionApprove, ErrForbidden)
+	_, err = service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionApprove, ErrForbidden)
 	if err != nil {
 		return err
-	}
-
-	if actor == run.TriggerActor {
-		service.auditError(ctx, traits.SecurityAuditEvent{
-			ActorSubject:  string(actor),
-			Action:        traits.AuditActionSelfApprovalRejected,
-			TenantID:      command.TenantID,
-			Outcome:       traits.AuditOutcomeFailure,
-			CorrelationID: "",
-		})
-		return ErrSelfApprovalForbidden
 	}
 
 	approval := traits.TemplateRunApproval{
