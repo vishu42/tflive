@@ -39,6 +39,7 @@ function stackTemplate(overrides: Partial<StackTemplate> = {}): StackTemplate {
     last_applied_template_revision_id: "rev_0",
     selected_ref: "main",
     workspace_name: "ws-payments",
+    display_name: "",
     config: { region: "us-east-1" },
     last_applied_run_id: "run_9",
     last_applied_ref: "main",

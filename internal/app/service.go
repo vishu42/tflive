@@ -759,6 +759,24 @@ func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (
 		view.Templates = []traits.StackTemplate{}
 	}
 
+	if len(view.Templates) > 0 {
+		revisions, err := service.TemplateRevisions.ListTemplateRevisions(ctx, command.TenantID)
+		if err != nil {
+			return StackView{}, fmt.Errorf("list template revisions: %w", err)
+		}
+		byID := make(map[traits.TemplateRevisionID]traits.TemplateRevision, len(revisions))
+		for _, rev := range revisions {
+			byID[rev.ID] = rev
+		}
+		for i := range view.Templates {
+			rev, ok := byID[view.Templates[i].DesiredTemplateRevisionID]
+			if !ok {
+				continue
+			}
+			view.Templates[i].DisplayName = templateDisplayName(rev.RepoName, rev.RootPath)
+		}
+	}
+
 	caps, err := ResolveStackCapabilities(ctx, service.Authorizer, command.StackID)
 	if err != nil {
 		return StackView{}, fmt.Errorf("resolve stack capabilities: %w", err)
@@ -1510,6 +1528,13 @@ func componentKey(value string, stackTemplateID traits.StackTemplateID) string {
 		return value
 	}
 	return string(stackTemplateID)
+}
+
+func templateDisplayName(repoName, rootPath string) string {
+	if rootPath == "" || rootPath == "." {
+		return strings.TrimSpace(repoName)
+	}
+	return strings.TrimSpace(repoName) + "/" + filepath.Clean(rootPath)
 }
 
 func workspaceName(stackSlug string, stackTemplateID traits.StackTemplateID) string {

@@ -22,7 +22,8 @@ export function stackLabel(stack: Stack): string {
 }
 
 export function stackTemplateLabel(stackTemplate: StackTemplate): string {
-  return `${stackTemplate.workspace_name} @ ${stackTemplate.selected_ref} (${stackTemplate.lifecycle})`;
+  const name = stackTemplate.display_name || stackTemplate.workspace_name;
+  return `${name} @ ${stackTemplate.selected_ref} (${stackTemplate.lifecycle})`;
 }
 
 export function canUpgradeStackTemplate(stackTemplate: StackTemplate | null, templateRevision: TemplateRevision | null): boolean {

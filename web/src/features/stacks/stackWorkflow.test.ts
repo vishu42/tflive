@@ -53,14 +53,24 @@ describe("stack workflow helpers", () => {
     expect(nextSelectedStackTemplateID([], "missing_stack_template")).toBe("");
   });
 
-  it("formats stack template rows from workspace, ref, and lifecycle", () => {
-    const installedTemplate = stackTemplate({
-      workspace_name: "prod-web",
+  it("formats stack template rows from display_name, ref, and lifecycle", () => {
+    const withDisplayName = stackTemplate({
+      display_name: "infra-templates/modules/vpc",
       selected_ref: "release-2026-07",
       lifecycle: "active"
     });
 
-    expect(stackTemplateLabel(installedTemplate)).toBe("prod-web @ release-2026-07 (active)");
+    expect(stackTemplateLabel(withDisplayName)).toBe("infra-templates/modules/vpc @ release-2026-07 (active)");
+  });
+
+  it("falls back to workspace_name when display_name is empty", () => {
+    const withoutDisplayName = stackTemplate({
+      workspace_name: "meg_prod_a4de3e48",
+      selected_ref: "main",
+      lifecycle: "active"
+    });
+
+    expect(stackTemplateLabel(withoutDisplayName)).toBe("meg_prod_a4de3e48 @ main (active)");
   });
 
   it("allows upgrades only to a different active revision from the same source template", () => {
@@ -190,6 +200,7 @@ function stackTemplate(overrides: Partial<StackTemplate>): StackTemplate {
     last_applied_template_revision_id: "",
     selected_ref: "main",
     workspace_name: "prod-workspace",
+    display_name: "",
     config: {},
     last_applied_run_id: "",
     last_applied_ref: "",
