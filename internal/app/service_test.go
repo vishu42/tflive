@@ -231,6 +231,91 @@ func TestGetStackPassesTenantAndIDAndNormalizesNilTemplates(t *testing.T) {
 	}
 }
 
+func TestTemplateDisplayName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		repoName string
+		rootPath string
+		want     string
+	}{
+		{name: "root path dot", repoName: "infra-templates", rootPath: ".", want: "infra-templates"},
+		{name: "empty root path", repoName: "infra-templates", rootPath: "", want: "infra-templates"},
+		{name: "subdirectory", repoName: "infra-templates", rootPath: "modules/vpc", want: "infra-templates/modules/vpc"},
+		{name: "nested subdirectory", repoName: "my-repo", rootPath: "modules/network/vpc", want: "my-repo/modules/network/vpc"},
+		{name: "trims whitespace", repoName: "  my-repo  ", rootPath: ".", want: "my-repo"},
+		{name: "cleans path", repoName: "my-repo", rootPath: "modules/../modules/vpc", want: "my-repo/modules/vpc"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := templateDisplayName(tt.repoName, tt.rootPath)
+			if got != tt.want {
+				t.Errorf("templateDisplayName(%q, %q) = %q, want %q", tt.repoName, tt.rootPath, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetStackResolvesTemplateDisplayName(t *testing.T) {
+	t.Parallel()
+
+	stacks := &recordingStackRepository{
+		view: StackView{
+			Stack: traits.Stack{
+				ID:       traits.StackID("stack_123"),
+				TenantID: traits.TenantID("tenant_123"),
+				Name:     "Acme Prod",
+				Slug:     "acme-prod",
+			},
+			Templates: []traits.StackTemplate{
+				{
+					ID:                        traits.StackTemplateID("stack_template_1"),
+					DesiredTemplateRevisionID: traits.TemplateRevisionID("rev_1"),
+				},
+				{
+					ID:                        traits.StackTemplateID("stack_template_2"),
+					DesiredTemplateRevisionID: traits.TemplateRevisionID("rev_2"),
+				},
+				{
+					ID:                        traits.StackTemplateID("stack_template_3"),
+					DesiredTemplateRevisionID: traits.TemplateRevisionID("rev_missing"),
+				},
+			},
+		},
+	}
+	revisions := &recordingTemplateRepository{
+		templates: []traits.TemplateRevision{
+			{ID: traits.TemplateRevisionID("rev_1"), RepoName: "infra-templates", RootPath: "modules/vpc"},
+			{ID: traits.TemplateRevisionID("rev_2"), RepoName: "my-repo", RootPath: "."},
+		},
+	}
+	service := NewService(Service{Stacks: stacks, TemplateRevisions: revisions, Authorizer: &permissionAuthorizer{allowed: true}})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject})
+
+	view, err := service.GetStack(ctx, GetStackCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		StackID:  traits.StackID("stack_123"),
+	})
+	if err != nil {
+		t.Fatalf("GetStack returned error: %v", err)
+	}
+
+	if len(view.Templates) != 3 {
+		t.Fatalf("len(templates) = %d, want 3", len(view.Templates))
+	}
+	if got := view.Templates[0].DisplayName; got != "infra-templates/modules/vpc" {
+		t.Errorf("template[0].DisplayName = %q, want infra-templates/modules/vpc", got)
+	}
+	if got := view.Templates[1].DisplayName; got != "my-repo" {
+		t.Errorf("template[1].DisplayName = %q, want my-repo", got)
+	}
+	if got := view.Templates[2].DisplayName; got != "" {
+		t.Errorf("template[2].DisplayName = %q, want empty (no matching revision)", got)
+	}
+}
+
 func TestListStacksPassesTenantAndNormalizesNilStacks(t *testing.T) {
 	t.Parallel()
 

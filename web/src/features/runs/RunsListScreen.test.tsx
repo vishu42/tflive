@@ -35,6 +35,7 @@ function stackTemplate(overrides: Partial<StackTemplate> = {}): StackTemplate {
     last_applied_template_revision_id: "",
     selected_ref: "main",
     workspace_name: "acme-prod-primary",
+    display_name: "",
     config: {},
     last_applied_run_id: "",
     last_applied_ref: "",

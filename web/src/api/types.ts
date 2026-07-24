@@ -106,6 +106,7 @@ export interface StackTemplate {
   last_applied_template_revision_id: string;
   selected_ref: string;
   workspace_name: string;
+  display_name: string;
   config: Record<string, unknown>;
   last_applied_run_id: string;
   last_applied_ref: string;

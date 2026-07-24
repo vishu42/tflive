@@ -296,6 +296,9 @@ type StackTemplate struct {
 	CreatedBy UserID `json:"created_by"`
 	// Lifecycle determines whether this component can run or is being removed.
 	Lifecycle StackTemplateLifecycle `json:"lifecycle"`
+	// DisplayName is a human-readable label derived from template metadata when resolving a view.
+	// It is not persisted and may be empty for templates created outside the view path.
+	DisplayName string `json:"-"`
 }
 
 // TemplateRun is one Terraform operation against a StackTemplate.

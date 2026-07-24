@@ -613,6 +613,7 @@ type stackTemplateResponse struct {
 	LastAppliedTemplateRevisionID string         `json:"last_applied_template_revision_id"`
 	SelectedRef                   string         `json:"selected_ref"`
 	WorkspaceName                 string         `json:"workspace_name"`
+	DisplayName                   string         `json:"display_name"`
 	Config                        map[string]any `json:"config"`
 	LastAppliedRunID              string         `json:"last_applied_run_id"`
 	LastAppliedRef                string         `json:"last_applied_ref"`
@@ -688,6 +689,7 @@ func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateR
 		LastAppliedTemplateRevisionID: string(stackTemplate.LastAppliedTemplateRevisionID),
 		SelectedRef:                   stackTemplate.SelectedRef,
 		WorkspaceName:                 stackTemplate.WorkspaceName,
+		DisplayName:                   stackTemplate.DisplayName,
 		Config:                        config,
 		LastAppliedRunID:              string(stackTemplate.LastAppliedRunID),
 		LastAppliedRef:                stackTemplate.LastAppliedRef,
