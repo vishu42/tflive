@@ -12,6 +12,7 @@ describe("queryKeys", () => {
     expect(queryKeys.templateRegistration("tenant_123", "reg_1")).toEqual(["templateRegistration", "tenant_123", "reg_1"]);
     expect(queryKeys.templateRevisionVariables("tenant_123", "rev_1")).toEqual(["templateRevisionVariables", "tenant_123", "rev_1"]);
     expect(queryKeys.templateRun("tenant_123", "run_1")).toEqual(["templateRun", "tenant_123", "run_1"]);
+    expect(queryKeys.templateRuns("tenant_123", "stpl_1")).toEqual(["templateRuns", "tenant_123", "stpl_1"]);
   });
 
   it("builds status-tagged log keys so a status change produces a new key", () => {

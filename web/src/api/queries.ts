@@ -68,6 +68,15 @@ export function useTemplateRunQuery(tenantID: string, runID: string, options: { 
   });
 }
 
+export function useTemplateRunsQuery(tenantID: string, stackTemplateID: string) {
+  return useQuery({
+    queryKey: queryKeys.templateRuns(tenantID, stackTemplateID),
+    queryFn: () => client.listTemplateRuns(tenantID, stackTemplateID),
+    enabled: stackTemplateID !== "",
+    refetchInterval: POLL_INTERVAL_MS
+  });
+}
+
 export function useTemplateRunLogsQuery(tenantID: string, runID: string, statusTag: string) {
   return useQuery({
     queryKey: queryKeys.templateRunLogs(tenantID, runID, statusTag),

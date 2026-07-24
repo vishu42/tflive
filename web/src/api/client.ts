@@ -136,6 +136,10 @@ export function getTemplateRun(tenantID: string, runID: string): Promise<Templat
   return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/template-runs/${encodeURIComponent(runID)}`);
 }
 
+export function listTemplateRuns(tenantID: string, stackTemplateID: string): Promise<TemplateRun[]> {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stack-templates/${encodeURIComponent(stackTemplateID)}/runs`);
+}
+
 export function listTemplateRunLogs(tenantID: string, runID: string): Promise<TemplateRunLog[]> {
   return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/template-runs/${encodeURIComponent(runID)}/logs`);
 }
