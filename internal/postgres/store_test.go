@@ -1677,6 +1677,85 @@ func TestRecordTemplateRunLogReturnsNotFoundForOtherTenant(t *testing.T) {
 	}
 }
 
+func TestListTemplateRunsReturnsMostRecentFirstScopedToStackTemplate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_older"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          traits.TemplateRunCompleted,
+		TriggerActor:    traits.UserID("user_123"),
+		StartedAt:       time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC),
+	})
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_newer"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationApply,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          traits.TemplateRunWaitingApproval,
+		TriggerActor:    traits.UserID("user_456"),
+		StartedAt:       time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC),
+	})
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_other_stack_template"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_456"),
+		Operation:       traits.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_other",
+		Status:          traits.TemplateRunCompleted,
+		TriggerActor:    traits.UserID("user_123"),
+		StartedAt:       time.Date(2026, 7, 20, 11, 0, 0, 0, time.UTC),
+	})
+
+	runs, err := store.ListTemplateRuns(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"))
+	if err != nil {
+		t.Fatalf("ListTemplateRuns returned error: %v", err)
+	}
+
+	if len(runs) != 2 {
+		t.Fatalf("len(runs) = %d, want 2", len(runs))
+	}
+	if runs[0].ID != traits.TemplateRunID("run_newer") || runs[1].ID != traits.TemplateRunID("run_older") {
+		t.Fatalf("run order = %q, %q; want run_newer, run_older", runs[0].ID, runs[1].ID)
+	}
+	if runs[0].Status != traits.TemplateRunWaitingApproval {
+		t.Fatalf("newest run status = %q, want waiting_approval", runs[0].Status)
+	}
+	if runs[0].TriggerActor != traits.UserID("user_456") {
+		t.Fatalf("newest run trigger actor = %q, want user_456", runs[0].TriggerActor)
+	}
+}
+
+func TestListTemplateRunsReturnsEmptySliceWhenNoneExist(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+
+	runs, err := store.ListTemplateRuns(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_nonexistent"))
+	if err != nil {
+		t.Fatalf("ListTemplateRuns returned error: %v", err)
+	}
+	if runs == nil {
+		t.Fatal("runs = nil, want empty slice")
+	}
+	if len(runs) != 0 {
+		t.Fatalf("len(runs) = %d, want 0", len(runs))
+	}
+}
+
 func TestApproveTemplateRunApprovesWaitingRun(t *testing.T) {
 	t.Parallel()
 

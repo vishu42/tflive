@@ -1027,6 +1027,77 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID traits.TenantID
 	return run, nil
 }
 
+func (store *Store) ListTemplateRuns(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID) ([]traits.TemplateRun, error) {
+	rows, err := store.pool.Query(ctx, `
+		select
+			id,
+			tenant_id,
+			stack_template_id,
+			template_revision_id,
+			source_template_id,
+			operation,
+			selected_ref,
+			resolved_commit_sha,
+			workspace_name,
+			config_json,
+			backend_type,
+			backend_config_hash,
+			status,
+			trigger_actor,
+			started_at,
+			completed_at,
+			error_summary
+		from template_runs
+		where tenant_id = $1
+			and stack_template_id = $2
+		order by started_at desc nulls last, id desc
+	`, tenantID, stackTemplateID)
+	if err != nil {
+		return nil, fmt.Errorf("list template runs: %w", err)
+	}
+	defer rows.Close()
+
+	runs := []traits.TemplateRun{}
+	for rows.Next() {
+		var run traits.TemplateRun
+		var startedAt sql.NullTime
+		var completedAt sql.NullTime
+		if err := rows.Scan(
+			&run.ID,
+			&run.TenantID,
+			&run.StackTemplateID,
+			&run.TemplateRevisionID,
+			&run.SourceTemplateID,
+			&run.Operation,
+			&run.SelectedRef,
+			&run.ResolvedCommitSHA,
+			&run.WorkspaceName,
+			&run.ConfigJSON,
+			&run.BackendType,
+			&run.BackendConfigHash,
+			&run.Status,
+			&run.TriggerActor,
+			&startedAt,
+			&completedAt,
+			&run.ErrorSummary,
+		); err != nil {
+			return nil, fmt.Errorf("scan template run: %w", err)
+		}
+		if startedAt.Valid {
+			run.StartedAt = startedAt.Time
+		}
+		if completedAt.Valid {
+			run.CompletedAt = completedAt.Time
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list template runs: %w", err)
+	}
+
+	return runs, nil
+}
+
 func (store *Store) RecordTemplateRunLog(ctx context.Context, log traits.TemplateRunLog) error {
 	result, err := store.pool.Exec(ctx, `
 		insert into template_run_logs (
