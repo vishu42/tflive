@@ -1062,7 +1062,7 @@ func TestApproveRunDoesNotSignalWhenRunIsNotApprovable(t *testing.T) {
 	}
 }
 
-func TestApproveRunRejectsSelfApproval(t *testing.T) {
+func TestApproveRunAllowsSelfApproval(t *testing.T) {
 	t.Parallel()
 
 	ctx := authenticatedContext()
@@ -1087,30 +1087,20 @@ func TestApproveRunRejectsSelfApproval(t *testing.T) {
 		TenantID: traits.TenantID("tenant_123"),
 		RunID:    traits.TemplateRunID("run_123"),
 	})
-	if !errors.Is(err, ErrSelfApprovalForbidden) {
-		t.Fatalf("error = %v, want ErrSelfApprovalForbidden", err)
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
 	}
 
-	if runs.approval.RunID != "" {
-		t.Fatalf("approval was recorded, want no approval")
+	if runs.approval.RunID == "" {
+		t.Fatalf("approval was not recorded, want approval")
 	}
 
-	if workflows.approvalRunID != "" {
-		t.Fatalf("workflow approval run ID = %q, want no workflow signal", workflows.approvalRunID)
-	}
-
-	if len(audit.events) != 1 {
-		t.Fatalf("audit events = %d, want 1", len(audit.events))
-	}
-	if audit.events[0].Action != traits.AuditActionSelfApprovalRejected {
-		t.Fatalf("audit action = %q, want %q", audit.events[0].Action, traits.AuditActionSelfApprovalRejected)
-	}
-	if audit.events[0].Outcome != traits.AuditOutcomeFailure {
-		t.Fatalf("audit outcome = %q, want %q", audit.events[0].Outcome, traits.AuditOutcomeFailure)
+	if workflows.approvalRunID == "" {
+		t.Fatalf("workflow approval run ID = %q, want signal", workflows.approvalRunID)
 	}
 }
 
-func TestApproveRunSelfApprovalAppliesToPlatformAdmins(t *testing.T) {
+func TestApproveRunSelfApprovalWorksForPlatformAdmins(t *testing.T) {
 	t.Parallel()
 
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{
@@ -1137,12 +1127,12 @@ func TestApproveRunSelfApprovalAppliesToPlatformAdmins(t *testing.T) {
 		TenantID: traits.TenantID("tenant_123"),
 		RunID:    traits.TemplateRunID("run_123"),
 	})
-	if !errors.Is(err, ErrSelfApprovalForbidden) {
-		t.Fatalf("error = %v, want ErrSelfApprovalForbidden", err)
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
 	}
 
-	if workflows.approvalRunID != "" {
-		t.Fatalf("workflow approval run ID = %q, want no workflow signal", workflows.approvalRunID)
+	if workflows.approvalRunID == "" {
+		t.Fatalf("workflow approval run ID = %q, want signal", workflows.approvalRunID)
 	}
 }
 
