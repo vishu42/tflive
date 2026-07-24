@@ -107,10 +107,21 @@ func TestModelsEqualNormalizesComputedUsersetObject(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			actual, err := ParseAuthorizationModel([]byte(`{
-				"schema_version":"1.1",
-				"type_definitions":[{
-					"type":"stack",
-					"relations":{"can_view":{"union":{"child":[{"computedUserset":{"object":` + fmt.Sprintf("%q", test.object) + `,"relation":"viewer"}}]}}}
+				"schema_version": "1.1",
+				"type_definitions": [{
+					"type": "stack",
+					"relations": {
+						"can_view": {
+							"union": {
+								"child": [{
+									"computedUserset": {
+										"object": ` + fmt.Sprintf("%q", test.object) + `,
+										"relation": "viewer"
+									}
+								}]
+							}
+						}
+					}
 				}]
 			}`))
 			if err != nil {
