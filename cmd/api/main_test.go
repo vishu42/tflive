@@ -613,6 +613,10 @@ func (recordingStore) GetTemplateRun(context.Context, traits.TenantID, traits.Te
 	return traits.TemplateRun{}, nil
 }
 
+func (recordingStore) ListTemplateRuns(context.Context, traits.TenantID, traits.StackTemplateID) ([]traits.TemplateRun, error) {
+	return nil, nil
+}
+
 func (recordingStore) GetTemplateRunLog(context.Context, traits.TenantID, traits.TemplateRunID, string) (traits.TemplateRunLog, error) {
 	return traits.TemplateRunLog{}, nil
 }

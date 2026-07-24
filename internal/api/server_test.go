@@ -2456,20 +2456,29 @@ func (installer *recordingStackTemplateInstaller) CreateStackTemplate(_ context.
 }
 
 type recordingTemplateRunRepository struct {
-	created         traits.TemplateRun
-	run             traits.TemplateRun
-	approval        traits.TemplateRunApproval
-	cancellation    traits.TemplateRunCancellation
-	gotGetTenantID  traits.TenantID
-	gotGetRunID     traits.TemplateRunID
-	getErr          error
-	approvalErr     error
-	cancellationErr error
+	created                traits.TemplateRun
+	run                    traits.TemplateRun
+	list                   []traits.TemplateRun
+	approval               traits.TemplateRunApproval
+	cancellation           traits.TemplateRunCancellation
+	gotGetTenantID         traits.TenantID
+	gotGetRunID            traits.TemplateRunID
+	gotListTenantID        traits.TenantID
+	gotListStackTemplateID traits.StackTemplateID
+	getErr                 error
+	approvalErr            error
+	cancellationErr        error
 }
 
 func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run traits.TemplateRun) error {
 	repository.created = run
 	return nil
+}
+
+func (repository *recordingTemplateRunRepository) ListTemplateRuns(_ context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID) ([]traits.TemplateRun, error) {
+	repository.gotListTenantID = tenantID
+	repository.gotListStackTemplateID = stackTemplateID
+	return repository.list, nil
 }
 
 func (repository *recordingTemplateRunRepository) GetTemplateRun(_ context.Context, tenantID traits.TenantID, runID traits.TemplateRunID) (traits.TemplateRun, error) {

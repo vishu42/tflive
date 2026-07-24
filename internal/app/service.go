@@ -84,6 +84,8 @@ type StackTemplateRepository interface {
 type TemplateRunRepository interface {
 	CreateTemplateRun(ctx context.Context, run traits.TemplateRun) error
 	GetTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID) (traits.TemplateRun, error)
+	// ListTemplateRuns returns tenant-owned runs for one stack template, most recent first.
+	ListTemplateRuns(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID) ([]traits.TemplateRun, error)
 	// ApproveTemplateRun records approval only when the tenant-owned run is waiting for approval.
 	ApproveTemplateRun(ctx context.Context, approval traits.TemplateRunApproval) error
 	// RequestTemplateRunCancellation records cancellation only when the tenant-owned run can still stop.
@@ -350,6 +352,12 @@ type ListTemplateRevisionsCommand struct {
 type GetTemplateRunCommand struct {
 	TenantID traits.TenantID
 	RunID    traits.TemplateRunID
+}
+
+// ListTemplateRunsCommand asks the app to list tenant-owned runs for one stack template.
+type ListTemplateRunsCommand struct {
+	TenantID        traits.TenantID
+	StackTemplateID traits.StackTemplateID
 }
 
 // GetTemplateRunLogCommand asks the app to read one tenant-owned run phase log.
@@ -1188,6 +1196,28 @@ func (service *Service) GetTemplateRun(ctx context.Context, command GetTemplateR
 	return run, nil
 }
 
+// ListTemplateRuns returns tenant-owned runs for one stack template, most recent first,
+// visible to anyone who can view the owning stack.
+func (service *Service) ListTemplateRuns(ctx context.Context, command ListTemplateRunsCommand) ([]traits.TemplateRun, error) {
+	if err := validateListTemplateRunsCommand(command); err != nil {
+		return nil, err
+	}
+
+	if _, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionView, ErrNotFound); err != nil {
+		return nil, fmt.Errorf("list template runs: %w", err)
+	}
+
+	runs, err := service.TemplateRuns.ListTemplateRuns(ctx, command.TenantID, command.StackTemplateID)
+	if err != nil {
+		return nil, fmt.Errorf("list template runs: %w", err)
+	}
+	if runs == nil {
+		return []traits.TemplateRun{}, nil
+	}
+
+	return runs, nil
+}
+
 // GetTemplateRunLog returns one phase log after checking that the run belongs to the tenant.
 func (service *Service) GetTemplateRunLog(ctx context.Context, command GetTemplateRunLogCommand) ([]byte, error) {
 	if err := validateGetTemplateRunLogCommand(command); err != nil {
@@ -1402,6 +1432,17 @@ func validateGetTemplateRunCommand(command GetTemplateRunCommand) error {
 		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
 	case command.RunID == "":
 		return fmt.Errorf("%w: run id is required", ErrInvalidCommand)
+	default:
+		return nil
+	}
+}
+
+func validateListTemplateRunsCommand(command ListTemplateRunsCommand) error {
+	switch {
+	case command.TenantID == "":
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	case command.StackTemplateID == "":
+		return fmt.Errorf("%w: stack template id is required", ErrInvalidCommand)
 	default:
 		return nil
 	}
