@@ -909,6 +909,49 @@ func TestListTemplateRevisionsReturnsTenantTemplateRevisions(t *testing.T) {
 	}
 }
 
+func TestListTemplateRunsReturnsRunsForStackTemplate(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	deps := newAPITestDependencies()
+	deps.templateRuns.list = []traits.TemplateRun{
+		{
+			ID:              traits.TemplateRunID("run_apply_1"),
+			TenantID:        traits.TenantID("tenant_123"),
+			StackTemplateID: traits.StackTemplateID("stack_template_123"),
+			Operation:       traits.OperationApply,
+			Status:          traits.TemplateRunWaitingApproval,
+			TriggerActor:    traits.UserID("user_456"),
+			StartedAt:       startedAt,
+		},
+	}
+	deps.stackTemplates.stackTemplate = traits.StackTemplate{
+		ID:       traits.StackTemplateID("stack_template_123"),
+		TenantID: traits.TenantID("tenant_123"),
+		StackID:  traits.StackID("stack_123"),
+	}
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", nil)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if deps.templateRuns.gotListStackTemplateID != traits.StackTemplateID("stack_template_123") {
+		t.Fatalf("stack template lookup = %q, want stack_template_123", deps.templateRuns.gotListStackTemplateID)
+	}
+
+	var body []traits.TemplateRun
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body) != 1 || body[0].ID != traits.TemplateRunID("run_apply_1") || body[0].Status != traits.TemplateRunWaitingApproval {
+		t.Fatalf("runs = %#v", body)
+	}
+}
+
 func TestGetTemplateRevisionVariablesReturnsVariables(t *testing.T) {
 	t.Parallel()
 
@@ -1611,6 +1654,7 @@ func TestStackRoleRoutesUseInheritedPermissions(t *testing.T) {
 		{name: "viewer reads run", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusOK, permission: authz.PermissionView},
 		{name: "approver lists run logs", role: authz.RoleApprover, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusOK, permission: authz.PermissionView},
 		{name: "viewer reads run log", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusOK, permission: authz.PermissionView},
+		{name: "viewer lists run history", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", status: http.StatusOK, permission: authz.PermissionView},
 	}
 
 	for _, test := range tests {
@@ -1667,6 +1711,7 @@ func TestStackRoleRoutesDenyInsufficientRoles(t *testing.T) {
 		{name: "unassigned cannot read run", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusNotFound, permission: authz.PermissionView},
 		{name: "unassigned cannot list logs", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusNotFound, permission: authz.PermissionView},
 		{name: "unassigned cannot read log", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusNotFound, permission: authz.PermissionView},
+		{name: "unassigned cannot list run history", method: http.MethodGet, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", status: http.StatusNotFound, permission: authz.PermissionView},
 	}
 
 	for _, test := range tests {
@@ -1789,6 +1834,7 @@ func TestInheritedRouteMissingAndDeniedStatusesMatch(t *testing.T) {
 		{name: "cancellation", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusForbidden},
 		{name: "log list", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusNotFound},
 		{name: "log body", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusNotFound},
+		{name: "run history", method: http.MethodGet, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", status: http.StatusNotFound, resource: "stack-template"},
 	}
 
 	for _, test := range tests {
@@ -1839,6 +1885,7 @@ func newPermissionMatrixDependencies() *apiTestDependencies {
 	}
 	deps.templates.template = traits.TemplateRevision{ID: "revision_123", TenantID: "tenant_123", Status: traits.TemplateRevisionActive}
 	deps.templateRuns.run = traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}
+	deps.templateRuns.list = []traits.TemplateRun{deps.templateRuns.run}
 	deps.logMetadata.logs = []traits.TemplateRunLog{{TenantID: "tenant_123", RunID: "run_123", Phase: "plan"}}
 	deps.logMetadata.log = traits.TemplateRunLog{TenantID: "tenant_123", RunID: "run_123", Phase: "plan", ObjectKey: "runs/run_123/plan.log"}
 	deps.logs.content = []byte("plan output")
