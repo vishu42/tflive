@@ -928,10 +928,10 @@ func (service *Service) ListStackGrants(ctx context.Context, command ListStackGr
 		gv := GrantView{UserSub: userSub, Role: role}
 
 		if service.UserDirectory != nil {
-			users, searchErr := service.UserDirectory.SearchUsers(ctx, userSub, 0, 1)
-			if searchErr == nil && len(users) > 0 {
-				gv.DisplayName = displayNameFromUser(users[0])
-				gv.Email = users[0].Email
+			user, getErr := service.UserDirectory.GetUser(ctx, userSub)
+			if getErr == nil && user != nil {
+				gv.DisplayName = displayNameFromUser(*user)
+				gv.Email = user.Email
 			}
 		}
 		if gv.DisplayName == "" {
@@ -969,8 +969,8 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 	}
 
 	if service.UserDirectory != nil {
-		users, searchErr := service.UserDirectory.SearchUsers(ctx, command.UserSub, 0, 1)
-		if searchErr != nil || len(users) == 0 {
+		user, getErr := service.UserDirectory.GetUser(ctx, command.UserSub)
+		if getErr != nil || user == nil {
 			return GrantView{}, fmt.Errorf("%w: target user not found in directory", ErrInvalidCommand)
 		}
 	}

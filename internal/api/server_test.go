@@ -2765,12 +2765,25 @@ func (clock fixedClock) Now() time.Time {
 }
 
 type apiFakeUserDirectory struct {
-	users []app.DirectoryUser
-	err   error
+	users  []app.DirectoryUser
+	err    error
+	getErr error
 }
 
 func (f *apiFakeUserDirectory) SearchUsers(_ context.Context, _ string, _, _ int) ([]app.DirectoryUser, error) {
 	return f.users, f.err
+}
+
+func (f *apiFakeUserDirectory) GetUser(_ context.Context, userID string) (*app.DirectoryUser, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	for _, u := range f.users {
+		if u.ID == userID {
+			return &u, nil
+		}
+	}
+	return nil, nil
 }
 
 func TestMeReturnsIdentityWithGlobalCapabilities(t *testing.T) {

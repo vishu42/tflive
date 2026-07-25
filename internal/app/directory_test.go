@@ -24,12 +24,25 @@ func contextWithOrdinaryUser() context.Context {
 }
 
 type fakeUserDirectory struct {
-	users []DirectoryUser
-	err   error
+	users  []DirectoryUser
+	err    error
+	getErr error
 }
 
 func (f *fakeUserDirectory) SearchUsers(_ context.Context, _ string, _, _ int) ([]DirectoryUser, error) {
 	return f.users, f.err
+}
+
+func (f *fakeUserDirectory) GetUser(_ context.Context, userID string) (*DirectoryUser, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	for _, u := range f.users {
+		if u.ID == userID {
+			return &u, nil
+		}
+	}
+	return nil, nil
 }
 
 type fakeErrorDirectory struct {
@@ -37,6 +50,10 @@ type fakeErrorDirectory struct {
 }
 
 func (f *fakeErrorDirectory) SearchUsers(_ context.Context, _ string, _, _ int) ([]DirectoryUser, error) {
+	return nil, f.err
+}
+
+func (f *fakeErrorDirectory) GetUser(_ context.Context, _ string) (*DirectoryUser, error) {
 	return nil, f.err
 }
 
