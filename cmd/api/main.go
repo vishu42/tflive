@@ -281,3 +281,36 @@ func (a *directoryClientAdapter) SearchUsers(ctx context.Context, query string, 
 	}
 	return result, nil
 }
+
+func (a *directoryClientAdapter) GetUser(ctx context.Context, userID string) (*app.DirectoryUser, error) {
+	if a.debug {
+		log.Printf("[DEBUG] directoryClientAdapter.GetUser userID=%s", userID)
+	}
+	if err := a.client.Authenticate(ctx); err != nil {
+		if a.debug {
+			log.Printf("[DEBUG] directoryClientAdapter.Authenticate failed: %v", err)
+		}
+		return nil, fmt.Errorf("authenticate directory client: %w", err)
+	}
+	if a.debug {
+		log.Printf("[DEBUG] directoryClientAdapter.Authenticate succeeded")
+	}
+	user, err := a.client.GetUser(ctx, userID)
+	if err != nil {
+		if a.debug {
+			log.Printf("[DEBUG] directoryClientAdapter.GetUser failed: %v", err)
+		}
+		return nil, err
+	}
+	result := &app.DirectoryUser{
+		ID:        user.ID,
+		Username:  user.Username,
+		Email:     user.Email,
+		FirstName: user.FirstName,
+		LastName:  user.LastName,
+	}
+	if a.debug {
+		log.Printf("[DEBUG] directoryClientAdapter.GetUser returned user id=%s username=%s", result.ID, result.Username)
+	}
+	return result, nil
+}

@@ -159,6 +159,52 @@ func (c *DirectoryClient) SearchUsers(ctx context.Context, query string, first, 
 	return users, nil
 }
 
+func (c *DirectoryClient) GetUser(ctx context.Context, userID string) (*DirectoryUser, error) {
+	if c.accessToken == "" {
+		return nil, fmt.Errorf("Keycloak directory get-user requires authentication")
+	}
+	endpoint, err := c.buildURL([]string{"admin", "realms", c.realm, "users", userID}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build get-user endpoint: %w", err)
+	}
+	if c.debug {
+		log.Printf("[DEBUG] DirectoryClient.GetUser realm=%s userID=%s endpoint=%s", c.realm, userID, endpoint.String())
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("build get-user request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("get Keycloak user: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := readBounded(resp.Body, maxErrorBody)
+		return nil, fmt.Errorf("get Keycloak user: unexpected HTTP %d: %s", resp.StatusCode, redactSecrets(strings.TrimSpace(string(body)), c.secrets))
+	}
+
+	body, truncated, err := readBoundedWithTruncation(resp.Body, maxSuccessBody)
+	if err != nil {
+		return nil, fmt.Errorf("read get-user response: %w", err)
+	}
+	if truncated {
+		return nil, fmt.Errorf("read get-user response: response exceeds %d bytes", maxSuccessBody)
+	}
+
+	var user DirectoryUser
+	if err := json.Unmarshal(body, &user); err != nil {
+		return nil, fmt.Errorf("decode get-user response: %w", err)
+	}
+	if c.debug {
+		log.Printf("[DEBUG] DirectoryClient.GetUser returned user id=%s username=%s", user.ID, user.Username)
+	}
+	return &user, nil
+}
+
 func (c *DirectoryClient) buildURL(segments []string, query url.Values) (*url.URL, error) {
 	return buildAdminURL(c.adminURL, segments, query)
 }
