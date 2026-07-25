@@ -84,6 +84,10 @@ function seedCapabilities(queryClient: QueryClient, capabilities: StackCapabilit
   });
 }
 
+function seedRuns(queryClient: QueryClient, runs: TemplateRun[]) {
+  queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "stpl_1"), runs);
+}
+
 function renderRow(queryClient: QueryClient, overrides: Partial<StackTemplate> = {}) {
   return render(
     <QueryClientProvider client={queryClient}>
@@ -113,6 +117,7 @@ describe("RunsListRow", () => {
   it("shows the component label with Plan enabled and Apply/Approve disabled when no run has started", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
+    seedRuns(queryClient, []);
 
     renderRow(queryClient);
 
@@ -126,6 +131,7 @@ describe("RunsListRow", () => {
   it("disables Plan/Apply/Cancel with a reason when canOperate is denied", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, { ...allAllowed, canOperate: false });
+    seedRuns(queryClient, []);
 
     renderRow(queryClient);
 
@@ -138,6 +144,7 @@ describe("RunsListRow", () => {
   it("disables Approve with a reason when canApprove is denied", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, { ...allAllowed, canApprove: false });
+    seedRuns(queryClient, []);
 
     renderRow(queryClient);
 
@@ -145,35 +152,52 @@ describe("RunsListRow", () => {
     expect(screen.getByTestId("runs-row-approve-disabled-reason")).toBeTruthy();
   });
 
-  it("walks plan → apply → approve, enabling each step's actions and linking to the run detail route", async () => {
+  it("shows a run history entry and an enabled Approve button for a run started by a different user", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
+    seedRuns(queryClient, [
+      run({ id: "run_apply_1", operation: "apply", status: "waiting_approval", trigger_actor: "someone_else", started_at: "2026-07-20T01:00:00Z" }),
+      run({ id: "run_plan_1", operation: "plan", status: "completed", trigger_actor: "someone_else", started_at: "2026-07-20T00:00:00Z" })
+    ]);
+
+    renderRow(queryClient);
+
+    expect(isDisabled(screen.getByRole("button", { name: /Approve/ }))).toBe(false);
+    expect(screen.getByTestId("runs-row-stpl_1-history-run_apply_1")).toBeTruthy();
+    expect(screen.getByTestId("runs-row-stpl_1-history-run_plan_1")).toBeTruthy();
+  });
+
+  it("walks plan → apply → approve using persisted history, and immediately reflects each step without a page reload", async () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    let runsState: TemplateRun[] = [];
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
-      if (init?.method === "POST" && url.endsWith("/stack-templates/stpl_1/runs")) {
-        // Return each run already resolved (rather than "queued" + relying on
-        // interval polling to reach a terminal state) so the test verifies
-        // the canApply/canApprove derivation, not TanStack Query's own
-        // already-tested refetchInterval mechanics.
-        const body = JSON.parse(String(init.body)) as { operation: string };
-        return body.operation === "apply"
-          ? jsonResponse(run({ id: "run_apply_1", operation: "apply", status: "waiting_approval" }))
-          : jsonResponse(run({ id: "run_plan_1", operation: "plan", status: "completed" }));
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/stack-templates/stpl_1/runs") && method === "GET") {
+        return jsonResponse(runsState);
       }
-      if (url.endsWith("/template-runs/run_plan_1")) {
-        return jsonResponse(run({ id: "run_plan_1", operation: "plan", status: "completed" }));
+      if (url.endsWith("/stack-templates/stpl_1/runs") && method === "POST") {
+        const body = JSON.parse(String(init?.body)) as { operation: string };
+        const created =
+          body.operation === "apply"
+            ? run({ id: "run_apply_1", operation: "apply", status: "waiting_approval", started_at: "2026-07-20T00:05:00Z" })
+            : run({ id: "run_plan_1", operation: "plan", status: "completed", started_at: "2026-07-20T00:00:00Z" });
+        runsState = [created, ...runsState];
+        return jsonResponse(created, 201);
       }
-      if (url.endsWith("/template-runs/run_apply_1")) {
-        return jsonResponse(run({ id: "run_apply_1", operation: "apply", status: "waiting_approval" }));
-      }
-      if (init?.method === "POST" && url.endsWith("/template-runs/run_apply_1/approval")) {
+      if (url.endsWith("/template-runs/run_apply_1/approval") && method === "POST") {
+        runsState = runsState.map((existing) => (existing.id === "run_apply_1" ? { ...existing, status: "approved" } : existing));
         return new Response(null, { status: 204 });
       }
-      throw new Error(`unexpected fetch: ${url} ${init?.method ?? "GET"}`);
+      throw new Error(`unexpected fetch: ${url} ${method}`);
     });
 
     renderRow(queryClient);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/v1/tenants/tenant_123/stack-templates/stpl_1/runs", expect.objectContaining({ method: "GET" }))
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
     await waitFor(() => expect(screen.getByTestId("runs-row-stpl_1-plan-link")).toBeTruthy());
@@ -193,5 +217,6 @@ describe("RunsListRow", () => {
         expect.objectContaining({ method: "POST" })
       )
     );
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Approve/ }))).toBe(true));
   });
 });

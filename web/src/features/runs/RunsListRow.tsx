@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { CircleStop, Loader2, Play, ShieldCheck } from "lucide-react";
 import { Link } from "react-router-dom";
 import { isTerminalRunStatus } from "../../api/polling";
-import { useApproveRunMutation, useCancelRunMutation, useStartTemplateRunMutation, useTemplateRunQuery } from "../../api/queries";
-import type { StackTemplate } from "../../api/types";
+import { queryKeys } from "../../api/queryKeys";
+import { useApproveRunMutation, useCancelRunMutation, useStartTemplateRunMutation, useTemplateRunsQuery } from "../../api/queries";
+import type { Operation, StackTemplate, TemplateRun } from "../../api/types";
 import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
 import StatusRow from "../../shared/StatusRow";
@@ -14,34 +16,39 @@ interface RunsListRowProps {
   stackTemplate: StackTemplate;
 }
 
-// One row per installed stack template on /stacks/:stackId/runs — session-scoped
-// plan/apply tracking (like the legacy RunsPanel), generalized across the
-// stack's components instead of a single selected one. Log viewing lives on
-// the run detail route; this row only starts runs and links to them.
-export default function RunsListRow({ stackId, stackTemplate }: RunsListRowProps) {
-  const [planRunID, setPlanRunID] = useState("");
-  const [applyRunID, setApplyRunID] = useState("");
-  const [errorMessage, setErrorMessage] = useState("");
+function latestRunFor(runs: TemplateRun[], operation: Operation): TemplateRun | null {
+  return runs.find((candidate) => candidate.operation === operation) ?? null;
+}
 
-  const planRunQuery = useTemplateRunQuery(tenantID, planRunID, { poll: true });
-  const applyRunQuery = useTemplateRunQuery(tenantID, applyRunID, { poll: true });
-  const planRun = planRunQuery.data ?? null;
-  const applyRun = applyRunQuery.data ?? null;
+// One row per installed stack template on /stacks/:stackId/runs. Run state is
+// derived entirely from the server's run history (useTemplateRunsQuery), not
+// from local component state, so it is visible to every user who can view the
+// stack — not just the browser tab that started a run.
+export default function RunsListRow({ stackId, stackTemplate }: RunsListRowProps) {
+  const [errorMessage, setErrorMessage] = useState("");
+  const queryClient = useQueryClient();
+
+  const runsQuery = useTemplateRunsQuery(tenantID, stackTemplate.id);
+  const runs = runsQuery.data ?? [];
+  const planRun = latestRunFor(runs, "plan");
+  const applyRun = latestRunFor(runs, "apply");
+  const latestRun = runs[0] ?? null;
+  const activeRun = latestRun && !isTerminalRunStatus(latestRun.status) ? latestRun : null;
 
   const startRunMutation = useStartTemplateRunMutation(tenantID);
   const approveRunMutation = useApproveRunMutation(tenantID);
   const cancelRunMutation = useCancelRunMutation(tenantID);
 
-  const canPlan = !planRun;
-  const canApply = Boolean(planRun?.status === "completed" && !applyRun);
-  const canApprove = applyRun?.status === "waiting_approval";
-  const activeRun = applyRun && !isTerminalRunStatus(applyRun.status) ? applyRun : planRun && !isTerminalRunStatus(planRun.status) ? planRun : null;
+  const canPlan = !activeRun;
+  const canApply = Boolean(!activeRun && latestRun?.operation === "plan" && latestRun.status === "completed");
+  const canApprove = Boolean(latestRun?.operation === "apply" && latestRun.status === "waiting_approval");
   const canCancel = Boolean(activeRun);
 
   async function runAction(action: () => Promise<void>) {
     setErrorMessage("");
     try {
       await action();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.templateRuns(tenantID, stackTemplate.id) });
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Request failed");
     }
@@ -49,24 +56,22 @@ export default function RunsListRow({ stackId, stackTemplate }: RunsListRowProps
 
   async function handlePlan() {
     await runAction(async () => {
-      const next = await startRunMutation.mutateAsync({ stackTemplateID: stackTemplate.id, body: { operation: "plan" } });
-      setPlanRunID(next.id);
+      await startRunMutation.mutateAsync({ stackTemplateID: stackTemplate.id, body: { operation: "plan" } });
     });
   }
 
   async function handleApply() {
     await runAction(async () => {
-      const next = await startRunMutation.mutateAsync({ stackTemplateID: stackTemplate.id, body: { operation: "apply" } });
-      setApplyRunID(next.id);
+      await startRunMutation.mutateAsync({ stackTemplateID: stackTemplate.id, body: { operation: "apply" } });
     });
   }
 
   async function handleApprove() {
-    if (!applyRunID) {
+    if (!applyRun) {
       return;
     }
     await runAction(async () => {
-      await approveRunMutation.mutateAsync(applyRunID);
+      await approveRunMutation.mutateAsync(applyRun.id);
     });
   }
 
@@ -120,6 +125,20 @@ export default function RunsListRow({ stackId, stackTemplate }: RunsListRowProps
         <Link to={`/stacks/${stackId}/runs/${applyRun.id}`} data-testid={`runs-row-${stackTemplate.id}-apply-link`}>
           View apply run
         </Link>
+      )}
+      {runs.length > 0 && (
+        <div className="run-history" data-testid={`runs-row-${stackTemplate.id}-history`}>
+          <h4>History</h4>
+          <ul>
+            {runs.map((historyRun) => (
+              <li key={historyRun.id}>
+                <Link to={`/stacks/${stackId}/runs/${historyRun.id}`} data-testid={`runs-row-${stackTemplate.id}-history-${historyRun.id}`}>
+                  {historyRun.operation} — {historyRun.status} — {historyRun.trigger_actor} — {historyRun.started_at}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );

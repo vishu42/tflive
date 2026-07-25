@@ -68,6 +68,8 @@ func NewServer(service *app.Service, tenantID traits.TenantID) *Server {
 	// Template run routes.
 	// Starts a Terraform operation for an installed stack template.
 	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/runs", server.handleStartTemplateRun)
+	// Lists runs for an installed stack template, most recent first.
+	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/runs", server.handleListTemplateRuns)
 	// Reads the current state of a template run.
 	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/template-runs/{run_id}", server.handleGetTemplateRun)
 	// Lists persisted log metadata for all phases of a template run.
@@ -460,6 +462,19 @@ func (server *Server) handleGetTemplateRun(response http.ResponseWriter, request
 	}
 
 	writeJSON(response, http.StatusOK, run)
+}
+
+func (server *Server) handleListTemplateRuns(response http.ResponseWriter, request *http.Request) {
+	runs, err := server.service.ListTemplateRuns(request.Context(), app.ListTemplateRunsCommand{
+		TenantID:        traits.TenantID(request.PathValue("tenant_id")),
+		StackTemplateID: traits.StackTemplateID(request.PathValue("stack_template_id")),
+	})
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusOK, runs)
 }
 
 func (server *Server) handleGetTemplateRunLog(response http.ResponseWriter, request *http.Request) {

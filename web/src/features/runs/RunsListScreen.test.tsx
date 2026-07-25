@@ -151,6 +151,8 @@ describe("RunsListScreen", () => {
       stack: stack(),
       templates: [stackTemplate(), stackTemplate({ id: "stpl_2", workspace_name: "acme-prod-secondary" })]
     });
+    queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "stpl_1"), []);
+    queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "stpl_2"), []);
 
     renderScreen(queryClient);
 
@@ -164,6 +166,7 @@ describe("RunsListScreen", () => {
       stack: stack({ effectiveCapabilities: capabilities }),
       templates: [stackTemplate()]
     });
+    queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "stpl_1"), []);
   }
 
   function isDisabled(element: HTMLElement): boolean {

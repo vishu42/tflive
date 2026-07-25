@@ -8,6 +8,7 @@ import {
   getTemplateRunLog,
   listStacks,
   listTemplateRevisions,
+  listTemplateRuns,
   registerTemplate,
   startTemplateRun,
   updateStackTemplateConfig,
@@ -86,6 +87,18 @@ describe("api client", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/v1/tenants/tenant_123/template-revisions",
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
+  it("lists runs for a stack template", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([{ id: "run_1", status: "waiting_approval" }]));
+
+    const runs = await listTemplateRuns("tenant_123", "stpl_1");
+
+    expect(runs).toEqual([{ id: "run_1", status: "waiting_approval" }]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/tenants/tenant_123/stack-templates/stpl_1/runs",
       expect.objectContaining({ method: "GET" })
     );
   });

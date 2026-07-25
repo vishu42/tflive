@@ -8,6 +8,7 @@ export const queryKeys = {
   templateRevisionVariables: (tenantID: string, templateRevisionID: string) =>
     ["templateRevisionVariables", tenantID, templateRevisionID] as const,
   templateRun: (tenantID: string, runID: string) => ["templateRun", tenantID, runID] as const,
+  templateRuns: (tenantID: string, stackTemplateID: string) => ["templateRuns", tenantID, stackTemplateID] as const,
   templateRunLogs: (tenantID: string, runID: string, statusTag: string) =>
     ["templateRunLogs", tenantID, runID, statusTag] as const,
   templateRunLog: (tenantID: string, runID: string, phase: string, statusTag: string) =>

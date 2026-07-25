@@ -20,6 +20,7 @@ import {
   useTemplateRunLogQuery,
   useTemplateRunLogsQuery,
   useTemplateRunQuery,
+  useTemplateRunsQuery,
   useUpdateStackTemplateConfigMutation,
   useUpgradeStackTemplateMutation
 } from "./queries";
@@ -83,6 +84,25 @@ describe("read-only query hooks", () => {
     const { result } = renderHook(() => useTemplateRevisionVariablesQuery("tenant_123", ""), {
       wrapper: wrapper(testQueryClient())
     });
+
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fetches runs for a stack template", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([{ id: "run_1", status: "waiting_approval" }]));
+    const { result } = renderHook(() => useTemplateRunsQuery("tenant_123", "stpl_1"), { wrapper: wrapper(testQueryClient()) });
+
+    await waitFor(() => expect(result.current.data).toEqual([{ id: "run_1", status: "waiting_approval" }]));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/tenants/tenant_123/stack-templates/stpl_1/runs",
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
+  it("does not fetch runs when the stack template id is empty", () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([]));
+    const { result } = renderHook(() => useTemplateRunsQuery("tenant_123", ""), { wrapper: wrapper(testQueryClient()) });
 
     expect(result.current.fetchStatus).toBe("idle");
     expect(fetchMock).not.toHaveBeenCalled();

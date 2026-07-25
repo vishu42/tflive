@@ -1378,6 +1378,71 @@ func TestGetTemplateRunReturnsTenantScopedRun(t *testing.T) {
 	}
 }
 
+func TestListTemplateRunsReturnsRunsScopedToStackTemplate(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{
+		list: []traits.TemplateRun{
+			{ID: traits.TemplateRunID("run_newer"), TenantID: traits.TenantID("tenant_123"), StackTemplateID: traits.StackTemplateID("stack_template_123"), Operation: traits.OperationApply, Status: traits.TemplateRunWaitingApproval},
+			{ID: traits.TemplateRunID("run_older"), TenantID: traits.TenantID("tenant_123"), StackTemplateID: traits.StackTemplateID("stack_template_123"), Operation: traits.OperationPlan, Status: traits.TemplateRunCompleted},
+		},
+	}
+	service := NewService(Service{
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
+	})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject})
+
+	got, err := service.ListTemplateRuns(ctx, ListTemplateRunsCommand{
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+	})
+	if err != nil {
+		t.Fatalf("ListTemplateRuns returned error: %v", err)
+	}
+
+	if runs.gotListTenantID != traits.TenantID("tenant_123") {
+		t.Fatalf("tenant lookup = %q, want tenant_123", runs.gotListTenantID)
+	}
+	if runs.gotListStackTemplateID != traits.StackTemplateID("stack_template_123") {
+		t.Fatalf("stack template lookup = %q, want stack_template_123", runs.gotListStackTemplateID)
+	}
+	if len(got) != 2 || got[0].ID != traits.TemplateRunID("run_newer") {
+		t.Fatalf("runs = %#v, want run_newer first", got)
+	}
+}
+
+func TestListTemplateRunsNormalizesNilAndRequiresStackTemplateID(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   &recordingTemplateRunRepository{},
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
+	})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject})
+
+	got, err := service.ListTemplateRuns(ctx, ListTemplateRunsCommand{
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+	})
+	if err != nil {
+		t.Fatalf("ListTemplateRuns returned error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("runs = nil, want empty slice")
+	}
+	if len(got) != 0 {
+		t.Fatalf("len(runs) = %d, want 0", len(got))
+	}
+
+	_, err = service.ListTemplateRuns(ctx, ListTemplateRunsCommand{TenantID: traits.TenantID("tenant_123")})
+	if !errors.Is(err, ErrInvalidCommand) {
+		t.Fatalf("error = %v, want ErrInvalidCommand", err)
+	}
+}
+
 func TestGetTemplateRunRejectsMissingRunID(t *testing.T) {
 	t.Parallel()
 
@@ -1961,15 +2026,18 @@ func (repository *recordingStackRepository) ListStacksPage(_ context.Context, te
 }
 
 type recordingTemplateRunRepository struct {
-	created         traits.TemplateRun
-	run             traits.TemplateRun
-	approval        traits.TemplateRunApproval
-	cancellation    traits.TemplateRunCancellation
-	gotGetTenantID  traits.TenantID
-	gotGetRunID     traits.TemplateRunID
-	getErr          error
-	approvalErr     error
-	cancellationErr error
+	created                traits.TemplateRun
+	run                    traits.TemplateRun
+	list                   []traits.TemplateRun
+	approval               traits.TemplateRunApproval
+	cancellation           traits.TemplateRunCancellation
+	gotGetTenantID         traits.TenantID
+	gotGetRunID            traits.TemplateRunID
+	gotListTenantID        traits.TenantID
+	gotListStackTemplateID traits.StackTemplateID
+	getErr                 error
+	approvalErr            error
+	cancellationErr        error
 }
 
 func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run traits.TemplateRun) error {
@@ -1984,6 +2052,12 @@ func (repository *recordingTemplateRunRepository) GetTemplateRun(_ context.Conte
 		return traits.TemplateRun{}, repository.getErr
 	}
 	return repository.run, nil
+}
+
+func (repository *recordingTemplateRunRepository) ListTemplateRuns(_ context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID) ([]traits.TemplateRun, error) {
+	repository.gotListTenantID = tenantID
+	repository.gotListStackTemplateID = stackTemplateID
+	return repository.list, nil
 }
 
 func (repository *recordingTemplateRunRepository) ApproveTemplateRun(_ context.Context, approval traits.TemplateRunApproval) error {
