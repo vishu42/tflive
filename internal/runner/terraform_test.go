@@ -66,6 +66,10 @@ func TestLocalProcessRunnerRunsTerraformApply(t *testing.T) {
 	}
 }
 
+// TestLocalProcessRunnerRunsTerraformDestroy verifies that the local process
+// runner dispatches "tofu destroy -input=false -auto-approve -no-color" with
+// terraform variable environment variables set when the command type is
+// TerraformCommandDestroy.
 func TestLocalProcessRunnerRunsTerraformDestroy(t *testing.T) {
 	t.Parallel()
 

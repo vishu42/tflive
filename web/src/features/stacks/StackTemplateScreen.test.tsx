@@ -250,6 +250,9 @@ describe("StackTemplateScreen", () => {
     await waitFor(() => expect(screen.getByTestId("route-access-denied")).toBeTruthy());
   });
 
+  // The Destroy button is visible and enabled for active templates. Clicking it
+  // reveals an inline confirmation with a warning message and a Confirm destroy
+  // button. The template must have lifecycle = "active" for these to appear.
   it("shows destroy button for active templates and confirmation on click", async () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient);
@@ -263,6 +266,9 @@ describe("StackTemplateScreen", () => {
     expect(actionButton(/Confirm destroy/)).toBeTruthy();
   });
 
+  // When lifecycle is "destroying", the Destroy button is disabled, a
+  // "Destroying…" badge appears in the template list, and all edit actions
+  // (save config, upgrade) are locked via VariablesPanel's disabledReason.
   it("disables destroy button and shows Destroying badge when lifecycle is destroying", () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient, allAllowed);

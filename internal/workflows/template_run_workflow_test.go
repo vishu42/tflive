@@ -255,6 +255,10 @@ func TestTemplateRunWorkflowCancelsPlanWhenSignalArrivesDuringTerraform(t *testi
 	}
 }
 
+// TestTemplateRunWorkflowCancelsDestroyWhileWaitingApproval verifies that a
+// destroy workflow transitions to the cancel path when a cancel signal arrives
+// during the waiting-for-approval phase. The workflow must not dispatch a
+// terraform destroy command and must reach the Canceled terminal status.
 func TestTemplateRunWorkflowCancelsDestroyWhileWaitingApproval(t *testing.T) {
 	t.Parallel()
 

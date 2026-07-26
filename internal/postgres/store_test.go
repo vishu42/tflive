@@ -2324,6 +2324,9 @@ func TestAppendAuditEventSuccess(t *testing.T) {
 	}
 }
 
+// TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroying verifies
+// that reaching the destroy_started status on an OperationDestroy run updates
+// the associated stack_template row to lifecycle = 'destroying'.
 func TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroying(t *testing.T) {
 	t.Parallel()
 
@@ -2384,6 +2387,10 @@ func TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroying(t *testin
 	}
 }
 
+// TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroyed verifies
+// that reaching the destroyed status on an OperationDestroy run updates the
+// associated stack_template row to lifecycle = 'destroyed', which causes it to
+// be excluded from GetStackWithTemplates results.
 func TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroyed(t *testing.T) {
 	t.Parallel()
 
