@@ -44,6 +44,7 @@ const (
 	TerraformCommandSelectWorkspace TerraformCommandType = "select_workspace"
 	TerraformCommandPlan            TerraformCommandType = "plan"
 	TerraformCommandApply           TerraformCommandType = "apply"
+	TerraformCommandDestroy         TerraformCommandType = "destroy"
 )
 
 // Valid reports whether the operation is one of the supported operation types.

@@ -270,6 +270,11 @@ func TestTemplateRunWorkflowRecordsDestroyStatuses(t *testing.T) {
 			statuses = append(statuses, activityInput.Status)
 			return nil
 		})
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(traits.ApprovalSignalName, traits.ApprovalSignal{
+			ApprovedBy: approverSubject,
+		})
+	}, 0)
 
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 
@@ -280,6 +285,8 @@ func TestTemplateRunWorkflowRecordsDestroyStatuses(t *testing.T) {
 		traits.TemplateRunSourceFetched,
 		traits.TemplateRunInit,
 		traits.TemplateRunWorkspaceSelected,
+		traits.TemplateRunWaitingApproval,
+		traits.TemplateRunApproved,
 		traits.TemplateRunDestroyStarted,
 		traits.TemplateRunDestroyed,
 		traits.TemplateRunLockReleased,
@@ -291,6 +298,7 @@ func TestTemplateRunWorkflowRecordsDestroyStatuses(t *testing.T) {
 	wantCommands := []traits.TerraformCommandType{
 		traits.TerraformCommandInit,
 		traits.TerraformCommandSelectWorkspace,
+		traits.TerraformCommandDestroy,
 	}
 	if !reflect.DeepEqual(commands, wantCommands) {
 		t.Fatalf("commands = %#v, want %#v", commands, wantCommands)

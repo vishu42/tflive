@@ -529,8 +529,9 @@ func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.T
 		from stack_templates
 		where tenant_id = $1
 			and stack_id = $2
+			and lifecycle != $3
 		order by id
-	`, tenantID, stackID)
+	`, tenantID, stackID, traits.StackTemplateDestroyed)
 	if err != nil {
 		return app.StackView{}, fmt.Errorf("get stack templates: %w", err)
 	}
@@ -1312,7 +1313,7 @@ func (store *Store) AppendAuditEvent(ctx context.Context, event traits.SecurityA
 }
 
 func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.TemplateRunStatusActivityInput) error {
-	if recordsStackTemplateLastApplied(input) {
+	if recordsStackTemplateLastApplied(input) || recordsStackTemplateDestroying(input) || recordsStackTemplateDestroyed(input) {
 		tx, err := store.pool.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("begin record template run status: %w", err)
@@ -1324,9 +1325,22 @@ func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.Te
 		if err := recordTemplateRunStatus(ctx, tx, input); err != nil {
 			return err
 		}
-		if err := recordStackTemplateLastApplied(ctx, tx, input); err != nil {
-			return err
+
+		switch {
+		case recordsStackTemplateLastApplied(input):
+			if err := recordStackTemplateLastApplied(ctx, tx, input); err != nil {
+				return err
+			}
+		case recordsStackTemplateDestroying(input):
+			if err := recordStackTemplateLifecycle(ctx, tx, input, traits.StackTemplateDestroying); err != nil {
+				return err
+			}
+		case recordsStackTemplateDestroyed(input):
+			if err := recordStackTemplateLifecycle(ctx, tx, input, traits.StackTemplateDestroyed); err != nil {
+				return err
+			}
 		}
+
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("commit record template run status: %w", err)
 		}
@@ -1397,6 +1411,14 @@ func recordsStackTemplateLastApplied(input traits.TemplateRunStatusActivityInput
 	return input.Operation == traits.OperationApply && input.Status == traits.TemplateRunApplied
 }
 
+func recordsStackTemplateDestroying(input traits.TemplateRunStatusActivityInput) bool {
+	return input.Operation == traits.OperationDestroy && input.Status == traits.TemplateRunDestroyStarted
+}
+
+func recordsStackTemplateDestroyed(input traits.TemplateRunStatusActivityInput) bool {
+	return input.Operation == traits.OperationDestroy && input.Status == traits.TemplateRunDestroyed
+}
+
 func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLastAppliedWriter, input traits.TemplateRunStatusActivityInput) error {
 	commandTag, err := writer.Exec(ctx, `
 		update stack_templates
@@ -1427,6 +1449,22 @@ func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLas
 		return ErrNotFound
 	}
 
+	return nil
+}
+
+func recordStackTemplateLifecycle(ctx context.Context, writer stackTemplateLastAppliedWriter, input traits.TemplateRunStatusActivityInput, lifecycle traits.StackTemplateLifecycle) error {
+	commandTag, err := writer.Exec(ctx, `
+		update stack_templates
+		set lifecycle = $1
+		where tenant_id = $2
+			and id = $3
+	`, lifecycle, input.TenantID, input.StackTemplateID)
+	if err != nil {
+		return fmt.Errorf("record stack template lifecycle: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
 	return nil
 }
 

@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { useParams } from "react-router-dom";
 import {
   useAddTemplateToStackMutation,
   useStackQuery,
+  useStartTemplateRunMutation,
   useTemplateRevisionVariablesQuery,
   useTemplateRevisionsQuery,
   useUpdateStackTemplateConfigMutation,
@@ -15,10 +16,12 @@ import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import InstalledTemplatePanel from "./InstalledTemplatePanel";
 import VariablesPanel from "./VariablesPanel";
 import {
+  canDestroyStackTemplate,
   canSaveStackTemplateConfig,
   canUpgradeStackTemplate,
   configFromVariableValues,
   findSelectedStackTemplate,
+  isDestroyingStackTemplate,
   stackTemplateLabel,
   variableValuesFromConfig
 } from "./stackWorkflow";
@@ -37,6 +40,7 @@ export default function StackTemplateScreen() {
   const [chosenRevisionID, setChosenRevisionID] = useState("");
   const [editedValues, setEditedValues] = useState<Record<string, string>>({});
   const [errorMessage, setErrorMessage] = useState("");
+  const [confirmDestroy, setConfirmDestroy] = useState(false);
 
   const stackQuery = useStackQuery(tenantID, stackId);
   const templateRevisionsQuery = useTemplateRevisionsQuery(tenantID);
@@ -67,9 +71,13 @@ export default function StackTemplateScreen() {
     variableValues[variable.name] = editedValues[variable.name] ?? baseValues[variable.name] ?? "";
   }
 
+  const destroying = isDestroyingStackTemplate(installedTemplate);
+  const canDestroy = canDestroyStackTemplate(installedTemplate);
+
   const addTemplateToStackMutation = useAddTemplateToStackMutation(tenantID, stackId);
   const updateStackTemplateConfigMutation = useUpdateStackTemplateConfigMutation(tenantID, stackId);
   const upgradeStackTemplateMutation = useUpgradeStackTemplateMutation(tenantID, stackId);
+  const destroyMutation = useStartTemplateRunMutation(tenantID);
 
   const canInstall = Boolean(selectedTemplateRevision?.status === "active" && stack);
   const canSaveConfig = canSaveStackTemplateConfig(installedTemplate, selectedTemplateRevision, variables, variableValues);
@@ -134,6 +142,19 @@ export default function StackTemplateScreen() {
     });
   }
 
+  async function handleDestroyStackTemplate() {
+    if (!installedTemplate) {
+      return;
+    }
+    await runAction(async () => {
+      await destroyMutation.mutateAsync({
+        stackTemplateID: installedTemplate.id,
+        body: { operation: "destroy" }
+      });
+      setConfirmDestroy(false);
+    });
+  }
+
   async function runAction(action: () => Promise<void>) {
     setErrorMessage("");
     try {
@@ -189,7 +210,8 @@ export default function StackTemplateScreen() {
     canUpgrade,
     onUpgrade: handleUpgradeStackTemplate,
     upgradeBusy: upgradeStackTemplateMutation.isPending,
-    installedTemplateStatus: installedTemplate?.workspace_name ?? "not installed"
+    installedTemplateStatus: installedTemplate?.workspace_name ?? "not installed",
+    disabledReason: destroying ? "Destroy in progress" : undefined
   };
 
   return (
@@ -212,6 +234,9 @@ export default function StackTemplateScreen() {
                   type="button"
                 >
                   <span>{stackTemplateLabel(item)}</span>
+                  {item.lifecycle === "destroying" && (
+                    <small className="lifecycle-badge destroying">Destroying…</small>
+                  )}
                   <small>{item.desired_template_revision_id}</small>
                 </button>
               ))}
@@ -241,6 +266,27 @@ export default function StackTemplateScreen() {
           <VariablesPanel {...variablesPanelProps} />
         </RequireCapability>
       </div>
+      {installedTemplate && (
+        <div className="destroy-section" data-testid="stack-template-destroy">
+          {confirmDestroy ? (
+            <>
+              <button className="destructive-button" disabled={destroyMutation.isPending} onClick={handleDestroyStackTemplate} type="button">
+                {destroyMutation.isPending ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}
+                Confirm destroy
+              </button>
+              <button className="secondary-button" disabled={destroyMutation.isPending} onClick={() => setConfirmDestroy(false)} type="button">
+                Cancel
+              </button>
+              <p className="muted">This will permanently destroy all infrastructure managed by this template. This cannot be undone.</p>
+            </>
+          ) : (
+            <button className="destructive-button" disabled={destroying || !canDestroy} onClick={() => setConfirmDestroy(true)} type="button">
+              <Trash2 size={16} />
+              Destroy
+            </button>
+          )}
+        </div>
+      )}
     </section>
   );
 }

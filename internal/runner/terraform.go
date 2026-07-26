@@ -78,6 +78,8 @@ func (runner *LocalProcessRunner) Run(ctx context.Context, input TerraformComman
 		return runner.runWithTerraformVariables(ctx, input, "tofu plan", "plan", "-input=false", "-no-color")
 	case traits.TerraformCommandApply:
 		return runner.runWithTerraformVariables(ctx, input, "tofu apply", "apply", "-input=false", "-auto-approve", "-no-color")
+	case traits.TerraformCommandDestroy:
+		return runner.runWithTerraformVariables(ctx, input, "tofu destroy", "destroy", "-input=false", "-auto-approve", "-no-color")
 	default:
 		return fmt.Errorf("unsupported terraform command %q", input.Command)
 	}
