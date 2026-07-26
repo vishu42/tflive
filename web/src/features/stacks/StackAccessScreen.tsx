@@ -83,7 +83,7 @@ export default function StackAccessScreen() {
     setMutationError("");
     try {
       await assignMutation.mutateAsync({
-        userSub: undoEntry.userSub,
+        user_sub: undoEntry.userSub,
         role: undoEntry.role
       });
     } catch {
