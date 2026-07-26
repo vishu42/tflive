@@ -73,6 +73,8 @@ func PhaseForTerraformCommand(command traits.TerraformCommandType) (string, erro
 		return "plan", nil
 	case traits.TerraformCommandApply:
 		return "apply", nil
+	case traits.TerraformCommandDestroy:
+		return "destroy", nil
 	default:
 		return "", fmt.Errorf("unsupported terraform command %q", command)
 	}

@@ -66,6 +66,37 @@ func TestLocalProcessRunnerRunsTerraformApply(t *testing.T) {
 	}
 }
 
+// TestLocalProcessRunnerRunsTerraformDestroy verifies that the local process
+// runner dispatches "tofu destroy -input=false -auto-approve -no-color" with
+// terraform variable environment variables set when the command type is
+// TerraformCommandDestroy.
+func TestLocalProcessRunnerRunsTerraformDestroy(t *testing.T) {
+	t.Parallel()
+
+	executor := &recordingTerraformCommandExecutor{}
+	runner := NewLocalProcessRunnerWithExecutor(executor)
+
+	err := runner.Run(context.Background(), TerraformCommand{
+		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
+		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+		Command:       traits.TerraformCommandDestroy,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	want := []recordedTerraformCommand{
+		{
+			dir:  "/tmp/tflive/runs/tenant_123/run_123",
+			name: "tofu",
+			args: []string{"destroy", "-input=false", "-auto-approve", "-no-color"},
+		},
+	}
+	if !reflect.DeepEqual(executor.commands, want) {
+		t.Fatalf("commands = %#v, want %#v", executor.commands, want)
+	}
+}
+
 func TestLocalProcessRunnerSetsTerraformVariablesForPlanAndApply(t *testing.T) {
 	t.Parallel()
 
@@ -83,6 +114,11 @@ func TestLocalProcessRunnerSetsTerraformVariablesForPlanAndApply(t *testing.T) {
 			name:    "apply",
 			command: traits.TerraformCommandApply,
 			args:    []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		},
+		{
+			name:    "destroy",
+			command: traits.TerraformCommandDestroy,
+			args:    []string{"destroy", "-input=false", "-auto-approve", "-no-color"},
 		},
 	}
 

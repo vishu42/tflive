@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Stack, StackTemplate, TemplateRevision, TemplateVariable } from "../../api/types";
 import {
+  canDestroyStackTemplate,
   canUpgradeStackTemplate,
   canSaveStackTemplateConfig,
   configFromVariableValues,
   findSelectedStack,
   findSelectedStackTemplate,
+  isDestroyingStackTemplate,
   nextSelectedStackID,
   nextSelectedStackTemplateID,
   stackLabel,
@@ -144,6 +146,23 @@ describe("stack workflow helpers", () => {
       size: "",
       unused: "ignored"
     })).toEqual({ region: "us-west-2" });
+  });
+
+  // canDestroyStackTemplate returns true only when the lifecycle is "active";
+  // null, "destroying", and "destroyed" templates are not eligible for destroy.
+  it("allows destroy only for active stack templates", () => {
+    expect(canDestroyStackTemplate(stackTemplate({ lifecycle: "active" }))).toBe(true);
+    expect(canDestroyStackTemplate(stackTemplate({ lifecycle: "destroying" }))).toBe(false);
+    expect(canDestroyStackTemplate(stackTemplate({ lifecycle: "destroyed" }))).toBe(false);
+    expect(canDestroyStackTemplate(null)).toBe(false);
+  });
+
+  // isDestroyingStackTemplate returns true only when lifecycle is "destroying",
+  // which gates the disabling of edit actions while a destroy run is in flight.
+  it("detects destroying state from stack template lifecycle", () => {
+    expect(isDestroyingStackTemplate(stackTemplate({ lifecycle: "destroying" }))).toBe(true);
+    expect(isDestroyingStackTemplate(stackTemplate({ lifecycle: "active" }))).toBe(false);
+    expect(isDestroyingStackTemplate(null)).toBe(false);
   });
 
   it("upserts refreshed stack templates without changing other installs", () => {

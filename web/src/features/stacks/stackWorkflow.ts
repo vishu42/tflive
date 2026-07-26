@@ -78,6 +78,14 @@ export function upsertStackTemplate(stackTemplates: StackTemplate[], stackTempla
   return [stackTemplate, ...stackTemplates];
 }
 
+export function canDestroyStackTemplate(stackTemplate: StackTemplate | null): boolean {
+  return stackTemplate?.lifecycle === "active";
+}
+
+export function isDestroyingStackTemplate(stackTemplate: StackTemplate | null): boolean {
+  return stackTemplate?.lifecycle === "destroying";
+}
+
 function areStringRecordEqual(left: Record<string, string>, right: Record<string, string>): boolean {
   const leftKeys = Object.keys(left);
   const rightKeys = Object.keys(right);

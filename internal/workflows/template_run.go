@@ -190,7 +190,25 @@ func (run *templateRunWorkflow) apply() error {
 }
 
 func (run *templateRunWorkflow) destroy() error {
-	if err := run.recordStatuses(traits.TemplateRunDestroyStarted, traits.TemplateRunDestroyed); err != nil {
+	if err := run.recordStatus(traits.TemplateRunWaitingApproval); err != nil {
+		return err
+	}
+
+	approved, err := run.waitForApproval()
+	if err != nil {
+		return err
+	}
+	if !approved {
+		return run.cancel()
+	}
+
+	if err := run.recordStatuses(traits.TemplateRunApproved, traits.TemplateRunDestroyStarted); err != nil {
+		return err
+	}
+	if err := run.runTerraform(traits.TerraformCommandDestroy); err != nil {
+		return err
+	}
+	if err := run.recordStatus(traits.TemplateRunDestroyed); err != nil {
 		return err
 	}
 	return run.complete()

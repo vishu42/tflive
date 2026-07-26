@@ -2324,6 +2324,133 @@ func TestAppendAuditEventSuccess(t *testing.T) {
 	}
 }
 
+// TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroying verifies
+// that reaching the destroy_started status on an OperationDestroy run updates
+// the associated stack_template row to lifecycle = 'destroying'.
+func TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroying(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	stack := traits.Stack{
+		ID:        traits.StackID("stack_destroy_1"),
+		TenantID:  traits.TenantID("tenant_destroy_1"),
+		Name:      "Destroy Test",
+		Slug:      "destroy-test",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateStack(ctx, stack); err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+	stackTemplate := traits.StackTemplate{
+		ID:        traits.StackTemplateID("st_destroy_1"),
+		TenantID:  traits.TenantID("tenant_destroy_1"),
+		StackID:   traits.StackID("stack_destroy_1"),
+		Lifecycle: traits.StackTemplateActive,
+	}
+	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
+		t.Fatalf("CreateStackTemplate returned error: %v", err)
+	}
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_destroy_1"),
+		TenantID:        traits.TenantID("tenant_destroy_1"),
+		StackTemplateID: traits.StackTemplateID("st_destroy_1"),
+		Operation:       traits.OperationDestroy,
+		SelectedRef:     "main",
+		WorkspaceName:   "ws_destroy",
+		Status:          traits.TemplateRunLocked,
+		TriggerActor:    traits.UserID("user_123"),
+	})
+
+	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
+		RunID:           traits.TemplateRunID("run_destroy_1"),
+		TenantID:        traits.TenantID("tenant_destroy_1"),
+		StackTemplateID: traits.StackTemplateID("st_destroy_1"),
+		Operation:       traits.OperationDestroy,
+		Status:          traits.TemplateRunDestroyStarted,
+	})
+	if err != nil {
+		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+	}
+
+	var lifecycle traits.StackTemplateLifecycle
+	if err := pool.QueryRow(ctx, `
+		select lifecycle from stack_templates
+		where tenant_id = $1 and id = $2
+	`, "tenant_destroy_1", "st_destroy_1").Scan(&lifecycle); err != nil {
+		t.Fatalf("read stack template lifecycle: %v", err)
+	}
+	if lifecycle != traits.StackTemplateDestroying {
+		t.Fatalf("lifecycle = %q, want %q", lifecycle, traits.StackTemplateDestroying)
+	}
+}
+
+// TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroyed verifies
+// that reaching the destroyed status on an OperationDestroy run updates the
+// associated stack_template row to lifecycle = 'destroyed', which causes it to
+// be excluded from GetStackWithTemplates results.
+func TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroyed(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	stack := traits.Stack{
+		ID:        traits.StackID("stack_destroy_2"),
+		TenantID:  traits.TenantID("tenant_destroy_2"),
+		Name:      "Destroy Done",
+		Slug:      "destroy-done",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateStack(ctx, stack); err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+	stackTemplate := traits.StackTemplate{
+		ID:        traits.StackTemplateID("st_destroy_2"),
+		TenantID:  traits.TenantID("tenant_destroy_2"),
+		StackID:   traits.StackID("stack_destroy_2"),
+		Lifecycle: traits.StackTemplateDestroying,
+	}
+	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
+		t.Fatalf("CreateStackTemplate returned error: %v", err)
+	}
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_destroy_2"),
+		TenantID:        traits.TenantID("tenant_destroy_2"),
+		StackTemplateID: traits.StackTemplateID("st_destroy_2"),
+		Operation:       traits.OperationDestroy,
+		SelectedRef:     "main",
+		WorkspaceName:   "ws_destroy_2",
+		Status:          traits.TemplateRunDestroyStarted,
+		TriggerActor:    traits.UserID("user_123"),
+	})
+
+	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
+		RunID:           traits.TemplateRunID("run_destroy_2"),
+		TenantID:        traits.TenantID("tenant_destroy_2"),
+		StackTemplateID: traits.StackTemplateID("st_destroy_2"),
+		Operation:       traits.OperationDestroy,
+		Status:          traits.TemplateRunDestroyed,
+	})
+	if err != nil {
+		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+	}
+
+	var lifecycle traits.StackTemplateLifecycle
+	if err := pool.QueryRow(ctx, `
+		select lifecycle from stack_templates
+		where tenant_id = $1 and id = $2
+	`, "tenant_destroy_2", "st_destroy_2").Scan(&lifecycle); err != nil {
+		t.Fatalf("read stack template lifecycle: %v", err)
+	}
+	if lifecycle != traits.StackTemplateDestroyed {
+		t.Fatalf("lifecycle = %q, want %q", lifecycle, traits.StackTemplateDestroyed)
+	}
+}
+
 func TestAppendAuditEventEmptyOptionalFields(t *testing.T) {
 	t.Parallel()
 

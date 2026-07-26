@@ -250,6 +250,38 @@ describe("StackTemplateScreen", () => {
     await waitFor(() => expect(screen.getByTestId("route-access-denied")).toBeTruthy());
   });
 
+  // The Destroy button is visible and enabled for active templates. Clicking it
+  // reveals an inline confirmation with a warning message and a Confirm destroy
+  // button. The template must have lifecycle = "active" for these to appear.
+  it("shows destroy button for active templates and confirmation on click", async () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    const destroyButton = actionButton(/Destroy/);
+    expect(destroyButton.disabled).toBe(false);
+    fireEvent.click(destroyButton);
+    expect(screen.getByText(/This will permanently destroy all infrastructure/)).toBeTruthy();
+    expect(actionButton(/Confirm destroy/)).toBeTruthy();
+  });
+
+  // When lifecycle is "destroying", the Destroy button is disabled, a
+  // "Destroying…" badge appears in the template list, and all edit actions
+  // (save config, upgrade) are locked via VariablesPanel's disabledReason.
+  it("disables destroy button and shows Destroying badge when lifecycle is destroying", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient, allAllowed);
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"),
+      stackView(allAllowed, [stackTemplate({ lifecycle: "destroying" })]));
+
+    renderScreen(queryClient);
+
+    expect(screen.getByText("Destroying…")).toBeTruthy();
+    const destroyButton = screen.getByTestId("stack-template-destroy").querySelector("button") as HTMLButtonElement;
+    expect(destroyButton.disabled).toBe(true);
+  });
+
   it("renders NotFound when the API returns 404", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ error: "not_found", message: "not found" }), {
