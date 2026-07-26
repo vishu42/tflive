@@ -73,6 +73,7 @@ func TestPhaseForTerraformCommand(t *testing.T) {
 		{command: traits.TerraformCommandSelectWorkspace, want: "workspace"},
 		{command: traits.TerraformCommandPlan, want: "plan"},
 		{command: traits.TerraformCommandApply, want: "apply"},
+		{command: traits.TerraformCommandDestroy, want: "destroy"},
 	}
 
 	for _, tt := range tests {

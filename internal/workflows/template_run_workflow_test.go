@@ -255,6 +255,55 @@ func TestTemplateRunWorkflowCancelsPlanWhenSignalArrivesDuringTerraform(t *testi
 	}
 }
 
+func TestTemplateRunWorkflowCancelsDestroyWhileWaitingApproval(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	input := templateRunWorkflowInput(traits.OperationDestroy)
+	var statuses []traits.TemplateRunStatus
+	var commands []traits.TerraformCommandType
+	mockPrepareWorkspace(t, env)
+	mockFetchSource(t, env)
+	mockRunTerraform(t, env, &commands)
+	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
+			statuses = append(statuses, activityInput.Status)
+			if activityInput.Status == traits.TemplateRunWaitingApproval {
+				env.SignalWorkflow(traits.CancelSignalName, traits.CancelSignal{
+					RequestedBy: requesterSubject,
+					Reason:      "superseded",
+				})
+			}
+			return nil
+		})
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+	assertWorkflowCompleted(t, env)
+	want := []traits.TemplateRunStatus{
+		traits.TemplateRunLocked,
+		traits.TemplateRunWorkspacePrepared,
+		traits.TemplateRunSourceFetched,
+		traits.TemplateRunInit,
+		traits.TemplateRunWorkspaceSelected,
+		traits.TemplateRunWaitingApproval,
+		traits.TemplateRunCancelRequested,
+		traits.TemplateRunCanceling,
+		traits.TemplateRunLockReleased,
+		traits.TemplateRunCanceled,
+	}
+	if !reflect.DeepEqual(statuses, want) {
+		t.Fatalf("statuses = %#v, want %#v", statuses, want)
+	}
+	wantCommands := []traits.TerraformCommandType{
+		traits.TerraformCommandInit,
+		traits.TerraformCommandSelectWorkspace,
+	}
+	if !reflect.DeepEqual(commands, wantCommands) {
+		t.Fatalf("commands = %#v, want %#v", commands, wantCommands)
+	}
+}
+
 func TestTemplateRunWorkflowRecordsDestroyStatuses(t *testing.T) {
 	t.Parallel()
 
