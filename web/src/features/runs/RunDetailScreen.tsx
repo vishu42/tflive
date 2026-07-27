@@ -31,7 +31,7 @@ export default function RunDetailScreen() {
   const approveRunMutation = useApproveRunMutation(tenantID);
   const cancelRunMutation = useCancelRunMutation(tenantID);
 
-  const canApprove = Boolean(run && run.operation === "apply" && run.status === "waiting_approval");
+  const canApprove = Boolean(run && run.status === "waiting_approval");
   const canCancel = Boolean(run && !isTerminalRunStatus(run.status));
 
   async function runAction(action: () => Promise<void>) {
