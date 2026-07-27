@@ -219,4 +219,70 @@ describe("RunsListRow", () => {
     );
     await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Approve/ }))).toBe(true));
   });
+
+  it("shows destroy button for active templates and confirmation on click", () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    seedRuns(queryClient, []);
+
+    renderRow(queryClient);
+
+    const destroyButton = screen.getByRole("button", { name: /Destroy/ }) as HTMLButtonElement;
+    expect(destroyButton.disabled).toBe(false);
+    fireEvent.click(destroyButton);
+    expect(screen.getByText(/This will permanently destroy all infrastructure/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Confirm destroy/ })).toBeTruthy();
+  });
+
+  it("disables destroy button when lifecycle is destroying", () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    seedRuns(queryClient, []);
+
+    renderRow(queryClient, { lifecycle: "destroying" });
+
+    expect(isDisabled(screen.getByRole("button", { name: /Destroy/ }))).toBe(true);
+  });
+
+  it("disables destroy button when an active run exists", () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    seedRuns(queryClient, [run({ operation: "plan", status: "queued" })]);
+
+    renderRow(queryClient);
+
+    expect(isDisabled(screen.getByRole("button", { name: /Destroy/ }))).toBe(true);
+  });
+
+  it("disables destroy with a reason when canOperate is denied", () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, { ...allAllowed, canOperate: false });
+    seedRuns(queryClient, []);
+
+    renderRow(queryClient);
+
+    expect(isDisabled(screen.getByRole("button", { name: /Destroy/ }))).toBe(true);
+    expect(screen.getByTestId("runs-row-actions-disabled-reason")).toBeTruthy();
+  });
+
+  it("executes destroy mutation on confirm", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(run({ id: "destroy_1", operation: "destroy", status: "completed" }), 201)
+    );
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    seedRuns(queryClient, []);
+
+    renderRow(queryClient);
+
+    fireEvent.click(screen.getByRole("button", { name: /Destroy/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Confirm destroy/ }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/v1/tenants/tenant_123/stack-templates/stpl_1/runs",
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ operation: "destroy" }) })
+      )
+    );
+  });
 });

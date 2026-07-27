@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleStop, Loader2, Play, ShieldCheck } from "lucide-react";
+import { CircleStop, Loader2, Play, ShieldCheck, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { isTerminalRunStatus } from "../../api/polling";
 import { queryKeys } from "../../api/queryKeys";
@@ -9,7 +9,7 @@ import type { Operation, StackTemplate, TemplateRun } from "../../api/types";
 import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
 import StatusRow from "../../shared/StatusRow";
-import { stackTemplateLabel } from "../stacks/stackWorkflow";
+import { canDestroyStackTemplate, isDestroyingStackTemplate, stackTemplateLabel } from "../stacks/stackWorkflow";
 
 interface RunsListRowProps {
   stackId: string;
@@ -26,6 +26,7 @@ function latestRunFor(runs: TemplateRun[], operation: Operation): TemplateRun | 
 // stack — not just the browser tab that started a run.
 export default function RunsListRow({ stackId, stackTemplate }: RunsListRowProps) {
   const [errorMessage, setErrorMessage] = useState("");
+  const [confirmDestroy, setConfirmDestroy] = useState(false);
   const queryClient = useQueryClient();
 
   const runsQuery = useTemplateRunsQuery(tenantID, stackTemplate.id);
@@ -41,8 +42,11 @@ export default function RunsListRow({ stackId, stackTemplate }: RunsListRowProps
 
   const canPlan = !activeRun;
   const canApply = Boolean(!activeRun && latestRun?.operation === "plan" && latestRun.status === "completed");
-  const canApprove = Boolean(latestRun?.operation === "apply" && latestRun.status === "waiting_approval");
+  const canApprove = Boolean(latestRun?.status === "waiting_approval");
   const canCancel = Boolean(activeRun);
+  const canDestroy = canDestroyStackTemplate(stackTemplate) && !activeRun;
+  const destroying = isDestroyingStackTemplate(stackTemplate);
+  const destroyBusy = startRunMutation.isPending && startRunMutation.variables?.body.operation === "destroy";
 
   async function runAction(action: () => Promise<void>) {
     setErrorMessage("");
@@ -67,11 +71,11 @@ export default function RunsListRow({ stackId, stackTemplate }: RunsListRowProps
   }
 
   async function handleApprove() {
-    if (!applyRun) {
+    if (!latestRun) {
       return;
     }
     await runAction(async () => {
-      await approveRunMutation.mutateAsync(applyRun.id);
+      await approveRunMutation.mutateAsync(latestRun.id);
     });
   }
 
@@ -84,6 +88,13 @@ export default function RunsListRow({ stackId, stackTemplate }: RunsListRowProps
     });
   }
 
+  async function handleDestroy() {
+    await runAction(async () => {
+      await startRunMutation.mutateAsync({ stackTemplateID: stackTemplate.id, body: { operation: "destroy" } });
+      setConfirmDestroy(false);
+    });
+  }
+
   const actionsProps = {
     canPlan,
     onPlan: handlePlan,
@@ -93,7 +104,14 @@ export default function RunsListRow({ stackId, stackTemplate }: RunsListRowProps
     applyBusy: startRunMutation.isPending && startRunMutation.variables?.body.operation === "apply",
     canCancel,
     onCancel: handleCancel,
-    cancelBusy: cancelRunMutation.isPending
+    cancelBusy: cancelRunMutation.isPending,
+    canDestroy,
+    destroying,
+    onDestroy: handleDestroy,
+    destroyBusy,
+    confirmDestroy,
+    onConfirmDestroy: () => setConfirmDestroy(true),
+    onCancelConfirm: () => setConfirmDestroy(false)
   };
 
   return (
@@ -154,10 +172,17 @@ interface RunsRowActionsProps {
   canCancel: boolean;
   onCancel: () => void;
   cancelBusy: boolean;
+  canDestroy: boolean;
+  destroying?: boolean;
+  onDestroy: () => void;
+  destroyBusy: boolean;
+  confirmDestroy?: boolean;
+  onConfirmDestroy?: () => void;
+  onCancelConfirm?: () => void;
   disabledReason?: string;
 }
 
-function RunsRowActions({ canPlan, onPlan, planBusy, canApply, onApply, applyBusy, canCancel, onCancel, cancelBusy, disabledReason }: RunsRowActionsProps) {
+function RunsRowActions({ canPlan, onPlan, planBusy, canApply, onApply, applyBusy, canCancel, onCancel, cancelBusy, canDestroy, destroying, onDestroy, destroyBusy, confirmDestroy, onConfirmDestroy, onCancelConfirm, disabledReason }: RunsRowActionsProps) {
   const locked = Boolean(disabledReason);
   return (
     <div className="button-row">
@@ -173,10 +198,29 @@ function RunsRowActions({ canPlan, onPlan, planBusy, canApply, onApply, applyBus
         {cancelBusy ? <Loader2 size={16} className="spin" /> : <CircleStop size={16} />}
         Cancel
       </button>
+      {confirmDestroy ? (
+        <>
+          <button className="destructive-button" disabled={destroyBusy} onClick={onDestroy} type="button">
+            {destroyBusy ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}
+            Confirm destroy
+          </button>
+          <button className="secondary-button" disabled={destroyBusy} onClick={onCancelConfirm} type="button">
+            Cancel
+          </button>
+        </>
+      ) : (
+        <button className="destructive-button" disabled={locked || destroying || !canDestroy || destroyBusy} onClick={onConfirmDestroy} type="button">
+          <Trash2 size={16} />
+          Destroy
+        </button>
+      )}
       {disabledReason && (
         <p className="muted" data-testid="runs-row-actions-disabled-reason">
           {disabledReason}
         </p>
+      )}
+      {confirmDestroy && (
+        <p className="muted">This will permanently destroy all infrastructure managed by this template. This cannot be undone.</p>
       )}
     </div>
   );

@@ -260,6 +260,21 @@ select {
   margin-top: 14px;
 }
 
+.destructive-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  border: 1px solid #c4434b;
+  color: #ffffff;
+  background: #c4434b;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
