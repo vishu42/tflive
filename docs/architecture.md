@@ -904,6 +904,33 @@ Future design should answer:
 - whether scheduled drift checks are needed
 - how drift findings appear in activity history and the UI
 
+### Monorepo Template Layouts
+
+A repository holding several templates under `templates/` alongside shared
+modules under `modules/`, where templates source those modules with relative
+paths such as `../modules/vpc`, already executes correctly. The runner performs
+a full shallow clone and runs Terraform from the configured root path, so paths
+referenced outside that root remain present on disk.
+
+Revision identity is the gap. A revision is `(repo, ref, root_path)` resolved to
+a commit SHA and does not record which modules a template references. A commit
+touching only a shared module changes a template's effective content without
+changing anything the platform recognizes as that template's identity.
+
+Future design should answer:
+
+- whether a revision records the local module paths a template transitively
+  references, discovered by parsing `module` blocks during template sync
+- how change detection distinguishes a commit affecting one template from an
+  unrelated commit elsewhere in the same repository
+- whether a module change with no template change should surface a new revision,
+  and how a user learns that it did
+- how upgrade and drift notifications avoid flagging every template in a
+  monorepo on any commit
+- whether per-run clone cost justifies sparse checkout once the set of required
+  paths is known
+- how module sources that escape the repository are rejected or reported
+
 ## MVP Summary
 
 The recommended MVP is the minimal local platform architecture:
