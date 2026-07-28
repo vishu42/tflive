@@ -1395,6 +1395,33 @@ func (store *Store) RequestTemplateRunCancellation(ctx context.Context, cancella
 	return nil
 }
 
+func (store *Store) ReconcileTemplateRunCancellation(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, errorSummary string) error {
+	commandTag, err := store.pool.Exec(ctx, `
+		update template_runs
+		set
+			status = $1,
+			error_summary = $2,
+			completed_at = coalesce(completed_at, now())
+		where tenant_id = $3
+			and id = $4
+			and status = $5
+	`,
+		traits.TemplateRunFailed,
+		errorSummary,
+		tenantID,
+		runID,
+		traits.TemplateRunCancelRequested,
+	)
+	if err != nil {
+		return fmt.Errorf("reconcile template run cancellation: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return app.ErrRunNotCancelable
+	}
+
+	return nil
+}
+
 func (store *Store) AppendAuditEvent(ctx context.Context, event traits.SecurityAuditEvent) error {
 	_, err := store.pool.Exec(ctx,
 		`INSERT INTO security_audit_log
@@ -1458,14 +1485,16 @@ func recordTemplateRunStatus(ctx context.Context, writer templateRunStatusWriter
 			update template_runs
 			set
 				status = $1,
+				error_summary = case when $2 <> '' then $2 else error_summary end,
 				completed_at = coalesce(completed_at, now())
-			where tenant_id = $2
-				and id = $3
-				and stack_template_id = $4
-				and operation = $5
+			where tenant_id = $3
+				and id = $4
+				and stack_template_id = $5
+				and operation = $6
 			returning id
 		`,
 			input.Status,
+			input.ErrorSummary,
 			input.TenantID,
 			input.RunID,
 			input.StackTemplateID,

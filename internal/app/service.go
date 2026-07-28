@@ -106,6 +106,8 @@ type TemplateRunRepository interface {
 	ApproveTemplateRun(ctx context.Context, approval traits.TemplateRunApproval) error
 	// RequestTemplateRunCancellation records cancellation only when the tenant-owned run can still stop.
 	RequestTemplateRunCancellation(ctx context.Context, cancellation traits.TemplateRunCancellation) error
+	// ReconcileTemplateRunCancellation marks a persisted cancellation request failed when its workflow is closed.
+	ReconcileTemplateRunCancellation(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, errorSummary string) error
 }
 
 // TemplateRegistrationRepository persists template registration attempts.
