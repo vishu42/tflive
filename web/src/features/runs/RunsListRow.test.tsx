@@ -128,6 +128,18 @@ describe("RunsListRow", () => {
     expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(true);
   });
 
+  it("treats a failed run as terminal and does not render a Terminate action", () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    seedRuns(queryClient, [run({ status: "failed", error_summary: "activity failed" })]);
+
+    renderRow(queryClient);
+
+    expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(true);
+    expect(screen.queryByRole("button", { name: /Terminate/ })).toBeNull();
+  });
+
   it("disables Plan/Apply/Cancel with a reason when canOperate is denied", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, { ...allAllowed, canOperate: false });

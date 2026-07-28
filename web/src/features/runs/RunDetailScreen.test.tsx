@@ -200,6 +200,21 @@ describe("RunDetailScreen", () => {
     await waitFor(() => expect(screen.getByText("init log body")).toBeTruthy());
   });
 
+  it("renders the activity failure summary for a failed run", () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    queryClient.setQueryData(
+      queryKeys.templateRun("tenant_123", "run_1"),
+      run({ status: "failed", error_summary: "template run activity failed: log upload failed" })
+    );
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([]));
+
+    renderScreen(queryClient);
+
+    expect(screen.getByText("template run activity failed: log upload failed")).toBeTruthy();
+    expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(true);
+  });
+
   it("enables Approve only for a waiting_approval apply run, gated by canApprove", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
