@@ -18,8 +18,10 @@ type TerraformCommand struct {
 	WorkspaceName string
 	Command       traits.TerraformCommandType
 	ConfigJSON    json.RawMessage
-	Stdout        io.Writer
-	Stderr        io.Writer
+	// Environment contains resolved provider credentials for this subprocess only.
+	Environment map[string]string
+	Stdout      io.Writer
+	Stderr      io.Writer
 }
 
 // CommandExecutor is the subprocess boundary used by LocalProcessRunner.
@@ -71,7 +73,7 @@ func (runner *LocalProcessRunner) Run(ctx context.Context, input TerraformComman
 
 	switch input.Command {
 	case traits.TerraformCommandInit:
-		return runner.run(ctx, input, nil, "tofu init", "init", "-input=false", "-no-color")
+		return runner.run(ctx, input, sortedEnvironment(input.Environment), "tofu init", "init", "-input=false", "-no-color")
 	case traits.TerraformCommandSelectWorkspace:
 		return runner.selectWorkspace(ctx, input)
 	case traits.TerraformCommandPlan:
@@ -95,7 +97,7 @@ func (runner *LocalProcessRunner) selectWorkspace(ctx context.Context, input Ter
 	err := runner.executor.Run(
 		ctx,
 		input.WorkspacePath,
-		nil,
+		sortedEnvironment(input.Environment),
 		stdout,
 		stderr,
 		terraformExecutable,
@@ -111,7 +113,7 @@ func (runner *LocalProcessRunner) selectWorkspace(ctx context.Context, input Ter
 	if err := runner.executor.Run(
 		ctx,
 		input.WorkspacePath,
-		nil,
+		sortedEnvironment(input.Environment),
 		stdout,
 		stderr,
 		terraformExecutable,
@@ -142,7 +144,25 @@ func (runner *LocalProcessRunner) runWithTerraformVariables(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("%s variables: %w", label, err)
 	}
-	return runner.run(ctx, input, env, label, args...)
+	credentialEnv := sortedEnvironment(input.Environment)
+	return runner.run(ctx, input, append(credentialEnv, env...), label, args...)
+}
+
+// sortedEnvironment converts credential variables into deterministic NAME=value process entries.
+func sortedEnvironment(values map[string]string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	env := make([]string, 0, len(keys))
+	for _, key := range keys {
+		env = append(env, key+"="+values[key])
+	}
+	return env
 }
 
 func terraformVariableEnv(raw json.RawMessage) ([]string, error) {
