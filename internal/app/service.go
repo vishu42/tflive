@@ -33,6 +33,9 @@ var (
 	ErrRunNotCancelable                   = errors.New("run is not cancelable")
 	ErrSelfApprovalForbidden              = errors.New("self-approval forbidden")
 	ErrLastOwner                          = errors.New("cannot remove the last stack owner")
+	ErrCredentialNameInvalid              = errors.New("credential name is invalid")
+	ErrDuplicateCredentialName            = errors.New("duplicate credential name")
+	ErrCredentialEncryptionUnavailable    = errors.New("credential encryption is unavailable")
 )
 
 func authenticatedActor(ctx context.Context) (traits.UserID, error) {
@@ -78,6 +81,19 @@ type StackTemplateRepository interface {
 	GetStackTemplate(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error)
 	UpdateStackTemplateConfig(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID, configJSON json.RawMessage) (traits.StackTemplate, error)
 	UpdateStackTemplateDesiredRevision(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateRevisionID traits.TemplateRevisionID, configJSON json.RawMessage) (traits.StackTemplate, error)
+}
+
+// CredentialRepository persists encrypted, scope-owned Terraform credentials.
+type CredentialRepository interface {
+	CreateCredential(ctx context.Context, credential traits.CredentialSet) error
+	ListCredentials(ctx context.Context, tenantID traits.TenantID, scope traits.CredentialScope, ownerID string) ([]traits.CredentialSet, error)
+	DeleteCredential(ctx context.Context, tenantID traits.TenantID, id traits.CredentialSetID) error
+	ListCredentialsForStackTemplate(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID) ([]traits.CredentialSet, error)
+}
+
+// CredentialEncryptor protects credential values before persistence.
+type CredentialEncryptor interface {
+	Encrypt(string) (string, error)
 }
 
 // TemplateRunRepository persists TemplateRun records and run decisions.
@@ -201,6 +217,8 @@ type Service struct {
 	AuthorizationOutbox      authdispatch.Outbox
 	Stacks                   StackRepository
 	StackTemplates           StackTemplateRepository
+	Credentials              CredentialRepository
+	CredentialEncryptor      CredentialEncryptor
 	TemplateRuns             TemplateRunRepository
 	TemplateRegistrations    TemplateRegistrationRepository
 	TemplateRevisionMetadata TemplateRevisionMetadataRepository
@@ -211,11 +229,18 @@ type Service struct {
 	Workflows                WorkflowDispatcher
 	StackIDs                 StackIDGenerator
 	StackTemplateIDs         StackTemplateIDGenerator
+	CredentialIDs            CredentialSetIDGenerator
 	RunIDs                   TemplateRunIDGenerator
 	RegistrationIDs          TemplateRegistrationIDGenerator
 	Clock                    Clock
 	Audit                    AuditRepository
 	UserDirectory            UserDirectory
+}
+
+// CredentialSetIDGenerator creates credential identifiers.
+type CredentialSetIDGenerator interface {
+	// NewCredentialSetID returns a fresh identifier for a credential record.
+	NewCredentialSetID() traits.CredentialSetID
 }
 
 // NewService creates a Service from app-owned dependencies.
@@ -238,6 +263,9 @@ func NewService(service Service) *Service {
 	}
 	if service.StackTemplateIDs == nil {
 		service.StackTemplateIDs = randomStackTemplateIDGenerator{}
+	}
+	if service.CredentialIDs == nil {
+		service.CredentialIDs = randomCredentialSetIDGenerator{}
 	}
 
 	return &service
@@ -294,6 +322,42 @@ type StartTemplateRunCommand struct {
 	TenantID        traits.TenantID
 	StackTemplateID traits.StackTemplateID
 	Operation       traits.OperationType
+}
+
+// CreateCredentialCommand asks the app to create one encrypted credential in a scope.
+type CreateCredentialCommand struct {
+	TenantID        traits.TenantID
+	Scope           traits.CredentialScope
+	StackID         traits.StackID
+	StackTemplateID traits.StackTemplateID
+	Name            string
+	Value           string
+}
+
+// ListCredentialsCommand asks the app for non-sensitive credential metadata.
+type ListCredentialsCommand struct {
+	TenantID        traits.TenantID
+	Scope           traits.CredentialScope
+	StackID         traits.StackID
+	StackTemplateID traits.StackTemplateID
+}
+
+// DeleteCredentialCommand asks the app to remove one scoped credential.
+type DeleteCredentialCommand struct {
+	TenantID        traits.TenantID
+	CredentialID    traits.CredentialSetID
+	StackID         traits.StackID
+	StackTemplateID traits.StackTemplateID
+}
+
+// CredentialMetadata is the safe API representation of a credential.
+type CredentialMetadata struct {
+	ID        traits.CredentialSetID `json:"id"`
+	Name      string                 `json:"name"`
+	Scope     traits.CredentialScope `json:"scope"`
+	StackID   traits.StackID         `json:"stack_id,omitempty"`
+	Template  traits.StackTemplateID `json:"stack_template_id,omitempty"`
+	CreatedAt time.Time              `json:"created_at"`
 }
 
 // UpdateStackTemplateConfigCommand asks the app to edit desired config before a run.
@@ -528,11 +592,11 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 
 	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionOperate, ErrForbidden); err != nil {
 		service.auditError(ctx, traits.SecurityAuditEvent{
-			ActorSubject:  string(actor),
-			Action:        traits.AuditActionFailedAccessAttempt,
-			TenantID:      command.TenantID,
-			StackID:       command.StackID,
-			Outcome:       traits.AuditOutcomeFailure,
+			ActorSubject: string(actor),
+			Action:       traits.AuditActionFailedAccessAttempt,
+			TenantID:     command.TenantID,
+			StackID:      command.StackID,
+			Outcome:      traits.AuditOutcomeFailure,
 		})
 		return traits.StackTemplate{}, err
 	}
@@ -594,11 +658,11 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionOperate, ErrForbidden)
 	if err != nil {
 		service.auditError(ctx, traits.SecurityAuditEvent{
-			ActorSubject:  string(actor),
-			Action:        traits.AuditActionFailedAccessAttempt,
-			TenantID:      command.TenantID,
-			StackID:       "",
-			Outcome:       traits.AuditOutcomeFailure,
+			ActorSubject: string(actor),
+			Action:       traits.AuditActionFailedAccessAttempt,
+			TenantID:     command.TenantID,
+			StackID:      "",
+			Outcome:      traits.AuditOutcomeFailure,
 		})
 		return traits.TemplateRun{}, fmt.Errorf("get stack template: %w", err)
 	}
@@ -648,6 +712,155 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	return run, nil
 }
 
+// CreateCredential creates one encrypted environment variable in a Stack or StackTemplate scope.
+func (service *Service) CreateCredential(ctx context.Context, command CreateCredentialCommand) (CredentialMetadata, error) {
+	_, err := authenticatedActor(ctx)
+	if err != nil {
+		return CredentialMetadata{}, err
+	}
+	if service.Credentials == nil || service.CredentialEncryptor == nil {
+		return CredentialMetadata{}, ErrCredentialEncryptionUnavailable
+	}
+	if err := validateCreateCredentialCommand(command); err != nil {
+		return CredentialMetadata{}, err
+	}
+	var stackID traits.StackID
+	var templateID traits.StackTemplateID
+	switch command.Scope {
+	case traits.CredentialScopeStack:
+		stackID = command.StackID
+		if err := authorizeStack(ctx, service.Authorizer, stackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+			return CredentialMetadata{}, err
+		}
+	case traits.CredentialScopeStackTemplate:
+		templateID = command.StackTemplateID
+		stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, command.TenantID, templateID)
+		if err != nil {
+			return CredentialMetadata{}, err
+		}
+		stackID = stackTemplate.StackID
+		if err := authorizeStack(ctx, service.Authorizer, stackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+			return CredentialMetadata{}, err
+		}
+	default:
+		return CredentialMetadata{}, fmt.Errorf("%w: credential scope is invalid", ErrInvalidCommand)
+	}
+	ciphertext, err := service.CredentialEncryptor.Encrypt(command.Value)
+	if err != nil {
+		return CredentialMetadata{}, fmt.Errorf("encrypt credential: %w", err)
+	}
+	credential := traits.CredentialSet{
+		ID:              service.CredentialIDs.NewCredentialSetID(),
+		TenantID:        command.TenantID,
+		StackID:         stackID,
+		StackTemplateID: templateID,
+		Name:            strings.TrimSpace(command.Name),
+		Ciphertext:      ciphertext,
+		CreatedAt:       service.Clock.Now(),
+	}
+	if err := service.Credentials.CreateCredential(ctx, credential); err != nil {
+		return CredentialMetadata{}, err
+	}
+	return credentialMetadata(credential), nil
+}
+
+// ListCredentials returns only credential names and metadata.
+func (service *Service) ListCredentials(ctx context.Context, command ListCredentialsCommand) ([]CredentialMetadata, error) {
+	if _, err := authenticatedActor(ctx); err != nil {
+		return nil, err
+	}
+	if service.Credentials == nil {
+		return nil, ErrCredentialEncryptionUnavailable
+	}
+	if err := validateListCredentialsCommand(command); err != nil {
+		return nil, err
+	}
+	ownerID := string(command.StackID)
+	if command.Scope == traits.CredentialScopeStackTemplate {
+		ownerID = string(command.StackTemplateID)
+		stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, command.TenantID, command.StackTemplateID)
+		if err != nil {
+			return nil, err
+		}
+		if err := authorizeStack(ctx, service.Authorizer, stackTemplate.StackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+			return nil, err
+		}
+	} else if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+		return nil, err
+	}
+	credentials, err := service.Credentials.ListCredentials(ctx, command.TenantID, command.Scope, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	metadata := make([]CredentialMetadata, 0, len(credentials))
+	for _, credential := range credentials {
+		metadata = append(metadata, credentialMetadata(credential))
+	}
+	return metadata, nil
+}
+
+// DeleteCredential deletes a scoped credential. Rotation is delete-and-recreate.
+func (service *Service) DeleteCredential(ctx context.Context, command DeleteCredentialCommand) error {
+	if _, err := authenticatedActor(ctx); err != nil {
+		return err
+	}
+	if service.Credentials == nil {
+		return ErrCredentialEncryptionUnavailable
+	}
+	if command.TenantID == "" || command.CredentialID == "" {
+		return fmt.Errorf("%w: tenant and credential IDs are required", ErrInvalidCommand)
+	}
+	var stackID traits.StackID
+	if command.StackID != "" {
+		stackID = command.StackID
+	} else if service.StackTemplates != nil && command.StackTemplateID != "" {
+		stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, command.TenantID, command.StackTemplateID)
+		if err != nil {
+			return err
+		}
+		stackID = stackTemplate.StackID
+	} else {
+		return fmt.Errorf("%w: credential scope is required", ErrInvalidCommand)
+	}
+	if err := authorizeStack(ctx, service.Authorizer, stackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+		return err
+	}
+	scope := traits.CredentialScopeStack
+	ownerID := string(command.StackID)
+	if command.StackTemplateID != "" {
+		scope = traits.CredentialScopeStackTemplate
+		ownerID = string(command.StackTemplateID)
+	}
+	credentials, err := service.Credentials.ListCredentials(ctx, command.TenantID, scope, ownerID)
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, credential := range credentials {
+		if credential.ID == command.CredentialID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ErrNotFound
+	}
+	return service.Credentials.DeleteCredential(ctx, command.TenantID, command.CredentialID)
+}
+
+// credentialMetadata strips ciphertext and exposes only safe credential metadata to API callers.
+func credentialMetadata(credential traits.CredentialSet) CredentialMetadata {
+	return CredentialMetadata{ID: credential.ID, Name: credential.Name, Scope: credentialScope(credential), StackID: credential.StackID, Template: credential.StackTemplateID, CreatedAt: credential.CreatedAt}
+}
+
+// credentialScope derives the public scope from the populated owner column.
+func credentialScope(credential traits.CredentialSet) traits.CredentialScope {
+	if credential.StackTemplateID != "" {
+		return traits.CredentialScopeStackTemplate
+	}
+	return traits.CredentialScopeStack
+}
+
 // UpdateStackTemplateConfig validates and saves desired config for an installed template.
 func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command UpdateStackTemplateConfigCommand) (traits.StackTemplate, error) {
 	actor, err := authenticatedActor(ctx)
@@ -661,10 +874,10 @@ func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command U
 	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionOperate, ErrForbidden)
 	if err != nil {
 		service.auditError(ctx, traits.SecurityAuditEvent{
-			ActorSubject:  string(actor),
-			Action:        traits.AuditActionFailedAccessAttempt,
-			TenantID:      command.TenantID,
-			Outcome:       traits.AuditOutcomeFailure,
+			ActorSubject: string(actor),
+			Action:       traits.AuditActionFailedAccessAttempt,
+			TenantID:     command.TenantID,
+			Outcome:      traits.AuditOutcomeFailure,
 		})
 		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
 	}
@@ -705,10 +918,10 @@ func (service *Service) UpgradeStackTemplate(ctx context.Context, command Upgrad
 	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionOperate, ErrForbidden)
 	if err != nil {
 		service.auditError(ctx, traits.SecurityAuditEvent{
-			ActorSubject:  string(actor),
-			Action:        traits.AuditActionFailedAccessAttempt,
-			TenantID:      command.TenantID,
-			Outcome:       traits.AuditOutcomeFailure,
+			ActorSubject: string(actor),
+			Action:       traits.AuditActionFailedAccessAttempt,
+			TenantID:     command.TenantID,
+			Outcome:      traits.AuditOutcomeFailure,
 		})
 		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
 	}
@@ -1304,6 +1517,43 @@ func validateCreateStackCommand(command CreateStackCommand) error {
 	}
 }
 
+// validateCreateCredentialCommand checks required IDs, scope, variable name, and value before encryption.
+func validateCreateCredentialCommand(command CreateCredentialCommand) error {
+	switch {
+	case command.TenantID == "":
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	case !validCredentialName(command.Name):
+		return ErrCredentialNameInvalid
+	case command.Value == "":
+		return fmt.Errorf("%w: credential value is required", ErrInvalidCommand)
+	case command.Scope == traits.CredentialScopeStack && command.StackID == "":
+		return fmt.Errorf("%w: stack id is required", ErrInvalidCommand)
+	case command.Scope == traits.CredentialScopeStackTemplate && command.StackTemplateID == "":
+		return fmt.Errorf("%w: stack template id is required", ErrInvalidCommand)
+	case command.Scope != traits.CredentialScopeStack && command.Scope != traits.CredentialScopeStackTemplate:
+		return fmt.Errorf("%w: credential scope is invalid", ErrInvalidCommand)
+	default:
+		return nil
+	}
+}
+
+// validateListCredentialsCommand checks the owner required to list one credential scope.
+func validateListCredentialsCommand(command ListCredentialsCommand) error {
+	if command.TenantID == "" {
+		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)
+	}
+	if command.Scope == traits.CredentialScopeStack && command.StackID == "" {
+		return fmt.Errorf("%w: stack id is required", ErrInvalidCommand)
+	}
+	if command.Scope == traits.CredentialScopeStackTemplate && command.StackTemplateID == "" {
+		return fmt.Errorf("%w: stack template id is required", ErrInvalidCommand)
+	}
+	if command.Scope != traits.CredentialScopeStack && command.Scope != traits.CredentialScopeStackTemplate {
+		return fmt.Errorf("%w: credential scope is invalid", ErrInvalidCommand)
+	}
+	return nil
+}
+
 func validateGetStackCommand(command GetStackCommand) error {
 	switch {
 	case command.TenantID == "":
@@ -1715,6 +1965,21 @@ func validCredentialSetIDs(ids []traits.CredentialSetID) bool {
 	return true
 }
 
+// validCredentialName accepts Terraform/provider-style environment variable names.
+func validCredentialName(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 256 {
+		return false
+	}
+	for index, char := range name {
+		if (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || (index > 0 && char >= '0' && char <= '9') || char == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func validGitHubPathComponent(component string) bool {
 	component = strings.TrimSpace(component)
 	if component == "" {
@@ -1786,4 +2051,15 @@ func (randomStackTemplateIDGenerator) NewStackTemplateID() traits.StackTemplateI
 		return traits.StackTemplateID(fmt.Sprintf("stack_template_%d", time.Now().UTC().UnixNano()))
 	}
 	return traits.StackTemplateID("stack_template_" + hex.EncodeToString(bytes[:]))
+}
+
+type randomCredentialSetIDGenerator struct{}
+
+// NewCredentialSetID creates a random identifier for a persisted credential record.
+func (randomCredentialSetIDGenerator) NewCredentialSetID() traits.CredentialSetID {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return traits.CredentialSetID(fmt.Sprintf("credential_%d", time.Now().UTC().UnixNano()))
+	}
+	return traits.CredentialSetID("credential_" + hex.EncodeToString(bytes[:]))
 }

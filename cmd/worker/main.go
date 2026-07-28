@@ -125,7 +125,9 @@ func defaultWorkerDependencies() workerDependencies {
 			})
 		},
 		registerActivities: func(worker temporalWorker, store workerStore, runRoot string, logStore activities.TemplateRunLogStore) {
-			templateRunActivities := activities.NewTemplateRunActivitiesWithLogStore(store, runRoot, logStore)
+			reader, _ := store.(activities.CredentialReader)
+			decryptor, _ := store.(activities.CredentialDecryptor)
+			templateRunActivities := activities.NewTemplateRunActivitiesWithCredentials(store, runRoot, logStore, reader, decryptor)
 			worker.RegisterActivityWithOptions(templateRunActivities.PrepareWorkspace, activity.RegisterOptions{
 				Name: traits.PrepareWorkspaceActivityName,
 			})

@@ -61,6 +61,101 @@ func (store *Store) CreateTemplateRegistration(ctx context.Context, registration
 	return nil
 }
 
+// CreateCredential stores one already-encrypted credential under exactly one scope owner.
+func (store *Store) CreateCredential(ctx context.Context, credential traits.CredentialSet) error {
+	_, err := store.pool.Exec(ctx, `
+		insert into scoped_credentials (id, tenant_id, stack_id, stack_template_id, name, ciphertext, created_at)
+		values ($1, $2, nullif($3, ''), nullif($4, ''), $5, $6, $7)
+	`, credential.ID, credential.TenantID, credential.StackID, credential.StackTemplateID, credential.Name, credential.Ciphertext, credential.CreatedAt)
+	if duplicateConstraint(err, "scoped_credentials_stack_name_idx") || duplicateConstraint(err, "scoped_credentials_template_name_idx") {
+		return app.ErrDuplicateCredentialName
+	}
+	if err != nil {
+		return fmt.Errorf("create credential: %w", err)
+	}
+	return nil
+}
+
+// ListCredentials returns encrypted credential records owned directly by one scope owner.
+func (store *Store) ListCredentials(ctx context.Context, tenantID traits.TenantID, scope traits.CredentialScope, ownerID string) ([]traits.CredentialSet, error) {
+	column := "stack_id"
+	if scope == traits.CredentialScopeStackTemplate {
+		column = "stack_template_id"
+	}
+	if scope != traits.CredentialScopeStack && scope != traits.CredentialScopeStackTemplate {
+		return nil, app.ErrInvalidCommand
+	}
+	rows, err := store.pool.Query(ctx, fmt.Sprintf(`
+		select id, tenant_id, stack_id, stack_template_id, name, ciphertext, created_at
+		from scoped_credentials
+		where tenant_id = $1 and %s = $2
+		order by name
+	`, column), tenantID, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("list credentials: %w", err)
+	}
+	defer rows.Close()
+	return scanCredentials(rows)
+}
+
+// DeleteCredential removes one tenant-owned credential record by ID.
+func (store *Store) DeleteCredential(ctx context.Context, tenantID traits.TenantID, id traits.CredentialSetID) error {
+	result, err := store.pool.Exec(ctx, `delete from scoped_credentials where tenant_id = $1 and id = $2`, tenantID, id)
+	if err != nil {
+		return fmt.Errorf("delete credential: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return app.ErrNotFound
+	}
+	return nil
+}
+
+// ListCredentialsForStackTemplate returns stack credentials plus template credentials for runtime inheritance.
+func (store *Store) ListCredentialsForStackTemplate(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID) ([]traits.CredentialSet, error) {
+	rows, err := store.pool.Query(ctx, `
+		select c.id, c.tenant_id, c.stack_id, c.stack_template_id, c.name, c.ciphertext, c.created_at
+		from scoped_credentials c
+		join stack_templates st on st.id = $2
+		where c.tenant_id = $1 and (c.stack_id = st.stack_id or c.stack_template_id = st.id)
+		order by c.stack_id is not null desc, c.name
+	`, tenantID, stackTemplateID)
+	if err != nil {
+		return nil, fmt.Errorf("list runtime credentials: %w", err)
+	}
+	defer rows.Close()
+	return scanCredentials(rows)
+}
+
+type credentialRows interface {
+	Next() bool
+	Scan(...any) error
+	Err() error
+}
+
+// scanCredentials converts nullable scope-owner columns into credential domain records.
+func scanCredentials(rows credentialRows) ([]traits.CredentialSet, error) {
+	credentials := make([]traits.CredentialSet, 0)
+	for rows.Next() {
+		var credential traits.CredentialSet
+		var stackID sql.NullString
+		var stackTemplateID sql.NullString
+		if err := rows.Scan(&credential.ID, &credential.TenantID, &stackID, &stackTemplateID, &credential.Name, &credential.Ciphertext, &credential.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan credential: %w", err)
+		}
+		if stackID.Valid {
+			credential.StackID = traits.StackID(stackID.String)
+		}
+		if stackTemplateID.Valid {
+			credential.StackTemplateID = traits.StackTemplateID(stackTemplateID.String)
+		}
+		credentials = append(credentials, credential)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate credentials: %w", err)
+	}
+	return credentials, nil
+}
+
 func (store *Store) GetTemplateRegistration(ctx context.Context, tenantID traits.TenantID, id traits.TemplateRegistrationID) (traits.TemplateRegistration, error) {
 	var registration traits.TemplateRegistration
 	var completedAt sql.NullTime

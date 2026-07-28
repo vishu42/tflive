@@ -1,11 +1,13 @@
 package activities
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/vishu42/tflive/internal/logsink"
@@ -28,8 +30,20 @@ type TerraformRunner interface {
 	RunTerraform(context.Context, traits.RunTerraformActivityInput) error
 }
 
+// TemplateRunLogStore persists output produced by a template run.
 type TemplateRunLogStore interface {
+	// PutTemplateRunLog stores the output for a run phase so it can be retrieved later.
 	PutTemplateRunLog(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, phase string, body io.Reader) error
+}
+
+type CredentialReader interface {
+	// ListCredentialsForStackTemplate returns encrypted credentials inherited by a template.
+	ListCredentialsForStackTemplate(context.Context, traits.TenantID, traits.StackTemplateID) ([]traits.CredentialSet, error)
+}
+
+type CredentialDecryptor interface {
+	// Decrypt opens one credential only inside the worker execution boundary.
+	Decrypt(string) (string, error)
 }
 
 // TemplateRunActivities groups the activity handlers registered by the worker.
@@ -46,7 +60,9 @@ type TemplateRunActivities struct {
 	// terraformRunner executes Terraform-compatible commands for RunTerraform activity calls.
 	terraformRunner TerraformRunner
 	// git clones template source repositories into run workspaces.
-	git runner.GitRunner
+	git                 runner.GitRunner
+	credentialReader    CredentialReader
+	credentialDecryptor CredentialDecryptor
 }
 
 // NewTemplateRunActivities constructs the activity handler set registered by the worker.
@@ -60,6 +76,11 @@ func NewTemplateRunActivities(recorder StatusRecorder, runRoot string, terraform
 }
 
 func NewTemplateRunActivitiesWithLogStore(recorder StatusRecorder, runRoot string, logStore TemplateRunLogStore, terraformRunners ...TerraformRunner) *TemplateRunActivities {
+	return NewTemplateRunActivitiesWithCredentials(recorder, runRoot, logStore, nil, nil, terraformRunners...)
+}
+
+// NewTemplateRunActivitiesWithCredentials wires runtime credential lookup and decryption into activities.
+func NewTemplateRunActivitiesWithCredentials(recorder StatusRecorder, runRoot string, logStore TemplateRunLogStore, credentialReader CredentialReader, credentialDecryptor CredentialDecryptor, terraformRunners ...TerraformRunner) *TemplateRunActivities {
 	terraformRunner := TerraformRunner(localTerraformRunner{
 		runner:   runner.NewLocalProcessRunner(),
 		logStore: logStore,
@@ -69,10 +90,12 @@ func NewTemplateRunActivitiesWithLogStore(recorder StatusRecorder, runRoot strin
 	}
 
 	return &TemplateRunActivities{
-		recorder:        recorder,
-		runRoot:         runRoot,
-		terraformRunner: terraformRunner,
-		git:             runner.NewLocalGitRunner(),
+		recorder:            recorder,
+		runRoot:             runRoot,
+		terraformRunner:     terraformRunner,
+		git:                 runner.NewLocalGitRunner(),
+		credentialReader:    credentialReader,
+		credentialDecryptor: credentialDecryptor,
 	}
 }
 
@@ -144,31 +167,26 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 
 // RunTerraform executes one Terraform phase requested by TemplateRunWorkflow.
 //
-// This activity is intentionally thin: it keeps Temporal-specific error context
-// here and delegates command selection, log handling, and subprocess execution to
-// the configured TerraformRunner implementation.
+// This activity resolves and decrypts credentials only at worker runtime, then
+// delegates command selection, log handling, and subprocess execution to the
+// configured TerraformRunner implementation. It never puts plaintext credentials
+// into workflow input or API responses.
 func (activities *TemplateRunActivities) RunTerraform(ctx context.Context, input traits.RunTerraformActivityInput) error {
+	if activities.credentialReader != nil {
+		if activities.credentialDecryptor == nil {
+			return fmt.Errorf("resolve terraform credentials: decryptor is unavailable")
+		}
+		environment, err := resolveCredentialEnvironment(ctx, activities.credentialReader, activities.credentialDecryptor, input.TenantID, input.StackTemplateID)
+		if err != nil {
+			return fmt.Errorf("resolve terraform credentials: %w", err)
+		}
+		input.Environment = environment
+	}
 	if err := activities.terraformRunner.RunTerraform(ctx, input); err != nil {
 		return fmt.Errorf("run terraform: %w", err)
 	}
 
 	return nil
-}
-
-// safePathComponent reports whether component can be used as one path segment.
-//
-// The check rejects blank values, absolute paths, cleaned path rewrites, current
-// or parent directory references, and nested paths. That keeps tenant and run IDs
-// usable as directory names without letting them influence parent directories.
-func safePathComponent(component string) bool {
-	if strings.TrimSpace(component) == "" {
-		return false
-	}
-	if filepath.IsAbs(component) {
-		return false
-	}
-	cleaned := filepath.Clean(component)
-	return cleaned == component && component != "." && component != ".." && filepath.Base(component) == component
 }
 
 // localTerraformRunner adapts the shared runner package to the activity interface.
@@ -200,15 +218,17 @@ func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input 
 		return fmt.Errorf("open terraform log: %w", err)
 	}
 
+	redactingWriter := newRedactingWriter(writer, credentialValues(input.Environment))
 	runErr := localRunner.runner.Run(ctx, runner.TerraformCommand{
 		WorkspacePath: terraformPath(input),
 		WorkspaceName: input.WorkspaceName,
 		Command:       input.Command,
 		ConfigJSON:    input.ConfigJSON,
-		Stdout:        writer,
-		Stderr:        writer,
+		Environment:   input.Environment,
+		Stdout:        redactingWriter,
+		Stderr:        redactingWriter,
 	})
-	closeErr := writer.Close()
+	closeErr := redactingWriter.Close()
 	if closeErr != nil {
 		return fmt.Errorf("close terraform log: %w", closeErr)
 	}
@@ -230,6 +250,74 @@ func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input 
 		return runErr
 	}
 	return nil
+}
+
+type redactingWriter struct {
+	writer  io.WriteCloser
+	secrets []string
+}
+
+// newRedactingWriter wraps a log destination and replaces exact credential values.
+func newRedactingWriter(writer io.WriteCloser, secrets []string) *redactingWriter {
+	return &redactingWriter{writer: writer, secrets: secrets}
+}
+
+// Write redacts configured secrets before forwarding command output to the destination.
+func (writer *redactingWriter) Write(body []byte) (int, error) {
+	redacted := append([]byte(nil), body...)
+	for _, secret := range writer.secrets {
+		redacted = bytes.ReplaceAll(redacted, []byte(secret), []byte("******"))
+	}
+	_, err := writer.writer.Write(redacted)
+	if err != nil {
+		return 0, err
+	}
+	return len(body), nil
+}
+
+// Close releases the wrapped log destination.
+func (writer *redactingWriter) Close() error { return writer.writer.Close() }
+
+// credentialValues extracts non-empty values so Terraform logs can be scrubbed.
+func credentialValues(environment map[string]string) []string {
+	secrets := make([]string, 0, len(environment))
+	for _, value := range environment {
+		if value != "" {
+			secrets = append(secrets, value)
+		}
+	}
+	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
+	return secrets
+}
+
+// resolveCredentialEnvironment decrypts inherited Stack credentials and applies StackTemplate overrides.
+func resolveCredentialEnvironment(ctx context.Context, reader CredentialReader, decryptor CredentialDecryptor, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID) (map[string]string, error) {
+	credentials, err := reader.ListCredentialsForStackTemplate(ctx, tenantID, stackTemplateID)
+	if err != nil {
+		return nil, err
+	}
+	environment := make(map[string]string, len(credentials))
+	for _, credential := range credentials {
+		if credential.StackTemplateID != "" {
+			continue
+		}
+		value, err := decryptor.Decrypt(credential.Ciphertext)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt %q: %w", credential.Name, err)
+		}
+		environment[credential.Name] = value
+	}
+	for _, credential := range credentials {
+		if credential.StackTemplateID == "" {
+			continue
+		}
+		value, err := decryptor.Decrypt(credential.Ciphertext)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt %q: %w", credential.Name, err)
+		}
+		environment[credential.Name] = value
+	}
+	return environment, nil
 }
 
 func terraformPath(input traits.RunTerraformActivityInput) string {

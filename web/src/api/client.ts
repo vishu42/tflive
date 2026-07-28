@@ -3,6 +3,7 @@ import type { Me } from "../auth/types";
 import type {
   ApiErrorBody,
   DirectoryUser,
+  CredentialMetadata,
   GrantView,
   ListGrantsResponse,
   Operation,
@@ -62,6 +63,11 @@ interface StartRunRequest {
   operation: Operation;
 }
 
+interface CredentialRequest {
+  name: string;
+  value: string;
+}
+
 interface CancelRunRequest {
   reason: string;
 }
@@ -102,6 +108,36 @@ export function listStacks(tenantID: string): Promise<Stack[]> {
 
 export function getStack(tenantID: string, stackID: string): Promise<StackView> {
   return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stacks/${encodeURIComponent(stackID)}`);
+}
+
+/** Lists Stack credential names and metadata; secret values are never returned. */
+export function listStackCredentials(tenantID: string, stackID: string): Promise<CredentialMetadata[]> {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stacks/${encodeURIComponent(stackID)}/credentials`);
+}
+
+/** Stores one Stack-scoped credential and returns write-only metadata. */
+export function createStackCredential(tenantID: string, stackID: string, body: CredentialRequest): Promise<CredentialMetadata> {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stacks/${encodeURIComponent(stackID)}/credentials`, { method: "POST", body: JSON.stringify(body) });
+}
+
+/** Deletes one Stack-scoped credential. */
+export function deleteStackCredential(tenantID: string, stackID: string, credentialID: string): Promise<void> {
+  return requestNoContent(`/v1/tenants/${encodeURIComponent(tenantID)}/stacks/${encodeURIComponent(stackID)}/credentials/${encodeURIComponent(credentialID)}`, { method: "DELETE" });
+}
+
+/** Lists StackTemplate credential names and metadata without secret values. */
+export function listStackTemplateCredentials(tenantID: string, stackTemplateID: string): Promise<CredentialMetadata[]> {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stack-templates/${encodeURIComponent(stackTemplateID)}/credentials`);
+}
+
+/** Stores one StackTemplate-scoped credential and returns write-only metadata. */
+export function createStackTemplateCredential(tenantID: string, stackTemplateID: string, body: CredentialRequest): Promise<CredentialMetadata> {
+  return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/stack-templates/${encodeURIComponent(stackTemplateID)}/credentials`, { method: "POST", body: JSON.stringify(body) });
+}
+
+/** Deletes one StackTemplate-scoped credential. */
+export function deleteStackTemplateCredential(tenantID: string, stackTemplateID: string, credentialID: string): Promise<void> {
+  return requestNoContent(`/v1/tenants/${encodeURIComponent(tenantID)}/stack-templates/${encodeURIComponent(stackTemplateID)}/credentials/${encodeURIComponent(credentialID)}`, { method: "DELETE" });
 }
 
 export function addTemplateToStack(tenantID: string, stackID: string, body: AddTemplateToStackRequest): Promise<StackTemplate> {

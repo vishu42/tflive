@@ -62,6 +62,16 @@ type apiDependencies struct {
 	listenAndServe  func(context.Context, string, http.Handler) error
 }
 
+func credentialRepository(store appRepositories) app.CredentialRepository {
+	repository, _ := store.(app.CredentialRepository)
+	return repository
+}
+
+func credentialEncryptor(store appRepositories) app.CredentialEncryptor {
+	encryptor, _ := store.(app.CredentialEncryptor)
+	return encryptor
+}
+
 func main() {
 	if err := run(context.Background(), os.Getenv); err != nil {
 		writeStartupError(os.Stderr, err)
@@ -193,6 +203,8 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		AuthorizationOutbox:      store,
 		Stacks:                   store,
 		StackTemplates:           store,
+		Credentials:              credentialRepository(store),
+		CredentialEncryptor:      credentialEncryptor(store),
 		StackTemplateInstaller:   store,
 		TemplateRuns:             store,
 		TemplateRegistrations:    store,

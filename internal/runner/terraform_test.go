@@ -39,6 +39,45 @@ func TestLocalProcessRunnerRunsTerraformPlan(t *testing.T) {
 	}
 }
 
+// TestLocalProcessRunnerInjectsCredentialEnvironment verifies resolved credentials reach the subprocess.
+func TestLocalProcessRunnerInjectsCredentialEnvironment(t *testing.T) {
+	executor := &recordingTerraformCommandExecutor{}
+	runner := NewLocalProcessRunnerWithExecutor(executor)
+
+	err := runner.Run(context.Background(), TerraformCommand{
+		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
+		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+		Command:       traits.TerraformCommandPlan,
+		Environment:   map[string]string{"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret"},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !reflect.DeepEqual(executor.commands[0].env, []string{"AWS_ACCESS_KEY_ID=key", "AWS_SECRET_ACCESS_KEY=secret"}) {
+		t.Fatalf("environment = %#v", executor.commands[0].env)
+	}
+}
+
+// TestSortedEnvironmentReturnsSortedNameValueEntries verifies that environment
+// variables are formatted for a subprocess in deterministic key order.
+func TestSortedEnvironmentReturnsSortedNameValueEntries(t *testing.T) {
+	got := sortedEnvironment(map[string]string{
+		"ZED_TOKEN":  "token",
+		"AWS_REGION": "us-east-1",
+		"A_KEY":      "key",
+	})
+
+	want := []string{
+		"AWS_REGION=us-east-1",
+		"A_KEY=key",
+		"ZED_TOKEN=token",
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sortedEnvironment() = %#v, want %#v", got, want)
+	}
+}
+
 func TestLocalProcessRunnerRunsTerraformApply(t *testing.T) {
 	t.Parallel()
 

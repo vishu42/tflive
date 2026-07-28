@@ -58,7 +58,7 @@ describe("StackDetailShell", () => {
     vi.resetModules();
   });
 
-  it("renders the stack name and all four tabs when every capability is granted", async () => {
+  it("renders the stack name and all five tabs when every capability is granted", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const markup = await renderStackRoute("/stacks/stack_1", allAllowed);
 
@@ -68,6 +68,7 @@ describe("StackDetailShell", () => {
     expect(markup).toContain('href="/stacks/stack_1/template"');
     expect(markup).toContain('href="/stacks/stack_1/runs"');
     expect(markup).toContain('href="/stacks/stack_1/access"');
+    expect(markup).toContain('href="/stacks/stack_1/environment"');
   });
 
   it("omits the Access tab when canManageAccess is denied", async () => {
@@ -77,6 +78,7 @@ describe("StackDetailShell", () => {
     expect(markup).toContain('data-testid="stack-detail-shell"');
     expect(markup).toContain('href="/stacks/stack_1/runs"');
     expect(markup).not.toContain('href="/stacks/stack_1/access"');
+    expect(markup).not.toContain('href="/stacks/stack_1/environment"');
   });
 
   it("renders each nested route's content inside the shell", async () => {
@@ -87,6 +89,10 @@ describe("StackDetailShell", () => {
     const accessMarkup = await renderStackRoute("/stacks/stack_1/access", allAllowed);
     expect(accessMarkup).toContain('data-testid="stack-detail-shell"');
     expect(accessMarkup).toContain("Current Grants");
+
+    const environmentMarkup = await renderStackRoute("/stacks/stack_1/environment", allAllowed);
+    expect(environmentMarkup).toContain('data-testid="stack-detail-shell"');
+    expect(environmentMarkup).toContain('data-testid="environment-loading"');
 
     // The template tab is a real screen now; its revisions query is unseeded
     // here, so the shell renders its loading state as the nested content.

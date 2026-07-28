@@ -120,6 +120,15 @@ export interface StackView {
   templates: StackTemplate[];
 }
 
+export interface CredentialMetadata {
+  id: string;
+  name: string;
+  scope: "stack" | "stack_template";
+  stack_id?: string;
+  stack_template_id?: string;
+  created_at: string;
+}
+
 export interface TemplateRun {
   id: string;
   tenant_id: string;

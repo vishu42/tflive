@@ -10,6 +10,7 @@ import CallbackPage from "../auth/CallbackPage";
 import StacksListScreen from "../features/stacks/StacksListScreen";
 import StackDetailShell from "../features/stacks/StackDetailShell";
 import StackTemplateScreen from "../features/stacks/StackTemplateScreen";
+import EnvironmentScreen from "../features/stacks/EnvironmentScreen";
 import TemplateRegistryScreen from "../features/templates/TemplateRegistryScreen";
 import RunsListScreen from "../features/runs/RunsListScreen";
 import RunDetailScreen from "../features/runs/RunDetailScreen";
@@ -45,6 +46,11 @@ export const routeConfig: RouteObject[] = [
                 children: [
                   { index: true, element: <RoutePlaceholder title="Stack overview" /> },
                   { path: "template", element: <StackTemplateScreen /> },
+                  {
+                    path: "environment",
+                    element: <RequireCapability capability="canManageAccess" mode="route" />,
+                    children: [{ index: true, element: <EnvironmentScreen /> }]
+                  },
                   { path: "runs", element: <RunsListScreen /> },
                   { path: "runs/:runId", element: <RunDetailScreen /> },
                   {

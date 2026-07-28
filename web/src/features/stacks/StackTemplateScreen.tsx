@@ -3,7 +3,10 @@ import { Loader2, RefreshCw } from "lucide-react";
 import { useParams } from "react-router-dom";
 import {
   useAddTemplateToStackMutation,
+  useCreateStackTemplateCredentialMutation,
+  useDeleteStackTemplateCredentialMutation,
   useStackQuery,
+  useStackTemplateCredentialsQuery,
   useTemplateRevisionVariablesQuery,
   useTemplateRevisionsQuery,
   useUpdateStackTemplateConfigMutation,
@@ -14,6 +17,7 @@ import RequireCapability from "../../auth/RequireCapability";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import InstalledTemplatePanel from "./InstalledTemplatePanel";
 import VariablesPanel from "./VariablesPanel";
+import CredentialsPanel from "./CredentialsPanel";
 import {
   canSaveStackTemplateConfig,
   canUpgradeStackTemplate,
@@ -73,6 +77,9 @@ export default function StackTemplateScreen() {
   const addTemplateToStackMutation = useAddTemplateToStackMutation(tenantID, stackId);
   const updateStackTemplateConfigMutation = useUpdateStackTemplateConfigMutation(tenantID, stackId);
   const upgradeStackTemplateMutation = useUpgradeStackTemplateMutation(tenantID, stackId);
+  const templateCredentialsQuery = useStackTemplateCredentialsQuery(tenantID, installedTemplate?.id ?? "");
+  const createTemplateCredentialMutation = useCreateStackTemplateCredentialMutation(tenantID, installedTemplate?.id ?? "");
+  const deleteTemplateCredentialMutation = useDeleteStackTemplateCredentialMutation(tenantID, installedTemplate?.id ?? "");
 
   const canInstall = Boolean(selectedTemplateRevision?.status === "active" && stack);
   const canSaveConfig = canSaveStackTemplateConfig(installedTemplate, selectedTemplateRevision, variables, variableValues);
@@ -196,6 +203,11 @@ export default function StackTemplateScreen() {
     disabledReason: destroying ? "Destroy in progress" : undefined
   };
 
+  /** Persists a credential that overrides the Stack value for this template only. */
+  async function createTemplateCredential(name: string, value: string) {
+    await createTemplateCredentialMutation.mutateAsync({ name, value });
+  }
+
   return (
     <section className="stack-template-screen" data-testid="stack-template-screen">
       {errorMessage && <div className="alert">{errorMessage}</div>}
@@ -241,6 +253,18 @@ export default function StackTemplateScreen() {
           </label>
         </section>
         <InstalledTemplatePanel installedTemplate={installedTemplate} />
+        <RequireCapability capability="canManageAccess">
+          {installedTemplate && (
+            <CredentialsPanel
+              title="Environment"
+              credentials={templateCredentialsQuery.data ?? []}
+              loading={templateCredentialsQuery.isPending}
+              busy={createTemplateCredentialMutation.isPending || deleteTemplateCredentialMutation.isPending}
+              onCreate={createTemplateCredential}
+              onDelete={(id) => deleteTemplateCredentialMutation.mutateAsync(id)}
+            />
+          )}
+        </RequireCapability>
         <RequireCapability
           capability="canOperate"
           fallback={<VariablesPanel {...variablesPanelProps} disabledReason="Editing and upgrading require operator access" />}
