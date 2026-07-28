@@ -43,6 +43,9 @@ func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowI
 		if errors.Is(err, errTemplateRunCanceled) {
 			return nil
 		}
+		if failureErr := run.recordFailure(err); failureErr != nil {
+			return fmt.Errorf("%w (also failed to persist failure status: %v)", err, failureErr)
+		}
 		return err
 	}
 	return nil
@@ -326,12 +329,24 @@ func (run *templateRunWorkflow) recordStatuses(statuses ...traits.TemplateRunSta
 }
 
 func (run *templateRunWorkflow) recordStatus(status traits.TemplateRunStatus) error {
+	return run.recordStatusWithSummary(status, "")
+}
+
+func (run *templateRunWorkflow) recordFailure(rootErr error) error {
+	return run.recordStatusWithSummary(
+		traits.TemplateRunFailed,
+		fmt.Sprintf("template run activity failed: %v", rootErr),
+	)
+}
+
+func (run *templateRunWorkflow) recordStatusWithSummary(status traits.TemplateRunStatus, errorSummary string) error {
 	input := traits.TemplateRunStatusActivityInput{
 		RunID:           run.input.RunID,
 		TenantID:        run.input.TenantID,
 		StackTemplateID: run.input.StackTemplateID,
 		Operation:       run.input.Operation,
 		Status:          status,
+		ErrorSummary:    errorSummary,
 	}
 	return workflow.ExecuteActivity(
 		run.ctx,
