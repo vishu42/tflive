@@ -474,6 +474,47 @@ button:disabled {
   color: #66705f;
 }
 
+.credentials-panel {
+  grid-column: 1 / -1;
+}
+
+.credentials-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.credential-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid #e5eaf2;
+  padding-top: 8px;
+}
+
+.credential-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(180px, 1fr) auto;
+  gap: 8px;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  color: #991b1b;
+  background: transparent;
+  cursor: pointer;
+}
+
+@media (max-width: 700px) {
+  .credential-form {
+    grid-template-columns: 1fr;
+  }
+}
+
 .log-panel pre {
   min-height: 260px;
   max-height: 460px;

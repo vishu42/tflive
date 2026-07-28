@@ -265,13 +265,14 @@ var terraformRetryPolicy = &temporal.RetryPolicy{
 
 func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType) error {
 	input := traits.RunTerraformActivityInput{
-		RunID:         run.input.RunID,
-		TenantID:      run.input.TenantID,
-		WorkspacePath: run.workspacePath,
-		TerraformPath: run.terraformPath,
-		WorkspaceName: run.input.WorkspaceName,
-		Command:       command,
-		ConfigJSON:    run.input.ConfigJSON,
+		RunID:           run.input.RunID,
+		TenantID:        run.input.TenantID,
+		StackTemplateID: run.input.StackTemplateID,
+		WorkspacePath:   run.workspacePath,
+		TerraformPath:   run.terraformPath,
+		WorkspaceName:   run.input.WorkspaceName,
+		Command:         command,
+		ConfigJSON:      run.input.ConfigJSON,
 	}
 
 	activityCtx, cancelActivity := workflow.WithCancel(run.ctx)

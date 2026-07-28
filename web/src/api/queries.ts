@@ -26,6 +26,40 @@ export function useStackQuery(tenantID: string, stackID: string) {
   });
 }
 
+/** Loads write-only metadata for credentials owned by a Stack. */
+export function useStackCredentialsQuery(tenantID: string, stackID: string) {
+  return useQuery({ queryKey: queryKeys.stackCredentials(tenantID, stackID), queryFn: () => client.listStackCredentials(tenantID, stackID), enabled: stackID !== "" });
+}
+
+/** Loads write-only metadata for credentials owned by a StackTemplate. */
+export function useStackTemplateCredentialsQuery(tenantID: string, stackTemplateID: string) {
+  return useQuery({ queryKey: queryKeys.stackTemplateCredentials(tenantID, stackTemplateID), queryFn: () => client.listStackTemplateCredentials(tenantID, stackTemplateID), enabled: stackTemplateID !== "" });
+}
+
+/** Creates a Stack credential and refreshes its metadata list. */
+export function useCreateStackCredentialMutation(tenantID: string, stackID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: (body: Parameters<typeof client.createStackCredential>[2]) => client.createStackCredential(tenantID, stackID, body), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.stackCredentials(tenantID, stackID) }) });
+}
+
+/** Deletes a Stack credential and refreshes its metadata list. */
+export function useDeleteStackCredentialMutation(tenantID: string, stackID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: (credentialID: string) => client.deleteStackCredential(tenantID, stackID, credentialID), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.stackCredentials(tenantID, stackID) }) });
+}
+
+/** Creates a StackTemplate credential and refreshes its metadata list. */
+export function useCreateStackTemplateCredentialMutation(tenantID: string, stackTemplateID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: (body: Parameters<typeof client.createStackTemplateCredential>[2]) => client.createStackTemplateCredential(tenantID, stackTemplateID, body), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.stackTemplateCredentials(tenantID, stackTemplateID) }) });
+}
+
+/** Deletes a StackTemplate credential and refreshes its metadata list. */
+export function useDeleteStackTemplateCredentialMutation(tenantID: string, stackTemplateID: string) {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: (credentialID: string) => client.deleteStackTemplateCredential(tenantID, stackTemplateID, credentialID), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.stackTemplateCredentials(tenantID, stackTemplateID) }) });
+}
+
 export function useTemplateRevisionVariablesQuery(tenantID: string, templateRevisionID: string) {
   return useQuery({
     queryKey: queryKeys.templateRevisionVariables(tenantID, templateRevisionID),

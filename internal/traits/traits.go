@@ -27,6 +27,14 @@ type (
 	CredentialSetID        ID
 )
 
+// CredentialScope identifies the resource that owns one encrypted credential.
+type CredentialScope string
+
+const (
+	CredentialScopeStack         CredentialScope = "stack"
+	CredentialScopeStackTemplate CredentialScope = "stack_template"
+)
+
 // OperationType identifies a Terraform operation supported by the platform.
 type OperationType string
 
@@ -253,11 +261,12 @@ type TemplateVariable struct {
 
 // Stack is a logical infrastructure composition.
 type Stack struct {
-	ID                   StackID           `json:"id"`
-	TenantID             TenantID          `json:"tenant_id"`
-	Name                 string            `json:"name"`
-	Slug                 string            `json:"slug"`
-	Tags                 map[string]string `json:"tags"`
+	ID       StackID           `json:"id"`
+	TenantID TenantID          `json:"tenant_id"`
+	Name     string            `json:"name"`
+	Slug     string            `json:"slug"`
+	Tags     map[string]string `json:"tags"`
+	// DefaultCredentialIDs is retained for backward-compatible reads; new credentials are scope-owned records.
 	DefaultCredentialIDs []CredentialSetID `json:"default_credential_ids"`
 	CreatedBy            UserID            `json:"created_by"`
 	CreatedAt            time.Time         `json:"created_at"`
@@ -366,11 +375,13 @@ type StackRun struct {
 
 // CredentialSet is a reference to runtime execution credentials.
 type CredentialSet struct {
-	ID             CredentialSetID
-	TenantID       TenantID
-	Name           string
-	ProviderType   string
-	SecretStoreRef string
+	ID              CredentialSetID // Stable identifier used by API deletion and audit references.
+	TenantID        TenantID        // Tenant that owns the encrypted credential.
+	StackID         StackID         // Stack owner; empty when StackTemplateID is populated.
+	StackTemplateID StackTemplateID // Optional template owner for template-specific overrides.
+	Name            string          // Provider environment variable name.
+	Ciphertext      string          // Encrypted value; plaintext must never be persisted here.
+	CreatedAt       time.Time       // Creation timestamp used for metadata display and auditing.
 }
 
 const (
@@ -441,13 +452,15 @@ type FetchSourceActivityOutput struct {
 
 // RunTerraformActivityInput asks the worker to run one Terraform subprocess command.
 type RunTerraformActivityInput struct {
-	RunID         TemplateRunID
-	TenantID      TenantID
-	WorkspacePath string
-	TerraformPath string
-	WorkspaceName string
-	Command       TerraformCommandType
-	ConfigJSON    json.RawMessage
+	RunID           TemplateRunID
+	TenantID        TenantID
+	StackTemplateID StackTemplateID
+	WorkspacePath   string
+	TerraformPath   string
+	WorkspaceName   string
+	Command         TerraformCommandType
+	ConfigJSON      json.RawMessage
+	Environment     map[string]string
 }
 
 // TemplateSyncWorkflowInput starts template metadata sync for a public GitHub template.
@@ -503,12 +516,12 @@ type CancelSignal struct {
 type AuditAction string
 
 const (
-	AuditActionGrant               AuditAction = "grant"
-	AuditActionRevoke              AuditAction = "revoke"
-	AuditActionRoleChange          AuditAction = "role_change"
-	AuditActionFailedAccessAttempt AuditAction = "failed_access_attempt"
+	AuditActionGrant                AuditAction = "grant"
+	AuditActionRevoke               AuditAction = "revoke"
+	AuditActionRoleChange           AuditAction = "role_change"
+	AuditActionFailedAccessAttempt  AuditAction = "failed_access_attempt"
 	AuditActionSelfApprovalRejected AuditAction = "self_approval_rejected"
-	AuditActionApprovalGranted     AuditAction = "approval_granted"
+	AuditActionApprovalGranted      AuditAction = "approval_granted"
 )
 
 // AuditOutcome reports whether the audited operation succeeded or failed.

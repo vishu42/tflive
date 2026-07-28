@@ -158,6 +158,23 @@ describe("StackTemplateScreen", () => {
     expect(input.value).toBe("us-east-1");
   });
 
+  it("keeps Stack credentials out of the Template screen", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+    queryClient.setQueryData(queryKeys.stackCredentials("tenant_123", "stack_1"), [
+      { id: "stack_credential", name: "STACK_ONLY", scope: "stack", created_at: "2026-07-19T00:00:00Z" }
+    ]);
+    queryClient.setQueryData(queryKeys.stackTemplateCredentials("tenant_123", "st_1"), [
+      { id: "template_credential", name: "TEMPLATE_ONLY", scope: "stack_template", created_at: "2026-07-19T00:00:00Z" }
+    ]);
+
+    renderScreen(queryClient);
+
+    expect(screen.getByText("TEMPLATE_ONLY")).toBeTruthy();
+    expect(screen.queryByText("STACK_ONLY")).toBeNull();
+    expect(screen.queryByText("Stack credentials")).toBeNull();
+  });
+
   it("disables save while values match the installed config and enables it after an edit", () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient);
