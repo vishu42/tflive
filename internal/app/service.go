@@ -17,6 +17,7 @@ import (
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/traits"
+	"go.temporal.io/api/serviceerror"
 )
 
 var (
@@ -1409,10 +1410,26 @@ func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand)
 		Reason:      command.Reason,
 	}
 	if err := service.Workflows.CancelTemplateRun(ctx, command.TenantID, command.RunID, signal); err != nil {
+		if isWorkflowClosedError(err) {
+			if reconcileErr := service.TemplateRuns.ReconcileTemplateRunCancellation(
+				ctx,
+				command.TenantID,
+				command.RunID,
+				"workflow closed before cancellation was processed",
+			); reconcileErr != nil {
+				return fmt.Errorf("reconcile template run cancellation: %w", reconcileErr)
+			}
+			return nil
+		}
 		return fmt.Errorf("cancel template run workflow: %w", err)
 	}
 
 	return nil
+}
+
+func isWorkflowClosedError(err error) bool {
+	var notFound *serviceerror.NotFound
+	return errors.As(err, &notFound)
 }
 
 // GetTemplateRun returns one tenant-owned run.
