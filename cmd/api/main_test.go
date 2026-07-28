@@ -633,6 +633,10 @@ func (recordingStore) RequestTemplateRunCancellation(context.Context, traits.Tem
 	return nil
 }
 
+func (recordingStore) ReconcileTemplateRunCancellation(context.Context, traits.TenantID, traits.TemplateRunID, string) error {
+	return nil
+}
+
 func (recordingStore) CreateTemplateRegistration(context.Context, traits.TemplateRegistration) error {
 	return nil
 }

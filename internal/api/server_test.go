@@ -1232,10 +1232,10 @@ func TestApproveRunAllowsSelfApproval(t *testing.T) {
 
 	deps := newAPITestDependencies()
 	deps.templateRuns.run = traits.TemplateRun{
-		ID:            "run_123",
-		TenantID:      "tenant_123",
+		ID:              "run_123",
+		TenantID:        "tenant_123",
 		StackTemplateID: "stack_template_123",
-		TriggerActor:  traits.UserID(apiKeycloakSubject),
+		TriggerActor:    traits.UserID(apiKeycloakSubject),
 	}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -2553,6 +2553,10 @@ func (repository *recordingTemplateRunRepository) RequestTemplateRunCancellation
 	return nil
 }
 
+func (repository *recordingTemplateRunRepository) ReconcileTemplateRunCancellation(_ context.Context, _ traits.TenantID, _ traits.TemplateRunID, _ string) error {
+	return nil
+}
+
 type recordingTemplateRunLogReader struct {
 	content     []byte
 	err         error
@@ -2818,14 +2822,14 @@ func TestMeReturnsIdentityWithGlobalCapabilities(t *testing.T) {
 
 			server.ServeHTTP(response, request)
 
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNoContent, response.Body.String())
+			if response.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNoContent, response.Body.String())
 			}
 
 			var body struct {
-				Sub         string `json:"sub"`
-				DisplayName string `json:"displayName"`
-				Email       string `json:"email"`
+				Sub                string `json:"sub"`
+				DisplayName        string `json:"displayName"`
+				Email              string `json:"email"`
 				GlobalCapabilities struct {
 					IsPlatformAdmin bool `json:"isPlatformAdmin"`
 					CanCreateStack  bool `json:"canCreateStack"`
