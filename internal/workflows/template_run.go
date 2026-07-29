@@ -33,8 +33,9 @@ var defaultRunRetryPolicy = &temporal.RetryPolicy{
 // operation, and persists a status transition at every step. The body is kept
 // thin on purpose — the run logic lives on templateRunWorkflow so it can share
 // the workflow context and the workspace paths discovered along the way — and
-// this function owns only the two concerns that must not be duplicated per
-// operation: the default activity options and the terminal error handling.
+// this function owns the concerns that must not be duplicated per operation:
+// the default activity options, operation validation, session lifecycle, and
+// terminal error handling.
 //
 // Cancellation is not a workflow failure. A cancel signal already drove the run
 // through its canceled status transitions before errTemplateRunCanceled bubbled
@@ -57,6 +58,14 @@ func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowI
 		input: input,
 	}
 
+	operation, err := run.operation()
+	if err != nil {
+		if failureErr := run.recordFailure(err); failureErr != nil {
+			return fmt.Errorf("%w (also failed to persist failure status: %v)", err, failureErr)
+		}
+		return err
+	}
+
 	sessionCtx, err := workflow.CreateSession(ctx, &workflow.SessionOptions{
 		CreationTimeout:  time.Minute,
 		ExecutionTimeout: 24 * time.Hour,
@@ -69,7 +78,7 @@ func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowI
 	}
 	run.sessionCtx = sessionCtx
 
-	err = run.execute()
+	err = run.execute(operation)
 	workflow.CompleteSession(sessionCtx)
 	if err != nil {
 		if errors.Is(err, errTemplateRunCanceled) {
@@ -91,16 +100,11 @@ type templateRunWorkflow struct {
 	terraformPath string
 }
 
-// execute resolves the requested operation before preparing the workspace so an
-// unsupported operation fails without side effects. Preparing first would clone
-// the source, run terraform init and select a workspace before discovering there
-// is nothing to run, and would leave the run holding a lock it then has to
-// release.
-func (run *templateRunWorkflow) execute() error {
-	operation, err := run.operation()
-	if err != nil {
-		return err
-	}
+// execute prepares the workspace and invokes the already-resolved operation.
+// Resolving the operation before creating a session means an unsupported
+// operation fails without waiting for session capacity or creating workspace
+// side effects.
+func (run *templateRunWorkflow) execute(operation func() error) error {
 	if err := run.prepareWorkspace(); err != nil {
 		return err
 	}
@@ -109,9 +113,8 @@ func (run *templateRunWorkflow) execute() error {
 
 // operation maps the requested operation to the method that runs it. An
 // unsupported operation is rejected here rather than recording a failure status
-// directly: execute is called before any status transition, so returning the
-// error lets TemplateRunWorkflow's error path record the single Failed status,
-// with the reason attached as the run's error summary.
+// directly: returning the error lets TemplateRunWorkflow's error path record the
+// single Failed status, with the reason attached as the run's error summary.
 func (run *templateRunWorkflow) operation() (func() error, error) {
 	switch run.input.Operation {
 	case traits.OperationPlan:
@@ -278,8 +281,15 @@ func (run *templateRunWorkflow) waitForApproval() (bool, error) {
 		channel.Receive(run.ctx, &signal)
 		approved = false
 	})
+	var sessionFailed bool
+	selector.AddReceive(run.sessionCtx.Done(), func(_ workflow.ReceiveChannel, _ bool) {
+		sessionFailed = true
+	})
 
 	selector.Select(run.ctx)
+	if sessionFailed {
+		return false, fmt.Errorf("template run session failed while waiting for approval: %w", workflow.ErrSessionFailed)
+	}
 	return approved, nil
 }
 
