@@ -1409,19 +1409,22 @@ func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand)
 		RequestedBy: actor,
 		Reason:      command.Reason,
 	}
-	if err := service.Workflows.CancelTemplateRun(ctx, command.TenantID, command.RunID, signal); err != nil {
-		if isWorkflowClosedError(err) {
-			if reconcileErr := service.TemplateRuns.ReconcileTemplateRunCancellation(
-				ctx,
-				command.TenantID,
-				command.RunID,
-				"workflow closed before cancellation was processed",
-			); reconcileErr != nil {
-				return fmt.Errorf("reconcile template run cancellation: %w", reconcileErr)
-			}
-			return nil
-		}
+	err = service.Workflows.CancelTemplateRun(ctx, command.TenantID, command.RunID, signal)
+	if err == nil {
+		return nil
+	}
+	if !isWorkflowClosedError(err) {
 		return fmt.Errorf("cancel template run workflow: %w", err)
+	}
+
+	err = service.TemplateRuns.ReconcileTemplateRunCancellation(
+		ctx,
+		command.TenantID,
+		command.RunID,
+		"workflow closed before cancellation was processed",
+	)
+	if err != nil {
+		return fmt.Errorf("reconcile template run cancellation: %w", err)
 	}
 
 	return nil
