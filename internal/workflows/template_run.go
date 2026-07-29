@@ -57,7 +57,21 @@ func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowI
 		input: input,
 	}
 
-	if err := run.execute(); err != nil {
+	sessionCtx, err := workflow.CreateSession(ctx, &workflow.SessionOptions{
+		CreationTimeout:  time.Minute,
+		ExecutionTimeout: 24 * time.Hour,
+	})
+	if err != nil {
+		if failureErr := run.recordFailure(err); failureErr != nil {
+			return fmt.Errorf("%w (also failed to persist failure status: %v)", err, failureErr)
+		}
+		return err
+	}
+	run.sessionCtx = sessionCtx
+
+	err = run.execute()
+	workflow.CompleteSession(sessionCtx)
+	if err != nil {
 		if errors.Is(err, errTemplateRunCanceled) {
 			return nil
 		}
@@ -71,6 +85,7 @@ func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowI
 
 type templateRunWorkflow struct {
 	ctx           workflow.Context
+	sessionCtx    workflow.Context
 	input         traits.TemplateRunWorkflowInput
 	workspacePath string
 	terraformPath string
@@ -151,10 +166,10 @@ func (run *templateRunWorkflow) prepareLocalWorkspace() error {
 	}
 	var output traits.PrepareWorkspaceActivityOutput
 	if err := workflow.ExecuteActivity(
-		run.ctx,
+		run.sessionCtx,
 		traits.PrepareWorkspaceActivityName,
 		input,
-	).Get(run.ctx, &output); err != nil {
+	).Get(run.sessionCtx, &output); err != nil {
 		return err
 	}
 	run.workspacePath = output.WorkspacePath
@@ -173,10 +188,10 @@ func (run *templateRunWorkflow) fetchSource() error {
 	}
 	var output traits.FetchSourceActivityOutput
 	if err := workflow.ExecuteActivity(
-		run.ctx,
+		run.sessionCtx,
 		traits.FetchSourceActivityName,
 		input,
-	).Get(run.ctx, &output); err != nil {
+	).Get(run.sessionCtx, &output); err != nil {
 		return err
 	}
 	run.terraformPath = output.TerraformPath
@@ -310,7 +325,7 @@ func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType
 		ConfigJSON:      run.input.ConfigJSON,
 	}
 
-	activityCtx, cancelActivity := workflow.WithCancel(run.ctx)
+	activityCtx, cancelActivity := workflow.WithCancel(run.sessionCtx)
 	defer cancelActivity()
 
 	// Apply a longer timeout and more generous retry policy for Terraform
