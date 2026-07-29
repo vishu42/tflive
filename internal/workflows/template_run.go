@@ -231,6 +231,10 @@ func (run *templateRunWorkflow) destroy() error {
 	if !approved {
 		return run.cancel()
 	}
+
+	if err := run.recordStatus(traits.TemplateRunApproved); err != nil {
+		return err
+	}
 	if err := run.recordStatus(traits.TemplateRunDestroyStarted); err != nil {
 		return err
 	}

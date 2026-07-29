@@ -1435,7 +1435,7 @@ func (store *Store) AppendAuditEvent(ctx context.Context, event traits.SecurityA
 }
 
 func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.TemplateRunStatusActivityInput) error {
-	if recordsStackTemplateLastApplied(input) || recordsStackTemplateDestroying(input) || recordsStackTemplateDestroyed(input) {
+	if recordsStackTemplateLastApplied(input) || recordsStackTemplateDestroying(input) || recordsStackTemplateDestroyed(input) || recordsStackTemplateDestroyInterrupted(input) {
 		tx, err := store.pool.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("begin record template run status: %w", err)
@@ -1459,6 +1459,10 @@ func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.Te
 			}
 		case recordsStackTemplateDestroyed(input):
 			if err := recordStackTemplateLifecycle(ctx, tx, input, traits.StackTemplateDestroyed); err != nil {
+				return err
+			}
+		case recordsStackTemplateDestroyInterrupted(input):
+			if err := recordInterruptedDestroyLifecycle(ctx, tx, input); err != nil {
 				return err
 			}
 		}
@@ -1531,6 +1535,11 @@ type stackTemplateLastAppliedWriter interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
+type stackTemplateLifecycleWriter interface {
+	stackTemplateLastAppliedWriter
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 func recordsStackTemplateLastApplied(input traits.TemplateRunStatusActivityInput) bool {
 	return input.Operation == traits.OperationApply && input.Status == traits.TemplateRunApplied
 }
@@ -1541,6 +1550,11 @@ func recordsStackTemplateDestroying(input traits.TemplateRunStatusActivityInput)
 
 func recordsStackTemplateDestroyed(input traits.TemplateRunStatusActivityInput) bool {
 	return input.Operation == traits.OperationDestroy && input.Status == traits.TemplateRunDestroyed
+}
+
+func recordsStackTemplateDestroyInterrupted(input traits.TemplateRunStatusActivityInput) bool {
+	return input.Operation == traits.OperationDestroy &&
+		(input.Status == traits.TemplateRunFailed || input.Status == traits.TemplateRunCanceled)
 }
 
 func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLastAppliedWriter, input traits.TemplateRunStatusActivityInput) error {
@@ -1590,6 +1604,27 @@ func recordStackTemplateLifecycle(ctx context.Context, writer stackTemplateLastA
 		return ErrNotFound
 	}
 	return nil
+}
+
+func recordInterruptedDestroyLifecycle(ctx context.Context, writer stackTemplateLifecycleWriter, input traits.TemplateRunStatusActivityInput) error {
+	var lifecycle traits.StackTemplateLifecycle
+	err := writer.QueryRow(ctx, `
+		select lifecycle
+		from stack_templates
+		where tenant_id = $1 and id = $2
+		for update
+	`, input.TenantID, input.StackTemplateID).Scan(&lifecycle)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read interrupted destroy stack template lifecycle: %w", err)
+	}
+	if lifecycle != traits.StackTemplateDestroying {
+		return nil
+	}
+
+	return recordStackTemplateLifecycle(ctx, writer, input, traits.StackTemplateFailed)
 }
 
 type stackTemplateScanner interface {

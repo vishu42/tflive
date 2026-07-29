@@ -2567,6 +2567,170 @@ func TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroyed(t *testing
 	}
 }
 
+func TestRecordsStackTemplateDestroyInterrupted(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		operation traits.OperationType
+		status    traits.TemplateRunStatus
+		want      bool
+	}{
+		{
+			name:      "failed destroy",
+			operation: traits.OperationDestroy,
+			status:    traits.TemplateRunFailed,
+			want:      true,
+		},
+		{
+			name:      "canceled destroy",
+			operation: traits.OperationDestroy,
+			status:    traits.TemplateRunCanceled,
+			want:      true,
+		},
+		{
+			name:      "successful destroy",
+			operation: traits.OperationDestroy,
+			status:    traits.TemplateRunDestroyed,
+			want:      false,
+		},
+		{
+			name:      "failed apply",
+			operation: traits.OperationApply,
+			status:    traits.TemplateRunFailed,
+			want:      false,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			input := traits.TemplateRunStatusActivityInput{
+				Operation: test.operation,
+				Status:    test.status,
+			}
+			if got := recordsStackTemplateDestroyInterrupted(input); got != test.want {
+				t.Fatalf("recordsStackTemplateDestroyInterrupted(%q, %q) = %t, want %t", test.operation, test.status, got, test.want)
+			}
+		})
+	}
+}
+
+func TestRecordTemplateRunStatusReconcilesInterruptedDestroyLifecycle(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		initialLifecycle traits.StackTemplateLifecycle
+		initialStatus    traits.TemplateRunStatus
+		terminalStatus   traits.TemplateRunStatus
+		wantLifecycle    traits.StackTemplateLifecycle
+	}{
+		{
+			name:             "failed after destroy started",
+			initialLifecycle: traits.StackTemplateDestroying,
+			initialStatus:    traits.TemplateRunDestroyStarted,
+			terminalStatus:   traits.TemplateRunFailed,
+			wantLifecycle:    traits.StackTemplateFailed,
+		},
+		{
+			name:             "canceled after destroy started",
+			initialLifecycle: traits.StackTemplateDestroying,
+			initialStatus:    traits.TemplateRunDestroyStarted,
+			terminalStatus:   traits.TemplateRunCanceled,
+			wantLifecycle:    traits.StackTemplateFailed,
+		},
+		{
+			name:             "failed before destroy started",
+			initialLifecycle: traits.StackTemplateActive,
+			initialStatus:    traits.TemplateRunWaitingApproval,
+			terminalStatus:   traits.TemplateRunFailed,
+			wantLifecycle:    traits.StackTemplateActive,
+		},
+		{
+			name:             "retries after lifecycle failure",
+			initialLifecycle: traits.StackTemplateFailed,
+			initialStatus:    traits.TemplateRunDestroyStarted,
+			terminalStatus:   traits.TemplateRunFailed,
+			wantLifecycle:    traits.StackTemplateFailed,
+		},
+		{
+			name:             "late failure after destroy completed",
+			initialLifecycle: traits.StackTemplateDestroyed,
+			initialStatus:    traits.TemplateRunDestroyed,
+			terminalStatus:   traits.TemplateRunFailed,
+			wantLifecycle:    traits.StackTemplateDestroyed,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			pool := openMigratedTestPool(t, ctx)
+			store := NewStore(pool)
+			suffix := strings.ReplaceAll(test.name, " ", "_")
+			stackID := traits.StackID("stack_destroy_interrupted_" + suffix)
+			stackTemplateID := traits.StackTemplateID("st_destroy_interrupted_" + suffix)
+			tenantID := traits.TenantID("tenant_destroy_interrupted_" + suffix)
+			runID := traits.TemplateRunID("run_destroy_interrupted_" + suffix)
+
+			if err := store.CreateStack(ctx, traits.Stack{
+				ID:        stackID,
+				TenantID:  tenantID,
+				Name:      "Interrupted Destroy Test",
+				Slug:      "interrupted-destroy-" + suffix,
+				CreatedBy: traits.UserID("user_123"),
+				CreatedAt: time.Now().UTC(),
+			}); err != nil {
+				t.Fatalf("CreateStack returned error: %v", err)
+			}
+			if err := store.CreateStackTemplate(ctx, traits.StackTemplate{
+				ID:        stackTemplateID,
+				TenantID:  tenantID,
+				StackID:   stackID,
+				Lifecycle: test.initialLifecycle,
+			}); err != nil {
+				t.Fatalf("CreateStackTemplate returned error: %v", err)
+			}
+			seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+				ID:              runID,
+				TenantID:        tenantID,
+				StackTemplateID: stackTemplateID,
+				Operation:       traits.OperationDestroy,
+				SelectedRef:     "main",
+				WorkspaceName:   "ws_" + suffix,
+				Status:          test.initialStatus,
+				TriggerActor:    traits.UserID("user_123"),
+			})
+
+			if err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
+				RunID:           runID,
+				TenantID:        tenantID,
+				StackTemplateID: stackTemplateID,
+				Operation:       traits.OperationDestroy,
+				Status:          test.terminalStatus,
+			}); err != nil {
+				t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+			}
+
+			var lifecycle traits.StackTemplateLifecycle
+			if err := pool.QueryRow(ctx, `
+				select lifecycle from stack_templates
+				where tenant_id = $1 and id = $2
+			`, tenantID, stackTemplateID).Scan(&lifecycle); err != nil {
+				t.Fatalf("read stack template lifecycle: %v", err)
+			}
+			if lifecycle != test.wantLifecycle {
+				t.Fatalf("lifecycle = %q, want %q", lifecycle, test.wantLifecycle)
+			}
+		})
+	}
+}
+
 func TestAppendAuditEventEmptyOptionalFields(t *testing.T) {
 	t.Parallel()
 
