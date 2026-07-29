@@ -162,8 +162,11 @@ checkout, and Terraform activities stay on the same worker replica. The session
 also remains owned by that replica while an apply or destroy workflow waits for
 approval before continuing. The session has a 1-minute creation timeout and a
 24-hour execution timeout; the execution timeout bounds the entire session,
-including any approval wait. Status activities can run independently, and logs
-remain durable in Postgres and the configured artifact store.
+including any approval wait. Status activities can run independently. Run
+metadata and status are persisted in Postgres, while completed logs and
+artifacts are uploaded to the configured S3-compatible artifact store. The
+live workspace and phase-log spool remain worker-local until the activity
+completes, so a worker crash can lose in-flight local output.
 
 ### Workers
 
@@ -819,8 +822,8 @@ SDK default. An apply or destroy run waiting for approval continues to occupy
 its session until it completes or the 24-hour session execution timeout expires.
 Separate workflow runs may be assigned to different replicas while all replicas
 continue polling the shared `terraform-runs` task queue. No shared filesystem is
-required while a session owner remains available because logs and artifacts are
-written to the configured artifact store. If the session-owning worker crashes,
+required for the session's worker-private `WORKER_RUN_ROOT` live workspace while
+the session owner remains available. If the session-owning worker crashes,
 Temporal fails the session and the run; this design does not automatically
 re-establish a session or reconstruct its local workspace on another replica.
 
