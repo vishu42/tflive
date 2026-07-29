@@ -11,14 +11,125 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 )
 
 const (
 	requesterSubject = traits.UserID("6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91")
 	approverSubject  = traits.UserID("cb4afba6-d18d-496f-80ce-8a50b94f09be")
 )
+
+// TestTemplateRunWorkflowUsesSessionForWorkspaceActivities protects the worker
+// affinity contract for the filesystem-backed workspace. If a future change
+// schedules any workspace activity on the normal queue, it could run on a
+// different worker that does not have the run's local files. The apply and
+// destroy cases also prove that the session survives the approval wait.
+func TestTemplateRunWorkflowUsesSessionForWorkspaceActivities(t *testing.T) {
+	for _, testCase := range []struct {
+		name                   string
+		operation              traits.OperationType
+		workspaceActivityCount int
+	}{
+		{name: "plan", operation: traits.OperationPlan, workspaceActivityCount: 5},
+		{name: "apply", operation: traits.OperationApply, workspaceActivityCount: 6},
+		{name: "destroy", operation: traits.OperationDestroy, workspaceActivityCount: 5},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			env := newTemplateRunWorkflowTestEnvironment(t)
+			input := templateRunWorkflowInput(testCase.operation)
+			var workspaceTaskQueues []string
+			var statusTaskQueues []string
+
+			env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+				Return(func(ctx context.Context, _ traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+					workspaceTaskQueues = append(workspaceTaskQueues, activity.GetInfo(ctx).TaskQueue)
+					return traits.PrepareWorkspaceActivityOutput{WorkspacePath: "run/workspace"}, nil
+				})
+			env.OnActivity(traits.FetchSourceActivityName, mock.Anything, mock.Anything).
+				Return(func(ctx context.Context, _ traits.FetchSourceActivityInput) (traits.FetchSourceActivityOutput, error) {
+					workspaceTaskQueues = append(workspaceTaskQueues, activity.GetInfo(ctx).TaskQueue)
+					return traits.FetchSourceActivityOutput{TerraformPath: "run/workspace/source"}, nil
+				})
+			env.OnActivity(traits.RunTerraformActivityName, mock.Anything, mock.Anything).
+				Return(func(ctx context.Context, _ traits.RunTerraformActivityInput) error {
+					workspaceTaskQueues = append(workspaceTaskQueues, activity.GetInfo(ctx).TaskQueue)
+					return nil
+				})
+			env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+				Return(func(ctx context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
+					statusTaskQueues = append(statusTaskQueues, activity.GetInfo(ctx).TaskQueue)
+					if activityInput.Status == traits.TemplateRunWaitingApproval {
+						env.SignalWorkflow(traits.ApprovalSignalName, traits.ApprovalSignal{
+							ApprovedBy: approverSubject,
+						})
+					}
+					return nil
+				})
+
+			env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+			assertWorkflowCompleted(t, env)
+			if len(workspaceTaskQueues) != testCase.workspaceActivityCount {
+				t.Fatalf("workspace activity task queues = %#v, want %d activity queues", workspaceTaskQueues, testCase.workspaceActivityCount)
+			}
+			for _, taskQueue := range workspaceTaskQueues[1:] {
+				if taskQueue != workspaceTaskQueues[0] {
+					t.Fatalf("workspace activity task queues = %#v, want one shared session queue", workspaceTaskQueues)
+				}
+			}
+			if len(statusTaskQueues) == 0 {
+				t.Fatal("status activity task queue is empty")
+			}
+			for _, taskQueue := range statusTaskQueues {
+				if taskQueue != statusTaskQueues[0] {
+					t.Fatalf("status activity task queues = %#v, want one normal queue", statusTaskQueues)
+				}
+			}
+			if workspaceTaskQueues[0] == statusTaskQueues[0] {
+				t.Fatalf("workspace task queue = %q, want a session queue distinct from status queue", workspaceTaskQueues[0])
+			}
+		})
+	}
+}
+
+func TestTemplateRunWorkflowReturnsSessionFailureDuringApproval(t *testing.T) {
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	env.SetTestTimeout(time.Second)
+	env.RegisterWorkflow(templateRunApprovalSessionEndsWorkflow)
+
+	env.ExecuteWorkflow(templateRunApprovalSessionEndsWorkflow)
+
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow returned error: %v", err)
+	}
+}
+
+func templateRunApprovalSessionEndsWorkflow(ctx workflow.Context) error {
+	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: time.Minute,
+	})
+	sessionCtx, err := workflow.CreateSession(ctx, &workflow.SessionOptions{
+		CreationTimeout:  time.Minute,
+		ExecutionTimeout: 24 * time.Hour,
+	})
+	if err != nil {
+		return err
+	}
+	run := templateRunWorkflow{ctx: ctx, sessionCtx: sessionCtx}
+	workflow.CompleteSession(sessionCtx)
+	_, err = run.waitForApproval()
+	if err == nil {
+		return errors.New("approval wait returned nil after session ended")
+	}
+	if !errors.Is(err, workflow.ErrSessionFailed) {
+		return err
+	}
+	return nil
+}
 
 func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 	t.Parallel()
@@ -359,6 +470,10 @@ func TestTemplateRunWorkflowRejectsUnsupportedOperation(t *testing.T) {
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
 	input := templateRunWorkflowInput(traits.OperationType("migrate"))
+	var startedActivityNames []string
+	env.SetOnActivityStartedListener(func(activityInfo *activity.Info, _ context.Context, _ converter.EncodedValues) {
+		startedActivityNames = append(startedActivityNames, activityInfo.ActivityType.Name)
+	})
 	var statuses []traits.TemplateRunStatus
 	var summaries []string
 	var commands []traits.TerraformCommandType
@@ -401,6 +516,9 @@ func TestTemplateRunWorkflowRejectsUnsupportedOperation(t *testing.T) {
 	if !strings.Contains(summaries[0], "unsupported template run operation") {
 		t.Fatalf("error summary = %q, want the unsupported operation reason", summaries[0])
 	}
+	if !reflect.DeepEqual(startedActivityNames, []string{traits.RecordTemplateRunStatusActivityName}) {
+		t.Fatalf("started activity names = %#v, want only status persistence without session creation", startedActivityNames)
+	}
 }
 
 func newTemplateRunWorkflowTestEnvironment(t *testing.T) *testsuite.TestWorkflowEnvironment {
@@ -408,6 +526,7 @@ func newTemplateRunWorkflowTestEnvironment(t *testing.T) *testsuite.TestWorkflow
 
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(worker.Options{EnableSessionWorker: true})
 	env.RegisterWorkflow(TemplateRunWorkflow)
 	env.RegisterActivityWithOptions(
 		func(context.Context, traits.TemplateRunStatusActivityInput) error {

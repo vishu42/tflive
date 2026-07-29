@@ -156,6 +156,18 @@ All worker pods poll this queue. Operation type is represented in run metadata:
 plan | apply | destroy
 ```
 
+Every worker replica enables Temporal Session Workers. A `TemplateRun` creates
+one session for its filesystem-dependent work, so workspace preparation, source
+checkout, and Terraform activities stay on the same worker replica. The session
+also remains owned by that replica while an apply or destroy workflow waits for
+approval before continuing. The session has a 1-minute creation timeout and a
+24-hour execution timeout; the execution timeout bounds the entire session,
+including any approval wait. Status activities can run independently. Run
+metadata and status are persisted in Postgres, while completed logs and
+artifacts are uploaded to the configured S3-compatible artifact store. The
+live workspace and phase-log spool remain worker-local until the activity
+completes, so a worker crash can lose in-flight local output.
+
 ### Workers
 
 Workers are Go processes that poll Temporal and execute workflow activities.
@@ -801,12 +813,32 @@ worker replicas * per-pod Terraform concurrency
 
 If all workers are busy, new tasks remain queued in Temporal until a worker has capacity.
 
+Session affinity makes these capacity settings distinct. The ordinary Terraform
+activity concurrency shown above controls activity execution; it is not the
+session limit. Temporal Session Workers have separate session execution
+capacity. This implementation enables session workers but does not set
+`MaxConcurrentSessionExecutionSize`, so that capacity remains at the Temporal Go
+SDK default. An apply or destroy run waiting for approval continues to occupy
+its session until it completes or the 24-hour session execution timeout expires.
+Separate workflow runs may be assigned to different replicas while all replicas
+continue polling the shared `terraform-runs` task queue. No shared filesystem is
+required for the session's worker-private `WORKER_RUN_ROOT` live workspace while
+the session owner remains available. If the session-owning worker crashes,
+Temporal fails the session and the run; this design does not automatically
+re-establish a session or reconstruct its local workspace on another replica.
+
 HPA can be added using metrics such as:
 
 - Temporal task queue backlog
 - schedule-to-start latency
 - active Terraform activity count
 - CPU and memory as secondary signals
+
+`WORKER_RUN_ROOT` is a worker-private local root for each run's temporary
+workspace and local phase-log spool. It is not a shared-volume configuration:
+another replica cannot use the path to recover an interrupted session. Durable
+recovery would require rehydrating the workspace from durable inputs before a
+new session can continue.
 
 ## Deferred Design Topics
 
