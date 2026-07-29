@@ -156,6 +156,13 @@ All worker pods poll this queue. Operation type is represented in run metadata:
 plan | apply | destroy
 ```
 
+Every worker replica enables Temporal Session Workers. A `TemplateRun` creates
+one session for its filesystem-dependent work, so workspace preparation, source
+checkout, and Terraform activities stay on the same worker replica. The session
+also remains owned by that replica while an apply or destroy workflow waits for
+approval before continuing. Status activities can run independently, and logs
+remain durable in Postgres and the configured artifact store.
+
 ### Workers
 
 Workers are Go processes that poll Temporal and execute workflow activities.
@@ -801,12 +808,28 @@ worker replicas * per-pod Terraform concurrency
 
 If all workers are busy, new tasks remain queued in Temporal until a worker has capacity.
 
+Session affinity changes the meaning of that capacity. A worker replica can own
+several sessions only within its configured concurrency, and an apply or destroy
+run waiting for approval continues to occupy its session capacity. Separate
+workflow runs may be assigned to different replicas while all replicas continue
+polling the shared `terraform-runs` task queue. No shared filesystem is required
+while a session owner remains available because logs and artifacts are written to
+the configured artifact store. If the session-owning worker crashes, Temporal
+fails the session and the run; this design does not automatically re-establish a
+session or reconstruct its local workspace on another replica.
+
 HPA can be added using metrics such as:
 
 - Temporal task queue backlog
 - schedule-to-start latency
 - active Terraform activity count
 - CPU and memory as secondary signals
+
+`WORKER_RUN_ROOT` is a worker-private local root for each run's temporary
+workspace and local phase-log spool. It is not a shared-volume configuration:
+another replica cannot use the path to recover an interrupted session. Durable
+recovery would require rehydrating the workspace from durable inputs before a
+new session can continue.
 
 ## Deferred Design Topics
 
