@@ -160,7 +160,9 @@ Every worker replica enables Temporal Session Workers. A `TemplateRun` creates
 one session for its filesystem-dependent work, so workspace preparation, source
 checkout, and Terraform activities stay on the same worker replica. The session
 also remains owned by that replica while an apply or destroy workflow waits for
-approval before continuing. Status activities can run independently, and logs
+approval before continuing. The session has a 1-minute creation timeout and a
+24-hour execution timeout; the execution timeout bounds the entire session,
+including any approval wait. Status activities can run independently, and logs
 remain durable in Postgres and the configured artifact store.
 
 ### Workers
@@ -808,15 +810,19 @@ worker replicas * per-pod Terraform concurrency
 
 If all workers are busy, new tasks remain queued in Temporal until a worker has capacity.
 
-Session affinity changes the meaning of that capacity. A worker replica can own
-several sessions only within its configured concurrency, and an apply or destroy
-run waiting for approval continues to occupy its session capacity. Separate
-workflow runs may be assigned to different replicas while all replicas continue
-polling the shared `terraform-runs` task queue. No shared filesystem is required
-while a session owner remains available because logs and artifacts are written to
-the configured artifact store. If the session-owning worker crashes, Temporal
-fails the session and the run; this design does not automatically re-establish a
-session or reconstruct its local workspace on another replica.
+Session affinity makes these capacity settings distinct. The ordinary Terraform
+activity concurrency shown above controls activity execution; it is not the
+session limit. Temporal Session Workers have separate session execution
+capacity. This implementation enables session workers but does not set
+`MaxConcurrentSessionExecutionSize`, so that capacity remains at the Temporal Go
+SDK default. An apply or destroy run waiting for approval continues to occupy
+its session until it completes or the 24-hour session execution timeout expires.
+Separate workflow runs may be assigned to different replicas while all replicas
+continue polling the shared `terraform-runs` task queue. No shared filesystem is
+required while a session owner remains available because logs and artifacts are
+written to the configured artifact store. If the session-owning worker crashes,
+Temporal fails the session and the run; this design does not automatically
+re-establish a session or reconstruct its local workspace on another replica.
 
 HPA can be added using metrics such as:
 
