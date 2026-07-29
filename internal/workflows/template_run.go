@@ -28,7 +28,25 @@ var defaultRunRetryPolicy = &temporal.RetryPolicy{
 	},
 }
 
+// TemplateRunWorkflow is the Temporal entry point for a single template run: it
+// prepares a workspace, runs the Terraform command implied by the requested
+// operation, and persists a status transition at every step. The body is kept
+// thin on purpose — the run logic lives on templateRunWorkflow so it can share
+// the workflow context and the workspace paths discovered along the way — and
+// this function owns only the two concerns that must not be duplicated per
+// operation: the default activity options and the terminal error handling.
+//
+// Cancellation is not a workflow failure. A cancel signal already drove the run
+// through its canceled status transitions before errTemplateRunCanceled bubbled
+// up, so it is swallowed here and the workflow completes successfully; anything
+// else marks the run failed before returning.
+//
+// If recording that failure also fails, the run's persisted status will not
+// match reality, so both errors are surfaced: the original wrapped with %w to
+// stay matchable by callers, the persistence error appended as context.
 func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowInput) error {
+	// Baseline options for every activity scheduled on this context. RunTerraform
+	// overrides them for the long-running commands; see terraformRetryPolicy.
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: time.Minute,
 		RetryPolicy:         defaultRunRetryPolicy,
@@ -58,26 +76,37 @@ type templateRunWorkflow struct {
 	terraformPath string
 }
 
+// execute resolves the requested operation before preparing the workspace so an
+// unsupported operation fails without side effects. Preparing first would clone
+// the source, run terraform init and select a workspace before discovering there
+// is nothing to run, and would leave the run holding a lock it then has to
+// release.
 func (run *templateRunWorkflow) execute() error {
+	operation, err := run.operation()
+	if err != nil {
+		return err
+	}
 	if err := run.prepareWorkspace(); err != nil {
 		return err
 	}
+	return operation()
+}
 
+// operation maps the requested operation to the method that runs it. An
+// unsupported operation is rejected here rather than recording a failure status
+// directly: execute is called before any status transition, so returning the
+// error lets TemplateRunWorkflow's error path record the single Failed status,
+// with the reason attached as the run's error summary.
+func (run *templateRunWorkflow) operation() (func() error, error) {
 	switch run.input.Operation {
 	case traits.OperationPlan:
-		return run.planOnly()
+		return run.planOnly, nil
 	case traits.OperationApply:
-		return run.apply()
+		return run.apply, nil
 	case traits.OperationDestroy:
-		return run.destroy()
+		return run.destroy, nil
 	default:
-		if err := run.recordStatus(traits.TemplateRunFailed); err != nil {
-			return err
-		}
-		if releaseErr := run.recordStatus(traits.TemplateRunLockReleased); releaseErr != nil {
-			return releaseErr
-		}
-		return fmt.Errorf("unsupported template run operation %q", run.input.Operation)
+		return nil, fmt.Errorf("unsupported template run operation %q", run.input.Operation)
 	}
 }
 
@@ -168,7 +197,8 @@ func (run *templateRunWorkflow) apply() error {
 	if err := run.runTerraform(traits.TerraformCommandPlan); err != nil {
 		return err
 	}
-	if err := run.recordStatuses(traits.TemplateRunPlanned, traits.TemplateRunWaitingApproval); err != nil {
+
+	if err := run.recordStatus(traits.TemplateRunWaitingApproval); err != nil {
 		return err
 	}
 
@@ -180,9 +210,6 @@ func (run *templateRunWorkflow) apply() error {
 		return run.cancel()
 	}
 
-	if err := run.recordStatuses(traits.TemplateRunApproved, traits.TemplateRunApplyStarted); err != nil {
-		return err
-	}
 	if err := run.runTerraform(traits.TerraformCommandApply); err != nil {
 		return err
 	}
@@ -205,7 +232,10 @@ func (run *templateRunWorkflow) destroy() error {
 		return run.cancel()
 	}
 
-	if err := run.recordStatuses(traits.TemplateRunApproved, traits.TemplateRunDestroyStarted); err != nil {
+	if err := run.recordStatus(traits.TemplateRunApproved); err != nil {
+		return err
+	}
+	if err := run.recordStatus(traits.TemplateRunDestroyStarted); err != nil {
 		return err
 	}
 	if err := run.runTerraform(traits.TerraformCommandDestroy); err != nil {
@@ -238,17 +268,19 @@ func (run *templateRunWorkflow) waitForApproval() (bool, error) {
 	return approved, nil
 }
 
+// cancel records the run as canceled. CancelRequested is already persisted by
+// CancelRun before the workflow ever sees the cancel signal, and Canceling and
+// LockReleased have no reader and no work happening before the next write
+// overwrites them, so only the terminal status is recorded here.
 func (run *templateRunWorkflow) cancel() error {
-	return run.recordStatuses(
-		traits.TemplateRunCancelRequested,
-		traits.TemplateRunCanceling,
-		traits.TemplateRunLockReleased,
-		traits.TemplateRunCanceled,
-	)
+	return run.recordStatus(traits.TemplateRunCanceled)
 }
 
 func (run *templateRunWorkflow) complete() error {
-	return run.recordStatuses(traits.TemplateRunLockReleased, traits.TemplateRunCompleted)
+	if err := run.recordStatus(traits.TemplateRunLockReleased); err != nil {
+		return err
+	}
+	return run.recordStatus(traits.TemplateRunCompleted)
 }
 
 // terraformRetryPolicy is applied to long-running Terraform commands (plan,
@@ -317,15 +349,6 @@ func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType
 		return errTemplateRunCanceled
 	}
 	return activityErr
-}
-
-func (run *templateRunWorkflow) recordStatuses(statuses ...traits.TemplateRunStatus) error {
-	for _, status := range statuses {
-		if err := run.recordStatus(status); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (run *templateRunWorkflow) recordStatus(status traits.TemplateRunStatus) error {

@@ -624,6 +624,11 @@ failed
 lock_released
 ```
 
+If a destroy run fails or is canceled after `destroy_started`, its associated
+`StackTemplate` lifecycle transitions from `destroying` to `failed`. This does
+not roll back infrastructure changes; the template is treated as unsafe to run
+again until an explicit recovery or reconciliation flow exists.
+
 Canceled runs transition to:
 
 ```text

@@ -145,10 +145,7 @@ func TestTemplateRunWorkflowWaitsForApplyApproval(t *testing.T) {
 		traits.TemplateRunSourceFetched,
 		traits.TemplateRunInit,
 		traits.TemplateRunWorkspaceSelected,
-		traits.TemplateRunPlanned,
 		traits.TemplateRunWaitingApproval,
-		traits.TemplateRunApproved,
-		traits.TemplateRunApplyStarted,
 		traits.TemplateRunApplied,
 		traits.TemplateRunLockReleased,
 		traits.TemplateRunCompleted,
@@ -198,11 +195,7 @@ func TestTemplateRunWorkflowCancelsApplyWhileWaitingApproval(t *testing.T) {
 		traits.TemplateRunSourceFetched,
 		traits.TemplateRunInit,
 		traits.TemplateRunWorkspaceSelected,
-		traits.TemplateRunPlanned,
 		traits.TemplateRunWaitingApproval,
-		traits.TemplateRunCancelRequested,
-		traits.TemplateRunCanceling,
-		traits.TemplateRunLockReleased,
 		traits.TemplateRunCanceled,
 	}
 	if !reflect.DeepEqual(statuses, want) {
@@ -292,9 +285,6 @@ func TestTemplateRunWorkflowCancelsDestroyWhileWaitingApproval(t *testing.T) {
 		traits.TemplateRunInit,
 		traits.TemplateRunWorkspaceSelected,
 		traits.TemplateRunWaitingApproval,
-		traits.TemplateRunCancelRequested,
-		traits.TemplateRunCanceling,
-		traits.TemplateRunLockReleased,
 		traits.TemplateRunCanceled,
 	}
 	if !reflect.DeepEqual(statuses, want) {
@@ -356,6 +346,60 @@ func TestTemplateRunWorkflowRecordsDestroyStatuses(t *testing.T) {
 	}
 	if !reflect.DeepEqual(commands, wantCommands) {
 		t.Fatalf("commands = %#v, want %#v", commands, wantCommands)
+	}
+}
+
+// TestTemplateRunWorkflowRejectsUnsupportedOperation verifies that an
+// unrecognized operation fails the run before any side effect: no workspace is
+// prepared and no terraform command is dispatched. The run records a single
+// Failed status carrying the reason, and never claims a lock it would then have
+// to release.
+func TestTemplateRunWorkflowRejectsUnsupportedOperation(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	input := templateRunWorkflowInput(traits.OperationType("migrate"))
+	var statuses []traits.TemplateRunStatus
+	var summaries []string
+	var commands []traits.TerraformCommandType
+	prepared := false
+	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+			prepared = true
+			return traits.PrepareWorkspaceActivityOutput{}, nil
+		})
+	mockRunTerraform(t, env, &commands)
+	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
+			statuses = append(statuses, activityInput.Status)
+			summaries = append(summaries, activityInput.ErrorSummary)
+			return nil
+		})
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	err := env.GetWorkflowError()
+	if err == nil {
+		t.Fatal("workflow error = nil, want unsupported operation error")
+	}
+	if !strings.Contains(err.Error(), "unsupported template run operation") {
+		t.Fatalf("workflow error = %v, want unsupported operation error", err)
+	}
+	if prepared {
+		t.Fatal("prepare workspace ran, unsupported operation must fail before side effects")
+	}
+	if len(commands) != 0 {
+		t.Fatalf("commands = %#v, want no terraform commands", commands)
+	}
+	want := []traits.TemplateRunStatus{traits.TemplateRunFailed}
+	if !reflect.DeepEqual(statuses, want) {
+		t.Fatalf("statuses = %#v, want %#v", statuses, want)
+	}
+	if !strings.Contains(summaries[0], "unsupported template run operation") {
+		t.Fatalf("error summary = %q, want the unsupported operation reason", summaries[0])
 	}
 }
 
