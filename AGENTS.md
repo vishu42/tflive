@@ -1,0 +1,68 @@
+# Repository Guidelines
+
+## Project Structure & Module Organization
+
+This repository contains the `tflive` Terraform platform. Go services live in
+`cmd/` (`api`, `worker`, and provisioning commands) and reusable backend code
+is under `internal/`. Key boundaries include `internal/api`, `internal/app`,
+`internal/postgres`, `internal/workflows`, `internal/activities`, and
+`internal/runner`. The React/Vite frontend is in `web/`; infrastructure and
+local dependencies are defined in `docker-compose.yaml` and the Dockerfiles.
+Architecture and design notes are in `docs/`, while OpenFGA models are in
+`openfga/`.
+
+## Build, Test, and Development Commands
+
+Run backend tests and formatting from the repository root:
+
+```bash
+go test ./...
+gofmt -w $(rg --files cmd internal -g '*.go')
+```
+
+Run frontend checks from `web/`:
+
+```bash
+npm install
+npm test
+npm run build
+```
+
+`npm test` runs Vitest; `npm run build` type-checks and builds the Vite app.
+For local integration work, copy `.env.example` to `.env`, provision OpenFGA
+and Keycloak as described in `README.md`, then run `go run ./cmd/api` and
+`go run ./cmd/worker` in separate shells. Start the UI with `npm run dev`.
+
+## Coding Style & Naming Conventions
+
+Use standard Go formatting (`gofmt`) and idiomatic Go names: exported symbols
+use PascalCase and unexported symbols use camelCase. Keep packages focused on
+their boundary and place interfaces near the consumer. Frontend code uses
+TypeScript/React conventions: components and types use PascalCase, hooks use
+`use...`, and tests sit beside the code they cover.
+
+## Testing Guidelines
+
+Go tests use the standard `testing` package with Testify helpers; frontend
+tests use Vitest and Testing Library. Name Go tests `Test...` and frontend
+tests `*.test.ts`/`*.test.tsx`. Add focused unit tests for behavior changes and
+run the relevant package test before the full suite.
+
+## Commit & Pull Request Guidelines
+
+Use short, imperative, lowercase-prefixed commit subjects such as
+`feat:`, `fix:`, `test:`, `refactor:`, or `docs:`. Pull requests should explain
+the behavior change, call out configuration or migration impact, link related
+issues/design documents, and list validation commands. Include UI screenshots
+when frontend behavior or layout changes.
+
+Always use the GitHub CLI (`gh`) for GitHub interactions, including inspecting
+issues, pull requests, reviews, checks, and workflows, and for creating or
+updating pull requests. Run `gh auth status` before account-authenticated
+operations.
+
+## Security & Configuration Tips
+
+Treat `.env` credentials and tokens as local secrets; never commit them.
+Provisioning output may contain sensitive identifiers, so copy only the
+documented assignments into `.env` and do not execute bootstrap output.
