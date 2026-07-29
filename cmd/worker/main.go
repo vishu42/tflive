@@ -58,7 +58,7 @@ type workerDependencies struct {
 	// dialTemporal connects to the Temporal namespace where the worker polls for tasks.
 	dialTemporal func(context.Context, temporal.Config) (client.Client, error)
 	// newWorker creates the Temporal worker bound to the configured task queue.
-	newWorker func(client.Client, string) temporalWorker
+	newWorker func(client.Client, string, temporalworker.Options) temporalWorker
 	// newWorkflowStarter creates the idempotent Temporal workflow starter used by the outbox.
 	newWorkflowStarter func(client.Client, string) dispatch.WorkflowStarter
 	// newOutboxDispatcher builds the durable Postgres-to-Temporal dispatch loop.
@@ -101,8 +101,8 @@ func defaultWorkerDependencies() workerDependencies {
 			return postgres.NewStore(pgxPool), nil
 		},
 		dialTemporal: temporal.Dial,
-		newWorker: func(temporalClient client.Client, taskQueue string) temporalWorker {
-			return temporalworker.New(temporalClient, taskQueue, temporalworker.Options{})
+		newWorker: func(temporalClient client.Client, taskQueue string, options temporalworker.Options) temporalWorker {
+			return temporalworker.New(temporalClient, taskQueue, options)
 		},
 		newWorkflowStarter: func(temporalClient client.Client, taskQueue string) dispatch.WorkflowStarter {
 			return temporal.NewDispatcher(temporalClient, taskQueue)
@@ -206,7 +206,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 	}
 	defer temporalClient.Close()
 
-	worker := deps.newWorker(temporalClient, cfg.TemporalTaskQueue)
+	worker := deps.newWorker(temporalClient, cfg.TemporalTaskQueue, temporalworker.Options{EnableSessionWorker: true})
 	deps.registerWorkflow(worker)
 	deps.registerActivities(worker, store, cfg.WorkerRunRoot, logStore)
 	workflowStarter := deps.newWorkflowStarter(temporalClient, cfg.TemporalTaskQueue)

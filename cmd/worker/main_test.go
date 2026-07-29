@@ -20,6 +20,7 @@ import (
 	"github.com/vishu42/tflive/internal/workflows"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	temporalworker "go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -73,6 +74,9 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	}
 	if deps.workerTaskQueue != "terraform-runs-dev" {
 		t.Fatalf("worker task queue = %q, want terraform-runs-dev", deps.workerTaskQueue)
+	}
+	if !deps.workerOptions.EnableSessionWorker {
+		t.Fatal("session worker was not enabled")
 	}
 	if deps.worker.registeredWorkflow != reflect.ValueOf(workflows.TemplateRunWorkflow).Pointer() {
 		t.Fatal("TemplateRunWorkflow was not registered")
@@ -276,6 +280,7 @@ type recordingWorkerDependencies struct {
 	store                *recordingWorkerStore
 	temporalConfig       temporal.Config
 	workerTaskQueue      string
+	workerOptions        temporalworker.Options
 	artifactStoreConfig  config.ArtifactStoreConfig
 	migrated             bool
 	activityStoreIsWired bool
@@ -324,11 +329,12 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			}
 			return deps.temporalClient, nil
 		},
-		newWorker: func(temporalClient client.Client, taskQueue string) temporalWorker {
+		newWorker: func(temporalClient client.Client, taskQueue string, options temporalworker.Options) temporalWorker {
 			if temporalClient != deps.temporalClient {
 				t.Fatalf("newWorker temporalClient = %p, want %p", temporalClient, deps.temporalClient)
 			}
 			deps.workerTaskQueue = taskQueue
+			deps.workerOptions = options
 			return deps.worker
 		},
 		newWorkflowStarter: func(temporalClient client.Client, taskQueue string) dispatch.WorkflowStarter {
