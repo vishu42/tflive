@@ -421,6 +421,7 @@ type TemplateRunStatusActivityInput struct {
 	StackTemplateID StackTemplateID
 	Operation       OperationType
 	Status          TemplateRunStatus
+	ErrorSummary    string
 }
 
 // PrepareWorkspaceActivityInput asks the worker to create a local run workspace.

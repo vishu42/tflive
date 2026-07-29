@@ -11,6 +11,7 @@ import (
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/traits"
+	"go.temporal.io/api/serviceerror"
 )
 
 const keycloakSubject = "6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91"
@@ -1072,10 +1073,10 @@ func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 	ctx := authenticatedContext()
 	now := time.Date(2026, 7, 2, 10, 15, 0, 0, time.UTC)
 	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{
-		ID:            "run_123",
-		TenantID:      "tenant_123",
+		ID:              "run_123",
+		TenantID:        "tenant_123",
 		StackTemplateID: "stack_template_123",
-		TriggerActor:  traits.UserID("different-user"),
+		TriggerActor:    traits.UserID("different-user"),
 	}}
 	workflows := &recordingWorkflowDispatcher{}
 
@@ -1152,10 +1153,10 @@ func TestApproveRunAllowsSelfApproval(t *testing.T) {
 
 	ctx := authenticatedContext()
 	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{
-		ID:            "run_123",
-		TenantID:      "tenant_123",
+		ID:              "run_123",
+		TenantID:        "tenant_123",
 		StackTemplateID: "stack_template_123",
-		TriggerActor:  traits.UserID(keycloakSubject),
+		TriggerActor:    traits.UserID(keycloakSubject),
 	}}
 	workflows := &recordingWorkflowDispatcher{}
 	audit := &recordingAuditRepository{}
@@ -1192,10 +1193,10 @@ func TestApproveRunSelfApprovalWorksForPlatformAdmins(t *testing.T) {
 		Subject: keycloakSubject, RealmRoles: []string{"platform-admin"},
 	})
 	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{
-		ID:            "run_123",
-		TenantID:      "tenant_123",
+		ID:              "run_123",
+		TenantID:        "tenant_123",
 		StackTemplateID: "stack_template_123",
-		TriggerActor:  traits.UserID(keycloakSubject),
+		TriggerActor:    traits.UserID(keycloakSubject),
 	}}
 	workflows := &recordingWorkflowDispatcher{}
 	audit := &recordingAuditRepository{}
@@ -1227,10 +1228,10 @@ func TestApproveRunAuditsSuccessfulApproval(t *testing.T) {
 	ctx := authenticatedContext()
 	now := time.Date(2026, 7, 2, 10, 15, 0, 0, time.UTC)
 	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{
-		ID:            "run_123",
-		TenantID:      "tenant_123",
+		ID:              "run_123",
+		TenantID:        "tenant_123",
 		StackTemplateID: "stack_template_123",
-		TriggerActor:  traits.UserID("different-user"),
+		TriggerActor:    traits.UserID("different-user"),
 	}}
 	workflows := &recordingWorkflowDispatcher{}
 	audit := &recordingAuditRepository{}
@@ -1310,6 +1311,53 @@ func TestCancelRunRecordsCancellationAndSignalsWorkflow(t *testing.T) {
 
 	if workflows.cancelSignal.RequestedBy != traits.UserID(keycloakSubject) {
 		t.Fatalf("workflow cancel actor = %q, want %q", workflows.cancelSignal.RequestedBy, keycloakSubject)
+	}
+}
+
+func TestCancelRunReconcilesWhenWorkflowIsClosed(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
+	workflows := &recordingWorkflowDispatcher{cancelErr: serviceerror.NewNotFound("workflow not found")}
+	service := NewService(Service{
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
+		Workflows:      workflows,
+		Clock:          fixedClock{now: time.Now()},
+	})
+
+	if err := service.CancelRun(authenticatedContext(), CancelRunCommand{TenantID: "tenant_123", RunID: "run_123"}); err != nil {
+		t.Fatalf("CancelRun returned error: %v", err)
+	}
+	if runs.reconciledRunID != "run_123" {
+		t.Fatalf("reconciled run ID = %q, want run_123", runs.reconciledRunID)
+	}
+	if runs.reconciledSummary != "workflow closed before cancellation was processed" {
+		t.Fatalf("reconciled summary = %q", runs.reconciledSummary)
+	}
+}
+
+func TestCancelRunReturnsUnknownWorkflowSignalError(t *testing.T) {
+	t.Parallel()
+
+	signalErr := errors.New("temporal unavailable")
+	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
+	workflows := &recordingWorkflowDispatcher{cancelErr: signalErr}
+	service := NewService(Service{
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
+		Workflows:      workflows,
+		Clock:          fixedClock{now: time.Now()},
+	})
+
+	err := service.CancelRun(authenticatedContext(), CancelRunCommand{TenantID: "tenant_123", RunID: "run_123"})
+	if !errors.Is(err, signalErr) {
+		t.Fatalf("error = %v, want signal error", err)
+	}
+	if runs.reconciledRunID != "" {
+		t.Fatalf("reconciled run ID = %q, want no reconciliation", runs.reconciledRunID)
 	}
 }
 
@@ -2038,6 +2086,8 @@ type recordingTemplateRunRepository struct {
 	getErr                 error
 	approvalErr            error
 	cancellationErr        error
+	reconciledRunID        traits.TemplateRunID
+	reconciledSummary      string
 }
 
 func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run traits.TemplateRun) error {
@@ -2073,6 +2123,12 @@ func (repository *recordingTemplateRunRepository) RequestTemplateRunCancellation
 		return repository.cancellationErr
 	}
 	repository.cancellation = cancellation
+	return nil
+}
+
+func (repository *recordingTemplateRunRepository) ReconcileTemplateRunCancellation(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, errorSummary string) error {
+	repository.reconciledRunID = runID
+	repository.reconciledSummary = errorSummary
 	return nil
 }
 
@@ -2226,6 +2282,7 @@ type recordingWorkflowDispatcher struct {
 	approvalSignal        traits.ApprovalSignal
 	cancelRunID           traits.TemplateRunID
 	cancelSignal          traits.CancelSignal
+	cancelErr             error
 }
 
 func (dispatcher *recordingWorkflowDispatcher) StartTemplateRun(_ context.Context, input traits.TemplateRunWorkflowInput) error {
@@ -2259,6 +2316,9 @@ func (dispatcher *recordingWorkflowDispatcher) ApproveTemplateRun(_ context.Cont
 }
 
 func (dispatcher *recordingWorkflowDispatcher) CancelTemplateRun(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, signal traits.CancelSignal) error {
+	if dispatcher.cancelErr != nil {
+		return dispatcher.cancelErr
+	}
 	dispatcher.cancelRunID = runID
 	dispatcher.cancelSignal = signal
 	return nil

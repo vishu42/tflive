@@ -32,7 +32,7 @@ var (
 	_ app.TemplateRunRepository              = (*Store)(nil)
 	_ app.TemplateRegistrationRepository     = (*Store)(nil)
 	_ app.TemplateRevisionRepository         = (*Store)(nil)
-	_ app.AuditRepository                     = (*Store)(nil)
+	_ app.AuditRepository                    = (*Store)(nil)
 	_ dispatch.Outbox                        = (*Store)(nil)
 	_ interface {
 		RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error
@@ -2020,6 +2020,122 @@ func TestRecordTemplateRunStatusSetsCompletedAtForTerminalStatus(t *testing.T) {
 	}
 	if completedAt.IsZero() {
 		t.Fatal("completed_at was not set")
+	}
+}
+
+func TestRecordTemplateRunStatusPersistsFailureSummary(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_failure_summary"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "workspace",
+		Status:          traits.TemplateRunInit,
+		TriggerActor:    requesterSubject,
+	})
+
+	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
+		RunID:           traits.TemplateRunID("run_failure_summary"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		Status:          traits.TemplateRunFailed,
+		ErrorSummary:    "run terraform: activity failed",
+	})
+	if err != nil {
+		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+	}
+
+	var status traits.TemplateRunStatus
+	var errorSummary string
+	var completedAt time.Time
+	if err := pool.QueryRow(ctx, `
+		select status, error_summary, completed_at
+		from template_runs
+		where id = $1
+	`, "run_failure_summary").Scan(&status, &errorSummary, &completedAt); err != nil {
+		t.Fatalf("read failed run: %v", err)
+	}
+	if status != traits.TemplateRunFailed {
+		t.Fatalf("status = %q, want %q", status, traits.TemplateRunFailed)
+	}
+	if errorSummary != "run terraform: activity failed" {
+		t.Fatalf("error_summary = %q", errorSummary)
+	}
+	if completedAt.IsZero() {
+		t.Fatal("completed_at was not set")
+	}
+}
+
+func TestReconcileTemplateRunCancellationMarksRunFailed(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_reconcile"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationApply,
+		SelectedRef:     "main",
+		WorkspaceName:   "workspace",
+		Status:          traits.TemplateRunCancelRequested,
+		TriggerActor:    requesterSubject,
+	})
+
+	err := store.ReconcileTemplateRunCancellation(ctx, traits.TenantID("tenant_123"), traits.TemplateRunID("run_reconcile"), "workflow closed before cancellation was processed")
+	if err != nil {
+		t.Fatalf("ReconcileTemplateRunCancellation returned error: %v", err)
+	}
+
+	var status traits.TemplateRunStatus
+	var errorSummary string
+	var completedAt time.Time
+	if err := pool.QueryRow(ctx, `
+		select status, error_summary, completed_at
+		from template_runs
+		where id = $1
+	`, "run_reconcile").Scan(&status, &errorSummary, &completedAt); err != nil {
+		t.Fatalf("read reconciled run: %v", err)
+	}
+	if status != traits.TemplateRunFailed {
+		t.Fatalf("status = %q, want %q", status, traits.TemplateRunFailed)
+	}
+	if errorSummary != "workflow closed before cancellation was processed" {
+		t.Fatalf("error_summary = %q", errorSummary)
+	}
+	if completedAt.IsZero() {
+		t.Fatal("completed_at was not set")
+	}
+}
+
+func TestReconcileTemplateRunCancellationRejectsTerminalRun(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:              traits.TemplateRunID("run_reconcile_terminal"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationApply,
+		SelectedRef:     "main",
+		WorkspaceName:   "workspace",
+		Status:          traits.TemplateRunCompleted,
+		TriggerActor:    requesterSubject,
+	})
+
+	err := store.ReconcileTemplateRunCancellation(ctx, traits.TenantID("tenant_123"), traits.TemplateRunID("run_reconcile_terminal"), "should not overwrite terminal run")
+	if !errors.Is(err, app.ErrRunNotCancelable) {
+		t.Fatalf("error = %v, want ErrRunNotCancelable", err)
 	}
 }
 

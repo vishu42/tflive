@@ -17,6 +17,7 @@ import (
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/traits"
+	"go.temporal.io/api/serviceerror"
 )
 
 var (
@@ -106,6 +107,8 @@ type TemplateRunRepository interface {
 	ApproveTemplateRun(ctx context.Context, approval traits.TemplateRunApproval) error
 	// RequestTemplateRunCancellation records cancellation only when the tenant-owned run can still stop.
 	RequestTemplateRunCancellation(ctx context.Context, cancellation traits.TemplateRunCancellation) error
+	// ReconcileTemplateRunCancellation marks a persisted cancellation request failed when its workflow is closed.
+	ReconcileTemplateRunCancellation(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, errorSummary string) error
 }
 
 // TemplateRegistrationRepository persists template registration attempts.
@@ -1406,11 +1409,30 @@ func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand)
 		RequestedBy: actor,
 		Reason:      command.Reason,
 	}
-	if err := service.Workflows.CancelTemplateRun(ctx, command.TenantID, command.RunID, signal); err != nil {
+	err = service.Workflows.CancelTemplateRun(ctx, command.TenantID, command.RunID, signal)
+	if err == nil {
+		return nil
+	}
+	if !isWorkflowClosedError(err) {
 		return fmt.Errorf("cancel template run workflow: %w", err)
 	}
 
+	err = service.TemplateRuns.ReconcileTemplateRunCancellation(
+		ctx,
+		command.TenantID,
+		command.RunID,
+		"workflow closed before cancellation was processed",
+	)
+	if err != nil {
+		return fmt.Errorf("reconcile template run cancellation: %w", err)
+	}
+
 	return nil
+}
+
+func isWorkflowClosedError(err error) bool {
+	var notFound *serviceerror.NotFound
+	return errors.As(err, &notFound)
 }
 
 // GetTemplateRun returns one tenant-owned run.

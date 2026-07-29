@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -498,6 +499,73 @@ func TestTemplateRunWorkflowStopsOnNonRetryableError(t *testing.T) {
 	}
 	if prepareAttempts != 1 {
 		t.Fatalf("prepare attempts = %d, want 1 (non-retryable should not retry)", prepareAttempts)
+	}
+}
+
+func TestTemplateRunWorkflowPersistsFailedStatusAfterActivityError(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	input := templateRunWorkflowInput(traits.OperationPlan)
+	var statuses []traits.TemplateRunStatusActivityInput
+	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+			return traits.PrepareWorkspaceActivityOutput{}, temporal.NewNonRetryableApplicationError(
+				"invalid configuration",
+				"InvalidConfig",
+				nil,
+			)
+		})
+	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, status traits.TemplateRunStatusActivityInput) error {
+			statuses = append(statuses, status)
+			return nil
+		})
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "invalid configuration") {
+		t.Fatalf("workflow error = %v, want invalid configuration", err)
+	}
+	if len(statuses) == 0 || statuses[len(statuses)-1].Status != traits.TemplateRunFailed {
+		t.Fatalf("final statuses = %#v, want failed", statuses)
+	}
+	if !strings.Contains(statuses[len(statuses)-1].ErrorSummary, "invalid configuration") {
+		t.Fatalf("failure summary = %q, want root activity error", statuses[len(statuses)-1].ErrorSummary)
+	}
+}
+
+func TestTemplateRunWorkflowPreservesActivityErrorWhenFailurePersistenceFails(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	input := templateRunWorkflowInput(traits.OperationPlan)
+	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+			return traits.PrepareWorkspaceActivityOutput{}, temporal.NewNonRetryableApplicationError(
+				"invalid configuration",
+				"InvalidConfig",
+				nil,
+			)
+		})
+	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, status traits.TemplateRunStatusActivityInput) error {
+			if status.Status == traits.TemplateRunFailed {
+				return errors.New("status database unavailable")
+			}
+			return nil
+		})
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "invalid configuration") {
+		t.Fatalf("workflow error = %v, want original activity error", err)
 	}
 }
 
