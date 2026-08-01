@@ -11,7 +11,7 @@ import (
 func TestLocalGitRunnerClonesRef(t *testing.T) {
 	t.Parallel()
 
-	executor := &recordingGitCommandExecutor{}
+	executor := &recordingCommandExecutor{}
 	runner := NewLocalGitRunnerWithExecutor(executor)
 
 	err := runner.Clone(context.Background(), "https://github.com/acme/infra-templates.git", "main", "/tmp/repo")
@@ -19,7 +19,7 @@ func TestLocalGitRunnerClonesRef(t *testing.T) {
 		t.Fatalf("Clone returned error: %v", err)
 	}
 
-	want := []recordedGitCommand{
+	want := []recordedCommand{
 		{
 			dir:  "",
 			name: "git",
@@ -34,7 +34,7 @@ func TestLocalGitRunnerClonesRef(t *testing.T) {
 func TestLocalGitRunnerResolvesHead(t *testing.T) {
 	t.Parallel()
 
-	executor := &recordingGitCommandExecutor{output: []byte("abc123\n")}
+	executor := &recordingCommandExecutor{stdout: "abc123\n"}
 	runner := NewLocalGitRunnerWithExecutor(executor)
 
 	got, err := runner.ResolveHead(context.Background(), "/tmp/repo")
@@ -45,7 +45,7 @@ func TestLocalGitRunnerResolvesHead(t *testing.T) {
 	if got != "abc123" {
 		t.Fatalf("sha = %q, want abc123", got)
 	}
-	want := []recordedGitCommand{
+	want := []recordedCommand{
 		{
 			dir:  "",
 			name: "git",
@@ -61,9 +61,9 @@ func TestLocalGitRunnerWrapsCloneErrorsWithCommandOutput(t *testing.T) {
 	t.Parallel()
 
 	commandErr := errors.New("exit status 128")
-	executor := &recordingGitCommandExecutor{
-		output: []byte("fatal: repository not found\n"),
-		err:    commandErr,
+	executor := &recordingCommandExecutor{
+		stdout: "fatal: repository not found\n",
+		errs:   []error{commandErr},
 	}
 	runner := NewLocalGitRunnerWithExecutor(executor)
 
@@ -71,31 +71,14 @@ func TestLocalGitRunnerWrapsCloneErrorsWithCommandOutput(t *testing.T) {
 	if !errors.Is(err, commandErr) {
 		t.Fatalf("error = %v, want commandErr", err)
 	}
-	if !strings.Contains(err.Error(), "git clone") {
-		t.Fatalf("error = %q, want git clone context", err.Error())
+	var cmdErr *GitCommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("error = %v, want *GitCommandError", err)
 	}
-	if !strings.Contains(err.Error(), "fatal: repository not found") {
-		t.Fatalf("error = %q, want command output", err.Error())
+	if cmdErr.Command != GitCommandClone {
+		t.Fatalf("cmdErr.Command = %q, want %q", cmdErr.Command, GitCommandClone)
 	}
-}
-
-type recordingGitCommandExecutor struct {
-	commands []recordedGitCommand
-	output   []byte
-	err      error
-}
-
-func (executor *recordingGitCommandExecutor) CombinedOutput(_ context.Context, dir string, name string, args ...string) ([]byte, error) {
-	executor.commands = append(executor.commands, recordedGitCommand{
-		dir:  dir,
-		name: name,
-		args: append([]string(nil), args...),
-	})
-	return executor.output, executor.err
-}
-
-type recordedGitCommand struct {
-	dir  string
-	name string
-	args []string
+	if !strings.Contains(cmdErr.Output, "fatal: repository not found") {
+		t.Fatalf("cmdErr.Output = %q, want command output", cmdErr.Output)
+	}
 }
