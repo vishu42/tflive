@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 
@@ -22,16 +21,6 @@ type TerraformCommand struct {
 	Environment map[string]string
 	Stdout      io.Writer
 	Stderr      io.Writer
-}
-
-// CommandExecutor is the subprocess boundary used by LocalProcessRunner.
-//
-// Implementations receive the fully resolved working directory, output streams,
-// executable name, and CLI arguments. The production executor starts a real
-// process with os/exec, while tests can provide a recorder or fake executor to
-// verify command construction without invoking OpenTofu.
-type CommandExecutor interface {
-	Run(ctx context.Context, dir string, env []string, stdout io.Writer, stderr io.Writer, name string, args ...string) error
 }
 
 type LocalProcessRunner struct {
@@ -73,15 +62,15 @@ func (runner *LocalProcessRunner) Run(ctx context.Context, input TerraformComman
 
 	switch input.Command {
 	case traits.TerraformCommandInit:
-		return runner.run(ctx, input, sortedEnvironment(input.Environment), "tofu init", "init", "-input=false", "-no-color")
+		return runner.run(ctx, input, sortedEnvironment(input.Environment), "init", "-input=false", "-no-color")
 	case traits.TerraformCommandSelectWorkspace:
 		return runner.selectWorkspace(ctx, input)
 	case traits.TerraformCommandPlan:
-		return runner.runWithTerraformVariables(ctx, input, "tofu plan", "plan", "-input=false", "-no-color")
+		return runner.runWithTerraformVariables(ctx, input, "plan", "-input=false", "-no-color")
 	case traits.TerraformCommandApply:
-		return runner.runWithTerraformVariables(ctx, input, "tofu apply", "apply", "-input=false", "-auto-approve", "-no-color")
+		return runner.runWithTerraformVariables(ctx, input, "apply", "-input=false", "-auto-approve", "-no-color")
 	case traits.TerraformCommandDestroy:
-		return runner.runWithTerraformVariables(ctx, input, "tofu destroy", "destroy", "-input=false", "-auto-approve", "-no-color")
+		return runner.runWithTerraformVariables(ctx, input, "destroy", "-input=false", "-auto-approve", "-no-color")
 	default:
 		return fmt.Errorf("unsupported terraform command %q", input.Command)
 	}
@@ -122,30 +111,33 @@ func (runner *LocalProcessRunner) selectWorkspace(ctx context.Context, input Ter
 		"-no-color",
 		input.WorkspaceName,
 	); err != nil {
-		return fmt.Errorf("tofu workspace select or new: %w", err)
+		return &CommandError{Command: traits.TerraformCommandSelectWorkspace, Err: fmt.Errorf("select or new: %w", err)}
 	}
 	return nil
 }
 
 // run executes a non-workspace OpenTofu command with shared error wrapping.
 //
-// The label is used only for human-readable error context; args are the exact
-// OpenTofu CLI arguments passed to the command executor.
-func (runner *LocalProcessRunner) run(ctx context.Context, input TerraformCommand, env []string, label string, args ...string) error {
+// A failure is wrapped in CommandError (using input.Command) so callers can
+// identify which command failed via errors.As instead of parsing the error
+// text. args are the exact OpenTofu CLI arguments passed to the command
+// executor.
+func (runner *LocalProcessRunner) run(ctx context.Context, input TerraformCommand, env []string, args ...string) error {
 	stdout, stderr := outputWriters(input)
-	if err := runner.executor.Run(ctx, input.WorkspacePath, env, stdout, stderr, terraformExecutable, args...); err != nil {
-		return fmt.Errorf("%s: %w", label, err)
+	err := runner.executor.Run(ctx, input.WorkspacePath, env, stdout, stderr, terraformExecutable, args...)
+	if err != nil {
+		return &CommandError{Command: input.Command, Err: err}
 	}
 	return nil
 }
 
-func (runner *LocalProcessRunner) runWithTerraformVariables(ctx context.Context, input TerraformCommand, label string, args ...string) error {
+func (runner *LocalProcessRunner) runWithTerraformVariables(ctx context.Context, input TerraformCommand, args ...string) error {
 	env, err := terraformVariableEnv(input.ConfigJSON)
 	if err != nil {
-		return fmt.Errorf("%s variables: %w", label, err)
+		return &CommandError{Command: input.Command, Err: fmt.Errorf("variables: %w", err)}
 	}
 	credentialEnv := sortedEnvironment(input.Environment)
-	return runner.run(ctx, input, append(credentialEnv, env...), label, args...)
+	return runner.run(ctx, input, append(credentialEnv, env...), args...)
 }
 
 // sortedEnvironment converts credential variables into deterministic NAME=value process entries.
@@ -225,22 +217,4 @@ func outputWriters(input TerraformCommand) (io.Writer, io.Writer) {
 		stderr = os.Stderr
 	}
 	return stdout, stderr
-}
-
-type osExecCommandExecutor struct{}
-
-// Run starts one subprocess in dir and connects its output streams.
-//
-// The context is passed to exec.CommandContext so cancellation or deadline
-// expiry can terminate the OpenTofu process. The command name and args are
-// intentionally supplied by LocalProcessRunner so this adapter stays generic.
-func (osExecCommandExecutor) Run(ctx context.Context, dir string, env []string, stdout io.Writer, stderr io.Writer, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	if len(env) > 0 {
-		cmd.Env = append(os.Environ(), env...)
-	}
-	return cmd.Run()
 }

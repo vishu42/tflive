@@ -1,9 +1,8 @@
 package runner
 
 import (
+	"bytes"
 	"context"
-	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -13,45 +12,41 @@ type GitRunner interface {
 	ResolveHead(ctx context.Context, repoPath string) (string, error)
 }
 
-// GitCommandExecutor runs a git command and returns combined stdout/stderr.
-type GitCommandExecutor interface {
-	CombinedOutput(ctx context.Context, dir string, name string, args ...string) ([]byte, error)
-}
-
+// LocalGitRunner runs git as a subprocess via the shared CommandExecutor boundary.
 type LocalGitRunner struct {
-	executor GitCommandExecutor
+	executor CommandExecutor
 }
 
 // NewLocalGitRunner returns a runner backed by the local git executable.
 func NewLocalGitRunner() *LocalGitRunner {
-	return NewLocalGitRunnerWithExecutor(osExecGitCommandExecutor{})
+	return NewLocalGitRunnerWithExecutor(osExecCommandExecutor{})
 }
 
 // NewLocalGitRunnerWithExecutor returns a Git runner backed by executor.
-func NewLocalGitRunnerWithExecutor(executor GitCommandExecutor) *LocalGitRunner {
+func NewLocalGitRunnerWithExecutor(executor CommandExecutor) *LocalGitRunner {
 	return &LocalGitRunner{executor: executor}
 }
 
 func (runner *LocalGitRunner) Clone(ctx context.Context, repoURL string, ref string, dest string) error {
-	output, err := runner.executor.CombinedOutput(ctx, "", "git", "clone", "--depth", "1", "--branch", ref, repoURL, dest)
+	output, err := runner.combinedOutput(ctx, "git", "clone", "--depth", "1", "--branch", ref, repoURL, dest)
 	if err != nil {
-		return fmt.Errorf("git clone: %w: %s", err, strings.TrimSpace(string(output)))
+		return &GitCommandError{Command: GitCommandClone, Output: strings.TrimSpace(output), Err: err}
 	}
 	return nil
 }
 
 func (runner *LocalGitRunner) ResolveHead(ctx context.Context, repoPath string) (string, error) {
-	output, err := runner.executor.CombinedOutput(ctx, "", "git", "-C", repoPath, "rev-parse", "HEAD")
+	output, err := runner.combinedOutput(ctx, "git", "-C", repoPath, "rev-parse", "HEAD")
 	if err != nil {
-		return "", fmt.Errorf("git rev-parse HEAD: %w: %s", err, strings.TrimSpace(string(output)))
+		return "", &GitCommandError{Command: GitCommandResolveHead, Output: strings.TrimSpace(output), Err: err}
 	}
-	return strings.TrimSpace(string(output)), nil
+	return strings.TrimSpace(output), nil
 }
 
-type osExecGitCommandExecutor struct{}
-
-func (osExecGitCommandExecutor) CombinedOutput(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	return cmd.CombinedOutput()
+// combinedOutput runs a git command and returns its combined stdout/stderr,
+// mirroring exec.Cmd.CombinedOutput on top of the shared CommandExecutor.
+func (runner *LocalGitRunner) combinedOutput(ctx context.Context, name string, args ...string) (string, error) {
+	var output bytes.Buffer
+	err := runner.executor.Run(ctx, "", nil, &output, &output, name, args...)
+	return output.String(), err
 }

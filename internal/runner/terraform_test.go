@@ -15,7 +15,7 @@ import (
 func TestLocalProcessRunnerRunsTerraformPlan(t *testing.T) {
 	t.Parallel()
 
-	executor := &recordingTerraformCommandExecutor{}
+	executor := &recordingCommandExecutor{}
 	runner := NewLocalProcessRunnerWithExecutor(executor)
 
 	err := runner.Run(context.Background(), TerraformCommand{
@@ -27,7 +27,7 @@ func TestLocalProcessRunnerRunsTerraformPlan(t *testing.T) {
 		t.Fatalf("Run returned error: %v", err)
 	}
 
-	want := []recordedTerraformCommand{
+	want := []recordedCommand{
 		{
 			dir:  "/tmp/tflive/runs/tenant_123/run_123",
 			name: "tofu",
@@ -41,7 +41,7 @@ func TestLocalProcessRunnerRunsTerraformPlan(t *testing.T) {
 
 // TestLocalProcessRunnerInjectsCredentialEnvironment verifies resolved credentials reach the subprocess.
 func TestLocalProcessRunnerInjectsCredentialEnvironment(t *testing.T) {
-	executor := &recordingTerraformCommandExecutor{}
+	executor := &recordingCommandExecutor{}
 	runner := NewLocalProcessRunnerWithExecutor(executor)
 
 	err := runner.Run(context.Background(), TerraformCommand{
@@ -81,7 +81,7 @@ func TestSortedEnvironmentReturnsSortedNameValueEntries(t *testing.T) {
 func TestLocalProcessRunnerRunsTerraformApply(t *testing.T) {
 	t.Parallel()
 
-	executor := &recordingTerraformCommandExecutor{}
+	executor := &recordingCommandExecutor{}
 	runner := NewLocalProcessRunnerWithExecutor(executor)
 
 	err := runner.Run(context.Background(), TerraformCommand{
@@ -93,7 +93,7 @@ func TestLocalProcessRunnerRunsTerraformApply(t *testing.T) {
 		t.Fatalf("Run returned error: %v", err)
 	}
 
-	want := []recordedTerraformCommand{
+	want := []recordedCommand{
 		{
 			dir:  "/tmp/tflive/runs/tenant_123/run_123",
 			name: "tofu",
@@ -112,7 +112,7 @@ func TestLocalProcessRunnerRunsTerraformApply(t *testing.T) {
 func TestLocalProcessRunnerRunsTerraformDestroy(t *testing.T) {
 	t.Parallel()
 
-	executor := &recordingTerraformCommandExecutor{}
+	executor := &recordingCommandExecutor{}
 	runner := NewLocalProcessRunnerWithExecutor(executor)
 
 	err := runner.Run(context.Background(), TerraformCommand{
@@ -124,7 +124,7 @@ func TestLocalProcessRunnerRunsTerraformDestroy(t *testing.T) {
 		t.Fatalf("Run returned error: %v", err)
 	}
 
-	want := []recordedTerraformCommand{
+	want := []recordedCommand{
 		{
 			dir:  "/tmp/tflive/runs/tenant_123/run_123",
 			name: "tofu",
@@ -166,7 +166,7 @@ func TestLocalProcessRunnerSetsTerraformVariablesForPlanAndApply(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			executor := &recordingTerraformCommandExecutor{}
+			executor := &recordingCommandExecutor{}
 			runner := NewLocalProcessRunnerWithExecutor(executor)
 
 			err := runner.Run(context.Background(), TerraformCommand{
@@ -179,7 +179,7 @@ func TestLocalProcessRunnerSetsTerraformVariablesForPlanAndApply(t *testing.T) {
 				t.Fatalf("Run returned error: %v", err)
 			}
 
-			want := []recordedTerraformCommand{
+			want := []recordedCommand{
 				{
 					dir:  "/tmp/tflive/runs/tenant_123/run_123",
 					env:  []string{"TF_VAR_enabled=true", "TF_VAR_region=us-east-1", "TF_VAR_replicas=3", "TF_VAR_tags={\"env\":\"prod\"}", "TF_VAR_zones=[\"us-east-1a\",\"us-east-1b\"]"},
@@ -197,7 +197,7 @@ func TestLocalProcessRunnerSetsTerraformVariablesForPlanAndApply(t *testing.T) {
 func TestLocalProcessRunnerSelectsExistingWorkspace(t *testing.T) {
 	t.Parallel()
 
-	executor := &recordingTerraformCommandExecutor{}
+	executor := &recordingCommandExecutor{}
 	runner := NewLocalProcessRunnerWithExecutor(executor)
 
 	err := runner.Run(context.Background(), TerraformCommand{
@@ -209,7 +209,7 @@ func TestLocalProcessRunnerSelectsExistingWorkspace(t *testing.T) {
 		t.Fatalf("Run returned error: %v", err)
 	}
 
-	want := []recordedTerraformCommand{
+	want := []recordedCommand{
 		{
 			dir:  "/tmp/tflive/runs/tenant_123/run_123",
 			name: "tofu",
@@ -224,7 +224,7 @@ func TestLocalProcessRunnerSelectsExistingWorkspace(t *testing.T) {
 func TestLocalProcessRunnerCreatesMissingWorkspace(t *testing.T) {
 	t.Parallel()
 
-	executor := &recordingTerraformCommandExecutor{
+	executor := &recordingCommandExecutor{
 		errs: []error{errors.New("workspace does not exist")},
 	}
 	runner := NewLocalProcessRunnerWithExecutor(executor)
@@ -238,7 +238,7 @@ func TestLocalProcessRunnerCreatesMissingWorkspace(t *testing.T) {
 		t.Fatalf("Run returned error: %v", err)
 	}
 
-	want := []recordedTerraformCommand{
+	want := []recordedCommand{
 		{
 			dir:  "/tmp/tflive/runs/tenant_123/run_123",
 			name: "tofu",
@@ -259,7 +259,7 @@ func TestLocalProcessRunnerWrapsWorkspaceCreationErrorWithTofuContext(t *testing
 	t.Parallel()
 
 	createErr := errors.New("create failed")
-	executor := &recordingTerraformCommandExecutor{
+	executor := &recordingCommandExecutor{
 		errs: []error{errors.New("workspace does not exist"), createErr},
 	}
 	runner := NewLocalProcessRunnerWithExecutor(executor)
@@ -272,8 +272,12 @@ func TestLocalProcessRunnerWrapsWorkspaceCreationErrorWithTofuContext(t *testing
 	if !errors.Is(err, createErr) {
 		t.Fatalf("error = %v, want createErr", err)
 	}
-	if !strings.Contains(err.Error(), "tofu workspace select or new") {
-		t.Fatalf("error = %q, want tofu workspace context", err.Error())
+	var cmdErr *CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("error = %v, want *CommandError", err)
+	}
+	if cmdErr.Command != traits.TerraformCommandSelectWorkspace {
+		t.Fatalf("cmdErr.Command = %q, want %q", cmdErr.Command, traits.TerraformCommandSelectWorkspace)
 	}
 }
 
@@ -281,7 +285,7 @@ func TestLocalProcessRunnerWrapsCommandErrors(t *testing.T) {
 	t.Parallel()
 
 	commandErr := errors.New("terraform failed")
-	executor := &recordingTerraformCommandExecutor{errs: []error{commandErr}}
+	executor := &recordingCommandExecutor{errs: []error{commandErr}}
 	runner := NewLocalProcessRunnerWithExecutor(executor)
 
 	err := runner.Run(context.Background(), TerraformCommand{
@@ -292,15 +296,19 @@ func TestLocalProcessRunnerWrapsCommandErrors(t *testing.T) {
 	if !errors.Is(err, commandErr) {
 		t.Fatalf("error = %v, want commandErr", err)
 	}
-	if !strings.Contains(err.Error(), "tofu plan") {
-		t.Fatalf("error = %q, want tofu plan context", err.Error())
+	var cmdErr *CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("error = %v, want *CommandError", err)
+	}
+	if cmdErr.Command != traits.TerraformCommandPlan {
+		t.Fatalf("cmdErr.Command = %q, want %q", cmdErr.Command, traits.TerraformCommandPlan)
 	}
 }
 
 func TestLocalProcessRunnerPassesOutputWritersToExecutor(t *testing.T) {
 	t.Parallel()
 
-	executor := &recordingTerraformCommandExecutor{
+	executor := &recordingCommandExecutor{
 		stdout: "terraform stdout\n",
 		stderr: "terraform stderr\n",
 	}
@@ -330,7 +338,7 @@ func TestLocalProcessRunnerPassesOutputWritersToExecutor(t *testing.T) {
 func TestLocalProcessRunnerRequiresWorkspacePath(t *testing.T) {
 	t.Parallel()
 
-	runner := NewLocalProcessRunnerWithExecutor(&recordingTerraformCommandExecutor{})
+	runner := NewLocalProcessRunnerWithExecutor(&recordingCommandExecutor{})
 
 	err := runner.Run(context.Background(), TerraformCommand{
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
@@ -344,15 +352,15 @@ func TestLocalProcessRunnerRequiresWorkspacePath(t *testing.T) {
 	}
 }
 
-type recordingTerraformCommandExecutor struct {
-	commands []recordedTerraformCommand
+type recordingCommandExecutor struct {
+	commands []recordedCommand
 	errs     []error
 	stdout   string
 	stderr   string
 }
 
-func (executor *recordingTerraformCommandExecutor) Run(_ context.Context, dir string, env []string, stdout io.Writer, stderr io.Writer, name string, args ...string) error {
-	executor.commands = append(executor.commands, recordedTerraformCommand{
+func (executor *recordingCommandExecutor) Run(_ context.Context, dir string, env []string, stdout io.Writer, stderr io.Writer, name string, args ...string) error {
+	executor.commands = append(executor.commands, recordedCommand{
 		dir:  dir,
 		env:  append([]string(nil), env...),
 		name: name,
@@ -376,7 +384,7 @@ func (executor *recordingTerraformCommandExecutor) Run(_ context.Context, dir st
 	return err
 }
 
-type recordedTerraformCommand struct {
+type recordedCommand struct {
 	dir  string
 	env  []string
 	name string
