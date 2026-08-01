@@ -605,7 +605,12 @@ func assertWorkflowCompleted(t *testing.T, env *testsuite.TestWorkflowEnvironmen
 	}
 }
 
-func TestTemplateRunWorkflowRetriesTransientActivityError(t *testing.T) {
+// TestTemplateRunWorkflowExhaustsRetriesOnTransientActivityError asserts a
+// persistently transient activity error fails the run after exactly
+// defaultRunRetryPolicy.MaximumAttempts attempts, rather than hardcoding the
+// current value (1) — so this test doesn't need updating every time the
+// policy's attempt count changes.
+func TestTemplateRunWorkflowExhaustsRetriesOnTransientActivityError(t *testing.T) {
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
@@ -615,21 +620,21 @@ func TestTemplateRunWorkflowRetriesTransientActivityError(t *testing.T) {
 	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, _ traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
 			prepareAttempts++
-			if prepareAttempts < 3 {
-				return traits.PrepareWorkspaceActivityOutput{}, errors.New("connection reset")
-			}
-			return traits.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123"}, nil
+			return traits.PrepareWorkspaceActivityOutput{}, errors.New("connection reset")
 		})
 
-	mockFetchSource(t, env)
-	mockRunTerraformNoop(t, env)
 	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
 
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 
-	assertWorkflowCompleted(t, env)
-	if prepareAttempts != 3 {
-		t.Fatalf("prepare attempts = %d, want 3 (2 failures + 1 success)", prepareAttempts)
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err == nil {
+		t.Fatal("workflow error is nil, want transient error to fail the run once retries are exhausted")
+	}
+	if want := defaultRunRetryPolicy.MaximumAttempts; prepareAttempts != int(want) {
+		t.Fatalf("prepare attempts = %d, want %d (defaultRunRetryPolicy.MaximumAttempts)", prepareAttempts, want)
 	}
 }
 
@@ -732,7 +737,12 @@ func TestTemplateRunWorkflowPreservesActivityErrorWhenFailurePersistenceFails(t 
 	}
 }
 
-func TestTemplateRunWorkflowRetriesTerraformCommand(t *testing.T) {
+// TestTemplateRunWorkflowExhaustsRetriesOnTerraformError asserts a
+// persistently transient plan error fails the run after exactly
+// terraformRetryPolicy.MaximumAttempts attempts, rather than hardcoding the
+// current value (1) — so this test doesn't need updating every time the
+// policy's attempt count changes.
+func TestTemplateRunWorkflowExhaustsRetriesOnTerraformError(t *testing.T) {
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
@@ -746,9 +756,7 @@ func TestTemplateRunWorkflowRetriesTerraformCommand(t *testing.T) {
 		Return(func(_ context.Context, activityInput traits.RunTerraformActivityInput) error {
 			if activityInput.Command == traits.TerraformCommandPlan {
 				planAttempts++
-				if planAttempts < 3 {
-					return errors.New("rate limit exceeded")
-				}
+				return errors.New("rate limit exceeded")
 			}
 			return nil
 		})
@@ -757,9 +765,14 @@ func TestTemplateRunWorkflowRetriesTerraformCommand(t *testing.T) {
 
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 
-	assertWorkflowCompleted(t, env)
-	if planAttempts != 3 {
-		t.Fatalf("plan attempts = %d, want 3 (2 failures + 1 success)", planAttempts)
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err == nil {
+		t.Fatal("workflow error is nil, want transient error to fail the run once retries are exhausted")
+	}
+	if want := terraformRetryPolicy.MaximumAttempts; planAttempts != int(want) {
+		t.Fatalf("plan attempts = %d, want %d (terraformRetryPolicy.MaximumAttempts)", planAttempts, want)
 	}
 }
 
@@ -805,8 +818,8 @@ func TestTemplateRunWorkflowNonRetryableTerraformError(t *testing.T) {
 func TestDefaultRunRetryPolicy(t *testing.T) {
 	t.Parallel()
 
-	if defaultRunRetryPolicy.MaximumAttempts != 5 {
-		t.Fatalf("MaximumAttempts = %d, want 5", defaultRunRetryPolicy.MaximumAttempts)
+	if defaultRunRetryPolicy.MaximumAttempts != 1 {
+		t.Fatalf("MaximumAttempts = %d, want 1", defaultRunRetryPolicy.MaximumAttempts)
 	}
 	if defaultRunRetryPolicy.InitialInterval != 30*time.Second {
 		t.Fatalf("InitialInterval = %v, want 30s", defaultRunRetryPolicy.InitialInterval)
@@ -826,8 +839,8 @@ func TestDefaultRunRetryPolicy(t *testing.T) {
 func TestTerraformRetryPolicy(t *testing.T) {
 	t.Parallel()
 
-	if terraformRetryPolicy.MaximumAttempts != 3 {
-		t.Fatalf("MaximumAttempts = %d, want 3", terraformRetryPolicy.MaximumAttempts)
+	if terraformRetryPolicy.MaximumAttempts != 1 {
+		t.Fatalf("MaximumAttempts = %d, want 1", terraformRetryPolicy.MaximumAttempts)
 	}
 	if terraformRetryPolicy.InitialInterval != time.Minute {
 		t.Fatalf("InitialInterval = %v, want 1m", terraformRetryPolicy.InitialInterval)
@@ -842,10 +855,4 @@ func TestTerraformRetryPolicy(t *testing.T) {
 	if !reflect.DeepEqual(terraformRetryPolicy.NonRetryableErrorTypes, wantNonRetryable) {
 		t.Fatalf("NonRetryableErrorTypes = %v, want %v", terraformRetryPolicy.NonRetryableErrorTypes, wantNonRetryable)
 	}
-}
-
-func mockRunTerraformNoop(t *testing.T, env *testsuite.TestWorkflowEnvironment) {
-	t.Helper()
-
-	env.OnActivity(traits.RunTerraformActivityName, mock.Anything, mock.Anything).Return(nil)
 }
