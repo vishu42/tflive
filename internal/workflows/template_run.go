@@ -13,15 +13,15 @@ import (
 var errTemplateRunCanceled = errors.New("template run canceled")
 
 // defaultRunRetryPolicy is the retry policy applied to activities in the
-// template-run workflow when no activity-specific override is set. It caps
-// retries at 5 attempts with a 30-second initial interval and exponential
-// backoff. Transient infrastructure errors (network timeouts, temporary
-// failures) are retried; permanent application errors are not.
+// template-run workflow when no activity-specific override is set.
+// MaximumAttempts is temporarily pinned to 1 (no automatic retries) — in
+// Temporal, 0 means unlimited attempts, not zero retries, so 1 is the value
+// that disables retries.
 var defaultRunRetryPolicy = &temporal.RetryPolicy{
 	InitialInterval:    30 * time.Second,
 	BackoffCoefficient: 2.0,
 	MaximumInterval:    5 * time.Minute,
-	MaximumAttempts:    5,
+	MaximumAttempts:    1,
 	NonRetryableErrorTypes: []string{
 		"InvalidConfig",
 		"UnsupportedCommand",
@@ -309,14 +309,14 @@ func (run *templateRunWorkflow) complete() error {
 }
 
 // terraformRetryPolicy is applied to long-running Terraform commands (plan,
-// apply) that can legitimately take many minutes. It allows more retries with
-// longer intervals than the default policy to accommodate transient cloud API
-// errors and rate limits.
+// apply). MaximumAttempts is temporarily pinned to 1 (no automatic retries) —
+// in Temporal, 0 means unlimited attempts, not zero retries, so 1 is the
+// value that disables retries.
 var terraformRetryPolicy = &temporal.RetryPolicy{
 	InitialInterval:    time.Minute,
 	BackoffCoefficient: 2.0,
 	MaximumInterval:    10 * time.Minute,
-	MaximumAttempts:    3,
+	MaximumAttempts:    1,
 	NonRetryableErrorTypes: []string{
 		"InvalidConfig",
 		"UnsupportedCommand",
