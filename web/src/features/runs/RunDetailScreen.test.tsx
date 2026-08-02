@@ -241,7 +241,7 @@ describe("RunDetailScreen", () => {
   it("enables Cancel for a non-terminal run and calls the cancellation endpoint, gated by canOperate", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
-    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "planned" }));
+    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "plan_finished" }));
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.endsWith("/logs")) {
@@ -269,7 +269,7 @@ describe("RunDetailScreen", () => {
   it("disables Cancel with a reason when canOperate is denied", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, { ...allAllowed, canOperate: false });
-    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "planned" }));
+    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "plan_finished" }));
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([]));
 
     renderScreen(queryClient);

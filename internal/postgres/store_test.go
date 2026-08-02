@@ -1956,7 +1956,7 @@ func TestRecordTemplateRunStatusUpdatesTenantScopedRun(t *testing.T) {
 		TenantID:        traits.TenantID("tenant_123"),
 		StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		Operation:       traits.OperationPlan,
-		Status:          traits.TemplateRunPlanned,
+		Status:          traits.TemplateRunPlanStarted,
 	})
 	if err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
@@ -1966,8 +1966,8 @@ func TestRecordTemplateRunStatusUpdatesTenantScopedRun(t *testing.T) {
 	if err := pool.QueryRow(ctx, "select status from template_runs where id = $1", "run_123").Scan(&status); err != nil {
 		t.Fatalf("read updated run status: %v", err)
 	}
-	if status != traits.TemplateRunPlanned {
-		t.Fatalf("status = %q, want %q", status, traits.TemplateRunPlanned)
+	if status != traits.TemplateRunPlanStarted {
+		t.Fatalf("status = %q, want %q", status, traits.TemplateRunPlanStarted)
 	}
 
 	if err := pool.QueryRow(ctx, "select status from template_runs where id = $1", "run_456").Scan(&status); err != nil {
@@ -2036,7 +2036,7 @@ func TestRecordTemplateRunStatusPersistsFailureSummary(t *testing.T) {
 		Operation:       traits.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "workspace",
-		Status:          traits.TemplateRunInit,
+		Status:          traits.TemplateRunInitFinished,
 		TriggerActor:    requesterSubject,
 	})
 
@@ -2190,7 +2190,7 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 		TenantID:        traits.TenantID("tenant_123"),
 		StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		Operation:       traits.OperationApply,
-		Status:          traits.TemplateRunApplied,
+		Status:          traits.TemplateRunApplyFinished,
 	})
 	if err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
@@ -2249,7 +2249,7 @@ func TestRecordTemplateRunStatusReturnsNotFoundForOtherTenant(t *testing.T) {
 		TenantID:        traits.TenantID("tenant_456"),
 		StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		Operation:       traits.OperationPlan,
-		Status:          traits.TemplateRunPlanned,
+		Status:          traits.TemplateRunPlanStarted,
 	})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("error = %v, want ErrNotFound", err)
@@ -2549,7 +2549,7 @@ func TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroyed(t *testing
 		TenantID:        traits.TenantID("tenant_destroy_2"),
 		StackTemplateID: traits.StackTemplateID("st_destroy_2"),
 		Operation:       traits.OperationDestroy,
-		Status:          traits.TemplateRunDestroyed,
+		Status:          traits.TemplateRunDestroyFinished,
 	})
 	if err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
@@ -2591,7 +2591,7 @@ func TestRecordsStackTemplateDestroyInterrupted(t *testing.T) {
 		{
 			name:      "successful destroy",
 			operation: traits.OperationDestroy,
-			status:    traits.TemplateRunDestroyed,
+			status:    traits.TemplateRunDestroyFinished,
 			want:      false,
 		},
 		{
@@ -2658,7 +2658,7 @@ func TestRecordTemplateRunStatusReconcilesInterruptedDestroyLifecycle(t *testing
 		{
 			name:             "late failure after destroy completed",
 			initialLifecycle: traits.StackTemplateDestroyed,
-			initialStatus:    traits.TemplateRunDestroyed,
+			initialStatus:    traits.TemplateRunDestroyFinished,
 			terminalStatus:   traits.TemplateRunFailed,
 			wantLifecycle:    traits.StackTemplateDestroyed,
 		},

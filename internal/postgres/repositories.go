@@ -1541,7 +1541,7 @@ type stackTemplateLifecycleWriter interface {
 }
 
 func recordsStackTemplateLastApplied(input traits.TemplateRunStatusActivityInput) bool {
-	return input.Operation == traits.OperationApply && input.Status == traits.TemplateRunApplied
+	return input.Operation == traits.OperationApply && input.Status == traits.TemplateRunApplyFinished
 }
 
 func recordsStackTemplateDestroying(input traits.TemplateRunStatusActivityInput) bool {
@@ -1549,7 +1549,7 @@ func recordsStackTemplateDestroying(input traits.TemplateRunStatusActivityInput)
 }
 
 func recordsStackTemplateDestroyed(input traits.TemplateRunStatusActivityInput) bool {
-	return input.Operation == traits.OperationDestroy && input.Status == traits.TemplateRunDestroyed
+	return input.Operation == traits.OperationDestroy && input.Status == traits.TemplateRunDestroyFinished
 }
 
 func recordsStackTemplateDestroyInterrupted(input traits.TemplateRunStatusActivityInput) bool {

@@ -147,13 +147,7 @@ func (run *templateRunWorkflow) prepareWorkspace() error {
 	if err := run.runTerraform(traits.TerraformCommandInit); err != nil {
 		return err
 	}
-	if err := run.recordStatus(traits.TemplateRunInit); err != nil {
-		return err
-	}
-	if err := run.runTerraform(traits.TerraformCommandSelectWorkspace); err != nil {
-		return err
-	}
-	return run.recordStatus(traits.TemplateRunWorkspaceSelected)
+	return run.runTerraform(traits.TerraformCommandSelectWorkspace)
 }
 
 // prepareLocalWorkspace schedules the worker-side activity that creates the
@@ -201,11 +195,9 @@ func (run *templateRunWorkflow) fetchSource() error {
 	return nil
 }
 
+// planOnly stops after planning; unlike apply, it never waits for approval.
 func (run *templateRunWorkflow) planOnly() error {
 	if err := run.runTerraform(traits.TerraformCommandPlan); err != nil {
-		return err
-	}
-	if err := run.recordStatus(traits.TemplateRunPlanned); err != nil {
 		return err
 	}
 	return run.complete()
@@ -231,9 +223,6 @@ func (run *templateRunWorkflow) apply() error {
 	if err := run.runTerraform(traits.TerraformCommandApply); err != nil {
 		return err
 	}
-	if err := run.recordStatus(traits.TemplateRunApplied); err != nil {
-		return err
-	}
 	return run.complete()
 }
 
@@ -253,13 +242,7 @@ func (run *templateRunWorkflow) destroy() error {
 	if err := run.recordStatus(traits.TemplateRunApproved); err != nil {
 		return err
 	}
-	if err := run.recordStatus(traits.TemplateRunDestroyStarted); err != nil {
-		return err
-	}
 	if err := run.runTerraform(traits.TerraformCommandDestroy); err != nil {
-		return err
-	}
-	if err := run.recordStatus(traits.TemplateRunDestroyed); err != nil {
 		return err
 	}
 	return run.complete()
@@ -323,7 +306,33 @@ var terraformRetryPolicy = &temporal.RetryPolicy{
 	},
 }
 
+// terraformCommandStatuses is the before/after status pair recorded around a
+// Terraform command. Not every command has a before status — select_workspace
+// has no meaningful "about to" signal — so before is left zero-valued there.
+type terraformCommandStatuses struct {
+	before traits.TemplateRunStatus
+	after  traits.TemplateRunStatus
+}
+
+var terraformCommandStatusTable = map[traits.TerraformCommandType]terraformCommandStatuses{
+	traits.TerraformCommandInit:            {before: traits.TemplateRunInitStarted, after: traits.TemplateRunInitFinished},
+	traits.TerraformCommandSelectWorkspace: {after: traits.TemplateRunWorkspaceSelected},
+	traits.TerraformCommandPlan:            {before: traits.TemplateRunPlanStarted, after: traits.TemplateRunPlanFinished},
+	traits.TerraformCommandApply:           {before: traits.TemplateRunApplyStarted, after: traits.TemplateRunApplyFinished},
+	traits.TerraformCommandDestroy:         {before: traits.TemplateRunDestroyStarted, after: traits.TemplateRunDestroyFinished},
+}
+
+// runTerraform executes one Terraform command, recording the before/after
+// status from terraformCommandStatusTable around it. Callers only record
+// statuses that aren't tied to a specific command (e.g. approval statuses).
 func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType) error {
+	statuses := terraformCommandStatusTable[command]
+	if statuses.before != "" {
+		if err := run.recordStatus(statuses.before); err != nil {
+			return err
+		}
+	}
+
 	input := traits.RunTerraformActivityInput{
 		RunID:           run.input.RunID,
 		TenantID:        run.input.TenantID,
@@ -373,7 +382,14 @@ func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType
 		}
 		return errTemplateRunCanceled
 	}
-	return activityErr
+	if activityErr != nil {
+		return activityErr
+	}
+
+	if statuses.after != "" {
+		return run.recordStatus(statuses.after)
+	}
+	return nil
 }
 
 func (run *templateRunWorkflow) recordStatus(status traits.TemplateRunStatus) error {

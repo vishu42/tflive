@@ -24,7 +24,7 @@ func TestRecordTemplateRunStatusDelegatesToRecorder(t *testing.T) {
 		TenantID:        traits.TenantID("tenant_123"),
 		StackTemplateID: traits.StackTemplateID("stack_template_123"),
 		Operation:       traits.OperationApply,
-		Status:          traits.TemplateRunPlanned,
+		Status:          traits.TemplateRunPlanFinished,
 	}
 
 	if err := activities.RecordTemplateRunStatus(context.Background(), input); err != nil {

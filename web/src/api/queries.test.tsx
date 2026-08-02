@@ -125,17 +125,17 @@ describe("polling-aware query hooks", () => {
 
   it("fetches a template run's status regardless of poll option", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
-      Promise.resolve(jsonResponse({ id: "run_1", status: "planned" }))
+      Promise.resolve(jsonResponse({ id: "run_1", status: "plan_finished" }))
     );
     const { result: polled } = renderHook(() => useTemplateRunQuery("tenant_123", "run_1", { poll: true }), {
       wrapper: wrapper(testQueryClient())
     });
-    await waitFor(() => expect(polled.current.data).toEqual({ id: "run_1", status: "planned" }));
+    await waitFor(() => expect(polled.current.data).toEqual({ id: "run_1", status: "plan_finished" }));
 
     const { result: unpolled } = renderHook(() => useTemplateRunQuery("tenant_123", "run_1", { poll: false }), {
       wrapper: wrapper(testQueryClient())
     });
-    await waitFor(() => expect(unpolled.current.data).toEqual({ id: "run_1", status: "planned" }));
+    await waitFor(() => expect(unpolled.current.data).toEqual({ id: "run_1", status: "plan_finished" }));
   });
 
   describe("refetch interval selectors", () => {
@@ -146,9 +146,9 @@ describe("polling-aware query hooks", () => {
     });
 
     it("only polls a run when told to, and stops on terminal status", () => {
-      expect(runRefetchInterval("planned", true)).toBe(1500);
+      expect(runRefetchInterval("plan_finished", true)).toBe(1500);
       expect(runRefetchInterval("completed", true)).toBe(false);
-      expect(runRefetchInterval("planned", false)).toBe(false);
+      expect(runRefetchInterval("plan_finished", false)).toBe(false);
     });
   });
 
@@ -157,7 +157,7 @@ describe("polling-aware query hooks", () => {
     const queryClient = testQueryClient();
     const { result, rerender } = renderHook(
       ({ statusTag }: { statusTag: string }) => useTemplateRunLogsQuery("tenant_123", "run_1", statusTag),
-      { wrapper: wrapper(queryClient), initialProps: { statusTag: "planned" } }
+      { wrapper: wrapper(queryClient), initialProps: { statusTag: "plan_finished" } }
     );
     await waitFor(() => expect(result.current.data).toEqual([{ phase: "plan" }]));
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -178,7 +178,7 @@ describe("polling-aware query hooks", () => {
     const queryClient = testQueryClient();
     const { result, rerender } = renderHook(
       ({ statusTag }: { statusTag: string }) => useTemplateRunLogsQuery("tenant_123", "run_1", statusTag),
-      { wrapper: wrapper(queryClient), initialProps: { statusTag: "planned" } }
+      { wrapper: wrapper(queryClient), initialProps: { statusTag: "plan_finished" } }
     );
     await waitFor(() => expect(result.current.data).toEqual([{ phase: "plan" }]));
 
@@ -205,7 +205,7 @@ describe("polling-aware query hooks", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("plan output\n", { status: 200, headers: { "content-type": "text/plain" } })
     );
-    const { result } = renderHook(() => useTemplateRunLogQuery("tenant_123", "run_1", "plan", "planned"), {
+    const { result } = renderHook(() => useTemplateRunLogQuery("tenant_123", "run_1", "plan", "plan_finished"), {
       wrapper: wrapper(testQueryClient())
     });
 
