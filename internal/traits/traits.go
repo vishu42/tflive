@@ -139,21 +139,31 @@ const (
 	TemplateRunLocked            TemplateRunStatus = "locked"
 	TemplateRunWorkspacePrepared TemplateRunStatus = "workspace_prepared"
 	TemplateRunSourceFetched     TemplateRunStatus = "source_fetched"
-	TemplateRunInit              TemplateRunStatus = "init"
 	TemplateRunWorkspaceSelected TemplateRunStatus = "workspace_selected"
-	TemplateRunPlanned           TemplateRunStatus = "planned"
 	TemplateRunWaitingApproval   TemplateRunStatus = "waiting_approval"
 	TemplateRunApproved          TemplateRunStatus = "approved"
-	TemplateRunApplyStarted      TemplateRunStatus = "apply_started"
-	TemplateRunApplied           TemplateRunStatus = "applied"
-	TemplateRunDestroyStarted    TemplateRunStatus = "destroy_started"
-	TemplateRunDestroyed         TemplateRunStatus = "destroyed"
 	TemplateRunCancelRequested   TemplateRunStatus = "cancel_requested"
 	TemplateRunCanceling         TemplateRunStatus = "canceling"
 	TemplateRunCanceled          TemplateRunStatus = "canceled"
 	TemplateRunLockReleased      TemplateRunStatus = "lock_released"
 	TemplateRunCompleted         TemplateRunStatus = "completed"
 	TemplateRunFailed            TemplateRunStatus = "failed"
+
+	// init statues
+	TemplateRunInitStarted  TemplateRunStatus = "init_started"
+	TemplateRunInitFinished TemplateRunStatus = "init_finished"
+
+	// plan statues
+	TemplateRunPlanStarted  TemplateRunStatus = "plan_started"
+	TemplateRunPlanFinished TemplateRunStatus = "plan_finished"
+
+	// apply statues
+	TemplateRunApplyStarted  TemplateRunStatus = "apply_started"
+	TemplateRunApplyFinished TemplateRunStatus = "apply_finished"
+
+	// destroy statues
+	TemplateRunDestroyStarted  TemplateRunStatus = "destroy_started"
+	TemplateRunDestroyFinished TemplateRunStatus = "destroy_finished"
 )
 
 // Valid reports whether the status is one of the supported run states.
@@ -163,21 +173,23 @@ func (status TemplateRunStatus) Valid() bool {
 		TemplateRunLocked,
 		TemplateRunWorkspacePrepared,
 		TemplateRunSourceFetched,
-		TemplateRunInit,
 		TemplateRunWorkspaceSelected,
-		TemplateRunPlanned,
 		TemplateRunWaitingApproval,
 		TemplateRunApproved,
-		TemplateRunApplyStarted,
-		TemplateRunApplied,
-		TemplateRunDestroyStarted,
-		TemplateRunDestroyed,
 		TemplateRunCancelRequested,
 		TemplateRunCanceling,
 		TemplateRunCanceled,
 		TemplateRunLockReleased,
 		TemplateRunCompleted,
-		TemplateRunFailed:
+		TemplateRunFailed,
+		TemplateRunInitStarted,
+		TemplateRunInitFinished,
+		TemplateRunPlanStarted,
+		TemplateRunPlanFinished,
+		TemplateRunApplyStarted,
+		TemplateRunApplyFinished,
+		TemplateRunDestroyStarted,
+		TemplateRunDestroyFinished:
 		return true
 	default:
 		return false

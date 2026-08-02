@@ -18,21 +18,23 @@ export type TemplateRunStatus =
   | "locked"
   | "workspace_prepared"
   | "source_fetched"
-  | "init"
   | "workspace_selected"
-  | "planned"
   | "waiting_approval"
   | "approved"
-  | "apply_started"
-  | "applied"
-  | "destroy_started"
-  | "destroyed"
   | "cancel_requested"
   | "canceling"
   | "canceled"
   | "lock_released"
   | "completed"
-  | "failed";
+  | "failed"
+  | "init_started"
+  | "init_finished"
+  | "plan_started"
+  | "plan_finished"
+  | "apply_started"
+  | "apply_finished"
+  | "destroy_started"
+  | "destroy_finished";
 
 export type Operation = "plan" | "apply" | "destroy";
 

@@ -212,12 +212,14 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 		string(traits.TemplateRunWorkspacePrepared),
 		"fetch_source",
 		string(traits.TemplateRunSourceFetched),
+		string(traits.TemplateRunInitStarted),
 		"terraform:" + string(traits.TerraformCommandInit),
-		string(traits.TemplateRunInit),
+		string(traits.TemplateRunInitFinished),
 		"terraform:" + string(traits.TerraformCommandSelectWorkspace),
 		string(traits.TemplateRunWorkspaceSelected),
+		string(traits.TemplateRunPlanStarted),
 		"terraform:" + string(traits.TerraformCommandPlan),
-		string(traits.TemplateRunPlanned),
+		string(traits.TemplateRunPlanFinished),
 		string(traits.TemplateRunLockReleased),
 		string(traits.TemplateRunCompleted),
 	}
@@ -254,10 +256,14 @@ func TestTemplateRunWorkflowWaitsForApplyApproval(t *testing.T) {
 		traits.TemplateRunLocked,
 		traits.TemplateRunWorkspacePrepared,
 		traits.TemplateRunSourceFetched,
-		traits.TemplateRunInit,
+		traits.TemplateRunInitStarted,
+		traits.TemplateRunInitFinished,
 		traits.TemplateRunWorkspaceSelected,
+		traits.TemplateRunPlanStarted,
+		traits.TemplateRunPlanFinished,
 		traits.TemplateRunWaitingApproval,
-		traits.TemplateRunApplied,
+		traits.TemplateRunApplyStarted,
+		traits.TemplateRunApplyFinished,
 		traits.TemplateRunLockReleased,
 		traits.TemplateRunCompleted,
 	}
@@ -304,8 +310,11 @@ func TestTemplateRunWorkflowCancelsApplyWhileWaitingApproval(t *testing.T) {
 		traits.TemplateRunLocked,
 		traits.TemplateRunWorkspacePrepared,
 		traits.TemplateRunSourceFetched,
-		traits.TemplateRunInit,
+		traits.TemplateRunInitStarted,
+		traits.TemplateRunInitFinished,
 		traits.TemplateRunWorkspaceSelected,
+		traits.TemplateRunPlanStarted,
+		traits.TemplateRunPlanFinished,
 		traits.TemplateRunWaitingApproval,
 		traits.TemplateRunCanceled,
 	}
@@ -351,7 +360,7 @@ func TestTemplateRunWorkflowCancelsPlanWhenSignalArrivesDuringTerraform(t *testi
 		t.Fatalf("final status = %#v, want canceled", statuses)
 	}
 	for _, status := range statuses {
-		if status == traits.TemplateRunPlanned || status == traits.TemplateRunCompleted {
+		if status == traits.TemplateRunPlanFinished || status == traits.TemplateRunCompleted {
 			t.Fatalf("statuses = %#v, canceled plan should not become planned or completed", statuses)
 		}
 	}
@@ -393,7 +402,8 @@ func TestTemplateRunWorkflowCancelsDestroyWhileWaitingApproval(t *testing.T) {
 		traits.TemplateRunLocked,
 		traits.TemplateRunWorkspacePrepared,
 		traits.TemplateRunSourceFetched,
-		traits.TemplateRunInit,
+		traits.TemplateRunInitStarted,
+		traits.TemplateRunInitFinished,
 		traits.TemplateRunWorkspaceSelected,
 		traits.TemplateRunWaitingApproval,
 		traits.TemplateRunCanceled,
@@ -438,12 +448,13 @@ func TestTemplateRunWorkflowRecordsDestroyStatuses(t *testing.T) {
 		traits.TemplateRunLocked,
 		traits.TemplateRunWorkspacePrepared,
 		traits.TemplateRunSourceFetched,
-		traits.TemplateRunInit,
+		traits.TemplateRunInitStarted,
+		traits.TemplateRunInitFinished,
 		traits.TemplateRunWorkspaceSelected,
 		traits.TemplateRunWaitingApproval,
 		traits.TemplateRunApproved,
 		traits.TemplateRunDestroyStarted,
-		traits.TemplateRunDestroyed,
+		traits.TemplateRunDestroyFinished,
 		traits.TemplateRunLockReleased,
 		traits.TemplateRunCompleted,
 	}
