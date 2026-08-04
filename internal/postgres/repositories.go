@@ -2,9 +2,7 @@ package postgres
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -258,6 +256,10 @@ func (store *Store) RecordTemplateRegistrationStatus(ctx context.Context, input 
 	return nil
 }
 
+// UpsertTemplateRevisionWithVariables records a template revision, deduplicating against
+// an existing revision with the same identity. The source template is resolved or created
+// first so the revision can reference it; variables are only written when this call actually
+// inserts a new revision, since a reused revision already has its variables recorded.
 func (store *Store) UpsertTemplateRevisionWithVariables(ctx context.Context, templateRevision traits.TemplateRevision, variables []traits.TemplateVariable) (traits.TemplateRevision, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
@@ -270,6 +272,7 @@ func (store *Store) UpsertTemplateRevisionWithVariables(ctx context.Context, tem
 		return traits.TemplateRevision{}, fmt.Errorf("marshal template revision tags: %w", err)
 	}
 	if tagsJSON == nil {
+		// Store an empty JSON array rather than a null tags column.
 		tagsJSON = []byte("[]")
 	}
 
@@ -287,6 +290,8 @@ func (store *Store) UpsertTemplateRevisionWithVariables(ctx context.Context, tem
 		return traits.TemplateRevision{}, err
 	}
 	if !insertedNew {
+		// Revision already existed under this identity, so its variables were already
+		// recorded on the original insert — skip re-inserting them.
 		if err := tx.Commit(ctx); err != nil {
 			return traits.TemplateRevision{}, fmt.Errorf("commit reused template revision: %w", err)
 		}
@@ -1757,9 +1762,12 @@ func duplicateConstraint(err error, constraint string) bool {
 }
 
 func upsertSourceTemplate(ctx context.Context, tx pgx.Tx, templateRevision traits.TemplateRevision) (traits.SourceTemplateID, error) {
+	// Identity is minted by the caller (see the deterministic hash in the template sync
+	// activity); the store persists it rather than inventing one, so a missing ID is a
+	// programming error instead of a silently empty primary key.
 	sourceTemplateID := templateRevision.SourceTemplateID
 	if sourceTemplateID == "" {
-		sourceTemplateID = deterministicSourceTemplateID(templateRevision)
+		return "", errors.New("upsert source template: source template ID is required")
 	}
 
 	var persistedID traits.SourceTemplateID
@@ -1811,17 +1819,6 @@ func recordLatestTemplateRevision(ctx context.Context, tx pgx.Tx, templateRevisi
 	}
 
 	return nil
-}
-
-func deterministicSourceTemplateID(templateRevision traits.TemplateRevision) traits.SourceTemplateID {
-	sum := sha256.Sum256([]byte(strings.Join([]string{
-		string(templateRevision.TenantID),
-		templateRevision.RepoOwner,
-		templateRevision.RepoName,
-		templateRevision.RootPath,
-		templateRevision.SourceRef,
-	}, "\x00")))
-	return traits.SourceTemplateID("source_template_" + hex.EncodeToString(sum[:16]))
 }
 
 func defaultJSON(input json.RawMessage) json.RawMessage {
