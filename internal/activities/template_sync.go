@@ -83,6 +83,7 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 		return invalidTemplateSyncOutput("clone public repository: %v", err), nil
 	}
 
+	// resolve SHA of head
 	resolvedSHA, err := activities.git.ResolveHead(ctx, repoPath)
 	if err != nil {
 		return invalidTemplateSyncOutput("resolve repository head: %v", err), nil
@@ -379,6 +380,7 @@ func sensitiveVariableNames(variables []traits.TemplateVariable) []string {
 	return names
 }
 
+// template_4b93175b6dcb1641073fcd42475912a3
 func deterministicTemplateRevisionID(input traits.TemplateSyncActivityInput, rootPath string, resolvedSHA string) traits.TemplateRevisionID {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
 		string(input.TenantID),
@@ -390,6 +392,11 @@ func deterministicTemplateRevisionID(input traits.TemplateSyncActivityInput, roo
 	return traits.TemplateRevisionID("template_" + hex.EncodeToString(sum[:16]))
 }
 
+// deterministicSourceTemplateID derives a stable SourceTemplateID from the tenant, repo,
+// root path, and source ref, so re-syncing the same source always resolves to the same ID
+// instead of minting a duplicate row.
+// e.g. tenant_123/acme/templates/templates/web/main -> source_template_106bb033369f88d7820a14c2ec059296
+// source_template_327520eeba5223257d8fb1d2d2a39f6d
 func deterministicSourceTemplateID(input traits.TemplateSyncActivityInput, rootPath string) traits.SourceTemplateID {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
 		string(input.TenantID),
