@@ -1428,7 +1428,13 @@ func (store *Store) ReconcileTemplateRunCancellation(ctx context.Context, tenant
 }
 
 func (store *Store) AppendAuditEvent(ctx context.Context, event traits.SecurityAuditEvent) error {
-	_, err := store.pool.Exec(ctx,
+	return appendAuditEvent(ctx, store.pool, event)
+}
+
+// appendAuditEvent holds the insert so both the standalone method and the
+// transaction-scoped repository share one copy of the SQL.
+func appendAuditEvent(ctx context.Context, exec pgxExecutor, event traits.SecurityAuditEvent) error {
+	_, err := exec.Exec(ctx,
 		`INSERT INTO security_audit_log
 			(actor_subject, action, target_user, tenant_id, stack_id, old_role, new_role, outcome, correlation_id)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,

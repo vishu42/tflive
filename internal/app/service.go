@@ -16,6 +16,7 @@ import (
 	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/api/serviceerror"
 )
@@ -63,6 +64,20 @@ func canCreateStack(principal authn.Principal) bool {
 type StackPageCursor struct {
 	CreatedAt time.Time
 	ID        traits.StackID
+}
+
+// TxRepo is the transaction-scoped repository surface handed to a unit of
+// work. It is deliberately tiny and grows only when a new dual-write point
+// appears; every other repository method keeps opening its own transaction.
+type TxRepo interface {
+	CreateStack(ctx context.Context, stack traits.Stack) error
+	AppendAuditEvent(ctx context.Context, event traits.SecurityAuditEvent) error
+}
+
+// UnitOfWork commits a domain write and a queued intent atomically. This is
+// what makes the queue an outbox rather than a second system to dual-write to.
+type UnitOfWork interface {
+	InTx(ctx context.Context, fn func(TxRepo, queue.Enqueuer) error) error
 }
 
 type StackRepository interface {
