@@ -2781,3 +2781,143 @@ func TestAppendAuditEventEmptyOptionalFields(t *testing.T) {
 		t.Fatalf("correlation_id = %q, want empty", correlationID)
 	}
 }
+
+func TestWorkQueueMigrationDefinesCoalescingQueue(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+
+	columns := map[string]string{}
+	rows, err := pool.Query(ctx, `
+		select column_name, data_type
+		from information_schema.columns
+		where table_name = 'work_queue' and table_schema = current_schema()
+	`)
+	if err != nil {
+		t.Fatalf("query work_queue columns: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, dataType string
+		if err := rows.Scan(&name, &dataType); err != nil {
+			t.Fatalf("scan column: %v", err)
+		}
+		columns[name] = dataType
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate columns: %v", err)
+	}
+
+	for _, name := range []string{
+		"id", "kind", "ordering_key", "payload", "revision", "actor_subject",
+		"tenant_id", "available_at", "claimed_until", "attempts", "last_error",
+		"created_at", "processed_at",
+	} {
+		if _, ok := columns[name]; !ok {
+			t.Fatalf("work_queue is missing column %q", name)
+		}
+	}
+	if columns["payload"] != "jsonb" {
+		t.Fatalf("payload data_type = %q, want jsonb", columns["payload"])
+	}
+	if columns["revision"] != "bigint" {
+		t.Fatalf("revision data_type = %q, want bigint", columns["revision"])
+	}
+
+	var indexDef string
+	if err := pool.QueryRow(ctx, `
+		select indexdef from pg_indexes
+		where schemaname = current_schema() and indexname = 'work_queue_pending_key_idx'
+	`).Scan(&indexDef); err != nil {
+		t.Fatalf("query work_queue_pending_key_idx: %v", err)
+	}
+	if !strings.Contains(indexDef, "UNIQUE") {
+		t.Fatalf("work_queue_pending_key_idx must be unique, got %q", indexDef)
+	}
+	if !strings.Contains(indexDef, "processed_at IS NULL") {
+		t.Fatalf("work_queue_pending_key_idx must be partial on processed_at is null, got %q", indexDef)
+	}
+}
+
+func TestWorkQueuePendingKeyIndexBlocksDuplicatePendingRows(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+
+	insert := `insert into work_queue (kind, ordering_key, payload, actor_subject, tenant_id) values ($1, $2, '{}'::jsonb, '', '')`
+	if _, err := pool.Exec(ctx, insert, "k", "stack:a/user:x"); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	if _, err := pool.Exec(ctx, insert, "k", "stack:a/user:x"); err == nil {
+		t.Fatal("second pending insert for the same key was accepted")
+	}
+
+	if _, err := pool.Exec(ctx, `update work_queue set processed_at = now() where ordering_key = $1`, "stack:a/user:x"); err != nil {
+		t.Fatalf("complete first row: %v", err)
+	}
+	if _, err := pool.Exec(ctx, insert, "k", "stack:a/user:x"); err != nil {
+		t.Fatalf("insert after completion must succeed, got: %v", err)
+	}
+}
+
+func TestWorkQueueMigrationBackfillsPendingAuthorizationOutbox(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+
+	if _, err := pool.Exec(ctx, `
+		insert into authorization_outbox (id, operation, subject, stack, role)
+		values ('grant/user:x/stack:a/owner', 'grant', 'user:x', 'stack:a', 'owner'),
+		       ('revoke/user:y/stack:a/viewer', 'revoke', 'user:y', 'stack:a', 'viewer'),
+		       ('done/user:z/stack:a/viewer', 'grant', 'user:z', 'stack:a', 'viewer')
+	`); err != nil {
+		t.Fatalf("seed authorization_outbox: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `update authorization_outbox set processed_at = now() where id = 'done/user:z/stack:a/viewer'`); err != nil {
+		t.Fatalf("mark processed: %v", err)
+	}
+
+	// Replay 0012 against the seeded outbox: drop what it created and forget
+	// that it ran, so Migrate re-applies the file including its backfill.
+	if _, err := pool.Exec(ctx, `drop table work_queue`); err != nil {
+		t.Fatalf("drop work_queue: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `delete from schema_migrations where version = '0012_work_queue'`); err != nil {
+		t.Fatalf("reset migration version: %v", err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("re-run migration: %v", err)
+	}
+
+	type backfilled struct {
+		key  string
+		role string
+	}
+	rows, err := pool.Query(ctx, `select ordering_key, payload->>'role' from work_queue order by ordering_key`)
+	if err != nil {
+		t.Fatalf("query backfilled rows: %v", err)
+	}
+	defer rows.Close()
+	var got []backfilled
+	for rows.Next() {
+		var row backfilled
+		if err := rows.Scan(&row.key, &row.role); err != nil {
+			t.Fatalf("scan backfilled row: %v", err)
+		}
+		got = append(got, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate backfilled rows: %v", err)
+	}
+
+	want := []backfilled{
+		{key: "stack:a/user:x", role: "owner"},
+		{key: "stack:a/user:y", role: ""},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("backfilled rows = %+v, want %+v", got, want)
+	}
+}
