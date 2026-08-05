@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/api/serviceerror"
 )
@@ -88,6 +90,7 @@ func TestCreateStackDerivesSlugAndPersistsStack(t *testing.T) {
 	stacks := &recordingStackRepository{}
 	service := NewService(Service{
 		Stacks:     stacks,
+		Work:       newRecordingWork(stacks),
 		Authorizer: &recordingAuthorizer{},
 		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
 		Clock:      fixedClock{now: now},
@@ -135,6 +138,7 @@ func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
 	authorizer := &recordingAuthorizer{}
 	service := NewService(Service{
 		Stacks:     stacks,
+		Work:       newRecordingWork(stacks),
 		Authorizer: authorizer,
 		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
 		Clock:      fixedClock{now: time.Now()},
@@ -158,6 +162,7 @@ func TestCreateStackRejectsInvalidTagKey(t *testing.T) {
 
 	service := NewService(Service{
 		Stacks:   &recordingStackRepository{},
+		Work:     newRecordingWork(&recordingStackRepository{}),
 		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
 	})
 
@@ -178,6 +183,7 @@ func TestCreateStackRejectsEmptyDefaultCredentialID(t *testing.T) {
 
 	service := NewService(Service{
 		Stacks:   &recordingStackRepository{},
+		Work:     newRecordingWork(&recordingStackRepository{}),
 		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
 	})
 
@@ -394,6 +400,7 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	service := NewService(Service{
 		Authorizer:               &permissionAuthorizer{allowed: true},
 		Stacks:                   stacks,
+		Work:                     newRecordingWork(stacks),
 		TemplateRevisionMetadata: templates,
 		TemplateRevisions:        templates,
 		StackTemplateInstaller:   installer,
@@ -1808,6 +1815,7 @@ func TestCreateStackAuditsOwnerGrant(t *testing.T) {
 	audit := &recordingAuditRepository{}
 	service := NewService(Service{
 		Stacks:     &recordingStackRepository{},
+		Work:       newRecordingWork(&recordingStackRepository{}),
 		Authorizer: &recordingAuthorizer{},
 		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
 		Clock:      fixedClock{now: now},
@@ -1856,6 +1864,7 @@ func TestCreateStackAuditWriteFailureDoesNotBlockMutation(t *testing.T) {
 	ctx := authenticatedContext()
 	service := NewService(Service{
 		Stacks:     &recordingStackRepository{},
+		Work:       newRecordingWork(&recordingStackRepository{}),
 		Authorizer: &recordingAuthorizer{},
 		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
 		Clock:      fixedClock{now: time.Now()},
@@ -1881,6 +1890,7 @@ func TestCreateStackWithNilAuditRepositoryDoesNotPanic(t *testing.T) {
 	ctx := authenticatedContext()
 	service := NewService(Service{
 		Stacks:     &recordingStackRepository{},
+		Work:       newRecordingWork(&recordingStackRepository{}),
 		Authorizer: &recordingAuthorizer{},
 		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
 		Clock:      fixedClock{now: time.Now()},
@@ -2362,4 +2372,149 @@ type fixedClock struct {
 
 func (clock fixedClock) Now() time.Time {
 	return clock.now
+}
+
+// recordingUnitOfWork stands in for the Postgres unit of work. It applies
+// writes immediately rather than staging them: rollback semantics are proven
+// against a real database in internal/postgres/unitofwork_test.go, so here it
+// only needs to record what the service asked for.
+type recordingUnitOfWork struct {
+	stacks   StackRepository
+	audits   []traits.SecurityAuditEvent
+	requests []queue.Request
+	err      error
+}
+
+func newRecordingWork(stacks StackRepository) *recordingUnitOfWork {
+	return &recordingUnitOfWork{stacks: stacks}
+}
+
+func (unit *recordingUnitOfWork) InTx(ctx context.Context, fn func(TxRepo, queue.Enqueuer) error) error {
+	if unit.err != nil {
+		return unit.err
+	}
+	return fn(unit, unit)
+}
+
+func (unit *recordingUnitOfWork) CreateStack(ctx context.Context, stack traits.Stack) error {
+	if unit.stacks == nil {
+		return nil
+	}
+	return unit.stacks.CreateStack(ctx, stack)
+}
+
+func (unit *recordingUnitOfWork) AppendAuditEvent(_ context.Context, event traits.SecurityAuditEvent) error {
+	unit.audits = append(unit.audits, event)
+	return nil
+}
+
+func (unit *recordingUnitOfWork) Enqueue(_ context.Context, requests ...queue.Request) error {
+	unit.requests = append(unit.requests, requests...)
+	return nil
+}
+
+func adminContext() context.Context {
+	return authn.ContextWithPrincipal(context.Background(), authn.Principal{
+		Subject:    "admin_123",
+		RealmRoles: []string{"platform-admin"},
+	})
+}
+
+func TestAssignStackRoleEnqueuesDesiredRoleWithoutCallingOpenFGA(t *testing.T) {
+	t.Parallel()
+
+	authorizer := &recordingAuthorizer{}
+	work := newRecordingWork(nil)
+	service := NewService(Service{Work: work, Authorizer: authorizer, Clock: fixedClock{now: time.Now()}})
+
+	view, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		StackID:  traits.StackID("stack_abc"),
+		UserSub:  "user_456",
+		Role:     "operator",
+	})
+	if err != nil {
+		t.Fatalf("AssignStackRole returned error: %v", err)
+	}
+	if view.Role != "operator" || view.UserSub != "user_456" {
+		t.Fatalf("view = %#v", view)
+	}
+
+	// The delete-then-write pair is gone: no OpenFGA mutation at request time.
+	if authorizer.calls != 0 {
+		t.Fatalf("authorization write calls = %d, want 0", authorizer.calls)
+	}
+	if len(work.requests) != 1 {
+		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
+	}
+
+	var payload authdispatch.GrantPayload
+	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.StackID != "stack_abc" || payload.Subject != "user_456" || payload.Role != "operator" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	if len(work.audits) != 1 || work.audits[0].NewRole != "operator" {
+		t.Fatalf("audits = %#v, want one grant event written in the same transaction", work.audits)
+	}
+}
+
+func TestRevokeStackRoleEnqueuesEmptyRole(t *testing.T) {
+	t.Parallel()
+
+	stack, err := authz.StackFromID("stack_abc")
+	if err != nil {
+		t.Fatalf("StackFromID: %v", err)
+	}
+	subject, err := authz.SubjectFromKeycloakSub("user_456")
+	if err != nil {
+		t.Fatalf("SubjectFromKeycloakSub: %v", err)
+	}
+	existing, err := authz.NewGrant(subject, stack, authz.RoleOperator)
+	if err != nil {
+		t.Fatalf("NewGrant: %v", err)
+	}
+
+	authorizer := &recordingAuthorizer{grants: []authz.Grant{existing}}
+	work := newRecordingWork(nil)
+	service := NewService(Service{Work: work, Authorizer: authorizer, Clock: fixedClock{now: time.Now()}})
+
+	if err := service.RevokeStackRole(adminContext(), RevokeStackRoleCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		StackID:  traits.StackID("stack_abc"),
+		UserSub:  "user_456",
+	}); err != nil {
+		t.Fatalf("RevokeStackRole returned error: %v", err)
+	}
+
+	if len(work.requests) != 1 {
+		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
+	}
+	var payload authdispatch.GrantPayload
+	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.Role != "" {
+		t.Fatalf("payload role = %q, want empty — an empty role means no access", payload.Role)
+	}
+	if len(work.audits) != 1 || work.audits[0].OldRole != "operator" {
+		t.Fatalf("audits = %#v, want one revoke event recording the old role", work.audits)
+	}
+}
+
+func TestAssignStackRoleWithoutUnitOfWorkFails(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{Authorizer: &recordingAuthorizer{}, Clock: fixedClock{now: time.Now()}})
+
+	_, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		StackID:  traits.StackID("stack_abc"),
+		UserSub:  "user_456",
+		Role:     "operator",
+	})
+	if !errors.Is(err, authz.ErrUnavailable) {
+		t.Fatalf("error = %v, want ErrUnavailable", err)
+	}
 }

@@ -232,6 +232,7 @@ type RevokeStackRoleCommand struct {
 // Service owns app use cases and the dependencies wired by cmd packages.
 type Service struct {
 	Authorizer               authz.Authorizer
+	Work                     UnitOfWork
 	AuthorizationOutbox      authdispatch.Outbox
 	Stacks                   StackRepository
 	StackTemplates           StackTemplateRepository
@@ -527,8 +528,12 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 	if service.Authorizer == nil {
 		return traits.Stack{}, fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
 	}
-	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
-	if err != nil {
+	if service.Work == nil {
+		return traits.Stack{}, fmt.Errorf("%w: unit of work not configured", authz.ErrUnavailable)
+	}
+	// Validate the identity now so a malformed subject fails the request rather
+	// than the handler, where it would retry forever.
+	if _, err := authz.SubjectFromKeycloakSub(principal.Subject); err != nil {
 		return traits.Stack{}, fmt.Errorf("create owner subject: %w", err)
 	}
 
@@ -547,37 +552,35 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		CreatedBy:            actor,
 		CreatedAt:            service.Clock.Now(),
 	}
-	authorizedStack, err := authz.StackFromID(string(stack.ID))
-	if errors.Is(err, authz.ErrInvalidInput) {
+	if _, err := authz.StackFromID(string(stack.ID)); errors.Is(err, authz.ErrInvalidInput) {
 		return traits.Stack{}, fmt.Errorf("%w: generated stack ID is invalid", authz.ErrMalformedResponse)
-	}
-	if err != nil {
+	} else if err != nil {
 		return traits.Stack{}, fmt.Errorf("create owner stack: %w", err)
 	}
-	grant, err := authz.NewGrant(subject, authorizedStack, authz.RoleOwner)
+
+	payload, err := json.Marshal(authdispatch.GrantPayload{
+		StackID: string(stack.ID),
+		Subject: principal.Subject,
+		Role:    authz.RoleOwner.String(),
+	})
 	if err != nil {
-		return traits.Stack{}, fmt.Errorf("create owner grant: %w", err)
-	}
-	mutation, err := authz.NewMutation([]authz.Grant{grant}, true)
-	if err != nil {
-		return traits.Stack{}, fmt.Errorf("create owner mutation: %w", err)
+		return traits.Stack{}, fmt.Errorf("encode owner grant payload: %w", err)
 	}
 
-	if repository, ok := service.Stacks.(stackOwnerIntentRepository); ok {
-		err = repository.CreateStackWithOwnerIntent(ctx, stack, grant)
-	} else {
-		err = service.Stacks.CreateStack(ctx, stack)
-	}
-	if err != nil {
-		return traits.Stack{}, fmt.Errorf("create stack: %w", err)
-	}
-	if err := service.Authorizer.WriteRelationships(ctx, mutation); err != nil {
-		return traits.Stack{}, fmt.Errorf("assign stack owner: %w", err)
-	}
-	if service.AuthorizationOutbox != nil {
-		if err := service.AuthorizationOutbox.CompleteAuthorizationRelationship(ctx, authorizationOutboxID("grant", grant)); err != nil {
-			return traits.Stack{}, fmt.Errorf("complete stack owner delivery: %w", err)
+	// The stack row and the owner intent commit together, so a crash can never
+	// leave a stack whose creator has no access and no record of the intent.
+	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
+		if err := repository.CreateStack(ctx, stack); err != nil {
+			return err
 		}
+		return enqueuer.Enqueue(ctx, queue.Request{
+			Kind:         authdispatch.KindReconcileStackGrant,
+			Payload:      payload,
+			ActorSubject: principal.Subject,
+			TenantID:     string(command.TenantID),
+		})
+	}); err != nil {
+		return traits.Stack{}, fmt.Errorf("create stack: %w", err)
 	}
 
 	service.auditError(ctx, traits.SecurityAuditEvent{
@@ -1194,9 +1197,14 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 		return GrantView{}, err
 	}
 
-	role, err := authz.RoleFromDirectRelation(command.Role)
-	if err != nil {
+	// Reject an unknown role here rather than letting the handler retry it
+	// forever against a payload it can never parse.
+	if _, err := authz.RoleFromDirectRelation(command.Role); err != nil {
 		return GrantView{}, fmt.Errorf("%w: %v", ErrInvalidCommand, err)
+	}
+
+	if service.Work == nil {
+		return GrantView{}, fmt.Errorf("%w: unit of work not configured", authz.ErrUnavailable)
 	}
 
 	if service.UserDirectory != nil {
@@ -1244,41 +1252,40 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 		return GrantView{UserSub: command.UserSub, Role: command.Role}, nil
 	}
 
-	grant, err := authz.NewGrant(subject, stack, role)
+	// The old delete-then-write pair is gone. The handler converges to the
+	// desired role, so there is no intermediate window in which a crash leaves
+	// the user holding no role at all.
+	payload, err := json.Marshal(authdispatch.GrantPayload{
+		StackID: string(command.StackID),
+		Subject: command.UserSub,
+		Role:    command.Role,
+	})
 	if err != nil {
-		return GrantView{}, fmt.Errorf("create assign grant: %w", err)
-	}
-	addMutation, err := authz.NewMutation([]authz.Grant{grant}, true)
-	if err != nil {
-		return GrantView{}, fmt.Errorf("create assign mutation: %w", err)
+		return GrantView{}, fmt.Errorf("encode grant payload: %w", err)
 	}
 
-	if currentRole != "" {
-		oldRole, _ := authz.RoleFromDirectRelation(currentRole)
-		oldGrant, _ := authz.NewGrant(subject, stack, oldRole)
-		delMutation, delErr := authz.NewMutation([]authz.Grant{oldGrant}, false)
-		if delErr != nil {
-			return GrantView{}, fmt.Errorf("create remove-old-role mutation: %w", delErr)
+	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
+		if err := repository.AppendAuditEvent(ctx, traits.SecurityAuditEvent{
+			ActorSubject: principal.Subject,
+			Action:       traits.AuditActionGrant,
+			TargetUser:   command.UserSub,
+			TenantID:     command.TenantID,
+			StackID:      command.StackID,
+			OldRole:      currentRole,
+			NewRole:      command.Role,
+			Outcome:      traits.AuditOutcomeSuccess,
+		}); err != nil {
+			return err
 		}
-		if err := service.Authorizer.DeleteRelationships(ctx, delMutation); err != nil {
-			return GrantView{}, fmt.Errorf("remove existing role: %w", err)
-		}
-	}
-
-	if err := service.Authorizer.WriteRelationships(ctx, addMutation); err != nil {
+		return enqueuer.Enqueue(ctx, queue.Request{
+			Kind:         authdispatch.KindReconcileStackGrant,
+			Payload:      payload,
+			ActorSubject: principal.Subject,
+			TenantID:     string(command.TenantID),
+		})
+	}); err != nil {
 		return GrantView{}, fmt.Errorf("assign stack role: %w", err)
 	}
-
-	service.auditError(ctx, traits.SecurityAuditEvent{
-		ActorSubject: principal.Subject,
-		Action:       traits.AuditActionGrant,
-		TargetUser:   command.UserSub,
-		TenantID:     command.TenantID,
-		StackID:      command.StackID,
-		OldRole:      currentRole,
-		NewRole:      command.Role,
-		Outcome:      traits.AuditOutcomeSuccess,
-	})
 
 	return GrantView{UserSub: command.UserSub, Role: command.Role}, nil
 }
@@ -1295,6 +1302,9 @@ func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStack
 	stack, err := authz.StackFromID(string(command.StackID))
 	if err != nil {
 		return fmt.Errorf("revoke role stack: %w", err)
+	}
+	if service.Work == nil {
+		return fmt.Errorf("%w: unit of work not configured", authz.ErrUnavailable)
 	}
 	subject, err := authz.SubjectFromKeycloakSub(command.UserSub)
 	if err != nil {
@@ -1325,26 +1335,38 @@ func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStack
 		return fmt.Errorf("%w: cannot remove the last owner; assign another owner first", ErrLastOwner)
 	}
 
-	role, _ := authz.RoleFromDirectRelation(targetRole)
-	grant, _ := authz.NewGrant(subject, stack, role)
-	mutation, err := authz.NewMutation([]authz.Grant{grant}, true)
+	// An empty desired role means "no access"; the handler removes whatever the
+	// subject currently holds on this stack.
+	payload, err := json.Marshal(authdispatch.GrantPayload{
+		StackID: string(command.StackID),
+		Subject: command.UserSub,
+		Role:    "",
+	})
 	if err != nil {
-		return fmt.Errorf("create revoke mutation: %w", err)
+		return fmt.Errorf("encode revoke payload: %w", err)
 	}
 
-	if err := service.Authorizer.DeleteRelationships(ctx, mutation); err != nil {
+	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
+		if err := repository.AppendAuditEvent(ctx, traits.SecurityAuditEvent{
+			ActorSubject: principal.Subject,
+			Action:       traits.AuditActionRevoke,
+			TargetUser:   command.UserSub,
+			TenantID:     command.TenantID,
+			StackID:      command.StackID,
+			OldRole:      targetRole,
+			Outcome:      traits.AuditOutcomeSuccess,
+		}); err != nil {
+			return err
+		}
+		return enqueuer.Enqueue(ctx, queue.Request{
+			Kind:         authdispatch.KindReconcileStackGrant,
+			Payload:      payload,
+			ActorSubject: principal.Subject,
+			TenantID:     string(command.TenantID),
+		})
+	}); err != nil {
 		return fmt.Errorf("revoke stack role: %w", err)
 	}
-
-	service.auditError(ctx, traits.SecurityAuditEvent{
-		ActorSubject: principal.Subject,
-		Action:       traits.AuditActionRevoke,
-		TargetUser:   command.UserSub,
-		TenantID:     command.TenantID,
-		StackID:      command.StackID,
-		OldRole:      targetRole,
-		Outcome:      traits.AuditOutcomeSuccess,
-	})
 
 	return nil
 }

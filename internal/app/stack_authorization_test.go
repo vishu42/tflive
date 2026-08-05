@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/traits"
@@ -28,26 +30,39 @@ func TestCreateStackRequiresCreatorRole(t *testing.T) {
 	}
 }
 
-func TestCreateStackAssignsConfirmedOwner(t *testing.T) {
+func TestCreateStackEnqueuesOwnerGrantInsteadOfCallingOpenFGA(t *testing.T) {
 	t.Parallel()
 
 	stacks := &authorizationStackRepository{}
 	authorizer := &recordingAuthorizer{}
-	service := NewService(Service{Stacks: stacks, Authorizer: authorizer, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
+	work := newRecordingWork(stacks)
+	service := NewService(Service{Stacks: stacks, Work: work, Authorizer: authorizer, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123", RealmRoles: []string{"stack-creator"}})
 
 	if _, err := service.CreateStack(ctx, CreateStackCommand{TenantID: "tenant_123", Name: "Acme"}); err != nil {
 		t.Fatalf("CreateStack() error = %v", err)
 	}
-	if authorizer.calls != 1 || !authorizer.mutation.Confirm() {
-		t.Fatalf("owner mutation = %#v, calls = %d", authorizer.mutation, authorizer.calls)
+
+	// The owner grant is now a durable intent, not a synchronous OpenFGA write.
+	if authorizer.calls != 0 {
+		t.Fatalf("authorization calls = %d, want 0 — delivery belongs to the controller", authorizer.calls)
 	}
-	grant := authorizer.mutation.Grants()[0]
-	if grant.Subject().String() != "user:user_123" || grant.Stack().String() != "stack:stack_123" || grant.Role() != authz.RoleOwner {
-		t.Fatalf("grant = %#v", grant)
+	if len(work.requests) != 1 {
+		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
 	}
-	if stacks.ownerGrant != grant {
-		t.Fatalf("persisted owner intent = %#v, want %#v", stacks.ownerGrant, grant)
+	if work.requests[0].Kind != authdispatch.KindReconcileStackGrant {
+		t.Fatalf("kind = %q, want %q", work.requests[0].Kind, authdispatch.KindReconcileStackGrant)
+	}
+
+	var payload authdispatch.GrantPayload
+	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.StackID != "stack_123" || payload.Subject != "user_123" || payload.Role != authz.RoleOwner.String() {
+		t.Fatalf("payload = %#v, want owner for user_123 on stack_123", payload)
+	}
+	if stacks.calls != 1 {
+		t.Fatalf("stack calls = %d, want 1", stacks.calls)
 	}
 }
 
@@ -55,32 +70,36 @@ func TestCreateStackAllowsPlatformAdmin(t *testing.T) {
 	t.Parallel()
 
 	stacks := &authorizationStackRepository{}
-	authorizer := &recordingAuthorizer{}
-	service := NewService(Service{Stacks: stacks, Authorizer: authorizer, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
+	work := newRecordingWork(stacks)
+	service := NewService(Service{Stacks: stacks, Work: work, Authorizer: &recordingAuthorizer{}, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123", RealmRoles: []string{"platform-admin"}})
 
 	if _, err := service.CreateStack(ctx, CreateStackCommand{TenantID: "tenant_123", Name: "Acme"}); err != nil {
 		t.Fatalf("CreateStack() error = %v", err)
 	}
-	if stacks.calls != 1 || authorizer.calls != 1 {
-		t.Fatalf("stack calls = %d, authorization calls = %d", stacks.calls, authorizer.calls)
+	if stacks.calls != 1 || len(work.requests) != 1 {
+		t.Fatalf("stack calls = %d, enqueued = %d, want 1 and 1", stacks.calls, len(work.requests))
 	}
 }
 
-func TestCreateStackRetainsStackWhenOwnerAssignmentFails(t *testing.T) {
+// The old "retains stack when owner assignment fails" case no longer exists:
+// there is no separate owner-assignment step at request time. Its replacement
+// is that a failing unit of work persists nothing at all.
+func TestCreateStackPersistsNothingWhenUnitOfWorkFails(t *testing.T) {
 	t.Parallel()
 
 	stacks := &authorizationStackRepository{}
-	authorizer := &recordingAuthorizer{writeErr: authz.ErrUnavailable}
-	service := NewService(Service{Stacks: stacks, Authorizer: authorizer, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
+	work := newRecordingWork(stacks)
+	work.err = authz.ErrUnavailable
+	service := NewService(Service{Stacks: stacks, Work: work, Authorizer: &recordingAuthorizer{}, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123", RealmRoles: []string{"stack-creator"}})
 
 	_, err := service.CreateStack(ctx, CreateStackCommand{TenantID: "tenant_123", Name: "Acme"})
 	if !errors.Is(err, authz.ErrUnavailable) {
 		t.Fatalf("error = %v, want ErrUnavailable", err)
 	}
-	if stacks.calls != 1 || authorizer.calls != 1 {
-		t.Fatalf("stack calls = %d, authorization calls = %d", stacks.calls, authorizer.calls)
+	if stacks.calls != 0 || len(work.requests) != 0 {
+		t.Fatalf("stack calls = %d, enqueued = %d, want 0 and 0", stacks.calls, len(work.requests))
 	}
 }
 
@@ -88,16 +107,16 @@ func TestCreateStackRejectsInvalidOpenFGASubjectBeforePersistence(t *testing.T) 
 	t.Parallel()
 
 	stacks := &authorizationStackRepository{}
-	authorizer := &recordingAuthorizer{}
-	service := NewService(Service{Stacks: stacks, Authorizer: authorizer, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
+	work := newRecordingWork(stacks)
+	service := NewService(Service{Stacks: stacks, Work: work, Authorizer: &recordingAuthorizer{}, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user:bad", RealmRoles: []string{"stack-creator"}})
 
 	_, err := service.CreateStack(ctx, CreateStackCommand{TenantID: "tenant_123", Name: "Acme"})
 	if !errors.Is(err, authz.ErrInvalidInput) {
 		t.Fatalf("error = %v, want ErrInvalidInput", err)
 	}
-	if stacks.calls != 0 || authorizer.calls != 0 {
-		t.Fatalf("stack calls = %d, authorization calls = %d", stacks.calls, authorizer.calls)
+	if stacks.calls != 0 || len(work.requests) != 0 {
+		t.Fatalf("stack calls = %d, enqueued = %d, want 0 and 0", stacks.calls, len(work.requests))
 	}
 }
 
@@ -134,6 +153,7 @@ type recordingAuthorizer struct {
 	calls    int
 	mutation authz.Mutation
 	writeErr error
+	grants   []authz.Grant
 }
 
 func (authorizer *recordingAuthorizer) Check(context.Context, authz.CheckRequest) (authz.CheckResult, error) {
@@ -146,7 +166,7 @@ func (authorizer *recordingAuthorizer) ListAccessibleStacks(context.Context, aut
 	return authz.ListAccessibleStacksResult{}, nil
 }
 func (authorizer *recordingAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
-	return authz.ListGrantsResult{}, nil
+	return authz.ListGrantsResult{Grants: authorizer.grants}, nil
 }
 func (authorizer *recordingAuthorizer) WriteRelationships(_ context.Context, mutation authz.Mutation) error {
 	authorizer.calls++
