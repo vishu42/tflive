@@ -210,6 +210,52 @@ func (adapter *AuthorizationAdapter) ListGrants(ctx context.Context, request aut
 	return result, nil
 }
 
+// ListSubjectGrants returns the direct roles one subject holds on one stack.
+// Unlike ListGrants it filters the read by user as well as object, so a
+// reconciling handler can compute a delta without paging every grant on the
+// stack. A subject holds at most one tuple per role, so this never paginates.
+func (adapter *AuthorizationAdapter) ListSubjectGrants(ctx context.Context, request authz.ListSubjectGrantsRequest) (authz.ListGrantsResult, error) {
+	if !request.Valid() {
+		return authz.ListGrantsResult{}, fmt.Errorf("%w: invalid subject grants request", authz.ErrInvalidInput)
+	}
+
+	type readTuple struct {
+		Key *tupleKey `json:"key"`
+	}
+	var response struct {
+		Tuples *[]readTuple `json:"tuples"`
+	}
+	input := struct {
+		TupleKey struct {
+			User   string `json:"user"`
+			Object string `json:"object"`
+		} `json:"tuple_key"`
+		PageSize int `json:"page_size"`
+	}{PageSize: 100}
+	input.TupleKey.User = request.Subject.String()
+	input.TupleKey.Object = request.Stack.String()
+
+	if err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "read"), nil, input, &response, http.StatusOK); err != nil {
+		return authz.ListGrantsResult{}, adapter.classify(err)
+	}
+	if response.Tuples == nil {
+		return authz.ListGrantsResult{}, fmt.Errorf("%w: read response is missing tuples", authz.ErrMalformedResponse)
+	}
+
+	result := authz.ListGrantsResult{}
+	for _, tuple := range *response.Tuples {
+		grant, err := grantFromReadTuple(tuple.Key, request.Stack)
+		if err != nil {
+			return authz.ListGrantsResult{}, fmt.Errorf("%w: read response contains invalid tuple", authz.ErrMalformedResponse)
+		}
+		if grant.Subject().String() != request.Subject.String() {
+			return authz.ListGrantsResult{}, fmt.Errorf("%w: read response contains another subject", authz.ErrMalformedResponse)
+		}
+		result.Grants = append(result.Grants, grant)
+	}
+	return result, nil
+}
+
 // WriteRelationships grants direct roles. If OpenFGA reports a conflicting
 // write, it confirms the desired state before deciding whether the operation
 // can safely be treated as an idempotent success.

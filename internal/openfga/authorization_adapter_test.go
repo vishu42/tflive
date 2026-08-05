@@ -672,3 +672,53 @@ func mustGrant(t *testing.T, subject, stack string, role authz.Role) authz.Grant
 	}
 	return grant
 }
+
+func TestAuthorizationAdapterListSubjectGrantsFiltersByUserAndObject(t *testing.T) {
+	adapter, requests := testAuthorizationAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/stores/store-id/read" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			TupleKey struct {
+				User   string `json:"user"`
+				Object string `json:"object"`
+			} `json:"tuple_key"`
+			PageSize int `json:"page_size"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.TupleKey.User != "user:alice" || body.TupleKey.Object != "stack:one" || body.PageSize != 100 {
+			t.Fatalf("body = %#v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"tuples":[{"key":{"user":"user:alice","relation":"owner","object":"stack:one"}}]}`)
+	})
+
+	result, err := adapter.ListSubjectGrants(context.Background(), authz.ListSubjectGrantsRequest{
+		Subject: mustSubject(t, "alice"),
+		Stack:   mustStack(t, "one"),
+	})
+	want := authz.ListGrantsResult{Grants: []authz.Grant{mustGrant(t, "alice", "one", authz.RoleOwner)}}
+	if err != nil || !reflect.DeepEqual(result, want) || *requests != 1 {
+		t.Fatalf("ListSubjectGrants() = %#v, %v (requests %d)", result, err, *requests)
+	}
+}
+
+func TestAuthorizationAdapterListSubjectGrantsRejectsOtherSubjectsAndInvalidRequests(t *testing.T) {
+	adapter, _ := testAuthorizationAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"tuples":[{"key":{"user":"user:bob","relation":"owner","object":"stack:one"}}]}`)
+	})
+
+	if _, err := adapter.ListSubjectGrants(context.Background(), authz.ListSubjectGrantsRequest{
+		Subject: mustSubject(t, "alice"),
+		Stack:   mustStack(t, "one"),
+	}); !errors.Is(err, authz.ErrMalformedResponse) {
+		t.Fatalf("ListSubjectGrants() error = %v, want ErrMalformedResponse", err)
+	}
+
+	if _, err := adapter.ListSubjectGrants(context.Background(), authz.ListSubjectGrantsRequest{}); !errors.Is(err, authz.ErrInvalidInput) {
+		t.Fatalf("ListSubjectGrants() error = %v, want ErrInvalidInput", err)
+	}
+}
