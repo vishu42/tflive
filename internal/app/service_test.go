@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/queue"
@@ -2448,7 +2447,7 @@ func TestAssignStackRoleEnqueuesDesiredRoleWithoutCallingOpenFGA(t *testing.T) {
 		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
 	}
 
-	var payload authdispatch.GrantPayload
+	var payload authz.GrantPayload
 	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}
@@ -2491,7 +2490,7 @@ func TestRevokeStackRoleEnqueuesEmptyRole(t *testing.T) {
 	if len(work.requests) != 1 {
 		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
 	}
-	var payload authdispatch.GrantPayload
+	var payload authz.GrantPayload
 	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}

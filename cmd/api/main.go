@@ -15,7 +15,6 @@ import (
 	"github.com/vishu42/tflive/internal/api"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/artifacts"
-	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
@@ -104,7 +103,7 @@ func defaultAPIDependencies() apiDependencies {
 			}
 			// The API only produces work; delivery belongs to the worker. The
 			// registry is still required so Enqueue can derive ordering keys.
-			registry, err := queue.NewRegistry(authdispatch.NewStackGrantHandler(nil))
+			registry, err := queue.NewRegistry(authz.NewStackGrantHandler(nil))
 			if err != nil {
 				return nil, fmt.Errorf("build queue registry: %w", err)
 			}

@@ -1,11 +1,10 @@
-package authdispatch
+package authz
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 
-	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/queue"
 )
 
@@ -22,9 +21,9 @@ type GrantPayload struct {
 
 // Relationships is the slice of the authorization port this handler needs.
 type Relationships interface {
-	authz.SubjectGrantLister
-	WriteRelationships(context.Context, authz.Mutation) error
-	DeleteRelationships(context.Context, authz.Mutation) error
+	SubjectGrantLister
+	WriteRelationships(context.Context, Mutation) error
+	DeleteRelationships(context.Context, Mutation) error
 }
 
 // StackGrantHandler converges a subject's roles on a stack to the desired
@@ -66,7 +65,7 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 		return err
 	}
 
-	current, err := handler.relationships.ListSubjectGrants(ctx, authz.ListSubjectGrantsRequest{
+	current, err := handler.relationships.ListSubjectGrants(ctx, ListSubjectGrantsRequest{
 		Subject: identity.subject,
 		Stack:   identity.stack,
 	})
@@ -74,7 +73,7 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 		return fmt.Errorf("read current stack grants: %w", err)
 	}
 
-	var stale []authz.Grant
+	var stale []Grant
 	satisfied := false
 	for _, grant := range current.Grants {
 		if identity.hasRole && grant.Role() == identity.role {
@@ -85,7 +84,7 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 	}
 
 	if len(stale) > 0 {
-		mutation, err := authz.NewMutation(stale, true)
+		mutation, err := NewMutation(stale, true)
 		if err != nil {
 			return fmt.Errorf("build stale grant mutation: %w", err)
 		}
@@ -98,11 +97,11 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 		return nil
 	}
 
-	grant, err := authz.NewGrant(identity.subject, identity.stack, identity.role)
+	grant, err := NewGrant(identity.subject, identity.stack, identity.role)
 	if err != nil {
 		return fmt.Errorf("build desired grant: %w", err)
 	}
-	mutation, err := authz.NewMutation([]authz.Grant{grant}, true)
+	mutation, err := NewMutation([]Grant{grant}, true)
 	if err != nil {
 		return fmt.Errorf("build desired mutation: %w", err)
 	}
@@ -112,13 +111,13 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 	return nil
 }
 
-// grantIdentity is the parsed payload. authz.Role is a struct, not a string, so
+// grantIdentity is the parsed payload. Role is a struct, not a string, so
 // the role is parsed once here and compared by value; hasRole distinguishes
 // "grant this role" from "revoke everything".
 type grantIdentity struct {
-	stack   authz.Stack
-	subject authz.Subject
-	role    authz.Role
+	stack   Stack
+	subject Subject
+	role    Role
 	hasRole bool
 }
 
@@ -127,17 +126,17 @@ func parseGrantPayload(payload json.RawMessage) (grantIdentity, error) {
 	if err := json.Unmarshal(payload, &parsed); err != nil {
 		return grantIdentity{}, fmt.Errorf("decode stack grant payload: %w", err)
 	}
-	stack, err := authz.StackFromID(parsed.StackID)
+	stack, err := StackFromID(parsed.StackID)
 	if err != nil {
 		return grantIdentity{}, fmt.Errorf("parse stack grant stack: %w", err)
 	}
-	subject, err := authz.SubjectFromKeycloakSub(parsed.Subject)
+	subject, err := SubjectFromKeycloakSub(parsed.Subject)
 	if err != nil {
 		return grantIdentity{}, fmt.Errorf("parse stack grant subject: %w", err)
 	}
 	identity := grantIdentity{stack: stack, subject: subject}
 	if parsed.Role != "" {
-		role, err := authz.RoleFromDirectRelation(parsed.Role)
+		role, err := RoleFromDirectRelation(parsed.Role)
 		if err != nil {
 			return grantIdentity{}, fmt.Errorf("parse stack grant role: %w", err)
 		}

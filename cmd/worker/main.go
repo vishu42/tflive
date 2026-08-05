@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/activities"
 	"github.com/vishu42/tflive/internal/artifacts"
-	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/dispatch"
@@ -122,7 +121,7 @@ func defaultWorkerDependencies() workerDependencies {
 			return openfga.NewAuthorizationAdapter(openfga.Config{APIURL: cfg.APIURL, StoreID: cfg.StoreID, ModelID: cfg.ModelID, APIToken: cfg.APIToken.Value(), HTTPTimeout: cfg.RequestTimeout})
 		},
 		newQueueController: func(backend queue.Backend, authorizer workerAuthorizer) (outboxDispatcher, error) {
-			registry, err := queue.NewRegistry(authdispatch.NewStackGrantHandler(authorizer))
+			registry, err := queue.NewRegistry(authz.NewStackGrantHandler(authorizer))
 			if err != nil {
 				return nil, err
 			}

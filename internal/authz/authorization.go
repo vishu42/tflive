@@ -1,4 +1,5 @@
-// Package authz defines the provider-neutral authorization contract.
+// Package authz defines the provider-neutral authorization contract and the
+// handler that reconciles stack grants onto whichever provider implements it.
 package authz
 
 import (

@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/queue"
@@ -553,7 +552,7 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		return traits.Stack{}, fmt.Errorf("create owner stack: %w", err)
 	}
 
-	payload, err := json.Marshal(authdispatch.GrantPayload{
+	payload, err := json.Marshal(authz.GrantPayload{
 		StackID: string(stack.ID),
 		Subject: principal.Subject,
 		Role:    authz.RoleOwner.String(),
@@ -569,7 +568,7 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 			return err
 		}
 		return enqueuer.Enqueue(ctx, queue.Request{
-			Kind:         authdispatch.KindReconcileStackGrant,
+			Kind:         authz.KindReconcileStackGrant,
 			Payload:      payload,
 			ActorSubject: principal.Subject,
 			TenantID:     string(command.TenantID),
@@ -1246,7 +1245,7 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 	// The old delete-then-write pair is gone. The handler converges to the
 	// desired role, so there is no intermediate window in which a crash leaves
 	// the user holding no role at all.
-	payload, err := json.Marshal(authdispatch.GrantPayload{
+	payload, err := json.Marshal(authz.GrantPayload{
 		StackID: string(command.StackID),
 		Subject: command.UserSub,
 		Role:    command.Role,
@@ -1269,7 +1268,7 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 			return err
 		}
 		return enqueuer.Enqueue(ctx, queue.Request{
-			Kind:         authdispatch.KindReconcileStackGrant,
+			Kind:         authz.KindReconcileStackGrant,
 			Payload:      payload,
 			ActorSubject: principal.Subject,
 			TenantID:     string(command.TenantID),
@@ -1328,7 +1327,7 @@ func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStack
 
 	// An empty desired role means "no access"; the handler removes whatever the
 	// subject currently holds on this stack.
-	payload, err := json.Marshal(authdispatch.GrantPayload{
+	payload, err := json.Marshal(authz.GrantPayload{
 		StackID: string(command.StackID),
 		Subject: command.UserSub,
 		Role:    "",
@@ -1350,7 +1349,7 @@ func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStack
 			return err
 		}
 		return enqueuer.Enqueue(ctx, queue.Request{
-			Kind:         authdispatch.KindReconcileStackGrant,
+			Kind:         authz.KindReconcileStackGrant,
 			Payload:      payload,
 			ActorSubject: principal.Subject,
 			TenantID:     string(command.TenantID),

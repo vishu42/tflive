@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/traits"
@@ -50,11 +49,11 @@ func TestCreateStackEnqueuesOwnerGrantInsteadOfCallingOpenFGA(t *testing.T) {
 	if len(work.requests) != 1 {
 		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
 	}
-	if work.requests[0].Kind != authdispatch.KindReconcileStackGrant {
-		t.Fatalf("kind = %q, want %q", work.requests[0].Kind, authdispatch.KindReconcileStackGrant)
+	if work.requests[0].Kind != authz.KindReconcileStackGrant {
+		t.Fatalf("kind = %q, want %q", work.requests[0].Kind, authz.KindReconcileStackGrant)
 	}
 
-	var payload authdispatch.GrantPayload
+	var payload authz.GrantPayload
 	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}
