@@ -16,6 +16,7 @@ import (
 	"github.com/vishu42/tflive/internal/dispatch"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
+	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/temporal"
 	"github.com/vishu42/tflive/internal/traits"
 	"github.com/vishu42/tflive/internal/workflows"
@@ -41,7 +42,14 @@ type workerStore interface {
 	activities.TemplateSyncStore
 	artifacts.LogMetadataRecorder
 	dispatch.Outbox
-	authdispatch.Outbox
+	queue.Backend
+}
+
+// workerAuthorizer is the authorization surface the worker needs: decisions
+// plus the per-subject read the reconciling grant handler converges against.
+type workerAuthorizer interface {
+	authz.Authorizer
+	authz.SubjectGrantLister
 }
 
 type outboxDispatcher interface {
@@ -62,9 +70,9 @@ type workerDependencies struct {
 	// newWorkflowStarter creates the idempotent Temporal workflow starter used by the outbox.
 	newWorkflowStarter func(client.Client, string) dispatch.WorkflowStarter
 	// newOutboxDispatcher builds the durable Postgres-to-Temporal dispatch loop.
-	newOutboxDispatcher        func(dispatch.Outbox, dispatch.WorkflowStarter) outboxDispatcher
-	newAuthorizationAdapter    func(config.OpenFGAConfig) (authz.Authorizer, error)
-	newAuthorizationDispatcher func(authdispatch.Outbox, authz.Authorizer) outboxDispatcher
+	newOutboxDispatcher     func(dispatch.Outbox, dispatch.WorkflowStarter) outboxDispatcher
+	newAuthorizationAdapter func(config.OpenFGAConfig) (workerAuthorizer, error)
+	newQueueController      func(queue.Backend, workerAuthorizer) (outboxDispatcher, error)
 	// registerWorkflow attaches the workflow implementations this process can execute.
 	registerWorkflow func(temporalWorker)
 	// registerActivities attaches activity handlers and their shared dependencies to the worker.
@@ -110,11 +118,15 @@ func defaultWorkerDependencies() workerDependencies {
 		newOutboxDispatcher: func(outbox dispatch.Outbox, starter dispatch.WorkflowStarter) outboxDispatcher {
 			return dispatch.NewDispatcher(outbox, starter, dispatch.Options{})
 		},
-		newAuthorizationAdapter: func(cfg config.OpenFGAConfig) (authz.Authorizer, error) {
+		newAuthorizationAdapter: func(cfg config.OpenFGAConfig) (workerAuthorizer, error) {
 			return openfga.NewAuthorizationAdapter(openfga.Config{APIURL: cfg.APIURL, StoreID: cfg.StoreID, ModelID: cfg.ModelID, APIToken: cfg.APIToken.Value(), HTTPTimeout: cfg.RequestTimeout})
 		},
-		newAuthorizationDispatcher: func(outbox authdispatch.Outbox, authorizer authz.Authorizer) outboxDispatcher {
-			return authdispatch.NewDispatcher(outbox, authorizer, authdispatch.Options{})
+		newQueueController: func(backend queue.Backend, authorizer workerAuthorizer) (outboxDispatcher, error) {
+			registry, err := queue.NewRegistry(authdispatch.NewStackGrantHandler(authorizer))
+			if err != nil {
+				return nil, err
+			}
+			return queue.NewController(backend, registry, queue.Options{}), nil
 		},
 		registerWorkflow: func(worker temporalWorker) {
 			worker.RegisterWorkflowWithOptions(workflows.TemplateRunWorkflow, workflow.RegisterOptions{
@@ -211,7 +223,10 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 	deps.registerActivities(worker, store, cfg.WorkerRunRoot, logStore)
 	workflowStarter := deps.newWorkflowStarter(temporalClient, cfg.TemporalTaskQueue)
 	outbox := deps.newOutboxDispatcher(store, workflowStarter)
-	authorizationOutbox := deps.newAuthorizationDispatcher(store, authorizer)
+	controller, err := deps.newQueueController(store, authorizer)
+	if err != nil {
+		return fmt.Errorf("build queue controller: %w", err)
+	}
 
 	dispatchCtx, cancelDispatch := context.WithCancel(ctx)
 	var dispatchGroup sync.WaitGroup
@@ -220,7 +235,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 		defer dispatchGroup.Done()
 		outbox.Run(dispatchCtx)
 	}()
-	go func() { defer dispatchGroup.Done(); authorizationOutbox.Run(dispatchCtx) }()
+	go func() { defer dispatchGroup.Done(); controller.Run(dispatchCtx) }()
 
 	workerErr := worker.Run(deps.interruptCh())
 	cancelDispatch()

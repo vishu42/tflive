@@ -121,18 +121,11 @@ func TestCreateStackRejectsInvalidOpenFGASubjectBeforePersistence(t *testing.T) 
 }
 
 type authorizationStackRepository struct {
-	calls      int
-	ownerGrant authz.Grant
+	calls int
 }
 
 func (repository *authorizationStackRepository) CreateStack(context.Context, traits.Stack) error {
 	repository.calls++
-	return nil
-}
-
-func (repository *authorizationStackRepository) CreateStackWithOwnerIntent(_ context.Context, _ traits.Stack, grant authz.Grant) error {
-	repository.calls++
-	repository.ownerGrant = grant
 	return nil
 }
 

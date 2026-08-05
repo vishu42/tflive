@@ -14,6 +14,7 @@ import (
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -479,12 +480,21 @@ func TestCreateStackRejectsPrincipalWithoutCreatorRole(t *testing.T) {
 	}
 }
 
-func TestCreateStackMapsOwnerWriteFailureAfterPersistence(t *testing.T) {
+// CreateStack no longer writes to OpenFGA at request time, so there is no
+// "owner write failed after persistence" case left to map. What replaces it is
+// a failing unit of work, which persists nothing and surfaces as 503.
+func TestCreateStackMapsUnitOfWorkFailure(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.authorizer.writeErr = authz.ErrUnavailable
-	server := NewServer(deps.service(), configuredTenantID)
+	service := app.NewService(app.Service{
+		Authorizer: deps.authorizer,
+		Stacks:     &deps.stacks,
+		Work:       &apiUnitOfWork{stacks: &deps.stacks, err: authz.ErrUnavailable},
+		StackIDs:   fixedStackIDGenerator{id: deps.stackID},
+		Clock:      fixedClock{now: deps.now},
+	})
+	server := NewServer(service, configuredTenantID)
 	response := httptest.NewRecorder()
 
 	server.ServeHTTP(response, authenticatedRequest(http.MethodPost, "/v1/tenants/tenant_123/stacks", strings.NewReader(`{"name":"Acme"}`)))
@@ -492,8 +502,36 @@ func TestCreateStackMapsOwnerWriteFailureAfterPersistence(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
+	if deps.stacks.created.ID != "" {
+		t.Fatal("a failed unit of work must not persist the stack")
+	}
+}
+
+func TestCreateStackEnqueuesOwnerGrantIntent(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	work := &apiUnitOfWork{stacks: &deps.stacks}
+	service := app.NewService(app.Service{
+		Authorizer: deps.authorizer,
+		Stacks:     &deps.stacks,
+		Work:       work,
+		StackIDs:   fixedStackIDGenerator{id: deps.stackID},
+		Clock:      fixedClock{now: deps.now},
+	})
+	server := NewServer(service, configuredTenantID)
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, authenticatedRequest(http.MethodPost, "/v1/tenants/tenant_123/stacks", strings.NewReader(`{"name":"Acme"}`)))
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	if len(work.requests) != 1 {
+		t.Fatalf("enqueued %d intents, want 1", len(work.requests))
+	}
 	if deps.stacks.created.ID == "" {
-		t.Fatal("owner-write failure did not preserve the persisted stack")
+		t.Fatal("stack was not persisted")
 	}
 }
 
@@ -2275,6 +2313,7 @@ func (deps *apiTestDependencies) withGrants(grants ...authz.Grant) *apiTestDepen
 func (deps *apiTestDependencies) service() *app.Service {
 	return app.NewService(app.Service{
 		Authorizer:               deps.authorizer,
+		Work:                     &apiUnitOfWork{stacks: &deps.stacks},
 		Stacks:                   &deps.stacks,
 		StackTemplates:           &deps.stackTemplates,
 		StackTemplateInstaller:   &deps.stackTemplateInstaller,
@@ -2292,6 +2331,37 @@ func (deps *apiTestDependencies) service() *app.Service {
 		RegistrationIDs:          fixedTemplateRegistrationIDGenerator{id: deps.registrationID},
 		Clock:                    fixedClock{now: deps.now},
 	})
+}
+
+// apiUnitOfWork applies writes immediately; transactional behaviour is proven
+// against a real database in internal/postgres/unitofwork_test.go.
+type apiUnitOfWork struct {
+	stacks   app.StackRepository
+	requests []queue.Request
+	err      error
+}
+
+func (unit *apiUnitOfWork) InTx(ctx context.Context, fn func(app.TxRepo, queue.Enqueuer) error) error {
+	if unit.err != nil {
+		return unit.err
+	}
+	return fn(unit, unit)
+}
+
+func (unit *apiUnitOfWork) CreateStack(ctx context.Context, stack traits.Stack) error {
+	if unit.stacks == nil {
+		return nil
+	}
+	return unit.stacks.CreateStack(ctx, stack)
+}
+
+func (unit *apiUnitOfWork) AppendAuditEvent(context.Context, traits.SecurityAuditEvent) error {
+	return nil
+}
+
+func (unit *apiUnitOfWork) Enqueue(_ context.Context, requests ...queue.Request) error {
+	unit.requests = append(unit.requests, requests...)
+	return nil
 }
 
 type apiAuthorizer struct {
@@ -3085,5 +3155,94 @@ func TestAuthenticatedServerProtectsMeRoute(t *testing.T) {
 
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnauthorized, response.Body.String())
+	}
+}
+
+type stubQueueReader struct {
+	statuses     []queue.Status
+	tenantID     string
+	actorSubject string
+	err          error
+}
+
+func (reader *stubQueueReader) ListByActor(_ context.Context, tenantID, actorSubject string, _ int) ([]queue.Status, error) {
+	reader.tenantID = tenantID
+	reader.actorSubject = actorSubject
+	return reader.statuses, reader.err
+}
+
+func TestListQueueReturnsOnlyCallerItems(t *testing.T) {
+	t.Parallel()
+
+	reader := &stubQueueReader{statuses: []queue.Status{{
+		Kind:      "reconcile_stack_grant",
+		State:     queue.StatePending,
+		Attempts:  3,
+		LastError: "openfga unavailable",
+		CreatedAt: time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC),
+	}}}
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service(), configuredTenantID, WithQueueReader(reader))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/queue", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+
+	var body struct {
+		Items []struct {
+			Kind      string `json:"kind"`
+			State     string `json:"state"`
+			Summary   string `json:"summary"`
+			Attempts  int    `json:"attempts"`
+			LastError string `json:"last_error"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(body.Items))
+	}
+	// Retry is forever, so a stuck item stays pending; attempts and last_error
+	// are the only way to tell "just queued" from "failing for an hour".
+	if body.Items[0].Attempts != 3 || body.Items[0].LastError != "openfga unavailable" {
+		t.Fatalf("item = %+v, want attempts and last_error surfaced", body.Items[0])
+	}
+	if body.Items[0].Summary != "reconcile_stack_grant" {
+		t.Fatalf("summary = %q, want the kind as fallback", body.Items[0].Summary)
+	}
+	if reader.tenantID != "tenant_123" || reader.actorSubject != apiKeycloakSubject {
+		t.Fatalf("reader called with tenant %q actor %q, want the authenticated caller", reader.tenantID, reader.actorSubject)
+	}
+}
+
+func TestListQueueWithoutReaderReturnsServiceUnavailable(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/queue", nil))
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", response.Code)
+	}
+}
+
+func TestListQueueRequiresAuthentication(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	server := NewServer(deps.service(), configuredTenantID, WithQueueReader(&stubQueueReader{}))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/queue", nil))
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", response.Code)
 	}
 }

@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vishu42/tflive/internal/app"
-	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/dispatch"
 	"github.com/vishu42/tflive/internal/traits"
@@ -425,28 +424,6 @@ func (store *Store) ListTemplateRevisions(ctx context.Context, tenantID traits.T
 		return nil, fmt.Errorf("iterate template revisions: %w", err)
 	}
 	return templateRevisions, nil
-}
-
-func (store *Store) CreateStackWithOwnerIntent(ctx context.Context, stack traits.Stack, grant authz.Grant) error {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin create stack: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	if err := insertStack(ctx, tx, stack); err != nil {
-		return err
-	}
-	_, err = tx.Exec(ctx, `
-		insert into authorization_outbox (id, operation, subject, stack, role)
-		values ($1, 'grant', $2, $3, $4)
-	`, authorizationOutboxID("grant", grant), grant.Subject().String(), grant.Stack().String(), grant.Role().String())
-	if err != nil {
-		return fmt.Errorf("enqueue stack owner relationship: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit create stack: %w", err)
-	}
-	return nil
 }
 
 func (store *Store) CreateStack(ctx context.Context, stack traits.Stack) error {
@@ -1014,53 +991,6 @@ func (store *Store) RetryTemplateRun(ctx context.Context, id string, availableAt
 	`, id, availableAt, lastError)
 	if err != nil {
 		return fmt.Errorf("retry template run outbox entry: %w", err)
-	}
-	return nil
-}
-
-func (store *Store) ClaimAuthorizationRelationship(ctx context.Context, availableAt, claimedUntil time.Time) (authdispatch.Entry, bool, error) {
-	var entry authdispatch.Entry
-	err := store.pool.QueryRow(ctx, `
-		with candidate as (
-			select id from authorization_outbox
-			where processed_at is null and failed_at is null and available_at <= $1
-				and (claimed_until is null or claimed_until <= $1)
-			order by available_at, id for update skip locked limit 1
-		), claimed as (
-			update authorization_outbox outbox set claimed_until = $2, attempts = attempts + 1
-			from candidate where outbox.id = candidate.id
-			returning outbox.id, outbox.operation, outbox.subject, outbox.stack, outbox.role
-		) select id, operation, subject, stack, role from claimed
-	`, availableAt, claimedUntil).Scan(&entry.ID, &entry.Operation, &entry.Subject, &entry.Stack, &entry.Role)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return authdispatch.Entry{}, false, nil
-	}
-	if err != nil {
-		return authdispatch.Entry{}, false, fmt.Errorf("claim authorization relationship: %w", err)
-	}
-	return entry, true, nil
-}
-
-func (store *Store) CompleteAuthorizationRelationship(ctx context.Context, id string) error {
-	_, err := store.pool.Exec(ctx, `update authorization_outbox set processed_at = now(), claimed_until = null, last_error = '' where id = $1 and processed_at is null and failed_at is null`, id)
-	if err != nil {
-		return fmt.Errorf("complete authorization relationship: %w", err)
-	}
-	return nil
-}
-
-func (store *Store) RetryAuthorizationRelationship(ctx context.Context, id string, availableAt time.Time, lastError string) error {
-	_, err := store.pool.Exec(ctx, `update authorization_outbox set available_at = $2, claimed_until = null, last_error = $3 where id = $1 and processed_at is null and failed_at is null`, id, availableAt, lastError)
-	if err != nil {
-		return fmt.Errorf("retry authorization relationship: %w", err)
-	}
-	return nil
-}
-
-func (store *Store) FailAuthorizationRelationship(ctx context.Context, id, lastError string) error {
-	_, err := store.pool.Exec(ctx, `update authorization_outbox set failed_at = now(), claimed_until = null, last_error = $2 where id = $1 and processed_at is null and failed_at is null`, id, lastError)
-	if err != nil {
-		return fmt.Errorf("fail authorization relationship: %w", err)
 	}
 	return nil
 }

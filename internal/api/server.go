@@ -15,22 +15,35 @@ import (
 	"github.com/vishu42/tflive/internal/auth"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
 type Server struct {
 	service  *app.Service
 	tenantID traits.TenantID
+	queue    queue.Reader
 	mux      *http.ServeMux
 	handler  http.Handler
 	debug    bool
 }
 
-func NewServer(service *app.Service, tenantID traits.TenantID) *Server {
+// ServerOption configures optional server dependencies.
+type ServerOption func(*Server)
+
+// WithQueueReader enables the queue read endpoint.
+func WithQueueReader(reader queue.Reader) ServerOption {
+	return func(server *Server) { server.queue = reader }
+}
+
+func NewServer(service *app.Service, tenantID traits.TenantID, options ...ServerOption) *Server {
 	server := &Server{
 		service:  service,
 		tenantID: tenantID,
 		mux:      http.NewServeMux(),
+	}
+	for _, option := range options {
+		option(server)
 	}
 
 	// Health routes.
@@ -89,6 +102,7 @@ func NewServer(service *app.Service, tenantID traits.TenantID) *Server {
 
 	// Stack grant routes.
 	// Lists grants for a stack.
+	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/queue", server.handleListQueue)
 	server.handleTenantRoute("GET /v1/tenants/{tenant_id}/stacks/{stack_id}/grants", server.handleListStackGrants)
 	// Assigns a role on a stack.
 	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/stacks/{stack_id}/grants", server.handleAssignStackRole)
@@ -105,8 +119,8 @@ func NewServer(service *app.Service, tenantID traits.TenantID) *Server {
 }
 
 // NewAuthenticatedServer protects all /v1 routes and leaves health probes public.
-func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier, tenantID traits.TenantID, debug bool) *Server {
-	server := NewServer(service, tenantID)
+func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier, tenantID traits.TenantID, debug bool, options ...ServerOption) *Server {
+	server := NewServer(service, tenantID, options...)
 	server.debug = debug
 	server.handler = authn.RequireAuthentication(verifier, "/healthz")(server.mux)
 	return server
@@ -936,4 +950,53 @@ func writeError(response http.ResponseWriter, status int, code string, message s
 		Error:   code,
 		Message: message,
 	})
+}
+
+type queueItemResponse struct {
+	Kind        string     `json:"kind"`
+	State       string     `json:"state"`
+	Summary     string     `json:"summary"`
+	Attempts    int        `json:"attempts"`
+	LastError   string     `json:"last_error"`
+	CreatedAt   time.Time  `json:"created_at"`
+	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
+}
+
+// handleListQueue returns the work items the caller queued. Scoping is by actor
+// alone, so no new permission concept is introduced: a caller only ever sees
+// their own items.
+func (server *Server) handleListQueue(response http.ResponseWriter, request *http.Request) {
+	principal, ok := authn.PrincipalFromContext(request.Context())
+	if !ok || principal.Subject == "" {
+		writeError(response, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	if server.queue == nil {
+		writeError(response, http.StatusServiceUnavailable, "queue_unavailable", "queue is not configured")
+		return
+	}
+
+	statuses, err := server.queue.ListByActor(request.Context(), request.PathValue("tenant_id"), principal.Subject, 50)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "internal_error", "list queue failed")
+		return
+	}
+
+	items := make([]queueItemResponse, 0, len(statuses))
+	for _, status := range statuses {
+		summary := status.Summary
+		if summary == "" {
+			summary = string(status.Kind)
+		}
+		items = append(items, queueItemResponse{
+			Kind:        string(status.Kind),
+			State:       string(status.State),
+			Summary:     summary,
+			Attempts:    status.Attempts,
+			LastError:   status.LastError,
+			CreatedAt:   status.CreatedAt,
+			DeliveredAt: status.DeliveredAt,
+		})
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
 }

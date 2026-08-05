@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/app"
-	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/openfga"
+	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/temporal"
 	"github.com/vishu42/tflive/internal/traits"
 	"go.temporal.io/sdk/client"
@@ -550,17 +550,6 @@ func (temporalClient *recordingTemporalClient) Close() {
 
 type recordingStore struct{}
 
-func (recordingStore) ClaimAuthorizationRelationship(context.Context, time.Time, time.Time) (authdispatch.Entry, bool, error) {
-	return authdispatch.Entry{}, false, nil
-}
-func (recordingStore) CompleteAuthorizationRelationship(context.Context, string) error { return nil }
-func (recordingStore) RetryAuthorizationRelationship(context.Context, string, time.Time, string) error {
-	return nil
-}
-func (recordingStore) FailAuthorizationRelationship(context.Context, string, string) error {
-	return nil
-}
-
 func (recordingStore) CreateStack(context.Context, traits.Stack) error {
 	return nil
 }
@@ -683,4 +672,16 @@ func (recordingWorkflowDispatcher) ApproveTemplateRun(context.Context, traits.Te
 
 func (recordingWorkflowDispatcher) CancelTemplateRun(context.Context, traits.TenantID, traits.TemplateRunID, traits.CancelSignal) error {
 	return nil
+}
+
+// The API store must satisfy the unit-of-work and queue-reader surfaces the
+// service and the queue endpoint depend on.
+func (store *recordingStore) InTx(ctx context.Context, fn func(app.TxRepo, queue.Enqueuer) error) error {
+	return fn(store, store)
+}
+
+func (store *recordingStore) Enqueue(context.Context, ...queue.Request) error { return nil }
+
+func (store *recordingStore) ListByActor(context.Context, string, string, int) ([]queue.Status, error) {
+	return nil, nil
 }
