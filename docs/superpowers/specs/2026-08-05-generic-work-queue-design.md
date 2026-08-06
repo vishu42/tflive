@@ -2,6 +2,10 @@
 
 Date: 2026-08-05
 
+> A Hinglish rendering of this document lives in
+> [2026-08-06-generic-work-queue-design-hinglish.md](2026-08-06-generic-work-queue-design-hinglish.md).
+> This file is canonical: change it first, then mirror.
+
 ## Problem
 
 Writes that must land in both Postgres and an external system are currently
