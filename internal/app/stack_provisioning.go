@@ -10,7 +10,7 @@ import (
 
 // This file holds the domain half of stack provisioning: what it means to
 // provision a stack and to mark one ready. The two queue kinds that drive it
-// live beside their handlers in provision_stack_handler.go and
+// live beside their handlers in grant_stack_owner_handler.go and
 // mark_stack_ready_handler.go, which are thin adapters over the methods here.
 
 // StackStatusRepository flips a provisioned stack to its terminal status.
@@ -20,34 +20,34 @@ type StackStatusRepository interface {
 
 // StackProvisioner is the slice of Service the provisioning handlers need.
 type StackProvisioner interface {
-	ProvisionStack(ctx context.Context, command ProvisionStackCommand) error
+	GrantStackOwner(ctx context.Context, command GrantStackOwnerCommand) error
 	MarkStackReady(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) error
 }
 
-// ProvisionStackCommand grants the founding owner their role on a new stack.
-type ProvisionStackCommand struct {
+// GrantStackOwnerCommand grants the founding owner their role on a new stack.
+type GrantStackOwnerCommand struct {
 	TenantID traits.TenantID
 	StackID  traits.StackID
 	Subject  string
 }
 
-// ProvisionStack writes the founding owner tuple for a newly created stack.
+// GrantStackOwner writes the founding owner tuple for a newly created stack.
 //
 // It reads before writing so that a replayed delivery is a no-op rather than a
 // duplicate-tuple error that would retry forever. It deliberately runs no
 // permission check: the caller is the queue, not a principal, and the request
 // was authorized when CreateStack accepted it.
-func (service *Service) ProvisionStack(ctx context.Context, command ProvisionStackCommand) error {
+func (service *Service) GrantStackOwner(ctx context.Context, command GrantStackOwnerCommand) error {
 	if service.Authorizer == nil {
 		return fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
 	}
 	stack, err := authz.StackFromID(string(command.StackID))
 	if err != nil {
-		return fmt.Errorf("provision stack: %w", err)
+		return fmt.Errorf("grant stack owner: %w", err)
 	}
 	subject, err := authz.SubjectFromKeycloakSub(command.Subject)
 	if err != nil {
-		return fmt.Errorf("provision stack owner: %w", err)
+		return fmt.Errorf("grant stack owner subject: %w", err)
 	}
 
 	current, err := service.listGrantsForStack(ctx, stack)

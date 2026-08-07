@@ -53,11 +53,11 @@ func TestCreateStackEnqueuesProvisioningInsteadOfCallingOpenFGA(t *testing.T) {
 	if len(work.requests) != 1 {
 		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
 	}
-	if work.requests[0].Kind != KindProvisionStack {
-		t.Fatalf("kind = %q, want %q", work.requests[0].Kind, KindProvisionStack)
+	if work.requests[0].Kind != KindGrantStackOwner {
+		t.Fatalf("kind = %q, want %q", work.requests[0].Kind, KindGrantStackOwner)
 	}
 
-	var payload ProvisionStackPayload
+	var payload GrantStackOwnerPayload
 	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}

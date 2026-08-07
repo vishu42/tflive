@@ -557,16 +557,16 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		return traits.Stack{}, fmt.Errorf("create owner stack: %w", err)
 	}
 
-	// provision_stack, not reconcile_stack_grant: creation is an event, and its
+	// grant_stack_owner, not reconcile_stack_grant: creation is an event, and its
 	// ModeJob "do nothing" on a duplicate key keeps the founding owner from
 	// being overwritten by any later enqueue on the same stack.
-	payload, err := json.Marshal(ProvisionStackPayload{
+	payload, err := json.Marshal(GrantStackOwnerPayload{
 		StackID:  string(stack.ID),
 		TenantID: string(command.TenantID),
 		Subject:  principal.Subject,
 	})
 	if err != nil {
-		return traits.Stack{}, fmt.Errorf("encode provision stack payload: %w", err)
+		return traits.Stack{}, fmt.Errorf("encode grant stack owner payload: %w", err)
 	}
 
 	// The stack row and the provisioning intent commit together, so a crash can
@@ -577,7 +577,7 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 			return err
 		}
 		return enqueuer.Enqueue(ctx, queue.Request{
-			Kind:         KindProvisionStack,
+			Kind:         KindGrantStackOwner,
 			Payload:      payload,
 			ActorSubject: principal.Subject,
 			TenantID:     string(command.TenantID),

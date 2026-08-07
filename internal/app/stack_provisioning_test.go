@@ -28,9 +28,9 @@ func (statuses *recordingStackStatuses) MarkStackReady(_ context.Context, tenant
 	return statuses.err
 }
 
-func provisionPayload(t *testing.T, stackID, tenantID, subject string) json.RawMessage {
+func grantOwnerPayload(t *testing.T, stackID, tenantID, subject string) json.RawMessage {
 	t.Helper()
-	payload, err := json.Marshal(ProvisionStackPayload{StackID: stackID, TenantID: tenantID, Subject: subject})
+	payload, err := json.Marshal(GrantStackOwnerPayload{StackID: stackID, TenantID: tenantID, Subject: subject})
 	if err != nil {
 		t.Fatalf("marshal provision payload: %v", err)
 	}

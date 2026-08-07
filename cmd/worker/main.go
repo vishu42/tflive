@@ -110,7 +110,7 @@ func defaultWorkerDependencies() workerDependencies {
 			}
 			// The worker both delivers work and enqueues the follow-ups handlers
 			// return, so its store needs the specs to derive ordering keys.
-			specs, err := queue.NewSpecRegistry(app.ProvisionStackSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
+			specs, err := queue.NewSpecRegistry(app.GrantStackOwnerSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
 			if err != nil {
 				return nil, fmt.Errorf("build queue specs: %w", err)
 			}
@@ -135,7 +135,7 @@ func defaultWorkerDependencies() workerDependencies {
 			// rather than reimplementing the writes.
 			service := app.NewService(app.Service{Authorizer: authorizer, StackStatuses: store})
 			registry, err := queue.NewRegistry(
-				app.NewProvisionStackHandler(service),
+				app.NewGrantStackOwnerHandler(service),
 				app.NewMarkStackReadyHandler(service),
 				authz.NewStackGrantHandler(authorizer),
 			)

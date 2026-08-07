@@ -41,7 +41,7 @@ Andar hai:
 - Ek generic `work_queue` table aur `internal/queue` package.
 - Authorization writes ko uspe le jaana — including wo assign/revoke paths jo
   abhi unprotected hain.
-- Stack provisioning: `stacks` pe ek `status` column, aur `provision_stack` +
+- Stack provisioning: `stacks` pe ek `status` column, aur `grant_stack_owner` +
   `mark_stack_ready` kinds jo use aage badhate hain (**revision 2**).
 - `notify_user` kind — aage notifications ke liye reserve.
 - Ek read endpoint jisse user apne queue kiye hue items dekh sake.
@@ -98,7 +98,7 @@ ho.** Dual-write problem *atomicity* ki hai; at-least-once delivery + idempotent
 handler uski jagah le lete hain. Ye rule na hota toh har multi-system operation
 ke liye kinds ki apni chain banani padti, aur har chain ka apna adhoora state
 hota. Jahan ek handler me do domains awkward lagein, wahan **system ke hisaab
-se** todo — jaise `provision_stack` / `mark_stack_ready`.
+se** todo — jaise `grant_stack_owner` / `mark_stack_ready`.
 
 ## Superseded decisions
 
@@ -107,8 +107,8 @@ isliye hai taaki wajah na kho jaaye.
 
 | Pehle | Ab | Kyun |
 | --- | --- | --- |
-| `CreateStack` `reconcile_stack_grant` enqueue karta tha | `provision_stack` karta hai | Ek kind "stack bani" aur "role badla" dono nahi sambhal sakta; payload me discriminator hai hi nahi, aur `ModeReconcile` baad ka enqueue owner ko overwrite kar deta. |
-| Owner grant `ModeReconcile` tha | `provision_stack` `ModeJob` hai | Provisioning ek event hai, desired state nahi. `ModeJob` ka `do nothing` original payload bachata hai; `ModeReconcile` ka `do update` kisi bhi future repair/backfill path se owner badal deta. |
+| `CreateStack` `reconcile_stack_grant` enqueue karta tha | `grant_stack_owner` karta hai | Ek kind "stack bani" aur "role badla" dono nahi sambhal sakta; payload me discriminator hai hi nahi, aur `ModeReconcile` baad ka enqueue owner ko overwrite kar deta. |
+| Owner grant `ModeReconcile` tha | `grant_stack_owner` `ModeJob` hai | Provisioning ek event hai, desired state nahi. `ModeJob` ka `do nothing` original payload bachata hai; `ModeReconcile` ka `do update` kisi bhi future repair/backfill path se owner badal deta. |
 | `Handler.Deliver(ctx, item) error` | `Deliver(ctx, item) ([]Request, error)` | Chaining ab declared return value hai, side-effect nahi. Handler ko `Enqueuer` dependency nahi chahiye, aur chain ko unit test me assert kiya ja sakta hai. |
 | `Handler` ek hi interface tha | `Spec` (kind, mode, key) `Handler` (spec + deliver) se alag | API sirf produce karti hai — usko `Key`/`Mode` chahiye, `Deliver` nahi. Wo sirf inhe paane ke liye `nil` dependencies ke saath handler bana rahi thi; doosre kind ke saath wo pattern tut jaata. |
 | Stack readiness implicit thi | `stacks.status` | Iske bina API aisi stack pe 201 deti hai jo abhi usable nahi, aur kahin record hi nahi hota. |
@@ -120,7 +120,7 @@ Revision 2 me kya reject hua, aur kyun:
   kinds me toda.
 - **`CreateStack` me inline fast path.** Upar dekho.
 - **Readiness ko queue se derive karna** (stack ready hai agar koi pending
-  `provision_stack` row nahi) `status` column ki jagah. Resource key se query
+  `grant_stack_owner` row nahi) `status` column ki jagah. Resource key se query
   chahiye hoti, aur prune ke baad "row nahi hai" aur "kabhi enqueue hi nahi hua"
   me farak hi nahi bachta — toh chhoot gaya enqueue "ready" jaisa dikhta.
 
@@ -165,12 +165,12 @@ bhi na badle**:
 ```
 CreateStack, ek transaction:
     INSERT stacks       (status = 'provisioning')
-    INSERT work_queue   (provision_stack, ModeJob, key = stack:<id>)
+    INSERT work_queue   (grant_stack_owner, ModeJob, key = stack:<id>)
   COMMIT  ──> 201 { id, status: "provisioning" }
 
-t≈1s   provision_stack   → OpenFGA owner tuple
-                         → returns [mark_stack_ready]
-t≈2s   mark_stack_ready  → UPDATE stacks SET status = 'ready'
+t≈1s   grant_stack_owner  → OpenFGA owner tuple
+                          → returns [mark_stack_ready]
+t≈2s   mark_stack_ready   → UPDATE stacks SET status = 'ready'
 ```
 
 Access t≈1s pe wapas aa jaata hai, jab tuple land hota hai. Label t≈2s pe pakadta
@@ -178,7 +178,7 @@ hai. 201 se t≈1s ke beech creator ke paas OpenFGA me koi grant hai hi nahi —
 usi window ko neeche wala `GetStack` exception dhakta hai.
 
 Ek ki jagah do kinds isliye, taaki har handler **ek hi system** chhue:
-`provision_stack` ke liye OpenFGA, `mark_stack_ready` ke liye Postgres. Dono
+`grant_stack_owner` ke liye OpenFGA, `mark_stack_ready` ke liye Postgres. Dono
 `internal/app` me rehte hain, kyunki stack provision karna app ka concern hai
 aur `Service` ke paas dono dependencies pehle se hain.
 
@@ -244,14 +244,14 @@ hai" — haan. "Ye email bhejo" — nahi.
 Shuruaati kinds:
 
 ```
-reconcile_stack_grant     Reconcile   stack:A/user:X      role ek state hai
-provision_stack           Job         stack:A             creation ek event hai
-mark_stack_ready          Job         stack:A             ek hi baar flip
-notify_user               Job         notif:9c2/rev3      (handler abhi nahi)
-start_template_run        Job         run:7f3a            (baad me migrate)
+reconcile_stack_grant   Reconcile   stack:A/user:X      role ek state hai
+grant_stack_owner       Job         stack:A             creation ek event hai
+mark_stack_ready        Job         stack:A             ek hi baar flip
+notify_user             Job         notif:9c2/rev3      (handler abhi nahi)
+start_template_run      Job         run:7f3a            (baad me migrate)
 ```
 
-`provision_stack` aur `mark_stack_ready` ek hi ordering key share karte hain. Ye
+`grant_stack_owner` aur `mark_stack_ready` ek hi ordering key share karte hain. Ye
 theek hai — unique index `(kind, ordering_key)` pe hai, toh takraav hota hi
 nahi, aur har kind apne aap se mutually excluded rehta hai.
 
@@ -420,7 +420,7 @@ Do registries hain, kyunki dono binaries ko kind ke alag-alag hisse chahiye:
 
 ```go
 // Producers ko sirf Kind, Mode, Key chahiye. Na dependency, na nil handler.
-queue.NewSpecRegistry(app.ProvisionStackSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
+queue.NewSpecRegistry(app.GrantStackOwnerSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
 
 // Worker deliver bhi karta hai.
 queue.NewRegistry(provisionHandler, readyHandler, grantHandler)
@@ -468,10 +468,10 @@ type UnitOfWork interface {
 
 **`CreateStack`.** `stackOwnerIntentRepository` type assertion aur
 `CreateStackWithOwnerIntent` dono khatam. Ek transaction stack ko
-`status = 'provisioning'` ke saath insert karti hai aur `provision_stack` request
+`status = 'provisioning'` ke saath insert karti hai aur `grant_stack_owner` request
 bhi; response 201 usi status ke saath.
 
-`provision_stack` ka payload, key `stack:stack_abc`:
+`grant_stack_owner` ka payload, key `stack:stack_abc`:
 
 ```json
 {"stack_id": "stack_abc", "subject": "user:xyz"}
@@ -531,7 +531,7 @@ Apne aap idempotent: wahi desired state dobara lagana no-op hai. Koi follow-up
 return nahi karta. `stacks.status` ko kabhi nahi chhuta, toh fail hone wala role
 change kisi `ready` stack ko wapas regress nahi kar sakta.
 
-### `provision_stack` — `ModeJob`, key `stack:<id>`
+### `grant_stack_owner` — `ModeJob`, key `stack:<id>`
 
 `internal/app` me rehta hai. Sirf OpenFGA chhuta hai: owner tuple likhta hai,
 phir ek `mark_stack_ready` request return karta hai.
@@ -540,7 +540,7 @@ phir ek `mark_stack_ready` request return karta hai.
 duplicate key pe `do nothing` record kiye hue owner ko kisi bhi baad ke enqueue
 se overwrite hone se bachata hai.
 
-Handler `Service.ProvisionStack` ke upar ek patla adapter hai, taaki logic wahan
+Handler `Service.GrantStackOwner` ke upar ek patla adapter hai, taaki logic wahan
 rahe jahan `Authorizer` pehle se hai.
 
 ### `mark_stack_ready` — `ModeJob`, key `stack:<id>`
@@ -548,7 +548,7 @@ rahe jahan `Authorizer` pehle se hai.
 `internal/app` me rehta hai. Sirf Postgres chhuta hai: `UPDATE stacks SET status
 = 'ready'`. Banawat se hi idempotent. Koi follow-up nahi.
 
-Kind aur ordering key milke unique hain, toh `provision_stack` ke saath
+Kind aur ordering key milke unique hain, toh `grant_stack_owner` ke saath
 `stack:<id>` share karna collision nahi hai.
 
 ## Notifications
@@ -636,7 +636,7 @@ Unit, bina database, in-memory backend ke saath:
 - Har spec ka `Key()` derivation, malformed payloads ke saath bhi.
 - Controller handler ke returned follow-ups enqueue kare, aur handler ke error
   dene pe **na** kare.
-- `provision_stack` theek ek `mark_stack_ready` request return kare.
+- `grant_stack_owner` theek ek `mark_stack_ready` request return kare.
 - `mark_stack_ready` do baar chalne pe status `ready` chhode aur dono baar error
   na de.
 - `reconcile_stack_grant` koi follow-up na de aur status kabhi na chhue.
@@ -691,12 +691,12 @@ Ye accept ki hui hain, khuli nahi. Likhi isliye hain taaki koi inhe bug samajh k
 dobara na khode.
 
 **Provisioning ke doran kiya gaya revoke undo ho sakta hai.** Agar koi
-`provision_stack` complete hone se pehle founding owner hata de, toh retry tuple
+`grant_stack_owner` complete hone se pehle founding owner hata de, toh retry tuple
 wapas likh dega. Window sankri hai — provisioning ke doran koi doosra owner hota
 hi nahi jo revoke kar sake — par hai.
 
 **Repair path ko current owner dena hoga.** Unique index sirf pending rows pe hai,
-toh `provision_stack` item complete aur prune hone ke baad usi stack pe naya
+toh `grant_stack_owner` item complete aur prune hone ke baad usi stack pe naya
 enqueue normally insert ho jayega. Kal koi repair/re-provision tool bane toh use
 stack ka **maujooda** owner pass karna hoga, `stacks.created_by` nahi — warna wo
 chupchaap original creator ko wapas bitha dega.

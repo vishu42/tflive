@@ -11,7 +11,7 @@ import (
 )
 
 // KindMarkStackReady records that a stack has finished provisioning. It is the
-// Postgres half of the chain KindProvisionStack starts, split out so that each
+// Postgres half of the chain KindGrantStackOwner starts, split out so that each
 // handler touches exactly one system.
 const KindMarkStackReady queue.Kind = "mark_stack_ready"
 

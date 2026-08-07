@@ -43,7 +43,7 @@ In scope:
 - A generic `work_queue` table and an `internal/queue` package.
 - Migrating authorization writes onto it, including the currently-unprotected
   assign and revoke paths.
-- Stack provisioning: a `status` column on `stacks`, and the `provision_stack`
+- Stack provisioning: a `status` column on `stacks`, and the `grant_stack_owner`
   and `mark_stack_ready` kinds that move it (**revision 2**, see Superseded
   decisions).
 - A `notify_user` kind reserved for downstream notifications.
@@ -105,7 +105,7 @@ The dual-write problem is about atomicity; at-least-once delivery plus an
 idempotent handler substitutes for it. Without this rule every multi-system
 operation would need its own chain of kinds, and each chain its own
 half-finished state. Where ownership makes a single handler awkward, split by
-*system* — see `provision_stack` / `mark_stack_ready`.
+*system* — see `grant_stack_owner` / `mark_stack_ready`.
 
 ## Superseded decisions
 
@@ -114,8 +114,8 @@ this section exists so the reasons are not lost.
 
 | Was | Now | Why |
 | --- | --- | --- |
-| `CreateStack` enqueues `reconcile_stack_grant` | enqueues `provision_stack` | One kind cannot serve both "found this stack" and "change a role"; the payload carries no discriminator, and `ModeReconcile` would let a later enqueue overwrite the recorded owner. |
-| Owner grant was `ModeReconcile` | `provision_stack` is `ModeJob` | Provisioning is an event, not a desired state. `ModeJob`'s `do nothing` protects the original payload; `ModeReconcile`'s `do update` would overwrite the owner from any future repair or backfill path. |
+| `CreateStack` enqueues `reconcile_stack_grant` | enqueues `grant_stack_owner` | One kind cannot serve both "found this stack" and "change a role"; the payload carries no discriminator, and `ModeReconcile` would let a later enqueue overwrite the recorded owner. |
+| Owner grant was `ModeReconcile` | `grant_stack_owner` is `ModeJob` | Provisioning is an event, not a desired state. `ModeJob`'s `do nothing` protects the original payload; `ModeReconcile`'s `do update` would overwrite the owner from any future repair or backfill path. |
 | `Handler.Deliver(ctx, item) error` | `Deliver(ctx, item) ([]Request, error)` | Makes chaining a declared return value rather than a side effect, so handlers need no `Enqueuer` dependency and can be tested by asserting the returned requests. |
 | `Handler` was one interface | `Spec` (kind, mode, key) split from `Handler` (spec + deliver) | The API only produces work, so it needed `Key`/`Mode` but not `Deliver`. It was constructing handlers with `nil` dependencies purely to reach them; that pattern does not survive a second kind. |
 | Stack readiness was implicit | `stacks.status` | Without it the API returns 201 for a stack that is not yet usable, and nothing records that. |
@@ -126,7 +126,7 @@ Rejected in revision 2, and why:
   safe — but it puts two domains in one unit. Split into two kinds instead.
 - **An inline fast path in `CreateStack`.** See above.
 - **Deriving readiness from the queue** (a stack is ready when no pending
-  `provision_stack` row exists) instead of a `status` column. Needs a query by
+  `grant_stack_owner` row exists) instead of a `status` column. Needs a query by
   resource key, and after pruning "no row" is indistinguishable from "never
   enqueued", so a missed enqueue would read as ready.
 
@@ -170,12 +170,12 @@ later touches one new file and zero lines in `internal/queue` or
 ```
 CreateStack, one transaction:
     INSERT stacks       (status = 'provisioning')
-    INSERT work_queue   (provision_stack, ModeJob, key = stack:<id>)
+    INSERT work_queue   (grant_stack_owner, ModeJob, key = stack:<id>)
   COMMIT  ──> 201 { id, status: "provisioning" }
 
-t≈1s   provision_stack   → OpenFGA owner tuple
-                         → returns [mark_stack_ready]
-t≈2s   mark_stack_ready  → UPDATE stacks SET status = 'ready'
+t≈1s   grant_stack_owner  → OpenFGA owner tuple
+                          → returns [mark_stack_ready]
+t≈2s   mark_stack_ready   → UPDATE stacks SET status = 'ready'
 ```
 
 Access is restored at t≈1s, when the tuple lands. The label catches up at t≈2s.
@@ -183,7 +183,7 @@ Between 201 and t≈1s the creator holds no OpenFGA grant at all, which is what
 the `GetStack` exception below covers.
 
 Two kinds rather than one so each handler touches a single system: OpenFGA for
-`provision_stack`, Postgres for `mark_stack_ready`. Both live in `internal/app`,
+`grant_stack_owner`, Postgres for `mark_stack_ready`. Both live in `internal/app`,
 because provisioning a stack is an app concern and `Service` already holds both
 dependencies.
 
@@ -249,14 +249,14 @@ yes. "Send this email" — no.
 Initial kinds:
 
 ```
-reconcile_stack_grant     Reconcile   stack:A/user:X      role is a state
-provision_stack           Job         stack:A             creation is an event
-mark_stack_ready          Job         stack:A             one flip, once
-notify_user               Job         notif:9c2/rev3      (no handler yet)
-start_template_run        Job         run:7f3a            (migrated later)
+reconcile_stack_grant   Reconcile   stack:A/user:X      role is a state
+grant_stack_owner       Job         stack:A             creation is an event
+mark_stack_ready        Job         stack:A             one flip, once
+notify_user             Job         notif:9c2/rev3      (no handler yet)
+start_template_run      Job         run:7f3a            (migrated later)
 ```
 
-`provision_stack` and `mark_stack_ready` share an ordering key. That is fine —
+`grant_stack_owner` and `mark_stack_ready` share an ordering key. That is fine —
 the unique index is on `(kind, ordering_key)`, so they never collide, and each
 is still mutually excluded against itself.
 
@@ -445,7 +445,7 @@ kind:
 
 ```go
 // Producers need Kind, Mode and Key only. No dependencies, no nil handlers.
-queue.NewSpecRegistry(app.ProvisionStackSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
+queue.NewSpecRegistry(app.GrantStackOwnerSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
 
 // The worker also delivers.
 queue.NewRegistry(provisionHandler, readyHandler, grantHandler)
@@ -493,10 +493,10 @@ type UnitOfWork interface {
 
 **`CreateStack`.** The `stackOwnerIntentRepository` type assertion and
 `CreateStackWithOwnerIntent` both disappear. One transaction inserts the stack
-with `status = 'provisioning'` and a `provision_stack` request; the response is
+with `status = 'provisioning'` and a `grant_stack_owner` request; the response is
 201 carrying that status.
 
-Payload for `provision_stack`, key `stack:stack_abc`:
+Payload for `grant_stack_owner`, key `stack:stack_abc`:
 
 ```json
 {"stack_id": "stack_abc", "subject": "user:xyz"}
@@ -558,7 +558,7 @@ Naturally idempotent: re-applying the same desired state is a no-op. Returns no
 follow-up requests. Never touches `stacks.status`, so a failing role change
 cannot regress a stack that is already `ready`.
 
-### `provision_stack` — `ModeJob`, key `stack:<id>`
+### `grant_stack_owner` — `ModeJob`, key `stack:<id>`
 
 Lives in `internal/app`. Touches OpenFGA only: writes the owner tuple, then
 returns a single `mark_stack_ready` request.
@@ -567,7 +567,7 @@ returns a single `mark_stack_ready` request.
 because `do nothing` on a duplicate key protects the recorded owner from being
 overwritten by any later enqueue for the same stack.
 
-The handler is a thin adapter over `Service.ProvisionStack`, so the logic sits
+The handler is a thin adapter over `Service.GrantStackOwner`, so the logic sits
 where `Authorizer` already is.
 
 ### `mark_stack_ready` — `ModeJob`, key `stack:<id>`
@@ -576,7 +576,7 @@ Lives in `internal/app`. Touches Postgres only: `UPDATE stacks SET status =
 'ready'`. Idempotent by construction. Returns no follow-ups.
 
 Kind and ordering key together are unique, so sharing `stack:<id>` with
-`provision_stack` is not a collision.
+`grant_stack_owner` is not a collision.
 
 ## Notifications
 
@@ -663,7 +663,7 @@ Unit, no database, against the in-memory backend:
 - `Key()` derivation per spec, including malformed payloads.
 - Controller enqueues a handler's returned follow-ups, and does **not** enqueue
   them when the handler returns an error.
-- `provision_stack` returns exactly one `mark_stack_ready` request.
+- `grant_stack_owner` returns exactly one `mark_stack_ready` request.
 - `mark_stack_ready` run twice leaves the status `ready` and errors neither time.
 - `reconcile_stack_grant` returns no follow-ups and never touches status.
 
@@ -720,12 +720,12 @@ These are accepted, not open. They are written down so nobody rediscovers them
 as bugs.
 
 **A revoke during provisioning can be undone.** If someone removes the founding
-owner before `provision_stack` completes, a retry rewrites the tuple. The window
+owner before `grant_stack_owner` completes, a retry rewrites the tuple. The window
 is narrow — during provisioning there is no second owner who could revoke — but
 it exists.
 
 **A repair path must supply the current owner.** The unique index only covers
-pending rows, so once a `provision_stack` item is completed and pruned, a fresh
+pending rows, so once a `grant_stack_owner` item is completed and pruned, a fresh
 enqueue for the same stack inserts normally. Any future repair or re-provision
 tool must pass the stack's *current* owner, not `stacks.created_by`, or it will
 silently restore the original creator.

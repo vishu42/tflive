@@ -530,8 +530,8 @@ func TestCreateStackEnqueuesProvisioningIntent(t *testing.T) {
 	if len(work.requests) != 1 {
 		t.Fatalf("enqueued %d intents, want 1", len(work.requests))
 	}
-	if work.requests[0].Kind != app.KindProvisionStack {
-		t.Fatalf("kind = %q, want %q", work.requests[0].Kind, app.KindProvisionStack)
+	if work.requests[0].Kind != app.KindGrantStackOwner {
+		t.Fatalf("kind = %q, want %q", work.requests[0].Kind, app.KindGrantStackOwner)
 	}
 	if deps.stacks.created.ID == "" {
 		t.Fatal("stack was not persisted")

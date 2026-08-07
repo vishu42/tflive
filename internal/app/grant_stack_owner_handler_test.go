@@ -9,22 +9,22 @@ import (
 	"github.com/vishu42/tflive/internal/queue"
 )
 
-func TestProvisionStackSpecKeyNamesTheStack(t *testing.T) {
+func TestGrantStackOwnerSpecKeyNamesTheStack(t *testing.T) {
 	t.Parallel()
 
-	key, err := ProvisionStackSpec.Key(provisionPayload(t, "stack_abc", "tenant_1", provisioningSubject))
+	key, err := GrantStackOwnerSpec.Key(grantOwnerPayload(t, "stack_abc", "tenant_1", provisioningSubject))
 	if err != nil {
 		t.Fatalf("Key returned error: %v", err)
 	}
 	if key != "stack:stack_abc" {
 		t.Fatalf("Key = %q, want stack:stack_abc", key)
 	}
-	if ProvisionStackSpec.Mode != queue.ModeJob {
-		t.Fatal("provision_stack must be ModeJob: creation is an event, not desired state")
+	if GrantStackOwnerSpec.Mode != queue.ModeJob {
+		t.Fatal("grant_stack_owner must be ModeJob: creation is an event, not desired state")
 	}
 }
 
-func TestProvisionStackSpecRejectsMalformedPayload(t *testing.T) {
+func TestGrantStackOwnerSpecRejectsMalformedPayload(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -38,23 +38,23 @@ func TestProvisionStackSpecRejectsMalformedPayload(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := ProvisionStackSpec.Key(test.payload); err == nil {
+			if _, err := GrantStackOwnerSpec.Key(test.payload); err == nil {
 				t.Fatal("Key accepted a malformed payload")
 			}
 		})
 	}
 }
 
-func TestProvisionStackHandlerChainsExactlyOneReadyRequest(t *testing.T) {
+func TestGrantStackOwnerHandlerChainsExactlyOneReadyRequest(t *testing.T) {
 	t.Parallel()
 
 	authorizer := &recordingAuthorizer{}
 	service := NewService(Service{Authorizer: authorizer})
-	handler := NewProvisionStackHandler(service)
+	handler := NewGrantStackOwnerHandler(service)
 
 	followUps, err := handler.Deliver(context.Background(), queue.Item{
-		Kind:         KindProvisionStack,
-		Payload:      provisionPayload(t, "stack_abc", "tenant_1", provisioningSubject),
+		Kind:         KindGrantStackOwner,
+		Payload:      grantOwnerPayload(t, "stack_abc", "tenant_1", provisioningSubject),
 		ActorSubject: provisioningSubject,
 		TenantID:     "tenant_1",
 	})
@@ -77,14 +77,14 @@ func TestProvisionStackHandlerChainsExactlyOneReadyRequest(t *testing.T) {
 	}
 }
 
-func TestProvisionStackHandlerChainsNothingWhenTheWriteFails(t *testing.T) {
+func TestGrantStackOwnerHandlerChainsNothingWhenTheWriteFails(t *testing.T) {
 	t.Parallel()
 
 	authorizer := &recordingAuthorizer{writeErr: authz.ErrUnavailable}
-	handler := NewProvisionStackHandler(NewService(Service{Authorizer: authorizer}))
+	handler := NewGrantStackOwnerHandler(NewService(Service{Authorizer: authorizer}))
 
 	followUps, err := handler.Deliver(context.Background(), queue.Item{
-		Payload: provisionPayload(t, "stack_abc", "tenant_1", provisioningSubject),
+		Payload: grantOwnerPayload(t, "stack_abc", "tenant_1", provisioningSubject),
 	})
 	if err == nil {
 		t.Fatal("Deliver swallowed the write failure — the item must be retried")
@@ -94,15 +94,15 @@ func TestProvisionStackHandlerChainsNothingWhenTheWriteFails(t *testing.T) {
 	}
 }
 
-func TestProvisionStackIsIdempotentWhenOwnerAlreadyGranted(t *testing.T) {
+func TestGrantStackOwnerIsIdempotentWhenOwnerAlreadyGranted(t *testing.T) {
 	t.Parallel()
 
 	authorizer := &recordingAuthorizer{grants: []authz.Grant{mustOwnerGrant(t, "stack_abc", provisioningSubject)}}
-	handler := NewProvisionStackHandler(NewService(Service{Authorizer: authorizer}))
+	handler := NewGrantStackOwnerHandler(NewService(Service{Authorizer: authorizer}))
 
 	for attempt := 0; attempt < 2; attempt++ {
 		if _, err := handler.Deliver(context.Background(), queue.Item{
-			Payload: provisionPayload(t, "stack_abc", "tenant_1", provisioningSubject),
+			Payload: grantOwnerPayload(t, "stack_abc", "tenant_1", provisioningSubject),
 		}); err != nil {
 			t.Fatalf("Deliver attempt %d returned error: %v", attempt, err)
 		}

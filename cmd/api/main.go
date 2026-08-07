@@ -103,7 +103,7 @@ func defaultAPIDependencies() apiDependencies {
 			}
 			// The API only produces work; delivery belongs to the worker. Specs
 			// carry no dependencies, so registering them here needs no handlers.
-			specs, err := queue.NewSpecRegistry(app.ProvisionStackSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
+			specs, err := queue.NewSpecRegistry(app.GrantStackOwnerSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
 			if err != nil {
 				return nil, fmt.Errorf("build queue specs: %w", err)
 			}
