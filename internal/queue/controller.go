@@ -67,6 +67,7 @@ func (options Options) withDefaults() Options {
 type Controller struct {
 	backend  Backend
 	registry *Registry
+	enqueuer Enqueuer
 	options  Options
 
 	// beforeComplete is a test seam for simulating a newer intent arriving
@@ -74,8 +75,10 @@ type Controller struct {
 	beforeComplete func()
 }
 
-func NewController(backend Backend, registry *Registry, options Options) *Controller {
-	return &Controller{backend: backend, registry: registry, options: options.withDefaults()}
+// NewController builds a controller. The enqueuer receives the follow-up work
+// handlers return; a controller whose handlers never chain may pass nil.
+func NewController(backend Backend, registry *Registry, enqueuer Enqueuer, options Options) *Controller {
+	return &Controller{backend: backend, registry: registry, enqueuer: enqueuer, options: options.withDefaults()}
 }
 
 // DispatchOnce claims one batch and processes it, returning how many items were
@@ -124,9 +127,25 @@ func (controller *Controller) process(ctx context.Context, item Item, now time.T
 		maxBackoff = timings.MaxBackoff()
 	}
 
-	if err := handler.Deliver(ctx, item); err != nil {
+	followUps, err := handler.Deliver(ctx, item)
+	if err != nil {
 		controller.reschedule(ctx, item, now, maxBackoff, err.Error())
 		return
+	}
+
+	// Follow-ups are enqueued outside the completing statement. That is safe
+	// because every kind derives its key deterministically and ModeJob ignores
+	// a duplicate key: a crash between this enqueue and the complete below
+	// replays both without harm.
+	if len(followUps) > 0 {
+		if controller.enqueuer == nil {
+			controller.reschedule(ctx, item, now, maxBackoff, "no enqueuer configured for follow-up work")
+			return
+		}
+		if err := controller.enqueuer.Enqueue(ctx, followUps...); err != nil {
+			controller.reschedule(ctx, item, now, maxBackoff, err.Error())
+			return
+		}
 	}
 
 	if controller.beforeComplete != nil {

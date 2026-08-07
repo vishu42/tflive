@@ -458,22 +458,31 @@ func insertStack(ctx context.Context, tx pgx.Tx, stack traits.Stack) error {
 		credentialIDsJSON = []byte("[]")
 	}
 
+	// A caller that does not care about provisioning gets the terminal status,
+	// so only the queue-driven creation path can leave a stack pending.
+	status := stack.Status
+	if status == "" {
+		status = traits.StackStatusReady
+	}
+
 	_, err = tx.Exec(ctx, `
 		insert into stacks (
 			id,
 			tenant_id,
 			name,
 			slug,
+			status,
 			tags_json,
 			default_credential_ids_json,
 			created_by,
 			created_at
-		) values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8)
+		) values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
 	`,
 		stack.ID,
 		stack.TenantID,
 		stack.Name,
 		stack.Slug,
+		string(status),
 		tagsJSON,
 		credentialIDsJSON,
 		stack.CreatedBy,
@@ -484,6 +493,26 @@ func insertStack(ctx context.Context, tx pgx.Tx, stack traits.Stack) error {
 	}
 	if err != nil {
 		return fmt.Errorf("create stack: %w", err)
+	}
+	return nil
+}
+
+// MarkStackReady flips a provisioned stack to its terminal status. It is
+// idempotent by construction: running it against an already ready stack is a
+// no-op update, which is what makes at-least-once delivery of the
+// mark_stack_ready kind safe.
+func (store *Store) MarkStackReady(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) error {
+	result, err := store.pool.Exec(ctx, `
+		update stacks
+		   set status = $3
+		 where tenant_id = $1
+		   and id = $2
+	`, tenantID, stackID, string(traits.StackStatusReady))
+	if err != nil {
+		return fmt.Errorf("mark stack ready: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return app.ErrNotFound
 	}
 	return nil
 }
@@ -507,6 +536,7 @@ func (store *Store) ListStacks(ctx context.Context, tenantID traits.TenantID) ([
 			tenant_id,
 			name,
 			slug,
+			status,
 			tags_json,
 			default_credential_ids_json,
 			created_by,
@@ -550,6 +580,7 @@ func (store *Store) ListStacksPage(ctx context.Context, tenantID traits.TenantID
 			tenant_id,
 			name,
 			slug,
+			status,
 			tags_json,
 			default_credential_ids_json,
 			created_by,
@@ -1646,11 +1677,14 @@ func scanStack(scanner stackScanner) (traits.Stack, error) {
 	var tagsJSON []byte
 	var credentialIDsJSON []byte
 
+	var status string
+
 	if err := scanner.Scan(
 		&stack.ID,
 		&stack.TenantID,
 		&stack.Name,
 		&stack.Slug,
+		&status,
 		&tagsJSON,
 		&credentialIDsJSON,
 		&stack.CreatedBy,
@@ -1658,6 +1692,7 @@ func scanStack(scanner stackScanner) (traits.Stack, error) {
 	); err != nil {
 		return traits.Stack{}, err
 	}
+	stack.Status = traits.StackStatus(status)
 	if err := json.Unmarshal(tagsJSON, &stack.Tags); err != nil {
 		return traits.Stack{}, fmt.Errorf("unmarshal stack tags: %w", err)
 	}
@@ -1674,6 +1709,7 @@ func (store *Store) getStack(ctx context.Context, tenantID traits.TenantID, stac
 			tenant_id,
 			name,
 			slug,
+			status,
 			tags_json,
 			default_credential_ids_json,
 			created_by,

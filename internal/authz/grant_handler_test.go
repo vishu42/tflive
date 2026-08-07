@@ -67,8 +67,7 @@ func grantPayload(role string) json.RawMessage {
 func TestKeyUsesCanonicalIdentifiers(t *testing.T) {
 	t.Parallel()
 
-	handler := NewStackGrantHandler(&fakeRelationships{})
-	key, err := handler.Key(grantPayload("owner"))
+	key, err := StackGrantSpec.Key(grantPayload("owner"))
 	if err != nil {
 		t.Fatalf("Key returned error: %v", err)
 	}
@@ -81,8 +80,7 @@ func TestKeyUsesCanonicalIdentifiers(t *testing.T) {
 func TestKeyRejectsMalformedPayload(t *testing.T) {
 	t.Parallel()
 
-	handler := NewStackGrantHandler(&fakeRelationships{})
-	if _, err := handler.Key(json.RawMessage(`{"stack_id":"","subject":""}`)); err == nil {
+	if _, err := StackGrantSpec.Key(json.RawMessage(`{"stack_id":"","subject":""}`)); err == nil {
 		t.Fatal("Key accepted an empty identity")
 	}
 }
@@ -90,12 +88,12 @@ func TestKeyRejectsMalformedPayload(t *testing.T) {
 func TestKindAndModeAreReconcile(t *testing.T) {
 	t.Parallel()
 
-	handler := NewStackGrantHandler(&fakeRelationships{})
-	if handler.Mode() != queue.ModeReconcile {
+	spec := NewStackGrantHandler(&fakeRelationships{}).Spec()
+	if spec.Mode != queue.ModeReconcile {
 		t.Fatal("stack grant handler must be ModeReconcile")
 	}
-	if handler.Kind() != KindReconcileStackGrant {
-		t.Fatalf("Kind = %q, want %q", handler.Kind(), KindReconcileStackGrant)
+	if spec.Kind != KindReconcileStackGrant {
+		t.Fatalf("Kind = %q, want %q", spec.Kind, KindReconcileStackGrant)
 	}
 }
 
@@ -105,8 +103,12 @@ func TestDeliverWritesDesiredRoleWhenAbsent(t *testing.T) {
 	relationships := &fakeRelationships{}
 	handler := NewStackGrantHandler(relationships)
 
-	if err := handler.Deliver(context.Background(), queue.Item{Payload: grantPayload("owner")}); err != nil {
+	followUps, err := handler.Deliver(context.Background(), queue.Item{Payload: grantPayload("owner")})
+	if err != nil {
 		t.Fatalf("Deliver returned error: %v", err)
+	}
+	if len(followUps) != 0 {
+		t.Fatalf("follow-ups = %+v, want none: a grant reconcile chains nothing", followUps)
 	}
 	if len(relationships.written) != 1 || relationships.written[0].Role() != RoleOwner {
 		t.Fatalf("written = %+v, want one owner grant", relationships.written)
@@ -124,7 +126,7 @@ func TestDeliverReplacesExistingRole(t *testing.T) {
 	}
 	handler := NewStackGrantHandler(relationships)
 
-	if err := handler.Deliver(context.Background(), queue.Item{Payload: grantPayload("owner")}); err != nil {
+	if _, err := handler.Deliver(context.Background(), queue.Item{Payload: grantPayload("owner")}); err != nil {
 		t.Fatalf("Deliver returned error: %v", err)
 	}
 	if len(relationships.written) != 1 || relationships.written[0].Role() != RoleOwner {
@@ -144,7 +146,7 @@ func TestDeliverIsIdempotentWhenAlreadyConverged(t *testing.T) {
 	handler := NewStackGrantHandler(relationships)
 
 	for attempt := 0; attempt < 2; attempt++ {
-		if err := handler.Deliver(context.Background(), queue.Item{Payload: grantPayload("owner")}); err != nil {
+		if _, err := handler.Deliver(context.Background(), queue.Item{Payload: grantPayload("owner")}); err != nil {
 			t.Fatalf("Deliver attempt %d returned error: %v", attempt, err)
 		}
 	}
@@ -161,7 +163,7 @@ func TestDeliverEmptyRoleRevokesEverything(t *testing.T) {
 	}
 	handler := NewStackGrantHandler(relationships)
 
-	if err := handler.Deliver(context.Background(), queue.Item{Payload: grantPayload("")}); err != nil {
+	if _, err := handler.Deliver(context.Background(), queue.Item{Payload: grantPayload("")}); err != nil {
 		t.Fatalf("Deliver returned error: %v", err)
 	}
 	if len(relationships.written) != 0 {
@@ -178,7 +180,7 @@ func TestDeliverPropagatesListError(t *testing.T) {
 	relationships := &fakeRelationships{listErr: errors.New("openfga unavailable")}
 	handler := NewStackGrantHandler(relationships)
 
-	if err := handler.Deliver(context.Background(), queue.Item{Payload: grantPayload("owner")}); err == nil {
+	if _, err := handler.Deliver(context.Background(), queue.Item{Payload: grantPayload("owner")}); err == nil {
 		t.Fatal("Deliver swallowed the list error — the item must be retried")
 	}
 }

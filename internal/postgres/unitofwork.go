@@ -28,12 +28,12 @@ func (repo *txRepo) AppendAuditEvent(ctx context.Context, event traits.SecurityA
 // the domain write commit or roll back together, so a crash can never leave
 // state written with its intent lost.
 type txEnqueuer struct {
-	tx       pgx.Tx
-	registry *queue.Registry
+	tx    pgx.Tx
+	specs *queue.SpecRegistry
 }
 
 func (enqueuer *txEnqueuer) Enqueue(ctx context.Context, requests ...queue.Request) error {
-	return enqueueRequests(ctx, enqueuer.tx, enqueuer.registry, requests...)
+	return enqueueRequests(ctx, enqueuer.tx, enqueuer.specs, requests...)
 }
 
 // InTx runs fn inside one transaction, giving it a transaction-scoped
@@ -46,7 +46,7 @@ func (store *Store) InTx(ctx context.Context, fn func(app.TxRepo, queue.Enqueuer
 	}
 	defer tx.Rollback(ctx)
 
-	if err := fn(&txRepo{tx: tx}, &txEnqueuer{tx: tx, registry: store.queueRegistry}); err != nil {
+	if err := fn(&txRepo{tx: tx}, &txEnqueuer{tx: tx, specs: store.queueSpecs}); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {

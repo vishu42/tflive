@@ -29,7 +29,7 @@ func TestCreateStackRequiresCreatorRole(t *testing.T) {
 	}
 }
 
-func TestCreateStackEnqueuesOwnerGrantInsteadOfCallingOpenFGA(t *testing.T) {
+func TestCreateStackEnqueuesProvisioningInsteadOfCallingOpenFGA(t *testing.T) {
 	t.Parallel()
 
 	stacks := &authorizationStackRepository{}
@@ -38,7 +38,8 @@ func TestCreateStackEnqueuesOwnerGrantInsteadOfCallingOpenFGA(t *testing.T) {
 	service := NewService(Service{Stacks: stacks, Work: work, Authorizer: authorizer, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123", RealmRoles: []string{"stack-creator"}})
 
-	if _, err := service.CreateStack(ctx, CreateStackCommand{TenantID: "tenant_123", Name: "Acme"}); err != nil {
+	stack, err := service.CreateStack(ctx, CreateStackCommand{TenantID: "tenant_123", Name: "Acme"})
+	if err != nil {
 		t.Fatalf("CreateStack() error = %v", err)
 	}
 
@@ -46,22 +47,28 @@ func TestCreateStackEnqueuesOwnerGrantInsteadOfCallingOpenFGA(t *testing.T) {
 	if authorizer.calls != 0 {
 		t.Fatalf("authorization calls = %d, want 0 — delivery belongs to the controller", authorizer.calls)
 	}
+	if stack.Status != traits.StackStatusProvisioning {
+		t.Fatalf("status = %q, want %q — the stack is not usable until the tuple lands", stack.Status, traits.StackStatusProvisioning)
+	}
 	if len(work.requests) != 1 {
 		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
 	}
-	if work.requests[0].Kind != authz.KindReconcileStackGrant {
-		t.Fatalf("kind = %q, want %q", work.requests[0].Kind, authz.KindReconcileStackGrant)
+	if work.requests[0].Kind != KindProvisionStack {
+		t.Fatalf("kind = %q, want %q", work.requests[0].Kind, KindProvisionStack)
 	}
 
-	var payload authz.GrantPayload
+	var payload ProvisionStackPayload
 	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}
-	if payload.StackID != "stack_123" || payload.Subject != "user_123" || payload.Role != authz.RoleOwner.String() {
-		t.Fatalf("payload = %#v, want owner for user_123 on stack_123", payload)
+	if payload.StackID != "stack_123" || payload.Subject != "user_123" || payload.TenantID != "tenant_123" {
+		t.Fatalf("payload = %#v, want user_123 provisioning stack_123 in tenant_123", payload)
 	}
 	if stacks.calls != 1 {
 		t.Fatalf("stack calls = %d, want 1", stacks.calls)
+	}
+	if stacks.created.Status != traits.StackStatusProvisioning {
+		t.Fatalf("persisted status = %q, want %q", stacks.created.Status, traits.StackStatusProvisioning)
 	}
 }
 
@@ -120,16 +127,20 @@ func TestCreateStackRejectsInvalidOpenFGASubjectBeforePersistence(t *testing.T) 
 }
 
 type authorizationStackRepository struct {
-	calls int
+	calls   int
+	created traits.Stack
+	stack   traits.Stack
+	getErr  error
 }
 
-func (repository *authorizationStackRepository) CreateStack(context.Context, traits.Stack) error {
+func (repository *authorizationStackRepository) CreateStack(_ context.Context, stack traits.Stack) error {
 	repository.calls++
+	repository.created = stack
 	return nil
 }
 
 func (repository *authorizationStackRepository) GetStack(context.Context, traits.TenantID, traits.StackID) (traits.Stack, error) {
-	return traits.Stack{}, nil
+	return repository.stack, repository.getErr
 }
 func (repository *authorizationStackRepository) GetStackWithTemplates(context.Context, traits.TenantID, traits.StackID) (StackView, error) {
 	return StackView{}, nil

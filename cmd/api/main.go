@@ -101,13 +101,13 @@ func defaultAPIDependencies() apiDependencies {
 			if !ok {
 				return nil, fmt.Errorf("unexpected postgres pool type %T", pool)
 			}
-			// The API only produces work; delivery belongs to the worker. The
-			// registry is still required so Enqueue can derive ordering keys.
-			registry, err := queue.NewRegistry(authz.NewStackGrantHandler(nil))
+			// The API only produces work; delivery belongs to the worker. Specs
+			// carry no dependencies, so registering them here needs no handlers.
+			specs, err := queue.NewSpecRegistry(app.ProvisionStackSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
 			if err != nil {
-				return nil, fmt.Errorf("build queue registry: %w", err)
+				return nil, fmt.Errorf("build queue specs: %w", err)
 			}
-			return postgres.NewStore(pgxPool, postgres.WithQueueRegistry(registry)), nil
+			return postgres.NewStore(pgxPool, postgres.WithQueueSpecs(specs)), nil
 		},
 		dialTemporal: temporal.Dial,
 		newDispatcher: func(temporalClient client.Client, taskQueue string) app.WorkflowDispatcher {

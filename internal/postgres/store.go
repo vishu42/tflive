@@ -15,16 +15,18 @@ var ErrNotFound = errors.New("postgres: not found")
 type Store struct {
 	pool             *pgxpool.Pool
 	credentialCipher *credentials.Cipher
-	queueRegistry    *queue.Registry
+	queueSpecs       *queue.SpecRegistry
 }
 
 // Option configures a Store at construction.
 type Option func(*Store)
 
-// WithQueueRegistry lets the store resolve a queue.Request into an ordering key
-// and mode. Stores that never enqueue can omit it.
-func WithQueueRegistry(registry *queue.Registry) Option {
-	return func(store *Store) { store.queueRegistry = registry }
+// WithQueueSpecs lets the store resolve a queue.Request into an ordering key
+// and mode. Specs carry no dependencies, so a producer-only binary registers
+// kinds without building the handlers that deliver them. Stores that never
+// enqueue can omit it.
+func WithQueueSpecs(specs *queue.SpecRegistry) Option {
+	return func(store *Store) { store.queueSpecs = specs }
 }
 
 // NewStore creates a repository store and loads the process-wide credential encryption key.

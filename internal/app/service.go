@@ -229,6 +229,7 @@ type Service struct {
 	Authorizer               authz.Authorizer
 	Work                     UnitOfWork
 	Stacks                   StackRepository
+	StackStatuses            StackStatusRepository
 	StackTemplates           StackTemplateRepository
 	Credentials              CredentialRepository
 	CredentialEncryptor      CredentialEncryptor
@@ -537,10 +538,14 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 	}
 
 	stack := traits.Stack{
-		ID:                   service.StackIDs.NewStackID(),
-		TenantID:             command.TenantID,
-		Name:                 strings.TrimSpace(command.Name),
-		Slug:                 slug,
+		ID:       service.StackIDs.NewStackID(),
+		TenantID: command.TenantID,
+		Name:     strings.TrimSpace(command.Name),
+		Slug:     slug,
+		// The owner tuple lands from the queue, not from this request, so the
+		// stack is recorded as not yet usable rather than silently returned as
+		// if it were.
+		Status:               traits.StackStatusProvisioning,
 		Tags:                 cloneStringMap(command.Tags),
 		DefaultCredentialIDs: append([]traits.CredentialSetID(nil), command.DefaultCredentialIDs...),
 		CreatedBy:            actor,
@@ -552,23 +557,27 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		return traits.Stack{}, fmt.Errorf("create owner stack: %w", err)
 	}
 
-	payload, err := json.Marshal(authz.GrantPayload{
-		StackID: string(stack.ID),
-		Subject: principal.Subject,
-		Role:    authz.RoleOwner.String(),
+	// provision_stack, not reconcile_stack_grant: creation is an event, and its
+	// ModeJob "do nothing" on a duplicate key keeps the founding owner from
+	// being overwritten by any later enqueue on the same stack.
+	payload, err := json.Marshal(ProvisionStackPayload{
+		StackID:  string(stack.ID),
+		TenantID: string(command.TenantID),
+		Subject:  principal.Subject,
 	})
 	if err != nil {
-		return traits.Stack{}, fmt.Errorf("encode owner grant payload: %w", err)
+		return traits.Stack{}, fmt.Errorf("encode provision stack payload: %w", err)
 	}
 
-	// The stack row and the owner intent commit together, so a crash can never
-	// leave a stack whose creator has no access and no record of the intent.
+	// The stack row and the provisioning intent commit together, so a crash can
+	// never leave a stack whose creator has no access and no record of the
+	// intent.
 	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
 		if err := repository.CreateStack(ctx, stack); err != nil {
 			return err
 		}
 		return enqueuer.Enqueue(ctx, queue.Request{
-			Kind:         authz.KindReconcileStackGrant,
+			Kind:         KindProvisionStack,
 			Payload:      payload,
 			ActorSubject: principal.Subject,
 			TenantID:     string(command.TenantID),
@@ -974,13 +983,45 @@ func (service *Service) UpgradeStackTemplate(ctx context.Context, command Upgrad
 	return updated, nil
 }
 
+// creatorMayViewProvisioningStack covers the window between CreateStack
+// returning 201 and the owner tuple landing, during which the creator has no
+// grant in OpenFGA and would get a 404 on the stack they just made. Because
+// there is no inline delivery, this is the only thing covering that window, so
+// it is load-bearing rather than cosmetic.
+//
+// It is deliberately narrow: view only, the creator only, and only while the
+// stack is still provisioning. Operating on the stack, adding templates and
+// starting runs keep going through OpenFGA, because the stack really is not
+// ready. Once the status flips to ready the exception stops applying, so it is
+// not a second authorization source in steady state.
+// It never turns a denial into a failure: any error reading the stack leaves
+// the original denial in place.
+func (service *Service) creatorMayViewProvisioningStack(ctx context.Context, command GetStackCommand, denied error) bool {
+	if !errors.Is(denied, ErrNotFound) {
+		// The check itself failed rather than denying; that is not this
+		// exception's business.
+		return false
+	}
+	principal, ok := authn.PrincipalFromContext(ctx)
+	if !ok || principal.Subject == "" {
+		return false
+	}
+	stack, err := service.Stacks.GetStack(ctx, command.TenantID, command.StackID)
+	if err != nil || stack.Status != traits.StackStatusProvisioning {
+		return false
+	}
+	return string(stack.CreatedBy) == principal.Subject
+}
+
 // GetStack returns one tenant-owned stack with installed templates.
 func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (StackView, error) {
 	if err := validateGetStackCommand(command); err != nil {
 		return StackView{}, err
 	}
 	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionView, ErrNotFound); err != nil {
-		return StackView{}, err
+		if !service.creatorMayViewProvisioningStack(ctx, command, err) {
+			return StackView{}, err
+		}
 	}
 
 	view, err := service.Stacks.GetStackWithTemplates(ctx, command.TenantID, command.StackID)

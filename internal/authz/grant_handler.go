@@ -37,18 +37,23 @@ func NewStackGrantHandler(relationships Relationships) *StackGrantHandler {
 	return &StackGrantHandler{relationships: relationships}
 }
 
-func (handler *StackGrantHandler) Kind() queue.Kind { return KindReconcileStackGrant }
-
-func (handler *StackGrantHandler) Mode() queue.Mode { return queue.ModeReconcile }
-
-// Key derives "stack:<id>/user:<sub>" from the payload identity, built from the
-// canonical formatters so the key cannot drift from what OpenFGA uses.
+// StackGrantSpec declares the reconcile_stack_grant kind. Producers register
+// it alone; only the worker also constructs the handler.
+//
+// The key is "stack:<id>/user:<sub>", built from the canonical formatters so it
+// cannot drift from the identity OpenFGA uses.
 //
 // This derivation is a frozen contract: keys are persisted, and changing the
 // format splits one resource across two keys, disabling the mutual exclusion
 // the unique partial index provides. To change it, drain the queue with
 // producers stopped, or introduce a new Kind and let the old one drain.
-func (handler *StackGrantHandler) Key(payload json.RawMessage) (string, error) {
+var StackGrantSpec = queue.Spec{
+	Kind: KindReconcileStackGrant,
+	Mode: queue.ModeReconcile,
+	Key:  stackGrantKey,
+}
+
+func stackGrantKey(payload json.RawMessage) (string, error) {
 	identity, err := parseGrantPayload(payload)
 	if err != nil {
 		return "", err
@@ -56,13 +61,16 @@ func (handler *StackGrantHandler) Key(payload json.RawMessage) (string, error) {
 	return identity.stack.String() + "/" + identity.subject.String(), nil
 }
 
+func (handler *StackGrantHandler) Spec() queue.Spec { return StackGrantSpec }
+
 // Deliver reads the subject's current roles on the stack and converges them to
 // the desired state: stale roles are removed, and the desired role is written
-// only when it is not already held.
-func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) error {
+// only when it is not already held. It never touches stacks.status, so a
+// failing role change cannot regress a ready stack, and it chains nothing.
+func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) ([]queue.Request, error) {
 	identity, err := parseGrantPayload(item.Payload)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	current, err := handler.relationships.ListSubjectGrants(ctx, ListSubjectGrantsRequest{
@@ -70,7 +78,7 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 		Stack:   identity.stack,
 	})
 	if err != nil {
-		return fmt.Errorf("read current stack grants: %w", err)
+		return nil, fmt.Errorf("read current stack grants: %w", err)
 	}
 
 	var stale []Grant
@@ -86,29 +94,29 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 	if len(stale) > 0 {
 		mutation, err := NewMutation(stale, true)
 		if err != nil {
-			return fmt.Errorf("build stale grant mutation: %w", err)
+			return nil, fmt.Errorf("build stale grant mutation: %w", err)
 		}
 		if err := handler.relationships.DeleteRelationships(ctx, mutation); err != nil {
-			return fmt.Errorf("remove stale stack grants: %w", err)
+			return nil, fmt.Errorf("remove stale stack grants: %w", err)
 		}
 	}
 
 	if !identity.hasRole || satisfied {
-		return nil
+		return nil, nil
 	}
 
 	grant, err := NewGrant(identity.subject, identity.stack, identity.role)
 	if err != nil {
-		return fmt.Errorf("build desired grant: %w", err)
+		return nil, fmt.Errorf("build desired grant: %w", err)
 	}
 	mutation, err := NewMutation([]Grant{grant}, true)
 	if err != nil {
-		return fmt.Errorf("build desired mutation: %w", err)
+		return nil, fmt.Errorf("build desired mutation: %w", err)
 	}
 	if err := handler.relationships.WriteRelationships(ctx, mutation); err != nil {
-		return fmt.Errorf("write desired stack grant: %w", err)
+		return nil, fmt.Errorf("write desired stack grant: %w", err)
 	}
-	return nil
+	return nil, nil
 }
 
 // grantIdentity is the parsed payload. Role is a struct, not a string, so

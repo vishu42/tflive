@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/activities"
+	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/artifacts"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
@@ -42,6 +43,8 @@ type workerStore interface {
 	artifacts.LogMetadataRecorder
 	dispatch.Outbox
 	queue.Backend
+	queue.Enqueuer
+	app.StackStatusRepository
 }
 
 // workerAuthorizer is the authorization surface the worker needs: decisions
@@ -71,7 +74,7 @@ type workerDependencies struct {
 	// newOutboxDispatcher builds the durable Postgres-to-Temporal dispatch loop.
 	newOutboxDispatcher     func(dispatch.Outbox, dispatch.WorkflowStarter) outboxDispatcher
 	newAuthorizationAdapter func(config.OpenFGAConfig) (workerAuthorizer, error)
-	newQueueController      func(queue.Backend, workerAuthorizer) (outboxDispatcher, error)
+	newQueueController      func(workerStore, workerAuthorizer) (outboxDispatcher, error)
 	// registerWorkflow attaches the workflow implementations this process can execute.
 	registerWorkflow func(temporalWorker)
 	// registerActivities attaches activity handlers and their shared dependencies to the worker.
@@ -105,7 +108,13 @@ func defaultWorkerDependencies() workerDependencies {
 			if !ok {
 				return nil, fmt.Errorf("unexpected postgres pool type %T", pool)
 			}
-			return postgres.NewStore(pgxPool), nil
+			// The worker both delivers work and enqueues the follow-ups handlers
+			// return, so its store needs the specs to derive ordering keys.
+			specs, err := queue.NewSpecRegistry(app.ProvisionStackSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
+			if err != nil {
+				return nil, fmt.Errorf("build queue specs: %w", err)
+			}
+			return postgres.NewStore(pgxPool, postgres.WithQueueSpecs(specs)), nil
 		},
 		dialTemporal: temporal.Dial,
 		newWorker: func(temporalClient client.Client, taskQueue string, options temporalworker.Options) temporalWorker {
@@ -120,12 +129,20 @@ func defaultWorkerDependencies() workerDependencies {
 		newAuthorizationAdapter: func(cfg config.OpenFGAConfig) (workerAuthorizer, error) {
 			return openfga.NewAuthorizationAdapter(openfga.Config{APIURL: cfg.APIURL, StoreID: cfg.StoreID, ModelID: cfg.ModelID, APIToken: cfg.APIToken.Value(), HTTPTimeout: cfg.RequestTimeout})
 		},
-		newQueueController: func(backend queue.Backend, authorizer workerAuthorizer) (outboxDispatcher, error) {
-			registry, err := queue.NewRegistry(authz.NewStackGrantHandler(authorizer))
+		newQueueController: func(store workerStore, authorizer workerAuthorizer) (outboxDispatcher, error) {
+			// Stack provisioning is an app concern and the app Service already
+			// owns both dependencies it needs, so the handlers adapt to it
+			// rather than reimplementing the writes.
+			service := app.NewService(app.Service{Authorizer: authorizer, StackStatuses: store})
+			registry, err := queue.NewRegistry(
+				app.NewProvisionStackHandler(service),
+				app.NewMarkStackReadyHandler(service),
+				authz.NewStackGrantHandler(authorizer),
+			)
 			if err != nil {
 				return nil, err
 			}
-			return queue.NewController(backend, registry, queue.Options{}), nil
+			return queue.NewController(store, registry, store, queue.Options{}), nil
 		},
 		registerWorkflow: func(worker temporalWorker) {
 			worker.RegisterWorkflowWithOptions(workflows.TemplateRunWorkflow, workflow.RegisterOptions{

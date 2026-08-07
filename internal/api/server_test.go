@@ -507,7 +507,7 @@ func TestCreateStackMapsUnitOfWorkFailure(t *testing.T) {
 	}
 }
 
-func TestCreateStackEnqueuesOwnerGrantIntent(t *testing.T) {
+func TestCreateStackEnqueuesProvisioningIntent(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
@@ -530,8 +530,21 @@ func TestCreateStackEnqueuesOwnerGrantIntent(t *testing.T) {
 	if len(work.requests) != 1 {
 		t.Fatalf("enqueued %d intents, want 1", len(work.requests))
 	}
+	if work.requests[0].Kind != app.KindProvisionStack {
+		t.Fatalf("kind = %q, want %q", work.requests[0].Kind, app.KindProvisionStack)
+	}
 	if deps.stacks.created.ID == "" {
 		t.Fatal("stack was not persisted")
+	}
+
+	// The caller is told the stack is not usable yet rather than being left to
+	// discover it through a failing follow-up request.
+	var body stackResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Status != string(traits.StackStatusProvisioning) {
+		t.Fatalf("status = %q, want %q", body.Status, traits.StackStatusProvisioning)
 	}
 }
 

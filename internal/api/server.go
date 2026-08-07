@@ -735,6 +735,7 @@ type stackResponse struct {
 	TenantID              string                    `json:"tenant_id"`
 	Name                  string                    `json:"name"`
 	Slug                  string                    `json:"slug"`
+	Status                string                    `json:"status"`
 	Tags                  map[string]string         `json:"tags"`
 	DefaultCredentialIDs  []string                  `json:"default_credential_ids"`
 	CreatedBy             string                    `json:"created_by"`
@@ -794,11 +795,20 @@ func newStackResponse(stack traits.Stack, capabilities app.StackCapabilities) st
 		tags = map[string]string{}
 	}
 
+	// Stacks created before the status column, and any stack a repository
+	// hands back without one, are ready: only the queue-driven creation path
+	// can leave a stack provisioning.
+	status := string(stack.Status)
+	if status == "" {
+		status = string(traits.StackStatusReady)
+	}
+
 	return stackResponse{
 		ID:                   string(stack.ID),
 		TenantID:             string(stack.TenantID),
 		Name:                 stack.Name,
 		Slug:                 stack.Slug,
+		Status:               status,
 		Tags:                 tags,
 		DefaultCredentialIDs: credentialIDs,
 		CreatedBy:            string(stack.CreatedBy),

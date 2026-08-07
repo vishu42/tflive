@@ -356,7 +356,7 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			return deps.outboxDispatcher
 		},
 		newAuthorizationAdapter: func(config.OpenFGAConfig) (workerAuthorizer, error) { return &recordingWorkerAuthorizer{}, nil },
-		newQueueController: func(queue.Backend, workerAuthorizer) (outboxDispatcher, error) {
+		newQueueController: func(workerStore, workerAuthorizer) (outboxDispatcher, error) {
 			return &recordingOutboxDispatcher{}, nil
 		},
 		registerWorkflow: func(worker temporalWorker) {
@@ -466,6 +466,14 @@ func (store *recordingWorkerStore) CompleteTemplateRun(context.Context, string) 
 }
 
 func (store *recordingWorkerStore) RetryTemplateRun(context.Context, string, time.Time, string) error {
+	return nil
+}
+
+func (store *recordingWorkerStore) Enqueue(context.Context, ...queue.Request) error {
+	return nil
+}
+
+func (store *recordingWorkerStore) MarkStackReady(context.Context, traits.TenantID, traits.StackID) error {
 	return nil
 }
 

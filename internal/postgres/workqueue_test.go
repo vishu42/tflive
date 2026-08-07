@@ -14,42 +14,40 @@ var _ queue.Backend = (*Store)(nil)
 var _ queue.Enqueuer = (*Store)(nil)
 var _ queue.Reader = (*Store)(nil)
 
-// keyedHandler derives its ordering key straight from the payload so queue
-// tests can exercise both modes without depending on a real domain handler.
-type keyedHandler struct {
-	kind queue.Kind
-	mode queue.Mode
+// keyedSpec derives its ordering key straight from the payload so queue tests
+// can exercise both modes without depending on a real domain kind.
+func keyedSpec(kind queue.Kind, mode queue.Mode) queue.Spec {
+	return queue.Spec{
+		Kind: kind,
+		Mode: mode,
+		Key: func(payload json.RawMessage) (string, error) {
+			var parsed struct {
+				Key string `json:"key"`
+			}
+			if err := json.Unmarshal(payload, &parsed); err != nil {
+				return "", err
+			}
+			return parsed.Key, nil
+		},
+	}
 }
 
-func (h keyedHandler) Kind() queue.Kind { return h.kind }
-func (h keyedHandler) Mode() queue.Mode { return h.mode }
-func (h keyedHandler) Key(payload json.RawMessage) (string, error) {
-	var parsed struct {
-		Key string `json:"key"`
-	}
-	if err := json.Unmarshal(payload, &parsed); err != nil {
-		return "", err
-	}
-	return parsed.Key, nil
-}
-func (h keyedHandler) Deliver(context.Context, queue.Item) error { return nil }
-
-func testRegistry(t *testing.T) *queue.Registry {
+func testSpecs(t *testing.T) *queue.SpecRegistry {
 	t.Helper()
-	registry, err := queue.NewRegistry(
-		keyedHandler{kind: "reconcile", mode: queue.ModeReconcile},
-		keyedHandler{kind: "job", mode: queue.ModeJob},
+	specs, err := queue.NewSpecRegistry(
+		keyedSpec("reconcile", queue.ModeReconcile),
+		keyedSpec("job", queue.ModeJob),
 	)
 	if err != nil {
-		t.Fatalf("NewRegistry returned error: %v", err)
+		t.Fatalf("NewSpecRegistry returned error: %v", err)
 	}
-	return registry
+	return specs
 }
 
 func newQueueStore(t *testing.T, ctx context.Context) (*Store, *pgxpool.Pool) {
 	t.Helper()
 	pool := openMigratedTestPool(t, ctx)
-	return NewStore(pool, WithQueueRegistry(testRegistry(t))), pool
+	return NewStore(pool, WithQueueSpecs(testSpecs(t))), pool
 }
 
 // dbNow reads the database clock. Claim eligibility compares the caller's now

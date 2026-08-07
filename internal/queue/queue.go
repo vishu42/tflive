@@ -69,6 +69,24 @@ type Status struct {
 	DeliveredAt *time.Time
 }
 
+// Spec declares a kind. It carries no dependencies, so a producer-only process
+// can register kinds without constructing the handlers that deliver them.
+//
+// Mode and Key are declared together in one value because they have to agree:
+// a Job with a repeating key silently swallows work, and a Reconcile with a
+// unique key gives up the mutual exclusion the unique index provides. A caller
+// cannot set one without the other.
+//
+// Key derivation is a frozen contract. Keys are persisted, so changing the
+// derivation splits one resource across two key formats and disables that
+// mutual exclusion. To change it, either drain the queue with producers
+// stopped, or introduce a new Kind and let the old one drain on the old format.
+type Spec struct {
+	Kind Kind
+	Mode Mode
+	Key  func(payload json.RawMessage) (string, error)
+}
+
 // Handler is implemented by whichever package owns the target external system.
 //
 // Deliver MUST be idempotent. The queue guarantees at-least-once delivery: a
@@ -76,16 +94,13 @@ type Status struct {
 // and a lease that expires while a slow worker is still running lets a second
 // worker deliver concurrently.
 //
-// Key derivation is a frozen contract. Keys are persisted, so changing the
-// derivation splits one resource across two key formats and disables the
-// mutual exclusion the unique index provides. To change it, either drain the
-// queue with producers stopped, or introduce a new Kind and let the old one
-// drain on the old format.
+// The returned requests are follow-up work. The controller enqueues them after
+// a successful delivery, which makes chaining a declared return value rather
+// than a side effect: a handler needs no Enqueuer, and its chain is assertable
+// in a unit test.
 type Handler interface {
-	Kind() Kind
-	Mode() Mode
-	Key(payload json.RawMessage) (string, error)
-	Deliver(ctx context.Context, item Item) error
+	Spec() Spec
+	Deliver(ctx context.Context, item Item) ([]Request, error)
 }
 
 // Describer renders a payload for the queue read API so that layer never
@@ -94,9 +109,10 @@ type Describer interface {
 	Describe(payload json.RawMessage) string
 }
 
-// Timings lets a Handler override controller defaults. Optional.
+// Timings lets a Handler override the controller's backoff cap, for a target
+// system whose outages are shorter or longer than the default. Optional,
+// discovered by type assertion.
 type Timings interface {
-	Lease() time.Duration
 	MaxBackoff() time.Duration
 }
 

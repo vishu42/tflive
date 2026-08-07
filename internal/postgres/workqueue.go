@@ -41,18 +41,18 @@ const enqueueJobSQL = `
 // Enqueue writes work intents. Use the transaction-bound enqueuer from InTx
 // when the intent must commit atomically with a domain write.
 func (store *Store) Enqueue(ctx context.Context, requests ...queue.Request) error {
-	return enqueueRequests(ctx, store.pool, store.queueRegistry, requests...)
+	return enqueueRequests(ctx, store.pool, store.queueSpecs, requests...)
 }
 
-func enqueueRequests(ctx context.Context, exec pgxExecutor, registry *queue.Registry, requests ...queue.Request) error {
+func enqueueRequests(ctx context.Context, exec pgxExecutor, specs *queue.SpecRegistry, requests ...queue.Request) error {
 	if len(requests) == 0 {
 		return nil
 	}
-	if registry == nil {
-		return fmt.Errorf("enqueue work: no queue registry configured")
+	if specs == nil {
+		return fmt.Errorf("enqueue work: no queue specs configured")
 	}
 	for _, request := range requests {
-		resolved, err := registry.Resolve(request)
+		resolved, err := specs.Resolve(request)
 		if err != nil {
 			return fmt.Errorf("resolve work request: %w", err)
 		}

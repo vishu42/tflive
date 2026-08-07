@@ -14,15 +14,20 @@ type stubHandler struct {
 	err  error
 }
 
-func (h stubHandler) Kind() Kind { return h.kind }
-func (h stubHandler) Mode() Mode { return h.mode }
-func (h stubHandler) Key(json.RawMessage) (string, error) {
-	if h.err != nil {
-		return "", h.err
+func (h stubHandler) Spec() Spec {
+	return Spec{
+		Kind: h.kind,
+		Mode: h.mode,
+		Key: func(json.RawMessage) (string, error) {
+			if h.err != nil {
+				return "", h.err
+			}
+			return h.key, nil
+		},
 	}
-	return h.key, nil
 }
-func (h stubHandler) Deliver(context.Context, Item) error { return nil }
+
+func (h stubHandler) Deliver(context.Context, Item) ([]Request, error) { return nil, nil }
 
 func TestNewRegistryRejectsDuplicateKinds(t *testing.T) {
 	t.Parallel()
@@ -33,6 +38,27 @@ func TestNewRegistryRejectsDuplicateKinds(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("NewRegistry accepted a duplicate kind")
+	}
+}
+
+func TestNewSpecRegistryRejectsDuplicateKinds(t *testing.T) {
+	t.Parallel()
+
+	key := func(json.RawMessage) (string, error) { return "k", nil }
+	_, err := NewSpecRegistry(
+		Spec{Kind: "a", Key: key},
+		Spec{Kind: "a", Key: key},
+	)
+	if err == nil {
+		t.Fatal("NewSpecRegistry accepted a duplicate kind")
+	}
+}
+
+func TestNewSpecRegistryRejectsMissingKeyDerivation(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewSpecRegistry(Spec{Kind: "a"}); err == nil {
+		t.Fatal("NewSpecRegistry accepted a spec with no key derivation")
 	}
 }
 
