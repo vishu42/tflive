@@ -2459,6 +2459,47 @@ func TestAssignStackRoleEnqueuesDesiredRoleWithoutCallingOpenFGA(t *testing.T) {
 	}
 }
 
+func TestAssignStackRoleEnqueuesMatchingRole(t *testing.T) {
+	t.Parallel()
+
+	stack, err := authz.StackFromID("stack_abc")
+	if err != nil {
+		t.Fatalf("StackFromID: %v", err)
+	}
+	subject, err := authz.SubjectFromKeycloakSub("user_456")
+	if err != nil {
+		t.Fatalf("SubjectFromKeycloakSub: %v", err)
+	}
+	existing, err := authz.NewGrant(subject, stack, authz.RoleOperator)
+	if err != nil {
+		t.Fatalf("NewGrant: %v", err)
+	}
+
+	authorizer := &recordingAuthorizer{grants: []authz.Grant{existing}}
+	work := newRecordingWork(nil)
+	service := NewService(Service{Work: work, Authorizer: authorizer, Clock: fixedClock{now: time.Now()}})
+
+	if _, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		StackID:  traits.StackID("stack_abc"),
+		UserSub:  "user_456",
+		Role:     "operator",
+	}); err != nil {
+		t.Fatalf("AssignStackRole returned error: %v", err)
+	}
+
+	if len(work.requests) != 1 {
+		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
+	}
+	var payload authz.GrantPayload
+	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.Role != "operator" {
+		t.Fatalf("payload role = %q, want operator", payload.Role)
+	}
+}
+
 func TestRevokeStackRoleEnqueuesEmptyRole(t *testing.T) {
 	t.Parallel()
 
@@ -2499,6 +2540,36 @@ func TestRevokeStackRoleEnqueuesEmptyRole(t *testing.T) {
 	}
 	if len(work.audits) != 1 || work.audits[0].OldRole != "operator" {
 		t.Fatalf("audits = %#v, want one revoke event recording the old role", work.audits)
+	}
+}
+
+func TestRevokeStackRoleEnqueuesEmptyRoleWhenGrantIsAbsent(t *testing.T) {
+	t.Parallel()
+
+	work := newRecordingWork(nil)
+	service := NewService(Service{
+		Work:       work,
+		Authorizer: &recordingAuthorizer{},
+		Clock:      fixedClock{now: time.Now()},
+	})
+
+	if err := service.RevokeStackRole(adminContext(), RevokeStackRoleCommand{
+		TenantID: traits.TenantID("tenant_123"),
+		StackID:  traits.StackID("stack_abc"),
+		UserSub:  "user_456",
+	}); err != nil {
+		t.Fatalf("RevokeStackRole returned error: %v", err)
+	}
+
+	if len(work.requests) != 1 {
+		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
+	}
+	var payload authz.GrantPayload
+	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.Role != "" {
+		t.Fatalf("payload role = %q, want empty", payload.Role)
 	}
 }
 

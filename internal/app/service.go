@@ -1279,10 +1279,6 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 		}
 	}
 
-	if currentRole == command.Role {
-		return GrantView{UserSub: command.UserSub, Role: command.Role}, nil
-	}
-
 	// The old delete-then-write pair is gone. The handler converges to the
 	// desired role, so there is no intermediate window in which a crash leaves
 	// the user holding no role at all.
@@ -1356,10 +1352,6 @@ func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStack
 		if g.Subject().String() == subject.String() {
 			targetRole = g.Role().String()
 		}
-	}
-
-	if targetRole == "" {
-		return nil
 	}
 
 	if targetRole == "owner" && ownerCount == 1 {
