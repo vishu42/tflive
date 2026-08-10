@@ -2,7 +2,7 @@
 
 ## Goal
 
-Replace the web console's current visual language with the Minimalist Monochrome design system: a pure black-and-white palette, serif typography, zero border radius, and a line-based visual structure. Every screen is converted. The result should read as editorial and deliberate rather than as a generic admin template, without sacrificing the information density an operator needs to run Terraform stacks.
+Replace the web console's current visual language with the Minimalist Monochrome design system: a pure black-and-white palette, a tight neo-grotesque paired with monospace, zero border radius, and a line-based visual structure. Every screen is converted. The result should read as editorial and deliberate rather than as a generic admin template, without sacrificing the information density an operator needs to run Terraform stacks.
 
 ## Current Context
 
@@ -26,9 +26,13 @@ Five decisions were settled during brainstorming and constrain everything below.
 
 **Scope.** Token layer plus a full restyle of every screen, not a phased or reference-implementation approach.
 
-**Density translation.** The design system as written targets editorial and marketing pages: 9xl hero headlines, pull quotes, pricing tiers. This console is a dense operational tool with stack lists, run logs, credential forms, and grant tables. Applying the type scale literally would make it unusable. The chosen translation is *editorial chrome, dense data*: oversized serif page titles, thick section rules, and monospace metadata labels, while tables, logs, and forms stay compact and scannable. Drama lives in the chrome; precision lives in the data.
+**Density translation.** The design system as written targets editorial and marketing pages: 9xl hero headlines, pull quotes, pricing tiers. This console is a dense operational tool with stack lists, run logs, credential forms, and grant tables. Applying the type scale literally would make it unusable. The chosen translation is *editorial chrome, dense data*: oversized page titles, thick section rules, and monospace metadata labels, while tables, logs, and forms stay compact and scannable. Drama lives in the chrome; precision lives in the data.
 
-**Fonts.** Self-hosted woff2 subsets rather than a CDN link. This control plane is likely to run in private or egress-restricted networks where a Google Fonts request would fail and silently degrade the console to fallback serif.
+**Fonts.** Self-hosted woff2 subsets rather than a CDN link. This control plane is likely to run in private or egress-restricted networks where a Google Fonts request would fail and silently degrade the console to a fallback face.
+
+**Typeface pairing (revised 2026-08-11).** The original design brief specified serif as hero — Playfair Display for display and Source Serif 4 for body. That was implemented and reviewed against a visual reference, and rejected: the serif read wrong for an operational console. The pairing is now a tight neo-grotesque (**Inter**) for both display and body, with **JetBrains Mono** retained for all technical signal (labels, IDs, timestamps, status, logs, buttons).
+
+This is a deliberate departure from the "Serif Typography as Hero" element of the source design system. Everything else about the style is unchanged, and the contrast the design depends on still comes from scale, weight, inversion and the line system rather than from typeface mixing.
 
 **State signalling.** Monochrome everywhere except a single reserved red used only for failure states and destructive confirmation. This breaks the design system's absolute palette rule at exactly one point, in exchange for keeping the loudest possible operational signal in a tool that can destroy production infrastructure.
 
@@ -51,8 +55,8 @@ Five decisions were settled during brainstorming and constrain everything below.
   --color-critical:      #C1121F;
   --color-critical-fg:   #FFFFFF;
 
-  --font-display: "Playfair Display", Georgia, serif;
-  --font-body:    "Source Serif 4", Georgia, serif;
+  --font-display: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-body:    Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --rule-hairline: 1px;
@@ -80,10 +84,10 @@ A console cannot put 128px type on every screen. The app does, however, have nat
 
 | Context | Treatment |
 |---|---|
-| Editorial screens (404, denied, unavailable, callback) | `--text-8xl` desktop to `--text-5xl` mobile, Playfair, tracking-tighter, leading-none |
-| Working-screen page titles | `--text-5xl` to `2rem` mobile, Playfair |
-| Panel headings | `--text-2xl` Playfair |
-| Body, form labels | `--text-base` to `--text-lg` Source Serif 4 |
+| Editorial screens (404, denied, unavailable, callback) | `--text-8xl` desktop to `--text-5xl` mobile, Inter, tracking-tighter, leading-none |
+| Working-screen page titles | `--text-5xl` to `2rem` mobile, Inter |
+| Panel headings | `--text-2xl` Inter |
+| Body, form labels | `--text-base` to `--text-lg` Inter |
 | Table headers, metadata, IDs, timestamps, status | `--text-xs` JetBrains Mono, tracking-widest, uppercase |
 
 Routing all technical chrome to monospace with wide tracking is what makes a dense table read as designed rather than merely small.
@@ -108,11 +112,10 @@ woff2 only, latin subset, `font-display: swap`.
 
 | Family | Weights | Purpose |
 |---|---|---|
-| Playfair Display | 400, 700, 400 italic | Display headings. Italic is required; the design system relies on it for emphasis and pull-quote treatments. |
-| Source Serif 4 | 400, 600 | Body text, form labels |
-| JetBrains Mono | 400, 500 | Metadata, IDs, timestamps, table headers, logs |
+| Inter | 400, 500, 600, 700 | Display headings and body text |
+| JetBrains Mono | 400, 500 | Metadata, IDs, timestamps, table headers, status, buttons, logs |
 
-Approximately 8 files, 250 to 350KB total. `index.html` gains `<link rel="preload">` for Playfair 400 and Source Serif 400 only. Preloading all eight faces would contend for bandwidth and defeat the purpose.
+Six files, roughly 140KB total. `index.html` gains `<link rel="preload">` for Inter 400 and Inter 700 only. Preloading every face would contend for bandwidth and defeat the purpose.
 
 ## Component Primitives
 
@@ -174,7 +177,7 @@ The most repeated new structure, and where the editorial voice lives on working 
 
 ```
 STACKS / INDEX          mono xs, tracking-widest, --color-muted-fg
-Stacks                  Playfair 5xl, tracking-tight, leading-none
+Stacks                  Inter 5xl, tracking-tight, leading-none
 ▬▬▬▬▬▬▬▬  ▫             4px rule plus 12px bordered square
 ```
 
@@ -184,7 +187,7 @@ Density is preserved. Monospace `xs` uppercase headers, 1px `--color-border-ligh
 
 ### Editorial screens
 
-`NotFound`, `AccessDenied`, and `ServiceUnavailable` receive the full treatment: an `8xl` Playfair headline (`404`, `DENIED`, `OFFLINE`), a thick rule, one line of Source Serif explanation, and a ghost-button return link.
+`NotFound`, `AccessDenied`, and `ServiceUnavailable` receive the full treatment: an `8xl` Inter headline (`404`, `DENIED`, `OFFLINE`), a thick rule, one line of Inter explanation, and a ghost-button return link.
 
 ## Textures
 

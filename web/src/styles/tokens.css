@@ -16,9 +16,12 @@
   --color-critical:     #C1121F;
   --color-critical-fg:  #FFFFFF;
 
-  /* Typefaces */
-  --font-display: "Playfair Display", Georgia, serif;
-  --font-body:    "Source Serif 4", Georgia, serif;
+  /* Typefaces. A tight neo-grotesque carries both display and body; the
+     monospace carries every technical signal (labels, IDs, status, logs).
+     The contrast in this design comes from scale, weight and inversion —
+     not from mixing a serif into the pairing. */
+  --font-display: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-body:    Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
                   Consolas, "Liberation Mono", monospace;
 

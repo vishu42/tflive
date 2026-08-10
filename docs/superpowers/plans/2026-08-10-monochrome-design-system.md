@@ -80,7 +80,7 @@ Expected output: seven lines each reporting a filename and a byte count in the 2
 ls -1 web/public/fonts/ && du -sh web/public/fonts
 ```
 
-Expected: 7 files (`playfair-display-400.woff2`, `playfair-display-700.woff2`, `playfair-display-400-italic.woff2`, `source-serif-4-400.woff2`, `source-serif-4-600.woff2`, `jetbrains-mono-400.woff2`, `jetbrains-mono-500.woff2`) totalling roughly 164K.
+Expected: 6 files (`inter-400.woff2`, `inter-500.woff2`, `inter-600.woff2`, `inter-700.woff2`, `jetbrains-mono-400.woff2`, `jetbrains-mono-500.woff2`) totalling roughly 140K.
 
 - [ ] **Step 3: Write the failing guard test**
 
@@ -181,8 +181,8 @@ Create `web/src/styles/tokens.css`:
   --color-critical-fg:  #FFFFFF;
 
   /* Typefaces */
-  --font-display: "Playfair Display", Georgia, serif;
-  --font-body:    "Source Serif 4", Georgia, serif;
+  --font-display: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-body:    Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
                   Consolas, "Liberation Mono", monospace;
 
@@ -250,39 +250,32 @@ Create `web/src/styles/base.css`:
 ```css
 /* ---- Self-hosted faces. Latin subset, vendored by scripts/vendor-fonts.sh ---- */
 @font-face {
-  font-family: "Playfair Display";
+  font-family: Inter;
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("/fonts/playfair-display-400.woff2") format("woff2");
+  src: url("/fonts/inter-400.woff2") format("woff2");
 }
 @font-face {
-  font-family: "Playfair Display";
+  font-family: Inter;
   font-style: normal;
-  font-weight: 700;
+  font-weight: 500;
   font-display: swap;
-  src: url("/fonts/playfair-display-700.woff2") format("woff2");
+  src: url("/fonts/inter-500.woff2") format("woff2");
 }
 @font-face {
-  font-family: "Playfair Display";
-  font-style: italic;
-  font-weight: 400;
-  font-display: swap;
-  src: url("/fonts/playfair-display-400-italic.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Source Serif 4";
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url("/fonts/source-serif-4-400.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Source Serif 4";
+  font-family: Inter;
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url("/fonts/source-serif-4-600.woff2") format("woff2");
+  src: url("/fonts/inter-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/inter-700.woff2") format("woff2");
 }
 @font-face {
   font-family: "JetBrains Mono";
@@ -465,8 +458,8 @@ Leave every other rule in `styles.css` untouched — later tasks drain them prog
 In `web/index.html`, inside `<head>` and before the `<title>`, add preloads for the two faces needed on first paint. Preloading all seven would contend for bandwidth and defeat the purpose.
 
 ```html
-    <link rel="preload" href="/fonts/playfair-display-400.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="/fonts/source-serif-4-400.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/inter-400.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/inter-700.woff2" as="font" type="font/woff2" crossorigin />
 ```
 
 - [ ] **Step 9: Run the guard test to verify it passes**

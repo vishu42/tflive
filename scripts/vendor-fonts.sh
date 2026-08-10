@@ -32,11 +32,10 @@ fetch() {
 }
 
 echo "Vendoring fonts into ${DEST}"
-fetch "Playfair+Display:wght@400"        playfair-display-400
-fetch "Playfair+Display:wght@700"        playfair-display-700
-fetch "Playfair+Display:ital,wght@1,400" playfair-display-400-italic
-fetch "Source+Serif+4:wght@400"          source-serif-4-400
-fetch "Source+Serif+4:wght@600"          source-serif-4-600
-fetch "JetBrains+Mono:wght@400"          jetbrains-mono-400
-fetch "JetBrains+Mono:wght@500"          jetbrains-mono-500
+fetch "Inter:wght@400"          inter-400
+fetch "Inter:wght@500"          inter-500
+fetch "Inter:wght@600"          inter-600
+fetch "Inter:wght@700"          inter-700
+fetch "JetBrains+Mono:wght@400" jetbrains-mono-400
+fetch "JetBrains+Mono:wght@500" jetbrains-mono-500
 echo "Done."
