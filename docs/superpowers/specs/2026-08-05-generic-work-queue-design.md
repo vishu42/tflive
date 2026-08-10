@@ -198,7 +198,7 @@ Migration `0012_work_queue.sql`:
 create table work_queue (
     id            bigserial primary key,
     kind          text not null,
-    ordering_key  text not null,
+    resource_key  text not null,
     payload       jsonb not null,
     revision      bigint not null default 1,
     actor_subject text not null,
@@ -214,7 +214,7 @@ create table work_queue (
 -- load-bearing: at most one pending row per (kind, key).
 -- Provides coalescing AND per-key mutual exclusion.
 create unique index work_queue_pending_key_idx
-    on work_queue (kind, ordering_key) where processed_at is null;
+    on work_queue (kind, resource_key) where processed_at is null;
 
 create index work_queue_ready_idx
     on work_queue (available_at, id) where processed_at is null;
@@ -256,8 +256,8 @@ notify_user             Job         notif:9c2/rev3      (no handler yet)
 start_template_run      Job         run:7f3a            (migrated later)
 ```
 
-`grant_stack_owner` and `mark_stack_ready` share an ordering key. That is fine —
-the unique index is on `(kind, ordering_key)`, so they never collide, and each
+`grant_stack_owner` and `mark_stack_ready` share an resource key. That is fine —
+the unique index is on `(kind, resource_key)`, so they never collide, and each
 is still mutually excluded against itself.
 
 ## The three queries
@@ -266,16 +266,16 @@ is still mutually excluded against itself.
 
 ```sql
 -- ModeReconcile: newest desired state wins, fence any in-flight worker
-insert into work_queue (kind, ordering_key, payload, actor_subject, tenant_id)
+insert into work_queue (kind, resource_key, payload, actor_subject, tenant_id)
 values ($1, $2, $3, $4, $5)
-on conflict (kind, ordering_key) where processed_at is null
+on conflict (kind, resource_key) where processed_at is null
 do update set payload  = excluded.payload,
               revision = work_queue.revision + 1;
 
 -- ModeJob: re-enqueueing identical work is a no-op
-insert into work_queue (kind, ordering_key, payload, actor_subject, tenant_id)
+insert into work_queue (kind, resource_key, payload, actor_subject, tenant_id)
 values ($1, $2, $3, $4, $5)
-on conflict (kind, ordering_key) where processed_at is null
+on conflict (kind, resource_key) where processed_at is null
 do nothing;
 ```
 
@@ -301,7 +301,7 @@ with candidate as (
        set claimed_until = $2, attempts = attempts + 1
       from candidate
      where q.id = candidate.id
- returning q.id, q.kind, q.ordering_key, q.payload, q.revision,
+ returning q.id, q.kind, q.resource_key, q.payload, q.revision,
            q.actor_subject, q.tenant_id, q.attempts
 ) select * from claimed;
 ```
@@ -319,7 +319,7 @@ Do **not** complete: clear `claimed_until`, set `available_at = now()`, and let
 it run again against the fresher payload. Without this fence the newer intent is
 silently lost.
 
-## Ordering keys
+## Resource keys
 
 The key is derived by the handler, stored in the column, and used by the index.
 It is not computed in SQL — that would put payload structure into the queue's
@@ -379,7 +379,7 @@ type Item struct {
 // Spec declares a kind. It carries no dependencies, so a producer-only process
 // can register kinds without constructing the handlers that deliver them.
 //
-// Key derivation is a frozen contract. See "Ordering keys" below before
+// Key derivation is a frozen contract. See "Resource keys" below before
 // changing it.
 type Spec struct {
     Kind Kind
@@ -575,7 +575,7 @@ where `Authorizer` already is.
 Lives in `internal/app`. Touches Postgres only: `UPDATE stacks SET status =
 'ready'`. Idempotent by construction. Returns no follow-ups.
 
-Kind and ordering key together are unique, so sharing `stack:<id>` with
+Kind and resource key together are unique, so sharing `stack:<id>` with
 `grant_stack_owner` is not a collision.
 
 ## Notifications
@@ -638,7 +638,7 @@ update stacks set status = 'provisioning'
 where exists (
     select 1 from work_queue
      where processed_at is null
-       and ordering_key like 'stack:' || stacks.id || '%'
+       and resource_key like 'stack:' || stacks.id || '%'
 );
 ```
 

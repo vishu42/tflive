@@ -566,7 +566,7 @@ func (worker *recordingTemporalWorker) Run(<-chan interface{}) error {
 
 // recordingWorkerStore must satisfy queue.Backend now that the worker runs a
 // queue controller instead of the authorization dispatcher.
-func (store *recordingWorkerStore) Claim(context.Context, time.Time, time.Time, int, []queue.Kind) ([]queue.Item, error) {
+func (store *recordingWorkerStore) Claim(context.Context, time.Duration, int, []queue.Kind) ([]queue.Item, error) {
 	return nil, nil
 }
 
@@ -574,11 +574,13 @@ func (store *recordingWorkerStore) Complete(context.Context, int64, int64) (bool
 	return true, nil
 }
 
-func (store *recordingWorkerStore) Reschedule(context.Context, int64, time.Time, string) error {
+func (store *recordingWorkerStore) Reschedule(context.Context, int64, time.Duration, string) error {
 	return nil
 }
 
-func (store *recordingWorkerStore) Prune(context.Context, time.Time) (int64, error) { return 0, nil }
+func (store *recordingWorkerStore) Prune(context.Context, time.Duration) (int64, error) {
+	return 0, nil
+}
 
 func (authorizer *recordingWorkerAuthorizer) ListSubjectGrants(context.Context, authz.ListSubjectGrantsRequest) (authz.ListGrantsResult, error) {
 	return authz.ListGrantsResult{}, nil

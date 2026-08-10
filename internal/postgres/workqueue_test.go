@@ -14,7 +14,7 @@ var _ queue.Backend = (*Store)(nil)
 var _ queue.Enqueuer = (*Store)(nil)
 var _ queue.Reader = (*Store)(nil)
 
-// keyedSpec derives its ordering key straight from the payload so queue tests
+// keyedSpec derives its resource key straight from the payload so queue tests
 // can exercise both modes without depending on a real domain kind.
 func keyedSpec(kind queue.Kind, mode queue.Mode) queue.Spec {
 	return queue.Spec{
@@ -48,18 +48,6 @@ func newQueueStore(t *testing.T, ctx context.Context) (*Store, *pgxpool.Pool) {
 	t.Helper()
 	pool := openMigratedTestPool(t, ctx)
 	return NewStore(pool, WithQueueSpecs(testSpecs(t))), pool
-}
-
-// dbNow reads the database clock. Claim eligibility compares the caller's now
-// against available_at, which the database stamps with its own now() at insert
-// time, so a Go timestamp captured before enqueueing is always too early.
-func dbNow(t *testing.T, ctx context.Context, pool *pgxpool.Pool) time.Time {
-	t.Helper()
-	var now time.Time
-	if err := pool.QueryRow(ctx, `select now()`).Scan(&now); err != nil {
-		t.Fatalf("read database clock: %v", err)
-	}
-	return now.UTC()
 }
 
 func TestEnqueueReconcileCoalescesAndBumpsRevision(t *testing.T) {
@@ -148,7 +136,7 @@ func TestClaimLeasesAndSkipsClaimedRows(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store, pool := newQueueStore(t, ctx)
+	store, _ := newQueueStore(t, ctx)
 
 	for _, key := range []string{"k1", "k2"} {
 		payload := json.RawMessage(`{"key":"` + key + `"}`)
@@ -157,8 +145,7 @@ func TestClaimLeasesAndSkipsClaimedRows(t *testing.T) {
 		}
 	}
 
-	now := dbNow(t, ctx, pool)
-	first, err := store.Claim(ctx, now, now.Add(30*time.Second), 1, nil)
+	first, err := store.Claim(ctx, 30*time.Second, 1, nil)
 	if err != nil {
 		t.Fatalf("first Claim returned error: %v", err)
 	}
@@ -166,7 +153,7 @@ func TestClaimLeasesAndSkipsClaimedRows(t *testing.T) {
 		t.Fatalf("first Claim = %+v, want 1 item with Attempts 1", first)
 	}
 
-	second, err := store.Claim(ctx, now, now.Add(30*time.Second), 10, nil)
+	second, err := store.Claim(ctx, 30*time.Second, 10, nil)
 	if err != nil {
 		t.Fatalf("second Claim returned error: %v", err)
 	}
@@ -174,7 +161,7 @@ func TestClaimLeasesAndSkipsClaimedRows(t *testing.T) {
 		t.Fatalf("second Claim = %+v, want the other key", second)
 	}
 
-	third, err := store.Claim(ctx, now, now.Add(30*time.Second), 10, nil)
+	third, err := store.Claim(ctx, 30*time.Second, 10, nil)
 	if err != nil {
 		t.Fatalf("third Claim returned error: %v", err)
 	}
@@ -187,19 +174,19 @@ func TestClaimReclaimsExpiredLease(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store, pool := newQueueStore(t, ctx)
+	store, _ := newQueueStore(t, ctx)
 
 	if err := store.Enqueue(ctx, queue.Request{Kind: "reconcile", Payload: json.RawMessage(`{"key":"k1"}`), TenantID: "t1"}); err != nil {
 		t.Fatalf("Enqueue returned error: %v", err)
 	}
-	now := dbNow(t, ctx, pool)
-	if _, err := store.Claim(ctx, now, now.Add(30*time.Second), 10, nil); err != nil {
+	// A zero lease has already expired by the time the next statement reads the
+	// database clock, so expiry is exercised without waiting for one.
+	if _, err := store.Claim(ctx, 0, 10, nil); err != nil {
 		t.Fatalf("first Claim returned error: %v", err)
 	}
 
 	// A dead worker releases nothing; the lease simply stops matching.
-	after := now.Add(31 * time.Second)
-	again, err := store.Claim(ctx, after, after.Add(30*time.Second), 10, nil)
+	again, err := store.Claim(ctx, 30*time.Second, 10, nil)
 	if err != nil {
 		t.Fatalf("second Claim returned error: %v", err)
 	}
@@ -212,7 +199,7 @@ func TestClaimFiltersByKind(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store, pool := newQueueStore(t, ctx)
+	store, _ := newQueueStore(t, ctx)
 
 	if err := store.Enqueue(ctx,
 		queue.Request{Kind: "reconcile", Payload: json.RawMessage(`{"key":"k1"}`), TenantID: "t1"},
@@ -221,8 +208,7 @@ func TestClaimFiltersByKind(t *testing.T) {
 		t.Fatalf("Enqueue returned error: %v", err)
 	}
 
-	now := dbNow(t, ctx, pool)
-	claimed, err := store.Claim(ctx, now, now.Add(30*time.Second), 10, []queue.Kind{"job"})
+	claimed, err := store.Claim(ctx, 30*time.Second, 10, []queue.Kind{"job"})
 	if err != nil {
 		t.Fatalf("Claim returned error: %v", err)
 	}
@@ -241,8 +227,7 @@ func TestCompleteIsFencedOnRevision(t *testing.T) {
 	if err := store.Enqueue(ctx, queue.Request{Kind: "reconcile", Payload: payload, TenantID: "t1"}); err != nil {
 		t.Fatalf("Enqueue returned error: %v", err)
 	}
-	now := dbNow(t, ctx, pool)
-	claimed, err := store.Claim(ctx, now, now.Add(30*time.Second), 10, nil)
+	claimed, err := store.Claim(ctx, 30*time.Second, 10, nil)
 	if err != nil {
 		t.Fatalf("Claim returned error: %v", err)
 	}
@@ -273,13 +258,12 @@ func TestCompleteSucceedsOnCurrentRevision(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store, pool := newQueueStore(t, ctx)
+	store, _ := newQueueStore(t, ctx)
 
 	if err := store.Enqueue(ctx, queue.Request{Kind: "reconcile", Payload: json.RawMessage(`{"key":"k1"}`), TenantID: "t1"}); err != nil {
 		t.Fatalf("Enqueue returned error: %v", err)
 	}
-	now := dbNow(t, ctx, pool)
-	claimed, err := store.Claim(ctx, now, now.Add(30*time.Second), 10, nil)
+	claimed, err := store.Claim(ctx, 30*time.Second, 10, nil)
 	if err != nil {
 		t.Fatalf("Claim returned error: %v", err)
 	}
@@ -307,17 +291,16 @@ func TestRescheduleClearsLeaseAndRecordsError(t *testing.T) {
 	if err := store.Enqueue(ctx, queue.Request{Kind: "reconcile", Payload: json.RawMessage(`{"key":"k1"}`), TenantID: "t1"}); err != nil {
 		t.Fatalf("Enqueue returned error: %v", err)
 	}
-	now := dbNow(t, ctx, pool)
-	claimed, err := store.Claim(ctx, now, now.Add(30*time.Second), 10, nil)
+	claimed, err := store.Claim(ctx, 30*time.Second, 10, nil)
 	if err != nil {
 		t.Fatalf("Claim returned error: %v", err)
 	}
 
-	if err := store.Reschedule(ctx, claimed[0].ID, now.Add(-time.Second), "openfga unavailable"); err != nil {
+	if err := store.Reschedule(ctx, claimed[0].ID, 0, "openfga unavailable"); err != nil {
 		t.Fatalf("Reschedule returned error: %v", err)
 	}
 
-	again, err := store.Claim(ctx, now, now.Add(30*time.Second), 10, nil)
+	again, err := store.Claim(ctx, 30*time.Second, 10, nil)
 	if err != nil {
 		t.Fatalf("second Claim returned error: %v", err)
 	}
@@ -346,11 +329,11 @@ func TestPruneRemovesOnlyOldCompletedRows(t *testing.T) {
 	); err != nil {
 		t.Fatalf("Enqueue returned error: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `update work_queue set processed_at = now() - interval '48 hours' where ordering_key = 'old'`); err != nil {
+	if _, err := pool.Exec(ctx, `update work_queue set processed_at = now() - interval '48 hours' where resource_key = 'old'`); err != nil {
 		t.Fatalf("age the completed row: %v", err)
 	}
 
-	pruned, err := store.Prune(ctx, time.Now().Add(-24*time.Hour))
+	pruned, err := store.Prune(ctx, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Prune returned error: %v", err)
 	}
@@ -393,5 +376,48 @@ func TestListByActorReturnsOnlyCallerItems(t *testing.T) {
 	}
 	if statuses[0].DeliveredAt != nil {
 		t.Fatal("DeliveredAt must be nil while pending")
+	}
+}
+
+func TestPruneSkipsWhenAnotherWorkerHoldsTheLock(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, pool := newQueueStore(t, ctx)
+
+	if err := store.Enqueue(ctx, queue.Request{Kind: "reconcile", Payload: json.RawMessage(`{"key":"old"}`), TenantID: "t1"}); err != nil {
+		t.Fatalf("Enqueue returned error: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `update work_queue set processed_at = now() - interval '48 hours'`); err != nil {
+		t.Fatalf("age the completed row: %v", err)
+	}
+
+	// Stand in for another worker's prune round already in progress.
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin holder transaction: %v", err)
+	}
+	if _, err := holder.Exec(ctx, `select pg_advisory_xact_lock(`+pruneLockKeyExpr+`)`); err != nil {
+		t.Fatalf("take prune lock: %v", err)
+	}
+
+	pruned, err := store.Prune(ctx, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("Prune returned error: %v — losing the race is not a failure", err)
+	}
+	if pruned != 0 {
+		t.Fatalf("pruned = %d, want 0 while another worker holds the lock", pruned)
+	}
+
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatalf("release prune lock: %v", err)
+	}
+
+	pruned, err = store.Prune(ctx, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("second Prune returned error: %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("pruned = %d, want 1 once the lock is free", pruned)
 	}
 }

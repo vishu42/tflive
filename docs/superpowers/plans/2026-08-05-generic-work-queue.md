@@ -141,7 +141,7 @@ const (
 	StateDelivered State = "delivered"
 )
 
-// Request is what callers enqueue. The ordering key is derived by the Handler,
+// Request is what callers enqueue. The resource key is derived by the Handler,
 // never supplied by the caller, so Mode and key shape cannot disagree.
 type Request struct {
 	Kind         Kind
@@ -422,7 +422,7 @@ func (registry *Registry) Kinds() []Kind {
 	return kinds
 }
 
-// Resolve derives the ordering key and mode for a request.
+// Resolve derives the resource key and mode for a request.
 func (registry *Registry) Resolve(request Request) (Resolved, error) {
 	handler, ok := registry.handlers[request.Kind]
 	if !ok {
@@ -1178,9 +1178,9 @@ git commit -m "feat(queue): add controller with backoff, worker pool and revisio
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: table `work_queue` with columns `id bigserial`, `kind text`, `ordering_key text`, `payload jsonb`, `revision bigint`, `actor_subject text`, `tenant_id text`, `available_at timestamptz`, `claimed_until timestamptz`, `attempts integer`, `last_error text`, `created_at timestamptz`, `processed_at timestamptz`; unique partial index `work_queue_pending_key_idx`; indexes `work_queue_ready_idx`, `work_queue_actor_idx`.
+- Produces: table `work_queue` with columns `id bigserial`, `kind text`, `resource_key text`, `payload jsonb`, `revision bigint`, `actor_subject text`, `tenant_id text`, `available_at timestamptz`, `claimed_until timestamptz`, `attempts integer`, `last_error text`, `created_at timestamptz`, `processed_at timestamptz`; unique partial index `work_queue_pending_key_idx`; indexes `work_queue_ready_idx`, `work_queue_actor_idx`.
 
-The backfill mirrors the precedent set by `0007_workflow_outbox.sql`, which seeds itself with an `insert ... select`. `authorization_outbox` stores `stack` as `stack:<id>` and `subject` as `user:<sub>`; the payload stores the raw ids and the ordering key stores the prefixed forms, matching what `Key()` derives in Task 9. `authorization_outbox` has no tenant column, so backfilled rows carry an empty `tenant_id` — they are transient and disappear once delivered.
+The backfill mirrors the precedent set by `0007_workflow_outbox.sql`, which seeds itself with an `insert ... select`. `authorization_outbox` stores `stack` as `stack:<id>` and `subject` as `user:<sub>`; the payload stores the raw ids and the resource key stores the prefixed forms, matching what `Key()` derives in Task 9. `authorization_outbox` has no tenant column, so backfilled rows carry an empty `tenant_id` — they are transient and disappear once delivered.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1215,7 +1215,7 @@ func TestWorkQueueMigrationDefinesCoalescingQueue(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		"id", "kind", "ordering_key", "payload", "revision", "actor_subject",
+		"id", "kind", "resource_key", "payload", "revision", "actor_subject",
 		"tenant_id", "available_at", "claimed_until", "attempts", "last_error",
 		"created_at", "processed_at",
 	} {
@@ -1251,7 +1251,7 @@ func TestWorkQueuePendingKeyIndexBlocksDuplicatePendingRows(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 
-	insert := `insert into work_queue (kind, ordering_key, payload, actor_subject, tenant_id) values ($1, $2, '{}'::jsonb, '', '')`
+	insert := `insert into work_queue (kind, resource_key, payload, actor_subject, tenant_id) values ($1, $2, '{}'::jsonb, '', '')`
 	if _, err := pool.Exec(ctx, insert, "k", "stack:a/user:x"); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
@@ -1259,7 +1259,7 @@ func TestWorkQueuePendingKeyIndexBlocksDuplicatePendingRows(t *testing.T) {
 		t.Fatal("second pending insert for the same key was accepted")
 	}
 
-	if _, err := pool.Exec(ctx, `update work_queue set processed_at = now() where ordering_key = $1`, "stack:a/user:x"); err != nil {
+	if _, err := pool.Exec(ctx, `update work_queue set processed_at = now() where resource_key = $1`, "stack:a/user:x"); err != nil {
 		t.Fatalf("complete first row: %v", err)
 	}
 	if _, err := pool.Exec(ctx, insert, "k", "stack:a/user:x"); err != nil {
@@ -1302,7 +1302,7 @@ func TestWorkQueueMigrationBackfillsPendingAuthorizationOutbox(t *testing.T) {
 		key  string
 		role string
 	}
-	rows, err := pool.Query(ctx, `select ordering_key, payload->>'role' from work_queue order by ordering_key`)
+	rows, err := pool.Query(ctx, `select resource_key, payload->>'role' from work_queue order by resource_key`)
 	if err != nil {
 		t.Fatalf("query backfilled rows: %v", err)
 	}
@@ -1342,7 +1342,7 @@ Create `internal/postgres/migrations/0012_work_queue.sql`:
 create table work_queue (
 	id            bigserial primary key,
 	kind          text not null,
-	ordering_key  text not null,
+	resource_key  text not null,
 	payload       jsonb not null,
 	revision      bigint not null default 1,
 	actor_subject text not null default '',
@@ -1355,11 +1355,11 @@ create table work_queue (
 	processed_at  timestamptz
 );
 
--- Load-bearing: at most one pending row per (kind, ordering_key). This gives
+-- Load-bearing: at most one pending row per (kind, resource_key). This gives
 -- coalescing for reconcile kinds and per-key mutual exclusion for every kind,
 -- because a second worker cannot claim a row that structurally cannot exist.
 create unique index work_queue_pending_key_idx
-	on work_queue (kind, ordering_key)
+	on work_queue (kind, resource_key)
 	where processed_at is null;
 
 create index work_queue_ready_idx
@@ -1370,9 +1370,9 @@ create index work_queue_actor_idx
 	on work_queue (tenant_id, actor_subject, created_at desc);
 
 -- Backfill undelivered authorization intents. authorization_outbox stores
--- prefixed identifiers; the payload carries raw ids and the ordering key
+-- prefixed identifiers; the payload carries raw ids and the resource key
 -- carries the prefixed forms, matching the handler's key derivation.
-insert into work_queue (kind, ordering_key, payload, actor_subject, tenant_id)
+insert into work_queue (kind, resource_key, payload, actor_subject, tenant_id)
 select
 	'reconcile_stack_grant',
 	stack || '/' || subject,
@@ -1385,7 +1385,7 @@ select
 	''
 from authorization_outbox
 where processed_at is null and failed_at is null
-on conflict (kind, ordering_key) where processed_at is null do nothing;
+on conflict (kind, resource_key) where processed_at is null do nothing;
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1563,17 +1563,17 @@ type pgxExecutor interface {
 }
 
 const enqueueReconcileSQL = `
-	insert into work_queue (kind, ordering_key, payload, actor_subject, tenant_id)
+	insert into work_queue (kind, resource_key, payload, actor_subject, tenant_id)
 	values ($1, $2, $3, $4, $5)
-	on conflict (kind, ordering_key) where processed_at is null
+	on conflict (kind, resource_key) where processed_at is null
 	do update set payload  = excluded.payload,
 	              revision = work_queue.revision + 1
 `
 
 const enqueueJobSQL = `
-	insert into work_queue (kind, ordering_key, payload, actor_subject, tenant_id)
+	insert into work_queue (kind, resource_key, payload, actor_subject, tenant_id)
 	values ($1, $2, $3, $4, $5)
-	on conflict (kind, ordering_key) where processed_at is null
+	on conflict (kind, resource_key) where processed_at is null
 	do nothing
 `
 
@@ -1811,7 +1811,7 @@ func TestPruneRemovesOnlyOldCompletedRows(t *testing.T) {
 	); err != nil {
 		t.Fatalf("Enqueue returned error: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `update work_queue set processed_at = now() - interval '48 hours' where ordering_key = 'old'`); err != nil {
+	if _, err := pool.Exec(ctx, `update work_queue set processed_at = now() - interval '48 hours' where resource_key = 'old'`); err != nil {
 		t.Fatalf("age the completed row: %v", err)
 	}
 
@@ -1888,9 +1888,9 @@ const claimWorkSQL = `
 		   set claimed_until = $2, attempts = attempts + 1
 		  from candidate
 		 where q.id = candidate.id
-	 returning q.id, q.kind, q.ordering_key, q.payload, q.revision,
+	 returning q.id, q.kind, q.resource_key, q.payload, q.revision,
 	           q.actor_subject, q.tenant_id, q.attempts
-	) select id, kind, ordering_key, payload, revision, actor_subject, tenant_id, attempts
+	) select id, kind, resource_key, payload, revision, actor_subject, tenant_id, attempts
 	    from claimed
 `
 
@@ -2086,7 +2086,7 @@ func TestInTxCommitsDomainWriteAndIntentTogether(t *testing.T) {
 	var stacks, intents int
 	if err := pool.QueryRow(ctx, `select
 		(select count(*) from stacks where id = $1),
-		(select count(*) from work_queue where ordering_key = $2)
+		(select count(*) from work_queue where resource_key = $2)
 	`, string(stack.ID), "stack:stack_intx_ok/user:me").Scan(&stacks, &intents); err != nil {
 		t.Fatalf("count rows: %v", err)
 	}
@@ -2132,7 +2132,7 @@ func TestInTxRollsBackBothOnError(t *testing.T) {
 	var stacks, intents int
 	if err := pool.QueryRow(ctx, `select
 		(select count(*) from stacks where id = $1),
-		(select count(*) from work_queue where ordering_key = $2)
+		(select count(*) from work_queue where resource_key = $2)
 	`, string(stack.ID), "stack:stack_intx_rollback/user:me").Scan(&stacks, &intents); err != nil {
 		t.Fatalf("count rows: %v", err)
 	}

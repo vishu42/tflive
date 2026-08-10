@@ -11,12 +11,15 @@ import (
 // MemoryBackend is an in-memory Backend for tests. Its semantics mirror the
 // Postgres implementation: claims respect availableAt and the lease, Complete
 // is fenced on revision, Reschedule clears the lease, and Enqueue coalesces or
-// dedupes per (kind, ordering key) according to the spec's Mode.
+// dedupes per (kind, resource key) according to the spec's Mode.
 type MemoryBackend struct {
 	mutex  sync.Mutex
 	rows   map[int64]*memoryRow
 	specs  *SpecRegistry
 	nextID int64
+	// now is the backend's clock, mirroring the database owning the clock in
+	// the Postgres implementation. Tests replace it to control expiry.
+	now func() time.Time
 }
 
 // MemoryOption configures a MemoryBackend at construction.
@@ -28,6 +31,12 @@ func WithSpecs(specs *SpecRegistry) MemoryOption {
 	return func(backend *MemoryBackend) { backend.specs = specs }
 }
 
+// WithClock replaces the backend's clock so a test can move time forward
+// without sleeping.
+func WithClock(now func() time.Time) MemoryOption {
+	return func(backend *MemoryBackend) { backend.now = now }
+}
+
 type memoryRow struct {
 	item         Item
 	availableAt  time.Time
@@ -37,7 +46,7 @@ type memoryRow struct {
 }
 
 func NewMemoryBackend(options ...MemoryOption) *MemoryBackend {
-	backend := &MemoryBackend{rows: map[int64]*memoryRow{}}
+	backend := &MemoryBackend{rows: map[int64]*memoryRow{}, now: time.Now}
 	for _, option := range options {
 		option(backend)
 	}
@@ -60,7 +69,7 @@ func (backend *MemoryBackend) AddAt(item Item, availableAt time.Time) {
 }
 
 // Enqueue mirrors the Postgres upsert: at most one pending row per (kind,
-// ordering key), with ModeReconcile overwriting the payload and bumping the
+// resource key), with ModeReconcile overwriting the payload and bumping the
 // revision while ModeJob leaves the existing row untouched.
 func (backend *MemoryBackend) Enqueue(_ context.Context, requests ...Request) error {
 	if backend.specs == nil {
@@ -152,9 +161,12 @@ func (backend *MemoryBackend) LastError(id int64) string {
 	return ""
 }
 
-func (backend *MemoryBackend) Claim(_ context.Context, now, leaseUntil time.Time, limit int, kinds []Kind) ([]Item, error) {
+func (backend *MemoryBackend) Claim(_ context.Context, lease time.Duration, limit int, kinds []Kind) ([]Item, error) {
 	backend.mutex.Lock()
 	defer backend.mutex.Unlock()
+
+	now := backend.now()
+	leaseUntil := now.Add(lease)
 
 	allowed := map[Kind]struct{}{}
 	for _, kind := range kinds {
@@ -206,28 +218,29 @@ func (backend *MemoryBackend) Complete(_ context.Context, id, revision int64) (b
 	if !ok || !row.processedAt.IsZero() || row.item.Revision != revision {
 		return false, nil
 	}
-	row.processedAt = time.Now()
+	row.processedAt = backend.now()
 	row.claimedUntil = time.Time{}
 	row.lastError = ""
 	return true, nil
 }
 
-func (backend *MemoryBackend) Reschedule(_ context.Context, id int64, availableAt time.Time, lastErr string) error {
+func (backend *MemoryBackend) Reschedule(_ context.Context, id int64, delay time.Duration, lastErr string) error {
 	backend.mutex.Lock()
 	defer backend.mutex.Unlock()
 
 	if row, ok := backend.rows[id]; ok {
 		row.claimedUntil = time.Time{}
-		row.availableAt = availableAt
+		row.availableAt = backend.now().Add(delay)
 		row.lastError = lastErr
 	}
 	return nil
 }
 
-func (backend *MemoryBackend) Prune(_ context.Context, before time.Time) (int64, error) {
+func (backend *MemoryBackend) Prune(_ context.Context, retention time.Duration) (int64, error) {
 	backend.mutex.Lock()
 	defer backend.mutex.Unlock()
 
+	before := backend.now().Add(-retention)
 	var pruned int64
 	for id, row := range backend.rows {
 		if !row.processedAt.IsZero() && row.processedAt.Before(before) {

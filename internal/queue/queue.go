@@ -37,7 +37,7 @@ const (
 	StateDelivered State = "delivered"
 )
 
-// Request is what callers enqueue. The ordering key is derived by the Handler,
+// Request is what callers enqueue. The resource key is derived by the Handler,
 // never supplied by the caller, so Mode and key shape cannot disagree.
 type Request struct {
 	Kind         Kind
@@ -94,6 +94,11 @@ type Spec struct {
 // and a lease that expires while a slow worker is still running lets a second
 // worker deliver concurrently.
 //
+// Deliver MUST also respect ctx. The controller cancels it before the item's
+// lease expires, which is the only thing stopping a second worker from picking
+// up a row this one is still working. A handler that does blocking work without
+// passing ctx through reopens that window for its own kind.
+//
 // The returned requests are follow-up work. The controller enqueues them after
 // a successful delivery, which makes chaining a declared return value rather
 // than a side effect: a handler needs no Enqueuer, and its chain is assertable
@@ -124,13 +129,23 @@ type Enqueuer interface {
 }
 
 // Backend is the delivery seam: lease, settle, prune.
+//
+// Every method takes a duration rather than an instant, because the store owns
+// the clock. Absolute times computed by a worker would make lease expiry depend
+// on that worker's clock agreeing with every other worker's, and a disagreement
+// there means one worker treats another's live lease as expired — losing the
+// mutual exclusion the queue is built on.
 type Backend interface {
-	Claim(ctx context.Context, now, leaseUntil time.Time, limit int, kinds []Kind) ([]Item, error)
+	// Claim leases ready rows for the given duration.
+	Claim(ctx context.Context, lease time.Duration, limit int, kinds []Kind) ([]Item, error)
 	// Complete reports false when the revision moved while the item was in
 	// flight, meaning a newer intent arrived and the item must run again.
 	Complete(ctx context.Context, id, revision int64) (bool, error)
-	Reschedule(ctx context.Context, id int64, availableAt time.Time, lastErr string) error
-	Prune(ctx context.Context, before time.Time) (int64, error)
+	// Reschedule releases the lease and makes the row available again after
+	// delay, which may be zero to retry immediately.
+	Reschedule(ctx context.Context, id int64, delay time.Duration, lastErr string) error
+	// Prune deletes rows processed longer ago than retention.
+	Prune(ctx context.Context, retention time.Duration) (int64, error)
 }
 
 // Reader serves the queue read API.

@@ -7,5 +7,5 @@ update stacks set status = 'provisioning'
 where exists (
 	select 1 from work_queue
 	 where processed_at is null
-	   and ordering_key like 'stack:' || stacks.id || '%'
+	   and resource_key like 'stack:' || stacks.id || '%'
 );

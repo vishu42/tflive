@@ -2810,7 +2810,7 @@ func TestWorkQueueMigrationDefinesCoalescingQueue(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		"id", "kind", "ordering_key", "payload", "revision", "actor_subject",
+		"id", "kind", "resource_key", "payload", "revision", "actor_subject",
 		"tenant_id", "available_at", "claimed_until", "attempts", "last_error",
 		"created_at", "processed_at",
 	} {
@@ -2846,7 +2846,7 @@ func TestWorkQueuePendingKeyIndexBlocksDuplicatePendingRows(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 
-	insert := `insert into work_queue (kind, ordering_key, payload, actor_subject, tenant_id) values ($1, $2, '{}'::jsonb, '', '')`
+	insert := `insert into work_queue (kind, resource_key, payload, actor_subject, tenant_id) values ($1, $2, '{}'::jsonb, '', '')`
 	if _, err := pool.Exec(ctx, insert, "k", "stack:a/user:x"); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
@@ -2854,7 +2854,7 @@ func TestWorkQueuePendingKeyIndexBlocksDuplicatePendingRows(t *testing.T) {
 		t.Fatal("second pending insert for the same key was accepted")
 	}
 
-	if _, err := pool.Exec(ctx, `update work_queue set processed_at = now() where ordering_key = $1`, "stack:a/user:x"); err != nil {
+	if _, err := pool.Exec(ctx, `update work_queue set processed_at = now() where resource_key = $1`, "stack:a/user:x"); err != nil {
 		t.Fatalf("complete first row: %v", err)
 	}
 	if _, err := pool.Exec(ctx, insert, "k", "stack:a/user:x"); err != nil {
@@ -2896,7 +2896,7 @@ func TestWorkQueueMigrationBackfillsPendingAuthorizationOutbox(t *testing.T) {
 		key  string
 		role string
 	}
-	rows, err := pool.Query(ctx, `select ordering_key, payload->>'role' from work_queue order by ordering_key`)
+	rows, err := pool.Query(ctx, `select resource_key, payload->>'role' from work_queue order by resource_key`)
 	if err != nil {
 		t.Fatalf("query backfilled rows: %v", err)
 	}

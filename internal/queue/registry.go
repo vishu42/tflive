@@ -53,7 +53,7 @@ func (registry *SpecRegistry) Spec(kind Kind) (Spec, bool) {
 	return spec, ok
 }
 
-// Resolve derives the ordering key and mode for a request.
+// Resolve derives the resource key and mode for a request.
 func (registry *SpecRegistry) Resolve(request Request) (Resolved, error) {
 	spec, ok := registry.specs[request.Kind]
 	if !ok {
@@ -121,7 +121,7 @@ func (registry *Registry) Kinds() []Kind {
 // Specs exposes the spec half of this registry for enqueueing.
 func (registry *Registry) Specs() *SpecRegistry { return registry.specs }
 
-// Resolve derives the ordering key and mode for a request.
+// Resolve derives the resource key and mode for a request.
 func (registry *Registry) Resolve(request Request) (Resolved, error) {
 	return registry.specs.Resolve(request)
 }

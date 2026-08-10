@@ -22,9 +22,9 @@ type pgxExecutor interface {
 // enqueueReconcileSQL coalesces: the newest desired state wins and the revision
 // bump fences any worker already in flight on this row.
 const enqueueReconcileSQL = `
-	insert into work_queue (kind, ordering_key, payload, actor_subject, tenant_id)
+	insert into work_queue (kind, resource_key, payload, actor_subject, tenant_id)
 	values ($1, $2, $3, $4, $5)
-	on conflict (kind, ordering_key) where processed_at is null
+	on conflict (kind, resource_key) where processed_at is null
 	do update set payload  = excluded.payload,
 	              revision = work_queue.revision + 1
 `
@@ -32,9 +32,9 @@ const enqueueReconcileSQL = `
 // enqueueJobSQL keeps distinct work: re-enqueueing the same key is a no-op, so
 // an accidental double submit cannot duplicate the work.
 const enqueueJobSQL = `
-	insert into work_queue (kind, ordering_key, payload, actor_subject, tenant_id)
+	insert into work_queue (kind, resource_key, payload, actor_subject, tenant_id)
 	values ($1, $2, $3, $4, $5)
-	on conflict (kind, ordering_key) where processed_at is null
+	on conflict (kind, resource_key) where processed_at is null
 	do nothing
 `
 
@@ -76,29 +76,35 @@ func enqueueRequests(ctx context.Context, exec pgxExecutor, specs *queue.SpecReg
 // claimWorkSQL leases ready rows. Rows another worker already locked are
 // skipped rather than waited on, so claims scale across workers instead of
 // serialising behind the first one.
+//
+// Every timestamp comes from the database, never from the caller. Lease expiry
+// is the one judgement several workers must agree on, and comparing a stored
+// deadline against each worker's own clock makes that agreement depend on their
+// clocks being in step.
 const claimWorkSQL = `
 	with candidate as (
 		select id from work_queue
 		where processed_at is null
-		  and available_at <= $1
-		  and (claimed_until is null or claimed_until <= $1)
-		  and ($4::text[] is null or kind = any($4))
+		  and available_at <= now()
+		  and (claimed_until is null or claimed_until <= now())
+		  and ($3::text[] is null or kind = any($3))
 		order by available_at, id
 		for update skip locked
-		limit $3
+		limit $2
 	), claimed as (
 		update work_queue q
-		   set claimed_until = $2, attempts = attempts + 1
+		   set claimed_until = now() + $1::interval, attempts = attempts + 1
 		  from candidate
 		 where q.id = candidate.id
-	 returning q.id, q.kind, q.ordering_key, q.payload, q.revision,
+	 returning q.id, q.kind, q.resource_key, q.payload, q.revision,
 	           q.actor_subject, q.tenant_id, q.attempts
-	) select id, kind, ordering_key, payload, revision, actor_subject, tenant_id, attempts
+	) select id, kind, resource_key, payload, revision, actor_subject, tenant_id, attempts
 	    from claimed
 `
 
-// Claim leases up to limit ready rows. A nil kinds slice claims every kind.
-func (store *Store) Claim(ctx context.Context, now, leaseUntil time.Time, limit int, kinds []queue.Kind) ([]queue.Item, error) {
+// Claim leases up to limit ready rows for the given duration. A nil kinds slice
+// claims every kind.
+func (store *Store) Claim(ctx context.Context, lease time.Duration, limit int, kinds []queue.Kind) ([]queue.Item, error) {
 	var kindFilter []string
 	if len(kinds) > 0 {
 		kindFilter = make([]string, len(kinds))
@@ -107,7 +113,7 @@ func (store *Store) Claim(ctx context.Context, now, leaseUntil time.Time, limit 
 		}
 	}
 
-	rows, err := store.pool.Query(ctx, claimWorkSQL, now, leaseUntil, limit, kindFilter)
+	rows, err := store.pool.Query(ctx, claimWorkSQL, lease, limit, kindFilter)
 	if err != nil {
 		return nil, fmt.Errorf("claim work: %w", err)
 	}
@@ -146,24 +152,62 @@ func (store *Store) Complete(ctx context.Context, id, revision int64) (bool, err
 	return tag.RowsAffected() == 1, nil
 }
 
-// Reschedule returns an item to the pool, clearing its lease.
-func (store *Store) Reschedule(ctx context.Context, id int64, availableAt time.Time, lastErr string) error {
+// Reschedule returns an item to the pool, clearing its lease. The delay is
+// applied to the database clock for the same reason Claim reads it there.
+func (store *Store) Reschedule(ctx context.Context, id int64, delay time.Duration, lastErr string) error {
 	if _, err := store.pool.Exec(ctx, `
 		update work_queue
-		   set claimed_until = null, available_at = $2, last_error = $3
+		   set claimed_until = null, available_at = now() + $2::interval, last_error = $3
 		 where id = $1 and processed_at is null
-	`, id, availableAt, lastErr); err != nil {
+	`, id, delay, lastErr); err != nil {
 		return fmt.Errorf("reschedule work: %w", err)
 	}
 	return nil
 }
 
-// Prune deletes rows completed before the retention cutoff, keeping the pending
+// pruneLockKeyExpr derives the prune advisory lock id from the current schema.
+//
+// Advisory locks live in one namespace per database, but a work_queue table
+// belongs to a schema. A constant would make every deployment sharing a
+// database — and every test running against its own schema — contend for one
+// lock and block each other's pruning for no reason. Hashing the schema name
+// scopes the lock to the table it actually protects.
+const pruneLockKeyExpr = `('x' || substr(md5(current_schema() || '.work_queue.prune'), 1, 16))::bit(64)::bigint`
+
+// Prune deletes rows processed longer ago than retention, keeping the pending
 // indexes small.
-func (store *Store) Prune(ctx context.Context, before time.Time) (int64, error) {
-	tag, err := store.pool.Exec(ctx, `delete from work_queue where processed_at is not null and processed_at < $1`, before)
+//
+// Only one worker prunes per round. Every controller runs the same maintenance
+// loop, so without this they would all delete the same rows on the same
+// schedule; a transaction-scoped advisory lock elects one of them for the round
+// and releases at commit, with no lease or leader table to keep alive. A worker
+// that loses the race reports zero rows and no error — it did not fail, it
+// simply had nothing to do.
+func (store *Store) Prune(ctx context.Context, retention time.Duration) (int64, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin prune: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var acquired bool
+	if err := tx.QueryRow(ctx, `select pg_try_advisory_xact_lock(`+pruneLockKeyExpr+`)`).Scan(&acquired); err != nil {
+		return 0, fmt.Errorf("lock prune: %w", err)
+	}
+	if !acquired {
+		return 0, nil
+	}
+
+	tag, err := tx.Exec(ctx, `
+		delete from work_queue
+		 where processed_at is not null
+		   and processed_at < now() - $1::interval
+	`, retention)
 	if err != nil {
 		return 0, fmt.Errorf("prune work: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit prune: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }

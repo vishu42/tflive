@@ -47,7 +47,7 @@ func TestInTxCommitsDomainWriteAndIntentTogether(t *testing.T) {
 	var stacks, intents int
 	if err := pool.QueryRow(ctx, `select
 		(select count(*) from stacks where id = $1),
-		(select count(*) from work_queue where ordering_key = $2)
+		(select count(*) from work_queue where resource_key = $2)
 	`, string(stack.ID), "stack:stack_intx_ok/user:me").Scan(&stacks, &intents); err != nil {
 		t.Fatalf("count rows: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestInTxRollsBackBothOnError(t *testing.T) {
 	var stacks, intents int
 	if err := pool.QueryRow(ctx, `select
 		(select count(*) from stacks where id = $1),
-		(select count(*) from work_queue where ordering_key = $2)
+		(select count(*) from work_queue where resource_key = $2)
 	`, string(stack.ID), "stack:stack_intx_rollback/user:me").Scan(&stacks, &intents); err != nil {
 		t.Fatalf("count rows: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestInTxWritesAuditEventTransactionally(t *testing.T) {
 	var audits, intents int
 	if err := pool.QueryRow(ctx, `select
 		(select count(*) from security_audit_log where stack_id = $1),
-		(select count(*) from work_queue where ordering_key = $2)
+		(select count(*) from work_queue where resource_key = $2)
 	`, "stack_audit", "stack:stack_audit/user:them").Scan(&audits, &intents); err != nil {
 		t.Fatalf("count rows: %v", err)
 	}

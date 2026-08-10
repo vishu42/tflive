@@ -21,7 +21,7 @@ func TestMarkStackReadySpecSharesTheStackKey(t *testing.T) {
 		t.Fatalf("Key returned error: %v", err)
 	}
 	// Sharing a key with grant_stack_owner is safe: the unique index is on
-	// (kind, ordering_key), so each kind only excludes itself.
+	// (kind, resource_key), so each kind only excludes itself.
 	if key != "stack:stack_abc" {
 		t.Fatalf("Key = %q, want stack:stack_abc", key)
 	}

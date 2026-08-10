@@ -193,7 +193,7 @@ Migration `0012_work_queue.sql`:
 create table work_queue (
     id            bigserial primary key,
     kind          text not null,
-    ordering_key  text not null,
+    resource_key  text not null,
     payload       jsonb not null,
     revision      bigint not null default 1,
     actor_subject text not null default '',
@@ -206,12 +206,12 @@ create table work_queue (
     processed_at  timestamptz
 );
 
--- Load-bearing: ek (kind, ordering_key) pe zyada se zyada ek pending row.
+-- Load-bearing: ek (kind, resource_key) pe zyada se zyada ek pending row.
 -- Isse reconcile kinds ko coalescing milti hai AUR har kind ko per-key mutual
 -- exclusion, kyunki doosra worker aisi row claim kar hi nahi sakta jo bann hi
 -- nahi sakti.
 create unique index work_queue_pending_key_idx
-    on work_queue (kind, ordering_key)
+    on work_queue (kind, resource_key)
     where processed_at is null;
 
 create index work_queue_ready_idx
@@ -251,8 +251,8 @@ notify_user             Job         notif:9c2/rev3      (handler abhi nahi)
 start_template_run      Job         run:7f3a            (baad me migrate)
 ```
 
-`grant_stack_owner` aur `mark_stack_ready` ek hi ordering key share karte hain. Ye
-theek hai — unique index `(kind, ordering_key)` pe hai, toh takraav hota hi
+`grant_stack_owner` aur `mark_stack_ready` ek hi resource key share karte hain. Ye
+theek hai — unique index `(kind, resource_key)` pe hai, toh takraav hota hi
 nahi, aur har kind apne aap se mutually excluded rehta hai.
 
 ## The three queries
@@ -261,16 +261,16 @@ nahi, aur har kind apne aap se mutually excluded rehta hai.
 
 ```sql
 -- ModeReconcile: naya desired state jeetta hai, aur in-flight worker fence hota hai
-insert into work_queue (kind, ordering_key, payload, actor_subject, tenant_id)
+insert into work_queue (kind, resource_key, payload, actor_subject, tenant_id)
 values ($1, $2, $3, $4, $5)
-on conflict (kind, ordering_key) where processed_at is null
+on conflict (kind, resource_key) where processed_at is null
 do update set payload  = excluded.payload,
               revision = work_queue.revision + 1;
 
 -- ModeJob: wahi kaam dobara enqueue karna no-op hai
-insert into work_queue (kind, ordering_key, payload, actor_subject, tenant_id)
+insert into work_queue (kind, resource_key, payload, actor_subject, tenant_id)
 values ($1, $2, $3, $4, $5)
-on conflict (kind, ordering_key) where processed_at is null
+on conflict (kind, resource_key) where processed_at is null
 do nothing;
 ```
 
@@ -297,7 +297,7 @@ with candidate as (
        set claimed_until = $2, attempts = attempts + 1
       from candidate
      where q.id = candidate.id
- returning q.id, q.kind, q.ordering_key, q.payload, q.revision,
+ returning q.id, q.kind, q.resource_key, q.payload, q.revision,
            q.actor_subject, q.tenant_id, q.attempts
 ) select * from claimed;
 ```
@@ -315,7 +315,7 @@ Zero rows ka matlab hai ki item flight me tha aur naya intent aa gaya.
 aur naye payload ke saath dobara chalne do. Is fence ke bina naya intent
 chupchaap kho jaata hai.
 
-## Ordering keys
+## Resource keys
 
 Key handler derive karta hai, column me store hoti hai, aur index use karta hai.
 SQL me compute **nahi** hoti — warna payload ka structure queue ke schema me
@@ -548,7 +548,7 @@ rahe jahan `Authorizer` pehle se hai.
 `internal/app` me rehta hai. Sirf Postgres chhuta hai: `UPDATE stacks SET status
 = 'ready'`. Banawat se hi idempotent. Koi follow-up nahi.
 
-Kind aur ordering key milke unique hain, toh `grant_stack_owner` ke saath
+Kind aur resource key milke unique hain, toh `grant_stack_owner` ke saath
 `stack:<id>` share karna collision nahi hai.
 
 ## Notifications
@@ -610,7 +610,7 @@ update stacks set status = 'provisioning'
 where exists (
     select 1 from work_queue
      where processed_at is null
-       and ordering_key like 'stack:' || stacks.id || '%'
+       and resource_key like 'stack:' || stacks.id || '%'
 );
 ```
 

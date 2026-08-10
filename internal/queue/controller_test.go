@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -47,7 +48,6 @@ func testOptions() Options {
 func TestDispatchOnceCompletesDeliveredItem(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
 	handler := &recordingHandler{stubHandler: stubHandler{kind: "a", key: "k"}}
 	registry, err := NewRegistry(handler)
 	if err != nil {
@@ -57,7 +57,7 @@ func TestDispatchOnceCompletesDeliveredItem(t *testing.T) {
 	backend.Add(Item{ID: 1, Kind: "a", Revision: 1, Payload: json.RawMessage(`{}`)})
 
 	controller := NewController(backend, registry, nil, testOptions())
-	processed, err := controller.DispatchOnce(context.Background(), now)
+	processed, err := controller.DispatchOnce(context.Background())
 	if err != nil {
 		t.Fatalf("DispatchOnce returned error: %v", err)
 	}
@@ -75,7 +75,6 @@ func TestDispatchOnceCompletesDeliveredItem(t *testing.T) {
 func TestDispatchOnceReschedulesFailedItem(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
 	handler := &recordingHandler{
 		stubHandler: stubHandler{kind: "a", key: "k"},
 		deliverEr:   errors.New("openfga unavailable"),
@@ -88,7 +87,7 @@ func TestDispatchOnceReschedulesFailedItem(t *testing.T) {
 	backend.Add(Item{ID: 1, Kind: "a", Revision: 1, Payload: json.RawMessage(`{}`)})
 
 	controller := NewController(backend, registry, nil, testOptions())
-	if _, err := controller.DispatchOnce(context.Background(), now); err != nil {
+	if _, err := controller.DispatchOnce(context.Background()); err != nil {
 		t.Fatalf("DispatchOnce returned error: %v", err)
 	}
 	if backend.Pending() != 1 {
@@ -102,7 +101,6 @@ func TestDispatchOnceReschedulesFailedItem(t *testing.T) {
 func TestDispatchOnceReschedulesUnknownKind(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
 	registry, err := NewRegistry(stubHandler{kind: "a", key: "k"})
 	if err != nil {
 		t.Fatalf("NewRegistry returned error: %v", err)
@@ -111,7 +109,7 @@ func TestDispatchOnceReschedulesUnknownKind(t *testing.T) {
 	backend.Add(Item{ID: 1, Kind: "unregistered", Revision: 1, Payload: json.RawMessage(`{}`)})
 
 	controller := NewController(backend, registry, nil, testOptions())
-	if _, err := controller.DispatchOnce(context.Background(), now); err != nil {
+	if _, err := controller.DispatchOnce(context.Background()); err != nil {
 		t.Fatalf("DispatchOnce returned error: %v", err)
 	}
 	if backend.Pending() != 1 {
@@ -122,7 +120,6 @@ func TestDispatchOnceReschedulesUnknownKind(t *testing.T) {
 func TestDispatchOnceReschedulesWhenRevisionMoved(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
 	handler := &recordingHandler{stubHandler: stubHandler{kind: "a", key: "k"}}
 	registry, err := NewRegistry(handler)
 	if err != nil {
@@ -134,7 +131,7 @@ func TestDispatchOnceReschedulesWhenRevisionMoved(t *testing.T) {
 	controller := NewController(backend, registry, nil, testOptions())
 	controller.beforeComplete = func() { backend.Bump(1) }
 
-	if _, err := controller.DispatchOnce(context.Background(), now); err != nil {
+	if _, err := controller.DispatchOnce(context.Background()); err != nil {
 		t.Fatalf("DispatchOnce returned error: %v", err)
 	}
 	if backend.Pending() != 1 {
@@ -163,7 +160,6 @@ func TestBackoffGrowsAndCaps(t *testing.T) {
 func TestDispatchOnceEnqueuesFollowUpWork(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC)
 	handler := &recordingHandler{
 		stubHandler: stubHandler{kind: "a", key: "k"},
 		followUps:   []Request{{Kind: "b", Payload: json.RawMessage(`{"next":true}`)}},
@@ -176,7 +172,7 @@ func TestDispatchOnceEnqueuesFollowUpWork(t *testing.T) {
 	backend.Add(Item{ID: 1, Kind: "a", Revision: 1, Payload: json.RawMessage(`{}`)})
 
 	controller := NewController(backend, registry, backend, testOptions())
-	if _, err := controller.DispatchOnce(context.Background(), now); err != nil {
+	if _, err := controller.DispatchOnce(context.Background()); err != nil {
 		t.Fatalf("DispatchOnce returned error: %v", err)
 	}
 
@@ -195,7 +191,6 @@ func TestDispatchOnceEnqueuesFollowUpWork(t *testing.T) {
 func TestDispatchOnceSkipsFollowUpsWhenDeliveryFails(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC)
 	handler := &recordingHandler{
 		stubHandler: stubHandler{kind: "a", key: "k"},
 		followUps:   []Request{{Kind: "b", Payload: json.RawMessage(`{}`)}},
@@ -209,7 +204,7 @@ func TestDispatchOnceSkipsFollowUpsWhenDeliveryFails(t *testing.T) {
 	backend.Add(Item{ID: 1, Kind: "a", Revision: 1, Payload: json.RawMessage(`{}`)})
 
 	controller := NewController(backend, registry, backend, testOptions())
-	if _, err := controller.DispatchOnce(context.Background(), now); err != nil {
+	if _, err := controller.DispatchOnce(context.Background()); err != nil {
 		t.Fatalf("DispatchOnce returned error: %v", err)
 	}
 
@@ -221,7 +216,6 @@ func TestDispatchOnceSkipsFollowUpsWhenDeliveryFails(t *testing.T) {
 func TestDispatchOnceReschedulesWhenFollowUpEnqueueFails(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC)
 	handler := &recordingHandler{
 		stubHandler: stubHandler{kind: "a", key: "k"},
 		followUps:   []Request{{Kind: "b", Payload: json.RawMessage(`{}`)}},
@@ -234,7 +228,7 @@ func TestDispatchOnceReschedulesWhenFollowUpEnqueueFails(t *testing.T) {
 	backend.Add(Item{ID: 1, Kind: "a", Revision: 1, Payload: json.RawMessage(`{}`)})
 
 	controller := NewController(backend, registry, backend, testOptions())
-	if _, err := controller.DispatchOnce(context.Background(), now); err != nil {
+	if _, err := controller.DispatchOnce(context.Background()); err != nil {
 		t.Fatalf("DispatchOnce returned error: %v", err)
 	}
 
@@ -261,7 +255,6 @@ func (h *slowHandler) Deliver(context.Context, Item) ([]Request, error) {
 func TestDispatchOnceRunsKindsConcurrently(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC)
 	slow := &slowHandler{
 		stubHandler: stubHandler{kind: "slow", key: "k"},
 		release:     make(chan struct{}),
@@ -280,7 +273,7 @@ func TestDispatchOnceRunsKindsConcurrently(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if _, err := controller.DispatchOnce(context.Background(), now); err != nil {
+		if _, err := controller.DispatchOnce(context.Background()); err != nil {
 			t.Errorf("DispatchOnce returned error: %v", err)
 		}
 	}()
@@ -312,7 +305,6 @@ func (h cappedHandler) MaxBackoff() time.Duration { return h.maxBackoff }
 func TestDispatchOnceHonoursHandlerMaxBackoff(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC)
 	handler := cappedHandler{
 		stubHandler: stubHandler{kind: "a", key: "k"},
 		maxBackoff:  2 * time.Second,
@@ -321,23 +313,207 @@ func TestDispatchOnceHonoursHandlerMaxBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry returned error: %v", err)
 	}
-	backend := NewMemoryBackend()
+
+	clock := &testClock{now: time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC)}
+	backend := NewMemoryBackend(WithClock(clock.Now))
 	// Attempts is high enough that the default cap would schedule minutes out.
 	backend.Add(Item{ID: 1, Kind: "a", Revision: 1, Attempts: 20, Payload: json.RawMessage(`{}`)})
 
 	controller := NewController(backend, registry, nil, testOptions())
-	if _, err := controller.DispatchOnce(context.Background(), now); err != nil {
+	if _, err := controller.DispatchOnce(context.Background()); err != nil {
 		t.Fatalf("DispatchOnce returned error: %v", err)
 	}
 
-	if _, err := backend.Claim(context.Background(), now.Add(handler.maxBackoff+time.Second), now, 10, nil); err != nil {
-		t.Fatalf("Claim returned error: %v", err)
-	}
-	claimed, err := backend.Claim(context.Background(), now.Add(handler.maxBackoff+time.Second), now, 10, nil)
+	clock.advance(handler.maxBackoff + time.Second)
+	claimed, err := backend.Claim(context.Background(), time.Minute, 10, nil)
 	if err != nil {
 		t.Fatalf("Claim returned error: %v", err)
 	}
 	if len(claimed) == 0 {
 		t.Fatal("item was not claimable within the handler's MaxBackoff")
+	}
+}
+
+// testClock is a manually advanced clock, standing in for the database clock
+// the Postgres backend reads.
+type testClock struct {
+	mutex sync.Mutex
+	now   time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.now
+}
+
+func (c *testClock) advance(d time.Duration) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.now = c.now.Add(d)
+}
+
+type panickingHandler struct {
+	stubHandler
+	panicWith any
+}
+
+func (h panickingHandler) Deliver(context.Context, Item) ([]Request, error) {
+	panic(h.panicWith)
+}
+
+func TestDispatchOnceReschedulesPanickingHandler(t *testing.T) {
+	t.Parallel()
+
+	handler := panickingHandler{
+		stubHandler: stubHandler{kind: "a", key: "k"},
+		panicWith:   "nil map write",
+	}
+	registry, err := NewRegistry(handler)
+	if err != nil {
+		t.Fatalf("NewRegistry returned error: %v", err)
+	}
+	backend := NewMemoryBackend()
+	backend.Add(Item{ID: 1, Kind: "a", Revision: 1, Payload: json.RawMessage(`{}`)})
+
+	controller := NewController(backend, registry, nil, testOptions())
+	// Reaching the next line at all is the assertion that matters: an
+	// unrecovered panic here would take down the test binary.
+	if _, err := controller.DispatchOnce(context.Background()); err != nil {
+		t.Fatalf("DispatchOnce returned error: %v", err)
+	}
+
+	if backend.Pending() != 1 {
+		t.Fatalf("Pending = %d, want 1 — a panicking handler must retry, not complete", backend.Pending())
+	}
+	if lastErr := backend.LastError(1); !strings.Contains(lastErr, "panicked") {
+		t.Fatalf("LastError = %q, want it to record the panic", lastErr)
+	}
+}
+
+func TestDispatchOncePanicDoesNotStopTheBatch(t *testing.T) {
+	t.Parallel()
+
+	panicking := panickingHandler{
+		stubHandler: stubHandler{kind: "panics", key: "k"},
+		panicWith:   errors.New("boom"),
+	}
+	healthy := &recordingHandler{stubHandler: stubHandler{kind: "healthy", key: "k"}}
+	registry, err := NewRegistry(panicking, healthy)
+	if err != nil {
+		t.Fatalf("NewRegistry returned error: %v", err)
+	}
+	backend := NewMemoryBackend()
+	backend.Add(Item{ID: 1, Kind: "panics", Revision: 1, Payload: json.RawMessage(`{}`)})
+	backend.Add(Item{ID: 2, Kind: "healthy", Revision: 1, Payload: json.RawMessage(`{}`)})
+
+	controller := NewController(backend, registry, nil, testOptions())
+	if _, err := controller.DispatchOnce(context.Background()); err != nil {
+		t.Fatalf("DispatchOnce returned error: %v", err)
+	}
+
+	if healthy.count() != 1 {
+		t.Fatalf("healthy handler delivered %d items, want 1 — one bad kind must not stop the batch", healthy.count())
+	}
+	if backend.Pending() != 1 {
+		t.Fatalf("Pending = %d, want 1 — only the panicking item stays", backend.Pending())
+	}
+}
+
+type blockingHandler struct {
+	stubHandler
+	entered chan struct{}
+}
+
+func (h *blockingHandler) Deliver(ctx context.Context, _ Item) ([]Request, error) {
+	close(h.entered)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestDispatchOnceBoundsDeliveryByItemTimeout(t *testing.T) {
+	t.Parallel()
+
+	handler := &blockingHandler{
+		stubHandler: stubHandler{kind: "a", key: "k"},
+		entered:     make(chan struct{}),
+	}
+	registry, err := NewRegistry(handler)
+	if err != nil {
+		t.Fatalf("NewRegistry returned error: %v", err)
+	}
+	backend := NewMemoryBackend()
+	backend.Add(Item{ID: 1, Kind: "a", Revision: 1, Payload: json.RawMessage(`{}`)})
+
+	options := testOptions()
+	options.ItemTimeout = 20 * time.Millisecond
+	controller := NewController(backend, registry, nil, options)
+
+	// A handler that never returns on its own must still be given up on, or it
+	// would hold the item past its lease and let a second worker claim it.
+	if _, err := controller.DispatchOnce(context.Background()); err != nil {
+		t.Fatalf("DispatchOnce returned error: %v", err)
+	}
+
+	if backend.Pending() != 1 {
+		t.Fatalf("Pending = %d, want 1", backend.Pending())
+	}
+	if lastErr := backend.LastError(1); !strings.Contains(lastErr, "deadline exceeded") {
+		t.Fatalf("LastError = %q, want the deadline recorded", lastErr)
+	}
+}
+
+func TestOptionsKeepBatchWithinLease(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		options         Options
+		wantBatchSize   int
+		wantItemTimeout time.Duration
+	}{
+		{
+			name:            "batch defaults to the worker count",
+			options:         Options{Lease: 30 * time.Second, Workers: 4},
+			wantBatchSize:   4,
+			wantItemTimeout: 25 * time.Second,
+		},
+		{
+			name:            "a wider batch shrinks the per-item budget",
+			options:         Options{Lease: 30 * time.Second, Workers: 4, BatchSize: 20},
+			wantBatchSize:   20,
+			wantItemTimeout: 5 * time.Second,
+		},
+		{
+			name:            "an over-long timeout is clamped to what the lease allows",
+			options:         Options{Lease: 30 * time.Second, Workers: 4, ItemTimeout: time.Minute},
+			wantBatchSize:   4,
+			wantItemTimeout: 25 * time.Second,
+		},
+		{
+			name:            "a shorter timeout is left alone",
+			options:         Options{Lease: 30 * time.Second, Workers: 4, ItemTimeout: time.Second},
+			wantBatchSize:   4,
+			wantItemTimeout: time.Second,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			options := test.options.withDefaults()
+			if options.BatchSize != test.wantBatchSize {
+				t.Fatalf("BatchSize = %d, want %d", options.BatchSize, test.wantBatchSize)
+			}
+			if options.ItemTimeout != test.wantItemTimeout {
+				t.Fatalf("ItemTimeout = %v, want %v", options.ItemTimeout, test.wantItemTimeout)
+			}
+
+			rounds := (options.BatchSize + options.Workers - 1) / options.Workers
+			if worst := options.ItemTimeout * time.Duration(rounds); worst >= options.Lease {
+				t.Fatalf("a full batch can take %v, which is not shorter than the %v lease", worst, options.Lease)
+			}
+		})
 	}
 }

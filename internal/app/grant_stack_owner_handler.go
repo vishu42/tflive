@@ -36,7 +36,7 @@ type GrantStackOwnerPayload struct {
 // The key is "stack:<id>", built from the canonical formatter so it cannot
 // drift from the identity OpenFGA uses. Sharing that key with
 // mark_stack_ready is not a collision: the unique index is on (kind,
-// ordering_key), so each kind is only mutually excluded against itself.
+// resource_key), so each kind is only mutually excluded against itself.
 //
 // Key derivation is a frozen contract; see queue.Spec.
 var GrantStackOwnerSpec = queue.Spec{

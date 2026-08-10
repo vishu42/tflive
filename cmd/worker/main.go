@@ -109,7 +109,7 @@ func defaultWorkerDependencies() workerDependencies {
 				return nil, fmt.Errorf("unexpected postgres pool type %T", pool)
 			}
 			// The worker both delivers work and enqueues the follow-ups handlers
-			// return, so its store needs the specs to derive ordering keys.
+			// return, so its store needs the specs to derive resource keys.
 			specs, err := queue.NewSpecRegistry(app.GrantStackOwnerSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
 			if err != nil {
 				return nil, fmt.Errorf("build queue specs: %w", err)

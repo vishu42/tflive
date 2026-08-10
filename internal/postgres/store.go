@@ -21,7 +21,7 @@ type Store struct {
 // Option configures a Store at construction.
 type Option func(*Store)
 
-// WithQueueSpecs lets the store resolve a queue.Request into an ordering key
+// WithQueueSpecs lets the store resolve a queue.Request into an resource key
 // and mode. Specs carry no dependencies, so a producer-only binary registers
 // kinds without building the handlers that deliver them. Stores that never
 // enqueue can omit it.

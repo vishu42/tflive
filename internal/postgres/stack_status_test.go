@@ -168,7 +168,7 @@ func TestStackStatusMigrationBackfillsFromPendingQueueRows(t *testing.T) {
 	}
 
 	if _, err := pool.Exec(ctx, `
-		insert into work_queue (kind, ordering_key, payload, processed_at)
+		insert into work_queue (kind, resource_key, payload, processed_at)
 		values ('reconcile_stack_grant', 'stack:stack_pending/user:abc', '{}'::jsonb, null),
 		       ('reconcile_stack_grant', 'stack:stack_delivered/user:abc', '{}'::jsonb, now())
 	`); err != nil {
