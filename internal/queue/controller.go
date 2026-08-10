@@ -278,9 +278,9 @@ func (controller *Controller) backoff(attempts int, maxBackoff time.Duration) ti
 // Run drains the queue until ctx is cancelled, pruning completed rows
 // periodically.
 func (controller *Controller) Run(ctx context.Context) {
-	timer := time.NewTimer(controller.jitteredPollInterval())
+	timer := time.NewTimer(jittered(controller.options.PollInterval))
 	defer timer.Stop()
-	nextPrune := time.Now().Add(controller.options.PruneInterval)
+	nextPrune := time.Now().Add(jittered(controller.options.PruneInterval))
 
 	for {
 		// Pruning is checked on every pass rather than from a channel, because a
@@ -290,7 +290,7 @@ func (controller *Controller) Run(ctx context.Context) {
 			if _, err := controller.backend.Prune(ctx, controller.options.PruneAfter); err != nil && ctx.Err() == nil {
 				log.Printf("queue: prune failed: %v", err)
 			}
-			nextPrune = time.Now().Add(controller.options.PruneInterval)
+			nextPrune = time.Now().Add(jittered(controller.options.PruneInterval))
 		}
 
 		processed, err := controller.DispatchOnce(ctx)
@@ -308,7 +308,7 @@ func (controller *Controller) Run(ctx context.Context) {
 			default:
 			}
 		}
-		timer.Reset(controller.jitteredPollInterval())
+		timer.Reset(jittered(controller.options.PollInterval))
 
 		select {
 		case <-ctx.Done():
@@ -318,13 +318,15 @@ func (controller *Controller) Run(ctx context.Context) {
 	}
 }
 
-// jitteredPollInterval spreads idle polls so that several workers restarted
+// jittered spreads a repeating interval by up to 10%, so that workers started
 // together, or nudged by the same GC pause, do not settle into one synchronised
-// tick that hits the database in a spike.
-func (controller *Controller) jitteredPollInterval() time.Duration {
-	spread := controller.options.PollInterval / 10
+// tick. Idle polls would otherwise hit the database in a spike, and prune
+// rounds would have every worker contend for the same advisory lock at the same
+// instant — with the same worker winning it every time.
+func jittered(interval time.Duration) time.Duration {
+	spread := interval / 10
 	if spread < time.Millisecond {
 		spread = time.Millisecond
 	}
-	return controller.options.PollInterval + time.Duration(rand.Int63n(int64(spread)))
+	return interval + time.Duration(rand.Int63n(int64(spread)))
 }

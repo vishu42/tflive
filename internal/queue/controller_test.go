@@ -517,3 +517,40 @@ func TestOptionsKeepBatchWithinLease(t *testing.T) {
 		})
 	}
 }
+
+func TestJitteredStaysWithinItsSpread(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		interval time.Duration
+	}{
+		{name: "poll interval", interval: time.Second},
+		{name: "prune interval", interval: 10 * time.Minute},
+		{name: "interval too small to divide", interval: time.Microsecond},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			seen := map[time.Duration]struct{}{}
+			for sample := 0; sample < 200; sample++ {
+				got := jittered(test.interval)
+				// Never early: an interval must still mean at least itself.
+				if got < test.interval {
+					t.Fatalf("jittered(%v) = %v, want at least %v", test.interval, got, test.interval)
+				}
+				if limit := test.interval + test.interval/10 + time.Millisecond; got > limit {
+					t.Fatalf("jittered(%v) = %v, want at most %v", test.interval, got, limit)
+				}
+				seen[got] = struct{}{}
+			}
+			// Spreading is the whole point; a constant would resynchronise the
+			// workers this exists to separate.
+			if len(seen) < 2 {
+				t.Fatalf("jittered(%v) returned one value across 200 samples", test.interval)
+			}
+		})
+	}
+}
