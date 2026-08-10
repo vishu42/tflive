@@ -1,0 +1,79 @@
+/* The only file in the codebase permitted to contain raw hex literals.
+   Everything else references these custom properties. */
+:root {
+  /* Palette — absolute. No other colors exist in this design. */
+  --color-bg:           #FFFFFF;
+  --color-fg:           #000000;
+  --color-muted:        #F5F5F5;
+  --color-muted-fg:     #525252;
+  --color-border:       #000000;
+  --color-border-light: #E5E5E5;
+  --color-inverse-fg:   #FFFFFF;
+
+  /* The single sanctioned exception. Used ONLY by the failure status tone and
+     the destructive confirm step, and always alongside a glyph and a label so
+     that meaning never depends on hue alone. */
+  --color-critical:     #C1121F;
+  --color-critical-fg:  #FFFFFF;
+
+  /* Typefaces */
+  --font-display: "Playfair Display", Georgia, serif;
+  --font-body:    "Source Serif 4", Georgia, serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+                  Consolas, "Liberation Mono", monospace;
+
+  /* Type scale */
+  --text-xs:   0.75rem;
+  --text-sm:   0.875rem;
+  --text-base: 1rem;
+  --text-lg:   1.125rem;
+  --text-xl:   1.25rem;
+  --text-2xl:  1.5rem;
+  --text-3xl:  2rem;
+  --text-4xl:  2.5rem;
+  --text-5xl:  3.5rem;
+  --text-6xl:  4.5rem;
+  --text-7xl:  6rem;
+  --text-8xl:  8rem;
+
+  /* Tracking */
+  --tracking-tighter: -0.05em;
+  --tracking-tight:   -0.025em;
+  --tracking-normal:  0;
+  --tracking-wide:    0.05em;
+  --tracking-widest:  0.1em;
+
+  /* Leading */
+  --leading-none:    1;
+  --leading-tight:   1.15;
+  --leading-normal:  1.4;
+  --leading-relaxed: 1.625;
+
+  /* Spacing, 4px base */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-24: 96px;
+
+  /* Rules — the visual system replaces fills and shadows with lines */
+  --rule-hairline: 1px;
+  --rule-thin:     1px;
+  --rule-medium:   2px;
+  --rule-thick:    4px;
+  --rule-ultra:    8px;
+
+  /* Geometry and motion */
+  --radius: 0;
+  --transition-fast: 100ms;
+
+  /* Controls */
+  --control-height: 38px;
+  --touch-target:   44px;
+}

@@ -135,7 +135,10 @@ describe.each(convertedStylesheets())("%s", (name) => {
   });
 
   it("declares no non-zero border radius", () => {
-    const matches = read(name).match(/border-radius:\s*(?!var\(--radius\))[^;]+;/g) ?? [];
+    // The \s* must live INSIDE the lookahead. Left outside it can backtrack to
+    // zero-width, so the lookahead inspects " var(--radius)" rather than
+    // "var(--radius)", succeeds, and every compliant declaration is reported.
+    const matches = read(name).match(/border-radius:(?!\s*var\(--radius\)\s*;)[^;]+;/g) ?? [];
     expect(matches, `use var(--radius): ${matches.join(", ")}`).toEqual([]);
   });
 
