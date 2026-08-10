@@ -423,6 +423,8 @@ func TestCreateAndGetTemplateRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTemplateRegistration returned error: %v", err)
 	}
+	got.RequestedAt = got.RequestedAt.UTC()
+	got.CompletedAt = got.CompletedAt.UTC()
 
 	if got != registration {
 		t.Fatalf("registration = %#v, want %#v", got, registration)
@@ -1117,10 +1119,10 @@ func TestUpdateStackTemplateConfigPersistsDesiredConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateStackTemplateConfig returned error: %v", err)
 	}
-	if string(updated.DesiredConfigJSON) != `{"region":"us-west-2"}` {
+	if !sameJSON(t, updated.DesiredConfigJSON, []byte(`{"region":"us-west-2"}`)) {
 		t.Fatalf("updated desired config = %s", updated.DesiredConfigJSON)
 	}
-	if string(updated.ConfigJSON) != `{"region":"us-east-1"}` {
+	if !sameJSON(t, updated.ConfigJSON, []byte(`{"region":"us-east-1"}`)) {
 		t.Fatalf("legacy config changed = %s", updated.ConfigJSON)
 	}
 }
@@ -1168,7 +1170,7 @@ func TestUpdateStackTemplateDesiredRevisionPersistsRevisionAndConfig(t *testing.
 	if updated.DesiredTemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
 		t.Fatalf("updated desired template revision ID = %q, want template_rev_2", updated.DesiredTemplateRevisionID)
 	}
-	if string(updated.DesiredConfigJSON) != `{"region":"us-west-2"}` {
+	if !sameJSON(t, updated.DesiredConfigJSON, []byte(`{"region":"us-west-2"}`)) {
 		t.Fatalf("updated desired config = %s", updated.DesiredConfigJSON)
 	}
 	if updated.LastAppliedTemplateRevisionID != "" {
@@ -1270,7 +1272,7 @@ func TestGetStackTemplateReturnsNotFoundForOtherTenant(t *testing.T) {
 			id,
 			tenant_id,
 			stack_id,
-			template_revision_id,
+			desired_template_revision_id,
 			selected_ref,
 			workspace_name,
 			lifecycle
@@ -1279,7 +1281,7 @@ func TestGetStackTemplateReturnsNotFoundForOtherTenant(t *testing.T) {
 		"stack_template_123",
 		"tenant_123",
 		"stack_123",
-		"template_123",
+		"template_rev_1",
 		"main",
 		"mtp_acme_prod_vpc_a13f9c",
 		"active",
@@ -1390,7 +1392,7 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 		got.SelectedRef != run.SelectedRef ||
 		got.ResolvedCommitSHA != run.ResolvedCommitSHA ||
 		got.WorkspaceName != run.WorkspaceName ||
-		string(got.ConfigJSON) != string(run.ConfigJSON) ||
+		!sameJSON(t, got.ConfigJSON, run.ConfigJSON) ||
 		got.BackendType != run.BackendType ||
 		got.BackendConfigHash != run.BackendConfigHash ||
 		got.Status != run.Status ||
@@ -1504,6 +1506,8 @@ func TestGetTemplateRunReturnsTenantScopedRecord(t *testing.T) {
 		ConfigJSON:        json.RawMessage(`{}`),
 		ErrorSummary:      "previous error summary",
 	}
+	run.StartedAt = run.StartedAt.UTC()
+	run.CompletedAt = run.CompletedAt.UTC()
 	if !reflect.DeepEqual(run, want) {
 		t.Fatalf("run = %#v, want %#v", run, want)
 	}
@@ -1573,6 +1577,7 @@ func TestRecordTemplateRunLogUpsertsTenantScopedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTemplateRunLog returned error: %v", err)
 	}
+	got.UploadedAt = got.UploadedAt.UTC()
 
 	if got != log {
 		t.Fatalf("log = %#v, want %#v", got, log)
@@ -2322,6 +2327,23 @@ func seedTemplateRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run 
 	if err != nil {
 		t.Fatalf("seed template run: %v", err)
 	}
+}
+
+// sameJSON compares two JSON documents by value. Postgres reformats jsonb on
+// the way out — a space after every colon, object keys reordered — so comparing
+// the bytes it returns against the literal that went in fails for reasons that
+// have nothing to do with the value stored.
+func sameJSON(t *testing.T, got, want []byte) bool {
+	t.Helper()
+
+	var gotValue, wantValue any
+	if err := json.Unmarshal(got, &gotValue); err != nil {
+		t.Fatalf("decode got JSON %s: %v", got, err)
+	}
+	if err := json.Unmarshal(want, &wantValue); err != nil {
+		t.Fatalf("decode want JSON %s: %v", want, err)
+	}
+	return reflect.DeepEqual(gotValue, wantValue)
 }
 
 func openTestPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
