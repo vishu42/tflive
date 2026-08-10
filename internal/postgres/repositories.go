@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vishu42/tflive/internal/app"
-	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/dispatch"
 	"github.com/vishu42/tflive/internal/traits"
@@ -427,28 +426,6 @@ func (store *Store) ListTemplateRevisions(ctx context.Context, tenantID traits.T
 	return templateRevisions, nil
 }
 
-func (store *Store) CreateStackWithOwnerIntent(ctx context.Context, stack traits.Stack, grant authz.Grant) error {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin create stack: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	if err := insertStack(ctx, tx, stack); err != nil {
-		return err
-	}
-	_, err = tx.Exec(ctx, `
-		insert into authorization_outbox (id, operation, subject, stack, role)
-		values ($1, 'grant', $2, $3, $4)
-	`, authorizationOutboxID("grant", grant), grant.Subject().String(), grant.Stack().String(), grant.Role().String())
-	if err != nil {
-		return fmt.Errorf("enqueue stack owner relationship: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit create stack: %w", err)
-	}
-	return nil
-}
-
 func (store *Store) CreateStack(ctx context.Context, stack traits.Stack) error {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
@@ -481,22 +458,31 @@ func insertStack(ctx context.Context, tx pgx.Tx, stack traits.Stack) error {
 		credentialIDsJSON = []byte("[]")
 	}
 
+	// A caller that does not care about provisioning gets the terminal status,
+	// so only the queue-driven creation path can leave a stack pending.
+	status := stack.Status
+	if status == "" {
+		status = traits.StackStatusReady
+	}
+
 	_, err = tx.Exec(ctx, `
 		insert into stacks (
 			id,
 			tenant_id,
 			name,
 			slug,
+			status,
 			tags_json,
 			default_credential_ids_json,
 			created_by,
 			created_at
-		) values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8)
+		) values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
 	`,
 		stack.ID,
 		stack.TenantID,
 		stack.Name,
 		stack.Slug,
+		string(status),
 		tagsJSON,
 		credentialIDsJSON,
 		stack.CreatedBy,
@@ -507,6 +493,26 @@ func insertStack(ctx context.Context, tx pgx.Tx, stack traits.Stack) error {
 	}
 	if err != nil {
 		return fmt.Errorf("create stack: %w", err)
+	}
+	return nil
+}
+
+// MarkStackReady flips a provisioned stack to its terminal status. It is
+// idempotent by construction: running it against an already ready stack is a
+// no-op update, which is what makes at-least-once delivery of the
+// mark_stack_ready kind safe.
+func (store *Store) MarkStackReady(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) error {
+	result, err := store.pool.Exec(ctx, `
+		update stacks
+		   set status = $3
+		 where tenant_id = $1
+		   and id = $2
+	`, tenantID, stackID, string(traits.StackStatusReady))
+	if err != nil {
+		return fmt.Errorf("mark stack ready: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return app.ErrNotFound
 	}
 	return nil
 }
@@ -530,6 +536,7 @@ func (store *Store) ListStacks(ctx context.Context, tenantID traits.TenantID) ([
 			tenant_id,
 			name,
 			slug,
+			status,
 			tags_json,
 			default_credential_ids_json,
 			created_by,
@@ -573,6 +580,7 @@ func (store *Store) ListStacksPage(ctx context.Context, tenantID traits.TenantID
 			tenant_id,
 			name,
 			slug,
+			status,
 			tags_json,
 			default_credential_ids_json,
 			created_by,
@@ -1018,53 +1026,6 @@ func (store *Store) RetryTemplateRun(ctx context.Context, id string, availableAt
 	return nil
 }
 
-func (store *Store) ClaimAuthorizationRelationship(ctx context.Context, availableAt, claimedUntil time.Time) (authdispatch.Entry, bool, error) {
-	var entry authdispatch.Entry
-	err := store.pool.QueryRow(ctx, `
-		with candidate as (
-			select id from authorization_outbox
-			where processed_at is null and failed_at is null and available_at <= $1
-				and (claimed_until is null or claimed_until <= $1)
-			order by available_at, id for update skip locked limit 1
-		), claimed as (
-			update authorization_outbox outbox set claimed_until = $2, attempts = attempts + 1
-			from candidate where outbox.id = candidate.id
-			returning outbox.id, outbox.operation, outbox.subject, outbox.stack, outbox.role
-		) select id, operation, subject, stack, role from claimed
-	`, availableAt, claimedUntil).Scan(&entry.ID, &entry.Operation, &entry.Subject, &entry.Stack, &entry.Role)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return authdispatch.Entry{}, false, nil
-	}
-	if err != nil {
-		return authdispatch.Entry{}, false, fmt.Errorf("claim authorization relationship: %w", err)
-	}
-	return entry, true, nil
-}
-
-func (store *Store) CompleteAuthorizationRelationship(ctx context.Context, id string) error {
-	_, err := store.pool.Exec(ctx, `update authorization_outbox set processed_at = now(), claimed_until = null, last_error = '' where id = $1 and processed_at is null and failed_at is null`, id)
-	if err != nil {
-		return fmt.Errorf("complete authorization relationship: %w", err)
-	}
-	return nil
-}
-
-func (store *Store) RetryAuthorizationRelationship(ctx context.Context, id string, availableAt time.Time, lastError string) error {
-	_, err := store.pool.Exec(ctx, `update authorization_outbox set available_at = $2, claimed_until = null, last_error = $3 where id = $1 and processed_at is null and failed_at is null`, id, availableAt, lastError)
-	if err != nil {
-		return fmt.Errorf("retry authorization relationship: %w", err)
-	}
-	return nil
-}
-
-func (store *Store) FailAuthorizationRelationship(ctx context.Context, id, lastError string) error {
-	_, err := store.pool.Exec(ctx, `update authorization_outbox set failed_at = now(), claimed_until = null, last_error = $2 where id = $1 and processed_at is null and failed_at is null`, id, lastError)
-	if err != nil {
-		return fmt.Errorf("fail authorization relationship: %w", err)
-	}
-	return nil
-}
-
 func (store *Store) GetTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID) (traits.TemplateRun, error) {
 	var run traits.TemplateRun
 	var startedAt sql.NullTime
@@ -1428,7 +1389,13 @@ func (store *Store) ReconcileTemplateRunCancellation(ctx context.Context, tenant
 }
 
 func (store *Store) AppendAuditEvent(ctx context.Context, event traits.SecurityAuditEvent) error {
-	_, err := store.pool.Exec(ctx,
+	return appendAuditEvent(ctx, store.pool, event)
+}
+
+// appendAuditEvent holds the insert so both the standalone method and the
+// transaction-scoped repository share one copy of the SQL.
+func appendAuditEvent(ctx context.Context, exec pgxExecutor, event traits.SecurityAuditEvent) error {
+	_, err := exec.Exec(ctx,
 		`INSERT INTO security_audit_log
 			(actor_subject, action, target_user, tenant_id, stack_id, old_role, new_role, outcome, correlation_id)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
@@ -1710,11 +1677,14 @@ func scanStack(scanner stackScanner) (traits.Stack, error) {
 	var tagsJSON []byte
 	var credentialIDsJSON []byte
 
+	var status string
+
 	if err := scanner.Scan(
 		&stack.ID,
 		&stack.TenantID,
 		&stack.Name,
 		&stack.Slug,
+		&status,
 		&tagsJSON,
 		&credentialIDsJSON,
 		&stack.CreatedBy,
@@ -1722,6 +1692,7 @@ func scanStack(scanner stackScanner) (traits.Stack, error) {
 	); err != nil {
 		return traits.Stack{}, err
 	}
+	stack.Status = traits.StackStatus(status)
 	if err := json.Unmarshal(tagsJSON, &stack.Tags); err != nil {
 		return traits.Stack{}, fmt.Errorf("unmarshal stack tags: %w", err)
 	}
@@ -1738,6 +1709,7 @@ func (store *Store) getStack(ctx context.Context, tenantID traits.TenantID, stac
 			tenant_id,
 			name,
 			slug,
+			status,
 			tags_json,
 			default_credential_ids_json,
 			created_by,

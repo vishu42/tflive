@@ -15,13 +15,13 @@ import (
 	"github.com/vishu42/tflive/internal/api"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/artifacts"
-	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/keycloak"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
+	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/temporal"
 	"go.temporal.io/sdk/client"
 )
@@ -41,7 +41,8 @@ type appRepositories interface {
 	app.TemplateRevisionRepository
 	app.TemplateRunLogRepository
 	app.AuditRepository
-	authdispatch.Outbox
+	app.UnitOfWork
+	queue.Reader
 }
 
 type tokenVerifier interface {
@@ -100,7 +101,13 @@ func defaultAPIDependencies() apiDependencies {
 			if !ok {
 				return nil, fmt.Errorf("unexpected postgres pool type %T", pool)
 			}
-			return postgres.NewStore(pgxPool), nil
+			// The API only produces work; delivery belongs to the worker. Specs
+			// carry no dependencies, so registering them here needs no handlers.
+			specs, err := queue.NewSpecRegistry(app.GrantStackOwnerSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
+			if err != nil {
+				return nil, fmt.Errorf("build queue specs: %w", err)
+			}
+			return postgres.NewStore(pgxPool, postgres.WithQueueSpecs(specs)), nil
 		},
 		dialTemporal: temporal.Dial,
 		newDispatcher: func(temporalClient client.Client, taskQueue string) app.WorkflowDispatcher {
@@ -200,7 +207,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 
 	service, err := deps.newService(app.Service{
 		Authorizer:               authorizer,
-		AuthorizationOutbox:      store,
+		Work:                     store,
 		Stacks:                   store,
 		StackTemplates:           store,
 		Credentials:              credentialRepository(store),
@@ -220,7 +227,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire service: %w", err)
 	}
 
-	handler := api.NewAuthenticatedServer(service, verifier, cfg.Security.TenantID, cfg.Debug)
+	handler := api.NewAuthenticatedServer(service, verifier, cfg.Security.TenantID, cfg.Debug, api.WithQueueReader(store))
 	if err := deps.listenAndServe(ctx, cfg.HTTPAddress, handler); err != nil {
 		return fmt.Errorf("listen and serve api: %w", err)
 	}

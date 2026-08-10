@@ -1,4 +1,5 @@
-// Package authz defines the provider-neutral authorization contract.
+// Package authz defines the provider-neutral authorization contract and the
+// handler that reconciles stack grants onto whichever provider implements it.
 package authz
 
 import (
@@ -293,6 +294,26 @@ func (mutation Mutation) Valid() bool {
 		}
 	}
 	return true
+}
+
+// ListSubjectGrantsRequest asks for one subject's direct roles on one stack.
+type ListSubjectGrantsRequest struct {
+	Subject Subject
+	Stack   Stack
+}
+
+// Valid reports whether the request names a well-formed subject and stack.
+func (request ListSubjectGrantsRequest) Valid() bool {
+	return request.Subject.Valid() && request.Stack.Valid()
+}
+
+// SubjectGrantLister reads the direct roles one subject holds on one stack.
+//
+// It is deliberately separate from Authorizer: only reconciling handlers need
+// this narrow read, and widening Authorizer would force every implementation
+// to grow a method it never calls.
+type SubjectGrantLister interface {
+	ListSubjectGrants(context.Context, ListSubjectGrantsRequest) (ListGrantsResult, error)
 }
 
 // Authorizer is the provider-neutral authorization port.

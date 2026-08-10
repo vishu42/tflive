@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/credentials"
+	"github.com/vishu42/tflive/internal/queue"
 )
 
 var ErrNotFound = errors.New("postgres: not found")
@@ -14,15 +15,31 @@ var ErrNotFound = errors.New("postgres: not found")
 type Store struct {
 	pool             *pgxpool.Pool
 	credentialCipher *credentials.Cipher
+	queueSpecs       *queue.SpecRegistry
+}
+
+// Option configures a Store at construction.
+type Option func(*Store)
+
+// WithQueueSpecs lets the store resolve a queue.Request into an resource key
+// and mode. Specs carry no dependencies, so a producer-only binary registers
+// kinds without building the handlers that deliver them. Stores that never
+// enqueue can omit it.
+func WithQueueSpecs(specs *queue.SpecRegistry) Option {
+	return func(store *Store) { store.queueSpecs = specs }
 }
 
 // NewStore creates a repository store and loads the process-wide credential encryption key.
-func NewStore(pool *pgxpool.Pool) *Store {
+func NewStore(pool *pgxpool.Pool, options ...Option) *Store {
 	var cipher *credentials.Cipher
 	if rawKey := os.Getenv("CREDENTIAL_ENCRYPTION_KEY"); rawKey != "" {
 		cipher, _ = credentials.NewCipher(rawKey)
 	}
-	return &Store{pool: pool, credentialCipher: cipher}
+	store := &Store{pool: pool, credentialCipher: cipher}
+	for _, option := range options {
+		option(store)
+	}
+	return store
 }
 
 // Encrypt protects a credential value with the configured application cipher before persistence.

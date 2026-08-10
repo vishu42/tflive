@@ -423,6 +423,8 @@ func TestCreateAndGetTemplateRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTemplateRegistration returned error: %v", err)
 	}
+	got.RequestedAt = got.RequestedAt.UTC()
+	got.CompletedAt = got.CompletedAt.UTC()
 
 	if got != registration {
 		t.Fatalf("registration = %#v, want %#v", got, registration)
@@ -1117,10 +1119,10 @@ func TestUpdateStackTemplateConfigPersistsDesiredConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateStackTemplateConfig returned error: %v", err)
 	}
-	if string(updated.DesiredConfigJSON) != `{"region":"us-west-2"}` {
+	if !sameJSON(t, updated.DesiredConfigJSON, []byte(`{"region":"us-west-2"}`)) {
 		t.Fatalf("updated desired config = %s", updated.DesiredConfigJSON)
 	}
-	if string(updated.ConfigJSON) != `{"region":"us-east-1"}` {
+	if !sameJSON(t, updated.ConfigJSON, []byte(`{"region":"us-east-1"}`)) {
 		t.Fatalf("legacy config changed = %s", updated.ConfigJSON)
 	}
 }
@@ -1168,7 +1170,7 @@ func TestUpdateStackTemplateDesiredRevisionPersistsRevisionAndConfig(t *testing.
 	if updated.DesiredTemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
 		t.Fatalf("updated desired template revision ID = %q, want template_rev_2", updated.DesiredTemplateRevisionID)
 	}
-	if string(updated.DesiredConfigJSON) != `{"region":"us-west-2"}` {
+	if !sameJSON(t, updated.DesiredConfigJSON, []byte(`{"region":"us-west-2"}`)) {
 		t.Fatalf("updated desired config = %s", updated.DesiredConfigJSON)
 	}
 	if updated.LastAppliedTemplateRevisionID != "" {
@@ -1270,7 +1272,7 @@ func TestGetStackTemplateReturnsNotFoundForOtherTenant(t *testing.T) {
 			id,
 			tenant_id,
 			stack_id,
-			template_revision_id,
+			desired_template_revision_id,
 			selected_ref,
 			workspace_name,
 			lifecycle
@@ -1279,7 +1281,7 @@ func TestGetStackTemplateReturnsNotFoundForOtherTenant(t *testing.T) {
 		"stack_template_123",
 		"tenant_123",
 		"stack_123",
-		"template_123",
+		"template_rev_1",
 		"main",
 		"mtp_acme_prod_vpc_a13f9c",
 		"active",
@@ -1390,7 +1392,7 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 		got.SelectedRef != run.SelectedRef ||
 		got.ResolvedCommitSHA != run.ResolvedCommitSHA ||
 		got.WorkspaceName != run.WorkspaceName ||
-		string(got.ConfigJSON) != string(run.ConfigJSON) ||
+		!sameJSON(t, got.ConfigJSON, run.ConfigJSON) ||
 		got.BackendType != run.BackendType ||
 		got.BackendConfigHash != run.BackendConfigHash ||
 		got.Status != run.Status ||
@@ -1504,6 +1506,8 @@ func TestGetTemplateRunReturnsTenantScopedRecord(t *testing.T) {
 		ConfigJSON:        json.RawMessage(`{}`),
 		ErrorSummary:      "previous error summary",
 	}
+	run.StartedAt = run.StartedAt.UTC()
+	run.CompletedAt = run.CompletedAt.UTC()
 	if !reflect.DeepEqual(run, want) {
 		t.Fatalf("run = %#v, want %#v", run, want)
 	}
@@ -1573,6 +1577,7 @@ func TestRecordTemplateRunLogUpsertsTenantScopedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTemplateRunLog returned error: %v", err)
 	}
+	got.UploadedAt = got.UploadedAt.UTC()
 
 	if got != log {
 		t.Fatalf("log = %#v, want %#v", got, log)
@@ -2324,6 +2329,23 @@ func seedTemplateRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run 
 	}
 }
 
+// sameJSON compares two JSON documents by value. Postgres reformats jsonb on
+// the way out — a space after every colon, object keys reordered — so comparing
+// the bytes it returns against the literal that went in fails for reasons that
+// have nothing to do with the value stored.
+func sameJSON(t *testing.T, got, want []byte) bool {
+	t.Helper()
+
+	var gotValue, wantValue any
+	if err := json.Unmarshal(got, &gotValue); err != nil {
+		t.Fatalf("decode got JSON %s: %v", got, err)
+	}
+	if err := json.Unmarshal(want, &wantValue); err != nil {
+		t.Fatalf("decode want JSON %s: %v", want, err)
+	}
+	return reflect.DeepEqual(gotValue, wantValue)
+}
+
 func openTestPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
 
@@ -2779,5 +2801,145 @@ func TestAppendAuditEventEmptyOptionalFields(t *testing.T) {
 	}
 	if correlationID != "" {
 		t.Fatalf("correlation_id = %q, want empty", correlationID)
+	}
+}
+
+func TestWorkQueueMigrationDefinesCoalescingQueue(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+
+	columns := map[string]string{}
+	rows, err := pool.Query(ctx, `
+		select column_name, data_type
+		from information_schema.columns
+		where table_name = 'work_queue' and table_schema = current_schema()
+	`)
+	if err != nil {
+		t.Fatalf("query work_queue columns: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, dataType string
+		if err := rows.Scan(&name, &dataType); err != nil {
+			t.Fatalf("scan column: %v", err)
+		}
+		columns[name] = dataType
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate columns: %v", err)
+	}
+
+	for _, name := range []string{
+		"id", "kind", "resource_key", "payload", "revision", "actor_subject",
+		"tenant_id", "available_at", "claimed_until", "attempts", "last_error",
+		"created_at", "processed_at",
+	} {
+		if _, ok := columns[name]; !ok {
+			t.Fatalf("work_queue is missing column %q", name)
+		}
+	}
+	if columns["payload"] != "jsonb" {
+		t.Fatalf("payload data_type = %q, want jsonb", columns["payload"])
+	}
+	if columns["revision"] != "bigint" {
+		t.Fatalf("revision data_type = %q, want bigint", columns["revision"])
+	}
+
+	var indexDef string
+	if err := pool.QueryRow(ctx, `
+		select indexdef from pg_indexes
+		where schemaname = current_schema() and indexname = 'work_queue_pending_key_idx'
+	`).Scan(&indexDef); err != nil {
+		t.Fatalf("query work_queue_pending_key_idx: %v", err)
+	}
+	if !strings.Contains(indexDef, "UNIQUE") {
+		t.Fatalf("work_queue_pending_key_idx must be unique, got %q", indexDef)
+	}
+	if !strings.Contains(indexDef, "processed_at IS NULL") {
+		t.Fatalf("work_queue_pending_key_idx must be partial on processed_at is null, got %q", indexDef)
+	}
+}
+
+func TestWorkQueuePendingKeyIndexBlocksDuplicatePendingRows(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+
+	insert := `insert into work_queue (kind, resource_key, payload, actor_subject, tenant_id) values ($1, $2, '{}'::jsonb, '', '')`
+	if _, err := pool.Exec(ctx, insert, "k", "stack:a/user:x"); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	if _, err := pool.Exec(ctx, insert, "k", "stack:a/user:x"); err == nil {
+		t.Fatal("second pending insert for the same key was accepted")
+	}
+
+	if _, err := pool.Exec(ctx, `update work_queue set processed_at = now() where resource_key = $1`, "stack:a/user:x"); err != nil {
+		t.Fatalf("complete first row: %v", err)
+	}
+	if _, err := pool.Exec(ctx, insert, "k", "stack:a/user:x"); err != nil {
+		t.Fatalf("insert after completion must succeed, got: %v", err)
+	}
+}
+
+func TestWorkQueueMigrationBackfillsPendingAuthorizationOutbox(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+
+	if _, err := pool.Exec(ctx, `
+		insert into authorization_outbox (id, operation, subject, stack, role)
+		values ('grant/user:x/stack:a/owner', 'grant', 'user:x', 'stack:a', 'owner'),
+		       ('revoke/user:y/stack:a/viewer', 'revoke', 'user:y', 'stack:a', 'viewer'),
+		       ('done/user:z/stack:a/viewer', 'grant', 'user:z', 'stack:a', 'viewer')
+	`); err != nil {
+		t.Fatalf("seed authorization_outbox: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `update authorization_outbox set processed_at = now() where id = 'done/user:z/stack:a/viewer'`); err != nil {
+		t.Fatalf("mark processed: %v", err)
+	}
+
+	// Replay 0012 against the seeded outbox: drop what it created and forget
+	// that it ran, so Migrate re-applies the file including its backfill.
+	if _, err := pool.Exec(ctx, `drop table work_queue`); err != nil {
+		t.Fatalf("drop work_queue: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `delete from schema_migrations where version = '0012_work_queue'`); err != nil {
+		t.Fatalf("reset migration version: %v", err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("re-run migration: %v", err)
+	}
+
+	type backfilled struct {
+		key  string
+		role string
+	}
+	rows, err := pool.Query(ctx, `select resource_key, payload->>'role' from work_queue order by resource_key`)
+	if err != nil {
+		t.Fatalf("query backfilled rows: %v", err)
+	}
+	defer rows.Close()
+	var got []backfilled
+	for rows.Next() {
+		var row backfilled
+		if err := rows.Scan(&row.key, &row.role); err != nil {
+			t.Fatalf("scan backfilled row: %v", err)
+		}
+		got = append(got, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate backfilled rows: %v", err)
+	}
+
+	want := []backfilled{
+		{key: "stack:a/user:x", role: "owner"},
+		{key: "stack:a/user:y", role: ""},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("backfilled rows = %+v, want %+v", got, want)
 	}
 }

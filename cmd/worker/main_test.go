@@ -11,10 +11,10 @@ import (
 
 	"github.com/vishu42/tflive/internal/activities"
 	"github.com/vishu42/tflive/internal/artifacts"
-	"github.com/vishu42/tflive/internal/authdispatch"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/dispatch"
+	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/temporal"
 	"github.com/vishu42/tflive/internal/traits"
 	"github.com/vishu42/tflive/internal/workflows"
@@ -355,8 +355,10 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			}
 			return deps.outboxDispatcher
 		},
-		newAuthorizationAdapter:    func(config.OpenFGAConfig) (authz.Authorizer, error) { return &recordingWorkerAuthorizer{}, nil },
-		newAuthorizationDispatcher: func(authdispatch.Outbox, authz.Authorizer) outboxDispatcher { return &recordingOutboxDispatcher{} },
+		newAuthorizationAdapter: func(config.OpenFGAConfig) (workerAuthorizer, error) { return &recordingWorkerAuthorizer{}, nil },
+		newQueueController: func(workerStore, workerAuthorizer) (outboxDispatcher, error) {
+			return &recordingOutboxDispatcher{}, nil
+		},
 		registerWorkflow: func(worker temporalWorker) {
 			if worker != deps.worker {
 				t.Fatalf("registerWorkflow worker = %p, want %p", worker, deps.worker)
@@ -439,19 +441,6 @@ func (pool *recordingWorkerPostgresPool) Close() {
 
 type recordingWorkerStore struct{}
 
-func (store *recordingWorkerStore) ClaimAuthorizationRelationship(context.Context, time.Time, time.Time) (authdispatch.Entry, bool, error) {
-	return authdispatch.Entry{}, false, nil
-}
-func (store *recordingWorkerStore) CompleteAuthorizationRelationship(context.Context, string) error {
-	return nil
-}
-func (store *recordingWorkerStore) RetryAuthorizationRelationship(context.Context, string, time.Time, string) error {
-	return nil
-}
-func (store *recordingWorkerStore) FailAuthorizationRelationship(context.Context, string, string) error {
-	return nil
-}
-
 func (store *recordingWorkerStore) RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error {
 	return nil
 }
@@ -477,6 +466,14 @@ func (store *recordingWorkerStore) CompleteTemplateRun(context.Context, string) 
 }
 
 func (store *recordingWorkerStore) RetryTemplateRun(context.Context, string, time.Time, string) error {
+	return nil
+}
+
+func (store *recordingWorkerStore) Enqueue(context.Context, ...queue.Request) error {
+	return nil
+}
+
+func (store *recordingWorkerStore) MarkStackReady(context.Context, traits.TenantID, traits.StackID) error {
 	return nil
 }
 
@@ -565,4 +562,26 @@ func (worker *recordingTemporalWorker) RegisterActivityWithOptions(activityFn in
 func (worker *recordingTemporalWorker) Run(<-chan interface{}) error {
 	worker.ran = true
 	return worker.runErr
+}
+
+// recordingWorkerStore must satisfy queue.Backend now that the worker runs a
+// queue controller instead of the authorization dispatcher.
+func (store *recordingWorkerStore) Claim(context.Context, time.Duration, int, []queue.Kind) ([]queue.Item, error) {
+	return nil, nil
+}
+
+func (store *recordingWorkerStore) Complete(context.Context, int64, int64) (bool, error) {
+	return true, nil
+}
+
+func (store *recordingWorkerStore) Reschedule(context.Context, int64, time.Duration, string) error {
+	return nil
+}
+
+func (store *recordingWorkerStore) Prune(context.Context, time.Duration) (int64, error) {
+	return 0, nil
+}
+
+func (authorizer *recordingWorkerAuthorizer) ListSubjectGrants(context.Context, authz.ListSubjectGrantsRequest) (authz.ListGrantsResult, error) {
+	return authz.ListGrantsResult{}, nil
 }
