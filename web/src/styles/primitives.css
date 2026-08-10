@@ -137,3 +137,144 @@ select:focus {
 textarea {
   resize: vertical;
 }
+
+/* ---- Panels ---- */
+.panel {
+  min-width: 0;
+  border: var(--rule-thin) solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-6);
+  background: var(--color-bg);
+}
+
+@media (min-width: 768px) {
+  .panel {
+    padding: var(--space-8);
+  }
+}
+
+.panel.wide {
+  grid-column: 1 / -1;
+}
+
+.panel h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-5);
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  letter-spacing: var(--tracking-tight);
+}
+
+.panel > .secondary-button {
+  margin-top: var(--space-5);
+}
+
+/* Inversion is the emphasis mechanism that replaces accent colour. Used
+   sparingly — it loses all force if it appears everywhere. */
+.panel--inverted {
+  position: relative;
+  border-color: var(--color-fg);
+  color: var(--color-inverse-fg);
+  background: var(--color-fg);
+}
+
+.panel--inverted::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.03;
+  background-image: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent 1px,
+    var(--color-bg) 1px,
+    var(--color-bg) 2px
+  );
+  background-size: 4px 100%;
+}
+
+.panel--inverted > * {
+  position: relative;
+}
+
+/* ---- Page header. The editorial voice on working screens. ---- */
+.page-header {
+  margin-bottom: var(--space-8);
+}
+
+.eyebrow {
+  margin: 0 0 var(--space-3);
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-widest);
+  text-transform: uppercase;
+}
+
+.page-header h1 {
+  font-family: var(--font-display);
+  font-size: var(--text-5xl);
+  letter-spacing: var(--tracking-tighter);
+  line-height: var(--leading-none);
+}
+
+/* Thick rule plus bordered square — the design system's required decorative
+   punctuation. Rendered from the rule element so no extra markup is needed. */
+.page-rule {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  border: 0;
+}
+
+.page-rule::before {
+  content: "";
+  flex: 0 0 clamp(80px, 18vw, 200px);
+  height: var(--rule-thick);
+  background: var(--color-fg);
+}
+
+.page-rule::after {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border: var(--rule-medium) solid var(--color-fg);
+}
+
+/* ---- Messaging ---- */
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  border: 0;
+  border-left: var(--rule-thick) solid var(--color-critical);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-fg);
+  background: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.error-text {
+  margin: var(--space-3) 0 0;
+  color: var(--color-fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.error-text::before {
+  content: "✕ ";
+  color: var(--color-critical);
+  font-family: var(--font-mono);
+}
+
+.muted {
+  margin: 0;
+  color: var(--color-muted-fg);
+}
