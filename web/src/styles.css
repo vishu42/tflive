@@ -1,5 +1,6 @@
 @import "./styles/tokens.css";
 @import "./styles/base.css";
+@import "./styles/primitives.css";
 
 .app-shell {
   min-height: 100vh;
@@ -136,26 +137,6 @@
   background: #eef1ea;
 }
 
-label {
-  display: grid;
-  gap: 6px;
-  color: #536064;
-  font-size: 0.85rem;
-  font-weight: 650;
-}
-
-input,
-textarea,
-select {
-  min-height: 38px;
-  min-width: 0;
-  border: 1px solid #c8cfc4;
-  border-radius: 6px;
-  padding: 8px 10px;
-  color: #202833;
-  background: #ffffff;
-}
-
 .workflow-grid {
   display: grid;
   grid-template-columns: minmax(280px, 0.85fr) minmax(320px, 1.15fr);
@@ -196,53 +177,8 @@ select {
   margin-bottom: 14px;
 }
 
-.primary-button,
-.secondary-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 38px;
-  border-radius: 6px;
-  padding: 8px 12px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.primary-button {
-  border: 1px solid #2f6f5e;
-  color: #ffffff;
-  background: #2f6f5e;
-}
-
-.secondary-button {
-  border: 1px solid #c0c8bc;
-  color: #293541;
-  background: #f8faf7;
-}
-
 .panel > .secondary-button {
   margin-top: 14px;
-}
-
-.destructive-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 38px;
-  border-radius: 6px;
-  padding: 8px 12px;
-  cursor: pointer;
-  white-space: nowrap;
-  border: 1px solid #c4434b;
-  color: #ffffff;
-  background: #c4434b;
-}
-
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 .button-row,
@@ -464,16 +400,6 @@ button:disabled {
   gap: 8px;
 }
 
-.icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  color: #991b1b;
-  background: transparent;
-  cursor: pointer;
-}
-
 @media (max-width: 700px) {
   .credential-form {
     grid-template-columns: 1fr;
@@ -522,10 +448,6 @@ button:disabled {
 
 .stacks-list-header h1 {
   margin: 0;
-}
-
-a.primary-button {
-  text-decoration: none;
 }
 
 .stacks-list {
@@ -758,15 +680,6 @@ a.primary-button {
 .form-row {
   display: grid;
   gap: 10px;
-}
-
-.form-row select {
-  min-height: 38px;
-  border: 1px solid #c8cfc4;
-  border-radius: 6px;
-  padding: 8px 10px;
-  color: #202833;
-  background: #ffffff;
 }
 
 @media (max-width: 920px) {

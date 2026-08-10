@@ -1,0 +1,139 @@
+/* ---- Buttons. Rectangular, uppercase, monospace, instant inversion. ---- */
+.primary-button,
+.secondary-button,
+.destructive-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--control-height);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-6);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-widest);
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.primary-button {
+  border: var(--rule-medium) solid var(--color-fg);
+  color: var(--color-inverse-fg);
+  background: var(--color-fg);
+}
+
+.primary-button:hover:not(:disabled) {
+  color: var(--color-fg);
+  background: var(--color-bg);
+}
+
+.secondary-button {
+  border: var(--rule-medium) solid var(--color-fg);
+  color: var(--color-fg);
+  background: transparent;
+}
+
+.secondary-button:hover:not(:disabled) {
+  color: var(--color-inverse-fg);
+  background: var(--color-fg);
+}
+
+/* Destructive stays black at rest deliberately. A button that is red before
+   the user has committed to anything makes the colour ambient rather than
+   meaningful; it earns --color-critical only at the confirm step below. */
+.destructive-button {
+  border: var(--rule-medium) solid var(--color-fg);
+  color: var(--color-inverse-fg);
+  background: var(--color-fg);
+}
+
+.destructive-button:hover:not(:disabled) {
+  color: var(--color-fg);
+  background: var(--color-bg);
+}
+
+.destructive-button[data-confirming="true"] {
+  border-color: var(--color-critical);
+  color: var(--color-critical-fg);
+  background: var(--color-critical);
+}
+
+a.primary-button,
+a.secondary-button {
+  text-decoration: none;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--space-6);
+  min-height: var(--space-6);
+  border: 0;
+  border-radius: var(--radius);
+  color: var(--color-fg);
+  background: transparent;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  color: var(--color-inverse-fg);
+  background: var(--color-fg);
+}
+
+.icon-button:focus-visible {
+  outline-offset: 2px;
+}
+
+/* ---- Inputs. Bottom rule only; focus thickens it rather than adding a ring. ---- */
+label {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-widest);
+  text-transform: uppercase;
+}
+
+input,
+textarea,
+select {
+  min-height: var(--control-height);
+  min-width: 0;
+  border: 0;
+  border-bottom: var(--rule-medium) solid var(--color-fg);
+  border-radius: var(--radius);
+  padding: var(--space-2) 0;
+  color: var(--color-fg);
+  background: var(--color-bg);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-muted-fg);
+  font-style: italic;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-bottom-width: var(--rule-thick);
+  outline: none;
+}
+
+textarea {
+  resize: vertical;
+}
