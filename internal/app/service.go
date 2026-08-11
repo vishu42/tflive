@@ -17,7 +17,6 @@ import (
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/traits"
-	"go.temporal.io/api/serviceerror"
 )
 
 var (
@@ -1488,11 +1487,6 @@ func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand)
 	}
 
 	return nil
-}
-
-func isWorkflowClosedError(err error) bool {
-	var notFound *serviceerror.NotFound
-	return errors.As(err, &notFound)
 }
 
 // GetTemplateRun returns one tenant-owned run.
