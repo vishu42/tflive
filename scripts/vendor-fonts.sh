@@ -32,6 +32,7 @@ fetch() {
 }
 
 echo "Vendoring fonts into ${DEST}"
+fetch "Calistoga"               calistoga-400
 fetch "Inter:wght@400"          inter-400
 fetch "Inter:wght@500"          inter-500
 fetch "Inter:wght@600"          inter-600

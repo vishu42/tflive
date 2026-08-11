@@ -1,27 +1,41 @@
 /* The only file in the codebase permitted to contain raw hex literals.
    Everything else references these custom properties. */
 :root {
-  /* Palette — absolute. No other colors exist in this design. */
-  --color-bg:           #FFFFFF;
-  --color-fg:           #000000;
-  --color-muted:        #F5F5F5;
-  --color-muted-fg:     #525252;
-  --color-border:       #000000;
-  --color-border-light: #E5E5E5;
-  --color-inverse-fg:   #FFFFFF;
+  /* Canvas and surfaces */
+  --color-bg:        #FAFAFA;
+  --color-fg:        #0F172A;
+  --color-muted:     #F1F5F9;
+  --color-muted-fg:  #64748B;
+  --color-border:    #E2E8F0;
+  --color-card:      #FFFFFF;
 
-  /* The single sanctioned exception. Used ONLY by the failure status tone and
-     the destructive confirm step, and always alongside a glyph and a label so
-     that meaning never depends on hue alone. */
-  --color-critical:     #C1121F;
-  --color-critical-fg:  #FFFFFF;
+  /* The signature accent */
+  --color-accent:    #0052FF;
+  --color-accent-2:  #4D7CFF;
+  --color-accent-fg: #FFFFFF;
+  --gradient-accent: linear-gradient(135deg, #0052FF, #4D7CFF);
 
-  /* Typefaces. A tight neo-grotesque carries both display and body; the
-     monospace carries every technical signal (labels, IDs, status, logs).
-     The contrast in this design comes from scale, weight and inversion —
-     not from mixing a serif into the pairing. */
-  --font-display: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --font-body:    Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --color-accent-soft:   rgba(0, 82, 255, 0.05);
+  --color-accent-border: rgba(0, 82, 255, 0.30);
+  --color-accent-wash:   rgba(0, 82, 255, 0.03);
+
+  /* Semantic status.
+     The -dot values are brighter and are ONLY for dots and fills, where the
+     3:1 UI-component contrast threshold applies. Text uses the darker values:
+     #16A34A is 3.24:1 on white and #D97706 is 3.20:1, both failing AA for
+     normal text, while #15803D is 4.99:1 and #B45309 is 5.02:1. */
+  --color-success:      #15803D;
+  --color-warning:      #B45309;
+  --color-danger:       #DC2626;
+  --color-success-dot:  #16A34A;
+  --color-warning-dot:  #D97706;
+  --color-success-soft: rgba(22, 163, 74, 0.10);
+  --color-warning-soft: rgba(180, 83, 9, 0.10);
+  --color-danger-soft:  rgba(220, 38, 38, 0.10);
+
+  /* Typefaces */
+  --font-display: Calistoga, Georgia, serif;
+  --font-body:    Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
                   Consolas, "Liberation Mono", monospace;
 
@@ -34,23 +48,22 @@
   --text-2xl:  1.5rem;
   --text-3xl:  2rem;
   --text-4xl:  2.5rem;
-  --text-5xl:  3.5rem;
-  --text-6xl:  4.5rem;
-  --text-7xl:  6rem;
-  --text-8xl:  8rem;
+  --text-5xl:  3.25rem;
+  --text-6xl:  4rem;
+  --text-7xl:  5.25rem;
 
   /* Tracking */
-  --tracking-tighter: -0.05em;
-  --tracking-tight:   -0.025em;
+  --tracking-tighter: -0.02em;
+  --tracking-tight:   -0.01em;
   --tracking-normal:  0;
   --tracking-wide:    0.05em;
-  --tracking-widest:  0.1em;
+  --tracking-label:   0.15em;
 
   /* Leading */
-  --leading-none:    1;
+  --leading-none:    1.05;
   --leading-tight:   1.15;
   --leading-normal:  1.4;
-  --leading-relaxed: 1.625;
+  --leading-relaxed: 1.7;
 
   /* Spacing, 4px base */
   --space-1:  4px;
@@ -65,18 +78,30 @@
   --space-16: 64px;
   --space-24: 96px;
 
-  /* Rules — the visual system replaces fills and shadows with lines */
-  --rule-hairline: 1px;
-  --rule-thin:     1px;
-  --rule-medium:   2px;
-  --rule-thick:    4px;
-  --rule-ultra:    8px;
+  /* Radii */
+  --radius-sm:   6px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-full: 9999px;
 
-  /* Geometry and motion */
-  --radius: 0;
-  --transition-fast: 100ms;
+  /* Shadows. --shadow-ring exists so the focus ring can satisfy the guard
+     rule that every box-shadow references a --shadow-* token. */
+  --shadow-sm:        0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-md:        0 4px 6px rgba(0, 0, 0, 0.07);
+  --shadow-lg:        0 10px 15px rgba(0, 0, 0, 0.08);
+  --shadow-xl:        0 20px 25px rgba(0, 0, 0, 0.10);
+  --shadow-accent:    0 4px 14px rgba(0, 82, 255, 0.25);
+  --shadow-accent-lg: 0 8px 24px rgba(0, 82, 255, 0.35);
+  --shadow-ring:      0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
+
+  /* Motion */
+  --ease-out:          cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast:     200ms;
+  --duration-lift:     300ms;
+  --duration-entrance: 700ms;
 
   /* Controls */
-  --control-height: 38px;
+  --control-height: 48px;
   --touch-target:   44px;
 }

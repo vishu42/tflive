@@ -17,12 +17,22 @@ function read(name: string): string {
   return readFileSync(join(STYLES_DIR, name), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
+function readAll(): string {
+  return convertedStylesheets().map(read).join("\n");
+}
+
 const REQUIRED_TOKENS = [
   "--color-bg", "--color-fg", "--color-muted", "--color-muted-fg",
-  "--color-border", "--color-border-light", "--color-inverse-fg",
-  "--color-critical", "--color-critical-fg",
+  "--color-border", "--color-card",
+  "--color-accent", "--color-accent-2", "--color-accent-fg", "--gradient-accent",
+  "--color-accent-soft", "--color-accent-border",
+  "--color-success", "--color-warning", "--color-danger",
+  "--color-success-dot", "--color-warning-dot",
   "--font-display", "--font-body", "--font-mono",
-  "--radius", "--transition-fast"
+  "--radius-sm", "--radius-md", "--radius-lg", "--radius-xl", "--radius-full",
+  "--shadow-sm", "--shadow-md", "--shadow-lg", "--shadow-xl",
+  "--shadow-accent", "--shadow-accent-lg", "--shadow-ring",
+  "--ease-out", "--duration-fast", "--duration-lift", "--duration-entrance"
 ];
 
 describe("tokens.css", () => {
@@ -33,9 +43,12 @@ describe("tokens.css", () => {
     }
   });
 
-  it("pins border radius to zero", () => {
+  it("uses the AA-safe status colours for text", () => {
     const tokens = readFileSync(join(STYLES_DIR, "tokens.css"), "utf8");
-    expect(tokens).toMatch(/--radius:\s*0\s*;/);
+    // #16A34A is 3.24:1 on white and #D97706 is 3.20:1 — both fail AA for
+    // normal text. They may only appear as the -dot variants.
+    expect(tokens).toMatch(/--color-success:\s*#15803D/i);
+    expect(tokens).toMatch(/--color-warning:\s*#B45309/i);
   });
 });
 
@@ -45,16 +58,28 @@ describe.each(convertedStylesheets())("%s", (name) => {
     expect(matches, `use var(--color-*) instead of ${matches.join(", ")}`).toEqual([]);
   });
 
-  it("declares no non-zero border radius", () => {
+  it("uses a radius token for every border-radius", () => {
     // The \s* must live INSIDE the lookahead. Left outside it can backtrack to
-    // zero-width, so the lookahead inspects " var(--radius)" rather than
-    // "var(--radius)", succeeds, and every compliant declaration is reported.
-    const matches = read(name).match(/border-radius:(?!\s*var\(--radius\)\s*;)[^;]+;/g) ?? [];
-    expect(matches, `use var(--radius): ${matches.join(", ")}`).toEqual([]);
+    // zero-width, so the lookahead inspects " var(...)" rather than "var(...)",
+    // succeeds, and every compliant declaration is reported as a violation.
+    const matches =
+      read(name).match(/border-radius:(?!\s*var\(--radius-[a-z]+\)\s*;)[^;]+;/g) ?? [];
+    expect(matches, `use var(--radius-*): ${matches.join(", ")}`).toEqual([]);
   });
 
-  it("declares no box-shadow", () => {
-    const matches = read(name).match(/box-shadow:[^;]+;/g) ?? [];
-    expect(matches, `monochrome has no shadows: ${matches.join(", ")}`).toEqual([]);
+  it("uses a shadow token for every box-shadow", () => {
+    const matches =
+      read(name).match(/box-shadow:(?!\s*var\(--shadow-[a-z-]+\)\s*;)[^;]+;/g) ?? [];
+    expect(matches, `use var(--shadow-*): ${matches.join(", ")}`).toEqual([]);
+  });
+});
+
+describe("accessibility fallbacks", () => {
+  it("gives gradient text a forced-colors fallback", () => {
+    // background-clip text with color:transparent renders invisible under
+    // Windows High Contrast unless the colour is restored explicitly.
+    const css = readAll();
+    expect(css).toMatch(/@media\s*\(forced-colors:\s*active\)/);
+    expect(css).toMatch(/\.gradient-text\s*\{[^}]*color:\s*CanvasText/);
   });
 });
