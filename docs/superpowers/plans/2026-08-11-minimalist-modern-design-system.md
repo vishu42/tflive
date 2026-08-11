@@ -2614,11 +2614,10 @@ git commit -m "feat(web): restyle stacks screens with empty-state hero and stats
 
 ---
 
-### Task 7: Templates, runs, and the log panel
+### Task 7: Templates and the log panel
 
 **Files:**
 - Modify: `web/src/features/templates/TemplateRegistryScreen.tsx`
-- Modify: `web/src/features/runs/RunsListScreen.tsx`
 - Modify: `web/src/styles/features.css` (append)
 - Modify: `web/src/styles.css` (drain remaining feature rules)
 
@@ -2789,18 +2788,11 @@ In `web/src/features/templates/TemplateRegistryScreen.tsx`, wrap the existing `<
 
 Add `import SectionLabel from "../../shared/SectionLabel";`.
 
-In `web/src/features/runs/RunsListScreen.tsx`, apply the identical structure with a different label:
+**Leave `web/src/features/runs/RunsListScreen.tsx` untouched.** It has no `<h1>` in any of its states, because it is a tab panel rendered inside `StackDetailShell`, which already supplies the page's `SectionLabel` and `<h1>{stack.name}</h1>`. Adding a heading there would put two `h1` elements on one page — a heading-hierarchy regression — and its three sibling tabs (`StackTemplateScreen`, `EnvironmentScreen`, `StackAccessScreen`) carry no such heading either, so labelling only Runs would read as an oversight.
 
-```tsx
-        <div className="page-header">
-          <SectionLabel pulse>Runs</SectionLabel>
-          {/* existing <h1> element, unchanged */}
-        </div>
-```
+Preserve every existing heading string, sibling element, and `data-testid` exactly as found in the one screen you do edit.
 
-Add `import SectionLabel from "../../shared/SectionLabel";`.
-
-Preserve every existing heading string, sibling element, and `data-testid` exactly as found.
+If the heading you wrap sits inside a flex container using `align-items: flex-end` or `baseline`, add a rule zeroing `.page-header`'s `margin-bottom` for that container's class, as `features.css` already does for `.stacks-list-header` and `.stack-detail-header`. Check the rendered ancestor chain, not just the immediate class name.
 
 - [ ] **Step 4: Run the full suite and build**
 
@@ -2815,8 +2807,7 @@ Expected: `Test Files 38 passed (38)`, `Tests 248 passed (248)`. Build clean.
 ```bash
 git add web/src/styles/features.css web/src/styles.css \
         web/src/features/templates/TemplateRegistryScreen.tsx \
-        web/src/features/runs/RunsListScreen.tsx
-git commit -m "feat(web): restyle templates, runs, and log panel"
+git commit -m "feat(web): restyle templates and log panel"
 ```
 
 ---

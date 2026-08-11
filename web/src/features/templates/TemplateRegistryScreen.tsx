@@ -10,6 +10,7 @@ import {
 } from "../../api/queries";
 import { tenantID } from "../../config";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
+import SectionLabel from "../../shared/SectionLabel";
 import TemplateRegistryPanel from "./TemplateRegistryPanel";
 import { findSelectedTemplateRevision, nextSelectedTemplateRevisionID } from "./templateWorkflow";
 
@@ -103,7 +104,10 @@ export default function TemplateRegistryScreen() {
   return (
     <section className="template-registry-screen">
       <header className="template-registry-header">
-        <h1>Templates</h1>
+        <div className="page-header">
+          <SectionLabel>Templates</SectionLabel>
+          <h1>Templates</h1>
+        </div>
       </header>
       {errorMessage && <div className="alert">{errorMessage}</div>}
       <TemplateRegistryPanel

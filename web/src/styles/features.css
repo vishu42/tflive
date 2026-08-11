@@ -622,3 +622,141 @@
 .stack-detail-header .page-header {
   margin-bottom: 0;
 }
+
+/* ---- Template lists ---- */
+.stack-template-list {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-4);
+}
+
+.stack-template-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.stack-template-list h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.stack-template-list-header span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  border-radius: var(--radius-full);
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.stack-template-items {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.stack-template-items button {
+  display: grid;
+  gap: var(--space-1);
+  width: 100%;
+  min-height: 56px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-fg);
+  background: var(--color-card);
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.stack-template-items button:hover {
+  transform: translateY(-1px);
+  border-color: var(--color-accent-border);
+  box-shadow: var(--shadow-md);
+}
+
+.stack-template-items button.active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.stack-template-items span,
+.stack-template-items small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.stack-template-items span {
+  font-size: var(--text-base);
+  font-weight: 500;
+}
+
+.stack-template-items small {
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.lifecycle-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-full);
+  padding: var(--space-1) var(--space-3);
+  color: var(--color-warning);
+  background: var(--color-warning-soft);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+}
+
+/* ---- Metadata grids ---- */
+.revision-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+
+.revision-grid dt {
+  color: var(--color-muted-fg);
+  font-size: var(--text-sm);
+}
+
+.revision-grid dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--color-fg);
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+/* ---- Log panel. Deliberately carries no texture: patterning behind a
+   monospace log stream measurably hurts scanning for errors. ---- */
+.log-panel pre {
+  min-height: 260px;
+  max-height: 460px;
+  overflow: auto;
+  border-radius: var(--radius-xl);
+  margin: 0;
+  padding: var(--space-5);
+  color: var(--color-card);
+  background: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  white-space: pre-wrap;
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
