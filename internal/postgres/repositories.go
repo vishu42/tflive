@@ -18,7 +18,11 @@ import (
 )
 
 func (store *Store) CreateTemplateRegistration(ctx context.Context, registration traits.TemplateRegistration) error {
-	_, err := store.pool.Exec(ctx, `
+	return createTemplateRegistration(ctx, store.pool, registration)
+}
+
+func createTemplateRegistration(ctx context.Context, exec pgxExecutor, registration traits.TemplateRegistration) error {
+	_, err := exec.Exec(ctx, `
 		insert into template_registrations (
 			id,
 			tenant_id,
@@ -871,7 +875,19 @@ func (store *Store) CreateTemplateRun(ctx context.Context, run traits.TemplateRu
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	_, err = tx.Exec(ctx, `
+	if err := createTemplateRun(ctx, tx, run); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit template run: %w", err)
+	}
+
+	return nil
+}
+
+func createTemplateRun(ctx context.Context, exec pgxExecutor, run traits.TemplateRun) error {
+	_, err := exec.Exec(ctx, `
 		insert into template_runs (
 			id,
 			tenant_id,
@@ -915,21 +931,6 @@ func (store *Store) CreateTemplateRun(ctx context.Context, run traits.TemplateRu
 	)
 	if err != nil {
 		return fmt.Errorf("create template run: %w", err)
-	}
-
-	_, err = tx.Exec(ctx, `
-		insert into workflow_outbox (
-			id,
-			event_type,
-			aggregate_id
-		) values ($1, 'start_template_run', $2)
-	`, fmt.Sprintf("template-run/%s/%s", run.TenantID, run.ID), run.ID)
-	if err != nil {
-		return fmt.Errorf("enqueue template run workflow: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit template run: %w", err)
 	}
 
 	return nil
@@ -1284,7 +1285,19 @@ func (store *Store) ApproveTemplateRun(ctx context.Context, approval traits.Temp
 	}
 	defer tx.Rollback(ctx)
 
-	commandTag, err := tx.Exec(ctx, `
+	if err := approveTemplateRun(ctx, tx, approval); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit approve template run: %w", err)
+	}
+
+	return nil
+}
+
+func approveTemplateRun(ctx context.Context, exec pgxExecutor, approval traits.TemplateRunApproval) error {
+	commandTag, err := exec.Exec(ctx, `
 		update template_runs
 		set status = $1
 		where tenant_id = $2
@@ -1303,7 +1316,7 @@ func (store *Store) ApproveTemplateRun(ctx context.Context, approval traits.Temp
 		return app.ErrRunNotApprovable
 	}
 
-	if _, err := tx.Exec(ctx, `
+	if _, err := exec.Exec(ctx, `
 		insert into template_run_approvals (
 			run_id,
 			tenant_id,
@@ -1319,18 +1332,18 @@ func (store *Store) ApproveTemplateRun(ctx context.Context, approval traits.Temp
 		return fmt.Errorf("insert template run approval: %w", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit approve template run: %w", err)
-	}
-
 	return nil
 }
 
 func (store *Store) RequestTemplateRunCancellation(ctx context.Context, cancellation traits.TemplateRunCancellation) error {
+	return requestTemplateRunCancellation(ctx, store.pool, cancellation)
+}
+
+func requestTemplateRunCancellation(ctx context.Context, exec pgxExecutor, cancellation traits.TemplateRunCancellation) error {
 	// TODO: Revisit cancellation eligibility. This currently allows every
 	// non-terminal status, including post-action cleanup states such as applied,
 	// destroyed, and lock_released, to move back to cancel_requested.
-	commandTag, err := store.pool.Exec(ctx, `
+	commandTag, err := exec.Exec(ctx, `
 		update template_runs
 		set
 			status = $1,

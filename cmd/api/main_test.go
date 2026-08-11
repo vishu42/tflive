@@ -598,6 +598,18 @@ func (recordingStore) CreateTemplateRun(context.Context, traits.TemplateRun) err
 	return nil
 }
 
+func (recordingStore) CreateTemplateRegistration(context.Context, traits.TemplateRegistration) error {
+	return nil
+}
+
+func (recordingStore) ApproveTemplateRun(context.Context, traits.TemplateRunApproval) error {
+	return nil
+}
+
+func (recordingStore) RequestTemplateRunCancellation(context.Context, traits.TemplateRunCancellation) error {
+	return nil
+}
+
 func (recordingStore) GetTemplateRun(context.Context, traits.TenantID, traits.TemplateRunID) (traits.TemplateRun, error) {
 	return traits.TemplateRun{}, nil
 }
@@ -614,19 +626,7 @@ func (recordingStore) ListTemplateRunLogs(context.Context, traits.TenantID, trai
 	return nil, nil
 }
 
-func (recordingStore) ApproveTemplateRun(context.Context, traits.TemplateRunApproval) error {
-	return nil
-}
-
-func (recordingStore) RequestTemplateRunCancellation(context.Context, traits.TemplateRunCancellation) error {
-	return nil
-}
-
 func (recordingStore) ReconcileTemplateRunCancellation(context.Context, traits.TenantID, traits.TemplateRunID, string) error {
-	return nil
-}
-
-func (recordingStore) CreateTemplateRegistration(context.Context, traits.TemplateRegistration) error {
 	return nil
 }
 

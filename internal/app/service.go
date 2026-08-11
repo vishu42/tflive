@@ -70,6 +70,10 @@ type StackPageCursor struct {
 type TxRepo interface {
 	CreateStack(ctx context.Context, stack traits.Stack) error
 	AppendAuditEvent(ctx context.Context, event traits.SecurityAuditEvent) error
+	CreateTemplateRun(ctx context.Context, run traits.TemplateRun) error
+	CreateTemplateRegistration(ctx context.Context, registration traits.TemplateRegistration) error
+	ApproveTemplateRun(ctx context.Context, approval traits.TemplateRunApproval) error
+	RequestTemplateRunCancellation(ctx context.Context, cancellation traits.TemplateRunCancellation) error
 }
 
 // UnitOfWork commits a domain write and a queued intent atomically. This is
@@ -487,10 +491,6 @@ func (service *Service) RegisterTemplate(ctx context.Context, command RegisterTe
 		RequestedAt: service.Clock.Now(),
 	}
 
-	if err := service.TemplateRegistrations.CreateTemplateRegistration(ctx, registration); err != nil {
-		return traits.TemplateRegistration{}, fmt.Errorf("create template registration: %w", err)
-	}
-
 	input := traits.TemplateSyncWorkflowInput{
 		RegistrationID: registration.ID,
 		TenantID:       registration.TenantID,
@@ -499,8 +499,22 @@ func (service *Service) RegisterTemplate(ctx context.Context, command RegisterTe
 		SourceRef:      registration.SourceRef,
 		RootPath:       registration.RootPath,
 	}
-	if err := service.Workflows.StartTemplateSync(ctx, input); err != nil {
-		return traits.TemplateRegistration{}, fmt.Errorf("start template sync workflow: %w", err)
+	payload, err := json.Marshal(StartTemplateSyncPayload(input))
+	if err != nil {
+		return traits.TemplateRegistration{}, fmt.Errorf("encode start template sync payload: %w", err)
+	}
+	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
+		if err := repository.CreateTemplateRegistration(ctx, registration); err != nil {
+			return err
+		}
+		return enqueuer.Enqueue(ctx, queue.Request{
+			Kind:         KindStartTemplateSync,
+			Payload:      payload,
+			ActorSubject: string(actor),
+			TenantID:     string(registration.TenantID),
+		})
+	}); err != nil {
+		return traits.TemplateRegistration{}, fmt.Errorf("create template registration: %w", err)
 	}
 
 	return registration, nil
@@ -568,11 +582,25 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		return traits.Stack{}, fmt.Errorf("encode grant stack owner payload: %w", err)
 	}
 
+	auditEvent := traits.SecurityAuditEvent{
+		ActorSubject:  string(actor),
+		Action:        traits.AuditActionGrant,
+		TargetUser:    string(actor),
+		TenantID:      command.TenantID,
+		StackID:       stack.ID,
+		NewRole:       "owner",
+		Outcome:       traits.AuditOutcomeSuccess,
+		CorrelationID: "",
+	}
+
 	// The stack row and the provisioning intent commit together, so a crash can
 	// never leave a stack whose creator has no access and no record of the
 	// intent.
 	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
 		if err := repository.CreateStack(ctx, stack); err != nil {
+			return err
+		}
+		if err := repository.AppendAuditEvent(ctx, auditEvent); err != nil {
 			return err
 		}
 		return enqueuer.Enqueue(ctx, queue.Request{
@@ -584,17 +612,6 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 	}); err != nil {
 		return traits.Stack{}, fmt.Errorf("create stack: %w", err)
 	}
-
-	service.auditError(ctx, traits.SecurityAuditEvent{
-		ActorSubject:  string(actor),
-		Action:        traits.AuditActionGrant,
-		TargetUser:    string(actor),
-		TenantID:      command.TenantID,
-		StackID:       stack.ID,
-		NewRole:       "owner",
-		Outcome:       traits.AuditOutcomeSuccess,
-		CorrelationID: "",
-	})
 
 	return stack, nil
 }
@@ -724,7 +741,33 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 		StartedAt:          service.Clock.Now(),
 	}
 
-	if err := service.TemplateRuns.CreateTemplateRun(ctx, run); err != nil {
+	input := traits.TemplateRunWorkflowInput{
+		RunID:           run.ID,
+		TenantID:        run.TenantID,
+		StackTemplateID: run.StackTemplateID,
+		Operation:       run.Operation,
+		SelectedRef:     run.SelectedRef,
+		WorkspaceName:   run.WorkspaceName,
+		RepoOwner:       templateRevision.RepoOwner,
+		RepoName:        templateRevision.RepoName,
+		RootPath:        templateRevision.RootPath,
+		ConfigJSON:      run.ConfigJSON,
+	}
+	payload, err := json.Marshal(StartTemplateRunPayload(input))
+	if err != nil {
+		return traits.TemplateRun{}, fmt.Errorf("encode start template run payload: %w", err)
+	}
+	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
+		if err := repository.CreateTemplateRun(ctx, run); err != nil {
+			return err
+		}
+		return enqueuer.Enqueue(ctx, queue.Request{
+			Kind:         KindStartTemplateRun,
+			Payload:      payload,
+			ActorSubject: string(actor),
+			TenantID:     string(run.TenantID),
+		})
+	}); err != nil {
 		return traits.TemplateRun{}, fmt.Errorf("create template run: %w", err)
 	}
 
@@ -1415,23 +1458,37 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 		ApprovedAt: service.Clock.Now(),
 	}
 
-	if err := service.TemplateRuns.ApproveTemplateRun(ctx, approval); err != nil {
-		return fmt.Errorf("approve template run: %w", err)
+	signal := traits.ApprovalSignal{ApprovedBy: actor}
+	payload, err := json.Marshal(SignalRunApprovalPayload{
+		TenantID: command.TenantID,
+		RunID:    command.RunID,
+		Signal:   signal,
+	})
+	if err != nil {
+		return fmt.Errorf("encode run approval payload: %w", err)
 	}
-
-	service.auditError(ctx, traits.SecurityAuditEvent{
+	auditEvent := traits.SecurityAuditEvent{
 		ActorSubject:  string(actor),
 		Action:        traits.AuditActionApprovalGranted,
 		TenantID:      command.TenantID,
 		Outcome:       traits.AuditOutcomeSuccess,
 		CorrelationID: "",
-	})
-
-	// TODO: Consider an outbox-backed approval signal so a persisted approval cannot
-	// be lost if the Temporal signal call fails.
-	signal := traits.ApprovalSignal{ApprovedBy: actor}
-	if err := service.Workflows.ApproveTemplateRun(ctx, command.TenantID, command.RunID, signal); err != nil {
-		return fmt.Errorf("approve template run workflow: %w", err)
+	}
+	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
+		if err := repository.ApproveTemplateRun(ctx, approval); err != nil {
+			return err
+		}
+		if err := repository.AppendAuditEvent(ctx, auditEvent); err != nil {
+			return err
+		}
+		return enqueuer.Enqueue(ctx, queue.Request{
+			Kind:         KindSignalRunApproval,
+			Payload:      payload,
+			ActorSubject: string(actor),
+			TenantID:     string(command.TenantID),
+		})
+	}); err != nil {
+		return fmt.Errorf("approve template run: %w", err)
 	}
 
 	return nil
@@ -1458,32 +1515,30 @@ func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand)
 		RequestedAt: service.Clock.Now(),
 	}
 
-	if err := service.TemplateRuns.RequestTemplateRunCancellation(ctx, cancellation); err != nil {
-		return fmt.Errorf("request template run cancellation: %w", err)
-	}
-
-	// TODO: Consider an outbox-backed cancellation signal so a persisted cancel request
-	// cannot be lost if the Temporal signal call fails.
 	signal := traits.CancelSignal{
 		RequestedBy: actor,
 		Reason:      command.Reason,
 	}
-	err = service.Workflows.CancelTemplateRun(ctx, command.TenantID, command.RunID, signal)
-	if err == nil {
-		return nil
-	}
-	if !isWorkflowClosedError(err) {
-		return fmt.Errorf("cancel template run workflow: %w", err)
-	}
-
-	err = service.TemplateRuns.ReconcileTemplateRunCancellation(
-		ctx,
-		command.TenantID,
-		command.RunID,
-		"workflow closed before cancellation was processed",
-	)
+	payload, err := json.Marshal(SignalRunCancellationPayload{
+		TenantID: command.TenantID,
+		RunID:    command.RunID,
+		Signal:   signal,
+	})
 	if err != nil {
-		return fmt.Errorf("reconcile template run cancellation: %w", err)
+		return fmt.Errorf("encode run cancellation payload: %w", err)
+	}
+	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
+		if err := repository.RequestTemplateRunCancellation(ctx, cancellation); err != nil {
+			return err
+		}
+		return enqueuer.Enqueue(ctx, queue.Request{
+			Kind:         KindSignalRunCancellation,
+			Payload:      payload,
+			ActorSubject: string(actor),
+			TenantID:     string(command.TenantID),
+		})
+	}); err != nil {
+		return fmt.Errorf("request template run cancellation: %w", err)
 	}
 
 	return nil
