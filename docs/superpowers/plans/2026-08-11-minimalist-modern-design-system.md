@@ -2052,6 +2052,23 @@ Append to `web/src/styles/features.css`:
     justify-content: center;
   }
 }
+
+/* Compact variant, used by the stacks empty state in Task 6: it sits inside
+   a page that already has a header, so it neither fills the viewport nor
+   needs a full-size title. These two values are the only difference. */
+.showcase--compact {
+  min-height: 0;
+}
+
+.showcase--compact .showcase__title {
+  font-size: var(--text-4xl);
+}
+
+@media (min-width: 768px) {
+  .showcase--compact .showcase__title {
+    font-size: var(--text-5xl);
+  }
+}
 ```
 
 - [ ] **Step 3: Restructure each screen**
@@ -2174,58 +2191,8 @@ Append to `web/src/styles/features.css`:
   font-size: var(--text-xs);
 }
 
-/* ---- Empty state ---- */
-.empty-state {
-  display: grid;
-  align-items: center;
-  gap: var(--space-12);
-  padding: var(--space-12) 0;
-}
-
-@media (min-width: 900px) {
-  .empty-state {
-    grid-template-columns: 1.1fr 0.9fr;
-  }
-}
-
-.empty-state__body {
-  display: grid;
-  gap: var(--space-5);
-  justify-items: start;
-}
-
-.empty-state__title {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: var(--text-4xl);
-  letter-spacing: var(--tracking-tighter);
-  line-height: var(--leading-none);
-}
-
-@media (min-width: 768px) {
-  .empty-state__title {
-    font-size: var(--text-5xl);
-  }
-}
-
-.empty-state__lede {
-  max-width: 46ch;
-  margin: 0;
-  color: var(--color-muted-fg);
-  font-size: var(--text-lg);
-  line-height: var(--leading-relaxed);
-}
-
-.empty-state__visual {
-  display: none;
-}
-
-@media (min-width: 900px) {
-  .empty-state__visual {
-    display: flex;
-    justify-content: center;
-  }
-}
+/* The stacks empty state reuses `.showcase .showcase--compact` from Task 5.
+   No `.empty-state` rules are needed — do not add any. */
 
 /* ---- Tabs ---- */
 .stack-detail-header {
@@ -2571,19 +2538,19 @@ Replace `stacks` with whatever the component already calls its loaded array. If 
 Still in `StacksListScreen.tsx`, when the loaded list is empty, render this instead of the empty list:
 
 ```tsx
-      <section className="empty-state" data-testid="stacks-empty">
-        <div className="empty-state__body">
+      <section className="showcase showcase--compact" data-testid="stacks-empty">
+        <div className="showcase__body">
           <SectionLabel pulse>Get started</SectionLabel>
-          <h2 className="empty-state__title">
+          <h2 className="showcase__title">
             No stacks <span className="gradient-text">yet</span>
           </h2>
-          <p className="empty-state__lede">
+          <p className="showcase__lede">
             A stack pairs a Terraform template with an environment. Create your
             first one to start planning and applying infrastructure.
           </p>
           {/* the existing create-stack link/button, unchanged */}
         </div>
-        <div className="empty-state__visual">
+        <div className="showcase__visual">
           <HeroGraphic />
         </div>
       </section>
