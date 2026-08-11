@@ -1,5 +1,11 @@
 # Minimalist Monochrome Design System Integration
 
+> **SUPERSEDED 2026-08-11** by `2026-08-11-minimalist-modern-design-system-design.md`.
+> This design was implemented through three of nine tasks and then rejected on
+> visual review. Retained for the record; do not implement from it. The token
+> architecture, the `styles/` split, the `styles.css` drain strategy, and
+> `statusTone.ts` all carried forward into the replacement.
+
 ## Goal
 
 Replace the web console's current visual language with the Minimalist Monochrome design system: a pure black-and-white palette, a tight neo-grotesque paired with monospace, zero border radius, and a line-based visual structure. Every screen is converted. The result should read as editorial and deliberate rather than as a generic admin template, without sacrificing the information density an operator needs to run Terraform stacks.

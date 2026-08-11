@@ -1,5 +1,10 @@
 # Minimalist Monochrome Design System Implementation Plan
 
+> **SUPERSEDED 2026-08-11.** Tasks 1-3 were completed and committed; the design
+> was then rejected on visual review and replaced by the Minimalist Modern
+> system. See `docs/superpowers/specs/2026-08-11-minimalist-modern-design-system-design.md`.
+> Do not execute the remaining tasks from this plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the tflive web console's visual language with the Minimalist Monochrome design system — pure black-and-white palette, serif typography, zero border radius, line-based structure — across every screen, without losing operator-grade information density.
