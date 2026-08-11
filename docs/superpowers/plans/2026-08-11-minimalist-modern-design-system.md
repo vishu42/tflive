@@ -2876,6 +2876,14 @@ Append to `web/src/styles/features.css`:
     grid-template-columns: 1fr;
   }
 
+  /* Bare h1 is included deliberately: several screens (the legacy console,
+     CreateStackScreen, and the error states of the stacks and templates
+     screens) render an h1 outside .page-header, and the pre-restyle
+     stylesheet shrank every h1 at this breakpoint. Scoping only to
+     .page-header would leave those at 2.5rem on a phone.
+     .showcase__title is unaffected — a class selector outranks a bare
+     element selector, so the full-viewport screens keep their large type. */
+  h1,
   .page-header h1 {
     font-size: var(--text-2xl);
   }
