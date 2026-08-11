@@ -29,8 +29,12 @@ export function statusTone(value: string): StatusTone {
   // Callers pass human phrases such as "not configured" for absent resources.
   if (value.startsWith("not ")) return "waiting";
 
-  // Finished phases and intermediate pipeline steps are settled, matching the
-  // previous behaviour where they received the default success icon.
+  // Finished phases and intermediate pipeline steps are settled. This is a
+  // deliberate behaviour change from the previous implementation, which
+  // over-broadly treated finished phases (e.g. workspace_prepared,
+  // source_fetched, init_finished, workspace_selected, plan_finished,
+  // approved, apply_finished, destroy_finished, lock_released) as
+  // in-progress and rendered a spinner for them instead of the settled icon.
   return "settled";
 }
 

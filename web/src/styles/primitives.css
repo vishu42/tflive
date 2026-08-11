@@ -229,6 +229,10 @@ textarea {
   line-height: var(--leading-tight);
 }
 
+.page-header .section-label {
+  margin-bottom: var(--space-3);
+}
+
 @media (min-width: 768px) {
   .page-header h1 {
     font-size: var(--text-4xl);
@@ -316,7 +320,8 @@ textarea {
 }
 
 .stat-band__item {
-  display: grid;
+  display: flex;
+  flex-direction: column-reverse;
   gap: var(--space-1);
 }
 
@@ -328,7 +333,7 @@ textarea {
 }
 
 .stat-band__label {
-  color: var(--color-muted-fg);
+  color: var(--color-border);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   letter-spacing: var(--tracking-label);

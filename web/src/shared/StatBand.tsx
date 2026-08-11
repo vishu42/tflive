@@ -8,8 +8,8 @@ export default function StatBand({ items }: { items: Stat[] }) {
       <dl className="stat-band__grid">
         {items.map((item) => (
           <div key={item.label} className="stat-band__item">
-            <dd className="stat-band__value">{item.value}</dd>
             <dt className="stat-band__label">{item.label}</dt>
+            <dd className="stat-band__value">{item.value}</dd>
           </div>
         ))}
       </dl>

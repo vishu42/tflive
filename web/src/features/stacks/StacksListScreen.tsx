@@ -7,12 +7,14 @@ import HeroGraphic from "../../shared/HeroGraphic";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import SectionLabel from "../../shared/SectionLabel";
 import StatBand from "../../shared/StatBand";
+import { useInView } from "../../shared/useInView";
 
 // The list is authz-filtered by the backend (AUTH-013) — the screen renders
 // whatever listStacks returns and never filters client-side.
 export default function StacksListScreen() {
   const { data: stacks, status, error, refetch } = useStacksQuery(tenantID);
   const boundary = useQueryErrorBoundary(error);
+  const { ref: emptyStateRef, visible: emptyStateVisible } = useInView<HTMLDivElement>();
 
   if (status === "pending") {
     return (
@@ -67,7 +69,7 @@ export default function StacksListScreen() {
       )}
       {stacks.length === 0 ? (
         <section className="showcase showcase--compact" data-testid="stacks-list-empty">
-          <div className="showcase__body">
+          <div className="showcase__body reveal" ref={emptyStateRef} data-visible={emptyStateVisible}>
             <SectionLabel pulse>Get started</SectionLabel>
             <h2 className="showcase__title gradient-text">No stacks yet</h2>
             <p className="showcase__lede">No stacks visible to you yet.</p>
