@@ -54,7 +54,17 @@ export default function StacksListScreen() {
           </Link>
         </RequireCapability>
       </header>
-      <StatBand items={[{ label: "Stacks", value: stacks.length }]} />
+      {stacks.length > 0 && (
+        <StatBand
+          items={[
+            { label: "Stacks", value: stacks.length },
+            {
+              label: "You can operate",
+              value: stacks.filter((s) => s.effectiveCapabilities.canOperate).length
+            }
+          ]}
+        />
+      )}
       {stacks.length === 0 ? (
         <section className="showcase showcase--compact" data-testid="stacks-list-empty">
           <div className="showcase__body">

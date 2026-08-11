@@ -614,3 +614,11 @@
 .selector-label {
   margin-bottom: var(--space-4);
 }
+
+/* .page-header's bottom margin is page-level spacing. Inside these flex
+   header rows it would push the heading block off the baseline its sibling
+   button sits on, because flex aligns by margin box. */
+.stacks-list-header .page-header,
+.stack-detail-header .page-header {
+  margin-bottom: 0;
+}

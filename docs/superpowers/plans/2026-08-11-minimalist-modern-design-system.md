@@ -2523,7 +2523,6 @@ In `web/src/features/stacks/StacksListScreen.tsx`, wrap the existing `<h1>` and 
 ```tsx
 import SectionLabel from "../../shared/SectionLabel";
 import StatBand from "../../shared/StatBand";
-import { statusTone } from "../../shared/statusTone";
 ```
 
 ```tsx
