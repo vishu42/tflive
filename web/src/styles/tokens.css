@@ -1,0 +1,108 @@
+/* The only file in the codebase permitted to contain raw hex literals.
+   Everything else references these custom properties. */
+:root {
+  /* Canvas and surfaces */
+  --color-bg:        #FAFAFA;
+  --color-fg:        #0F172A;
+  --color-muted:     #F1F5F9;
+  --color-muted-fg:  #475569;
+  --color-border:    #E2E8F0;
+  --color-card:      #FFFFFF;
+
+  /* The signature accent */
+  --color-accent:    #0052FF;
+  --color-accent-2:  #4D7CFF;
+  --color-accent-fg: #FFFFFF;
+  --gradient-accent: linear-gradient(135deg, #0052FF, #4D7CFF);
+
+  --color-accent-soft:   rgba(0, 82, 255, 0.05);
+  --color-accent-border: rgba(0, 82, 255, 0.30);
+  --color-accent-wash:   rgba(0, 82, 255, 0.03);
+
+  /* Semantic status.
+     The -dot values are brighter and are ONLY for dots and fills, where the
+     3:1 UI-component contrast threshold applies. Text uses the darker values:
+     #16A34A is 3.24:1 on white and #D97706 is 3.20:1, both failing AA for
+     normal text. The darker values below preserve AA contrast on their
+     tinted surfaces as well as on the canvas. */
+  --color-success:      #166534;
+  --color-warning:      #92400E;
+  --color-danger:       #B91C1C;
+  --color-success-dot:  #16A34A;
+  --color-warning-dot:  #D97706;
+  --color-success-soft: rgba(22, 163, 74, 0.10);
+  --color-warning-soft: rgba(180, 83, 9, 0.10);
+  --color-danger-soft:  rgba(220, 38, 38, 0.10);
+
+  /* Typefaces */
+  --font-display: Calistoga, Georgia, serif;
+  --font-body:    Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+                  Consolas, "Liberation Mono", monospace;
+
+  /* Type scale */
+  --text-xs:   0.75rem;
+  --text-sm:   0.875rem;
+  --text-base: 1rem;
+  --text-lg:   1.125rem;
+  --text-xl:   1.25rem;
+  --text-2xl:  1.5rem;
+  --text-3xl:  2rem;
+  --text-4xl:  2.5rem;
+  --text-5xl:  3.25rem;
+  --text-6xl:  4rem;
+  --text-7xl:  5.25rem;
+
+  /* Tracking */
+  --tracking-tighter: -0.02em;
+  --tracking-tight:   -0.01em;
+  --tracking-normal:  0;
+  --tracking-wide:    0.05em;
+  --tracking-label:   0.15em;
+
+  /* Leading */
+  --leading-none:    1.05;
+  --leading-tight:   1.15;
+  --leading-normal:  1.4;
+  --leading-relaxed: 1.7;
+
+  /* Spacing, 4px base */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-24: 96px;
+
+  /* Radii */
+  --radius-sm:   6px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-full: 9999px;
+
+  /* Shadows. --shadow-ring exists so the focus ring can satisfy the guard
+     rule that every box-shadow references a --shadow-* token. */
+  --shadow-sm:        0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-md:        0 4px 6px rgba(0, 0, 0, 0.07);
+  --shadow-lg:        0 10px 15px rgba(0, 0, 0, 0.08);
+  --shadow-xl:        0 20px 25px rgba(0, 0, 0, 0.10);
+  --shadow-accent:    0 4px 14px rgba(0, 82, 255, 0.25);
+  --shadow-accent-lg: 0 8px 24px rgba(0, 82, 255, 0.35);
+  --shadow-ring:      0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
+
+  /* Motion */
+  --ease-out:          cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast:     200ms;
+  --duration-lift:     300ms;
+  --duration-entrance: 700ms;
+
+  /* Controls */
+  --control-height: 48px;
+  --touch-target:   44px;
+}

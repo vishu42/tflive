@@ -1,8 +1,19 @@
+import HeroGraphic from "../shared/HeroGraphic";
+import SectionLabel from "../shared/SectionLabel";
+import { useInView } from "../shared/useInView";
+
 export default function NotFound() {
+  const { ref, visible } = useInView<HTMLDivElement>();
   return (
-    <section className="route-not-found" data-testid="route-not-found">
-      <h1>Page not found</h1>
-      <p className="muted">The page you were looking for doesn't exist.</p>
+    <section className="route-not-found showcase" data-testid="route-not-found">
+      <div className="showcase__body reveal" ref={ref} data-visible={visible}>
+        <SectionLabel>Error 404</SectionLabel>
+        <h1 className="showcase__title gradient-text">Page not found</h1>
+        <p className="muted showcase__lede">The page you were looking for doesn't exist.</p>
+      </div>
+      <div className="showcase__visual">
+        <HeroGraphic />
+      </div>
     </section>
   );
 }

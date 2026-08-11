@@ -1,0 +1,219 @@
+/* Layout for the development-only design system gallery.
+   Lives outside web/src/styles/ deliberately: it is scaffolding, not part of
+   the shipped design system, and the styles guard test only polices the
+   latter. It still uses tokens exclusively — the gallery should not be able
+   to demonstrate values the design system does not define. */
+
+.sg {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-height: 100vh;
+}
+
+@media (min-width: 900px) {
+  .sg {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+}
+
+/* ---- Sidebar ---- */
+.sg__nav {
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-6);
+  background: var(--color-card);
+}
+
+@media (min-width: 900px) {
+  .sg__nav {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    max-height: 100vh;
+    overflow-y: auto;
+    border-right: 1px solid var(--color-border);
+    border-bottom: 0;
+  }
+}
+
+.sg__brand {
+  margin-bottom: var(--space-6);
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  line-height: var(--leading-tight);
+}
+
+.sg__brand span {
+  display: block;
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.sg__nav ol {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sg__nav a {
+  display: block;
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-muted-fg);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.sg__nav a:hover {
+  color: var(--color-fg);
+  background: var(--color-muted);
+  text-decoration: none;
+}
+
+/* ---- Main column ---- */
+.sg__main {
+  min-width: 0;
+  padding: var(--space-8) var(--space-6) var(--space-24);
+}
+
+@media (min-width: 900px) {
+  .sg__main {
+    padding: var(--space-12) var(--space-12) var(--space-24);
+  }
+}
+
+.sg__intro {
+  max-width: 60ch;
+  margin-bottom: var(--space-12);
+}
+
+.sg__intro p {
+  margin: var(--space-4) 0 0;
+  color: var(--color-muted-fg);
+  line-height: var(--leading-relaxed);
+}
+
+.sg__section {
+  margin-bottom: var(--space-16);
+  scroll-margin-top: var(--space-6);
+}
+
+.sg__section > h2 {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  letter-spacing: var(--tracking-tighter);
+}
+
+.sg__note {
+  max-width: 68ch;
+  margin: 0 0 var(--space-6);
+  color: var(--color-muted-fg);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+/* ---- A single specimen frame ---- */
+.sg__specimen {
+  margin-bottom: var(--space-6);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-card);
+  overflow: hidden;
+}
+
+.sg__specimen-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-3) var(--space-5);
+  color: var(--color-muted-fg);
+  background: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+}
+
+.sg__specimen-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-5);
+  padding: var(--space-6);
+}
+
+.sg__specimen-body--stack {
+  display: block;
+}
+
+/* ---- Token tables ---- */
+.sg__swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-4);
+  width: 100%;
+}
+
+.sg__swatch {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.sg__swatch-chip {
+  height: 56px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.sg__swatch dt {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.sg__swatch dd {
+  margin: 0;
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.sg__rows {
+  display: grid;
+  gap: var(--space-4);
+  width: 100%;
+  margin: 0;
+}
+
+.sg__row {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-5);
+}
+
+.sg__row-name {
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.sg__shadow-tile {
+  width: 100%;
+  height: 64px;
+  border-radius: var(--radius-lg);
+  background: var(--color-card);
+}
+
+.sg__radius-tile {
+  width: 72px;
+  height: 72px;
+  border: 2px solid var(--color-accent);
+  background: var(--color-accent-soft);
+}
