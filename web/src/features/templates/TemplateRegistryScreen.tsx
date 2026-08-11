@@ -1,74 +1,25 @@
-import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { queryKeys } from "../../api/queryKeys";
-import {
-  useRegisterTemplateMutation,
-  useTemplateRegistrationQuery,
-  useTemplateRevisionsQuery
-} from "../../api/queries";
+import { Loader2, Plus, RefreshCw } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { useTemplateRevisionsQuery } from "../../api/queries";
 import { tenantID } from "../../config";
+import HeroGraphic from "../../shared/HeroGraphic";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import SectionLabel from "../../shared/SectionLabel";
-import TemplateRegistryPanel from "./TemplateRegistryPanel";
-import { findSelectedTemplateRevision, nextSelectedTemplateRevisionID } from "./templateWorkflow";
+import { statusGlyph, statusTone } from "../../shared/statusTone";
+import { useInView } from "../../shared/useInView";
+import { groupTemplateRevisionsByRepository, templateRevisionRefLabel } from "./templateWorkflow";
 
-// Standalone /templates screen: registration form + revision listing,
-// carrying over the register-then-poll flow the legacy console runs in
-// App.tsx. Registration status arrives via useTemplateRegistrationQuery's
-// polling; once it completes, the revisions list is invalidated and the
-// freshly minted revision becomes the selection.
+// /templates lists registered template revisions and nothing else; the
+// registration form lives at /templates/new. Selection is URL state
+// (?selected=<revisionID>) rather than component state so that the
+// registration screen can hand back the revision it just minted, and so a
+// highlighted row survives a reload or a shared link.
 export default function TemplateRegistryScreen() {
-  const [repoOwner, setRepoOwner] = useState("hashicorp");
-  const [repoName, setRepoName] = useState("");
-  const [sourceRef, setSourceRef] = useState("main");
-  const [rootPath, setRootPath] = useState(".");
-  const [registrationID, setRegistrationID] = useState("");
-  const [selectedTemplateRevisionID, setSelectedTemplateRevisionID] = useState("");
-  const [errorMessage, setErrorMessage] = useState("");
-
-  const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const selectedTemplateRevisionID = searchParams.get("selected") ?? "";
   const templateRevisionsQuery = useTemplateRevisionsQuery(tenantID);
-  const registrationQuery = useTemplateRegistrationQuery(tenantID, registrationID);
-  const registerTemplateMutation = useRegisterTemplateMutation(tenantID);
   const boundary = useQueryErrorBoundary(templateRevisionsQuery.error);
-
-  const templateRevisions = templateRevisionsQuery.data ?? [];
-  const registration = registrationQuery.data ?? null;
-  const selectedTemplateRevision = findSelectedTemplateRevision(templateRevisions, selectedTemplateRevisionID);
-
-  useEffect(() => {
-    if (templateRevisionsQuery.data) {
-      setSelectedTemplateRevisionID((current) => nextSelectedTemplateRevisionID(templateRevisionsQuery.data, current));
-    }
-  }, [templateRevisionsQuery.data]);
-
-  useEffect(() => {
-    const data = registrationQuery.data;
-    if (data?.status !== "completed" || !data.template_revision_id) {
-      return;
-    }
-    queryClient.invalidateQueries({ queryKey: queryKeys.templateRevisions(tenantID) });
-    setSelectedTemplateRevisionID(data.template_revision_id);
-  }, [registrationQuery.data?.status, registrationQuery.data?.template_revision_id, queryClient]);
-
-  async function handleRegister(event: FormEvent) {
-    event.preventDefault();
-    setErrorMessage("");
-    try {
-      const next = await registerTemplateMutation.mutateAsync({
-        repo_owner: repoOwner,
-        repo_name: repoName,
-        source_ref: sourceRef,
-        root_path: rootPath
-      });
-      setRegistrationID(next.id);
-      setSelectedTemplateRevisionID("");
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Request failed");
-    }
-  }
+  const { ref: emptyStateRef, visible: emptyStateVisible } = useInView<HTMLDivElement>();
 
   if (templateRevisionsQuery.status === "pending") {
     return (
@@ -101,33 +52,77 @@ export default function TemplateRegistryScreen() {
     );
   }
 
+  const templateRevisions = templateRevisionsQuery.data;
+
   return (
     <section className="template-registry-screen">
-      <header className="template-registry-header">
+      <header className="templates-list-header">
         <div className="page-header">
           <SectionLabel>Templates</SectionLabel>
           <h1>Templates</h1>
         </div>
+        <Link className="primary-button" to="/templates/new" data-testid="register-template-link">
+          <Plus size={16} />
+          Register template
+        </Link>
       </header>
-      {errorMessage && <div className="alert">{errorMessage}</div>}
-      <TemplateRegistryPanel
-        templateRevisions={templateRevisions}
-        selectedTemplateRevisionID={selectedTemplateRevisionID}
-        onSelectTemplateRevision={setSelectedTemplateRevisionID}
-        repoOwner={repoOwner}
-        onRepoOwnerChange={setRepoOwner}
-        repoName={repoName}
-        onRepoNameChange={setRepoName}
-        sourceRef={sourceRef}
-        onSourceRefChange={setSourceRef}
-        rootPath={rootPath}
-        onRootPathChange={setRootPath}
-        onSubmit={handleRegister}
-        busy={registerTemplateMutation.isPending}
-        templateRevisionStatus={selectedTemplateRevision?.status ?? "not selected"}
-        registrationStatus={registration?.status ?? "not started"}
-        registrationErrorSummary={registration?.error_summary ?? ""}
-      />
+      {templateRevisions.length === 0 ? (
+        <section className="showcase showcase--compact" data-testid="templates-list-empty">
+          <div className="showcase__body reveal" ref={emptyStateRef} data-visible={emptyStateVisible}>
+            <SectionLabel pulse>Get started</SectionLabel>
+            <h2 className="showcase__title gradient-text">No templates yet</h2>
+            <p className="showcase__lede">Register a Terraform module to make it available to your stacks.</p>
+          </div>
+          <div className="showcase__visual">
+            <HeroGraphic />
+          </div>
+        </section>
+      ) : (
+        <div className="templates-groups" data-testid="templates-list">
+          {groupTemplateRevisionsByRepository(templateRevisions).map((group) => (
+            <section className="templates-group" key={group.key} data-testid={`template-group-${group.key}`}>
+              <h2 className="templates-group__heading">
+                <span className="templates-group__repo">
+                  {group.repoOwner}/{group.repoName}
+                </span>
+                <span className="templates-group__count" data-testid={`template-group-count-${group.key}`}>
+                  {group.templateRevisions.length}
+                </span>
+              </h2>
+              <ul className="templates-list">
+                {group.templateRevisions.map((templateRevision) => {
+                  const selected = templateRevision.id === selectedTemplateRevisionID;
+                  const tone = statusTone(templateRevision.status);
+                  // The heading already names the repository, so the row shows
+                  // only what separates one revision from another.
+                  const details = [templateRevision.name.trim(), templateRevision.root_path]
+                    .filter((part) => part !== "")
+                    .join(" · ");
+                  return (
+                    <li
+                      key={templateRevision.id}
+                      data-testid={`template-row-${templateRevision.id}`}
+                      data-selected={selected ? "true" : undefined}
+                      aria-current={selected ? "true" : undefined}
+                    >
+                      <div className="templates-list__main">
+                        <span className="templates-list__name">{templateRevisionRefLabel(templateRevision)}</span>
+                        {details !== "" && <small className="muted">{details}</small>}
+                      </div>
+                      <span className={`status-tone status-tone--${tone}`}>
+                        <span className="status-tone__glyph" aria-hidden="true">
+                          {statusGlyph(tone)}
+                        </span>
+                        {templateRevision.status}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

@@ -12,6 +12,7 @@ import StackDetailShell from "../features/stacks/StackDetailShell";
 import StackTemplateScreen from "../features/stacks/StackTemplateScreen";
 import EnvironmentScreen from "../features/stacks/EnvironmentScreen";
 import TemplateRegistryScreen from "../features/templates/TemplateRegistryScreen";
+import TemplateRegistrationScreen from "../features/templates/TemplateRegistrationScreen";
 import RunsListScreen from "../features/runs/RunsListScreen";
 import RunDetailScreen from "../features/runs/RunDetailScreen";
 import StackAccessScreen from "../features/stacks/StackAccessScreen";
@@ -83,6 +84,7 @@ export const routeConfig: RouteObject[] = [
             ]
           },
           { path: "templates", element: <TemplateRegistryScreen /> },
+          { path: "templates/new", element: <TemplateRegistrationScreen /> },
           { path: "auth/callback", element: <CallbackPage /> },
           { path: "*", element: <NotFound /> }
         ]
