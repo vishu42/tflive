@@ -3,7 +3,10 @@ import { Link } from "react-router-dom";
 import { useStacksQuery } from "../../api/queries";
 import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
+import HeroGraphic from "../../shared/HeroGraphic";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
+import SectionLabel from "../../shared/SectionLabel";
+import StatBand from "../../shared/StatBand";
 
 // The list is authz-filtered by the backend (AUTH-013) — the screen renders
 // whatever listStacks returns and never filters client-side.
@@ -40,7 +43,10 @@ export default function StacksListScreen() {
   return (
     <section className="stacks-list-screen">
       <header className="stacks-list-header">
-        <h1>Stacks</h1>
+        <div className="page-header">
+          <SectionLabel pulse>Stacks</SectionLabel>
+          <h1>Stacks</h1>
+        </div>
         <RequireCapability capability="canCreateStack">
           <Link className="primary-button" to="/stacks/new" data-testid="create-stack-link">
             <Plus size={16} />
@@ -48,10 +54,18 @@ export default function StacksListScreen() {
           </Link>
         </RequireCapability>
       </header>
+      <StatBand items={[{ label: "Stacks", value: stacks.length }]} />
       {stacks.length === 0 ? (
-        <p className="muted" data-testid="stacks-list-empty">
-          No stacks visible to you yet.
-        </p>
+        <section className="showcase showcase--compact" data-testid="stacks-list-empty">
+          <div className="showcase__body">
+            <SectionLabel pulse>Get started</SectionLabel>
+            <h2 className="showcase__title gradient-text">No stacks yet</h2>
+            <p className="showcase__lede">No stacks visible to you yet.</p>
+          </div>
+          <div className="showcase__visual">
+            <HeroGraphic />
+          </div>
+        </section>
       ) : (
         <ul className="stacks-list" data-testid="stacks-list">
           {stacks.map((stack) => (

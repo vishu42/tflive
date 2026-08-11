@@ -262,3 +262,355 @@
     font-size: var(--text-5xl);
   }
 }
+
+/* ---- Stacks list ---- */
+.stacks-list-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.stacks-list {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stacks-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-card);
+  box-shadow: var(--shadow-sm);
+  transition: all var(--duration-lift) var(--ease-out);
+}
+
+.stacks-list li:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-accent-border);
+  box-shadow: var(--shadow-lg);
+}
+
+.stacks-list li a {
+  color: var(--color-fg);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.stacks-list li small {
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* The stacks empty state reuses `.showcase .showcase--compact` from Task 5.
+   No `.empty-state` rules are needed — do not add any. */
+
+/* ---- Tabs ---- */
+.stack-detail-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.button-row,
+.phase-row,
+.run-tabs,
+.stack-detail-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-6);
+}
+
+.run-tabs button,
+.phase-row button,
+.stack-detail-tabs a {
+  position: relative;
+  min-height: var(--touch-target);
+  border: 0;
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
+  color: var(--color-muted-fg);
+  background: transparent;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.run-tabs button:hover,
+.phase-row button:hover,
+.stack-detail-tabs a:hover {
+  color: var(--color-fg);
+  background: var(--color-muted);
+  text-decoration: none;
+}
+
+.run-tabs button.active,
+.phase-row button.active,
+.stack-detail-tabs a.active {
+  color: var(--color-accent);
+}
+
+.run-tabs button.active::after,
+.phase-row button.active::after,
+.stack-detail-tabs a.active::after {
+  content: "";
+  position: absolute;
+  left: var(--space-4);
+  right: var(--space-4);
+  bottom: 2px;
+  height: 2px;
+  border-radius: var(--radius-full);
+  background: var(--gradient-accent);
+}
+
+.stack-detail-tabs a {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ---- Grants ---- */
+.grants-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.grant-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-card);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.grant-row:hover {
+  border-color: var(--color-accent-border);
+}
+
+.grant-row .grant-user {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.grant-row .grant-user span {
+  font-size: var(--text-base);
+  font-weight: 500;
+}
+
+.grant-row .grant-user small {
+  color: var(--color-muted-fg);
+  font-size: var(--text-xs);
+}
+
+.grant-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.grant-actions button {
+  min-height: var(--touch-target);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-3);
+  color: var(--color-fg);
+  background: transparent;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.grant-actions button:hover {
+  border-color: var(--color-accent-border);
+  background: var(--color-muted);
+}
+
+.grant-actions button.danger {
+  color: var(--color-danger);
+}
+
+.grant-actions button.danger:hover {
+  border-color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
+
+/* ---- Credentials ---- */
+.credentials-panel {
+  grid-column: 1 / -1;
+}
+
+.credentials-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+}
+
+.credential-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.credential-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(180px, 1fr) auto;
+  gap: var(--space-4);
+  align-items: end;
+}
+
+/* ---- User search ---- */
+.search-wrapper {
+  position: relative;
+}
+
+.search-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  /* Must stay ABOVE .app-frame-header (5) — the sticky header is opaque and
+     would otherwise clip this dropdown once the page scrolls. */
+  z-index: 10;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  margin-top: var(--space-1);
+  background: var(--color-card);
+  box-shadow: var(--shadow-lg);
+}
+
+.search-result-item {
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.search-result-item:hover,
+.search-result-item.focused {
+  background: var(--color-accent-soft);
+}
+
+.search-result-item.assigned {
+  color: var(--color-muted-fg);
+  background: var(--color-muted);
+  cursor: default;
+}
+
+.search-result-item small {
+  display: block;
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.selected-user-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-lg);
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-accent-soft);
+}
+
+.selected-user-card span {
+  font-size: var(--text-base);
+  font-weight: 500;
+}
+
+.selected-user-card button {
+  border: 0;
+  padding: var(--space-1);
+  color: var(--color-muted-fg);
+  background: none;
+  cursor: pointer;
+}
+
+/* ---- Undo banner ---- */
+.undo-banner {
+  position: fixed;
+  bottom: var(--space-6);
+  left: 50%;
+  transform: translateX(-50%);
+  /* Must stay ABOVE .app-frame-header (5) and .search-dropdown (10). */
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  border-radius: var(--radius-xl);
+  padding: var(--space-3) var(--space-5);
+  color: var(--color-card);
+  background: var(--color-fg);
+  box-shadow: var(--shadow-xl);
+  font-size: var(--text-sm);
+}
+
+.undo-banner button {
+  min-height: var(--touch-target);
+  border: 0;
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
+  color: var(--color-accent-fg);
+  background: var(--gradient-accent);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* ---- Layout grids ---- */
+.workflow-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.85fr) minmax(320px, 1.15fr);
+  gap: var(--space-6);
+}
+
+.form-grid,
+.variable-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+  gap: var(--space-5);
+}
+
+.form-row {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.form-actions {
+  margin: var(--space-6) 0 0;
+}
+
+.selector-label {
+  margin-bottom: var(--space-4);
+}
