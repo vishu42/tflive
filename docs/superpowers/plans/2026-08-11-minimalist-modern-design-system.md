@@ -1736,7 +1736,11 @@ Create `web/src/styles/features.css`:
 .app-frame-header {
   position: sticky;
   top: 0;
-  z-index: 30;
+  /* Must stay BELOW .search-dropdown (10) and .undo-banner (20). base.css
+     establishes one stacking context at the app root and nothing uses
+     portals, so an opaque header with a higher z-index would paint over an
+     open dropdown as soon as the page scrolls. */
+  z-index: 5;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1949,10 +1953,12 @@ In `web/src/app/AppShell.tsx`, replace the opening of the returned JSX — from 
 Then change the `<main>` element to carry the anchor target:
 
 ```tsx
-      <main className="app-frame-content" id="main-content">
+      <main className="app-frame-content" id="main-content" tabIndex={-1}>
         <Outlet />
       </main>
 ```
+
+`tabIndex={-1}` is required, not optional. `<main>` is not natively focusable, so without it the browser scrolls the target into view but leaves keyboard focus where it was — the user's next Tab resumes from the top of the document and the skip link accomplishes nothing.
 
 - [ ] **Step 4: Run the full suite and build**
 
@@ -2375,6 +2381,8 @@ Append to `web/src/styles/features.css`:
   top: 100%;
   left: 0;
   right: 0;
+  /* Must stay ABOVE .app-frame-header (5) — the sticky header is opaque and
+     would otherwise clip this dropdown once the page scrolls. */
   z-index: 10;
   max-height: 240px;
   overflow-y: auto;
@@ -2441,6 +2449,7 @@ Append to `web/src/styles/features.css`:
   bottom: var(--space-6);
   left: 50%;
   transform: translateX(-50%);
+  /* Must stay ABOVE .app-frame-header (5) and .search-dropdown (10). */
   z-index: 20;
   display: flex;
   align-items: center;
