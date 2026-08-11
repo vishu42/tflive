@@ -16,7 +16,7 @@ Four code commits from the monochrome effort are on `feat/monochrome-design-syst
 - `web/src/styles.css` has been drained from 109 rules to 91. That drain continues unchanged.
 - Existing class names were deliberately preserved, so screens restyle without component edits. That strategy still holds.
 - `scripts/vendor-fonts.sh` works and is verified. **Inter and JetBrains Mono are already vendored** — two of this system's three faces. Only Calistoga is new.
-- `web/src/shared/statusTone.ts` maps 30 status values across three API unions onto five visual tones. This is pure classification logic with no styling, so it carries over untouched; only the tones' colours change.
+- The five-tone status classifier designed in the previous round was **never built** — the earlier plan stopped after its third task. `web/src/shared/StatusRow.tsx` is still the original, classifying with three lucide icons via an inline `inProgressStatus` helper. `web/src/shared/statusTone.ts` must therefore be created here, not carried over. Its design survives intact: 30 status values across three API unions map onto five visual tones.
 - `@types/node` is a devDependency, required for the guard test to typecheck.
 
 One artefact must invert rather than carry over: `web/src/styles/styles.guard.test.ts` currently fails the build on any `box-shadow` and any non-zero `border-radius`. This design requires both.
@@ -241,7 +241,7 @@ The forced-colors fallback matters here: the border is drawn from a background l
 
 ### Status tones
 
-The `statusTone.ts` classifier is unchanged. Tones render as tinted pills:
+`statusTone.ts` is created in this effort (see Current Context). Tones render as tinted pills:
 
 | Tone | Text | Background | Extra |
 |---|---|---|---|
@@ -302,7 +302,7 @@ Step 1 deliberately covers both the token layer and the primitives, because the 
 
 ## Testing
 
-`npm test` and `npm run build` run after each screen rather than batched, so failures attribute to a single change. `statusTone.test.ts` carries over unchanged and must continue to pass. `useInView` requires an `IntersectionObserver` stub under jsdom and gets its own test.
+`npm test` and `npm run build` run after each screen rather than batched, so failures attribute to a single change. `statusTone.ts` is written test-first, with a case per status tone. `useInView` requires an `IntersectionObserver` stub under jsdom and gets its own test.
 
 Because the app cannot boot without Keycloak, visual verification builds the project and renders the compiled CSS against representative markup in a static harness, screenshotted with headless Chrome.
 
