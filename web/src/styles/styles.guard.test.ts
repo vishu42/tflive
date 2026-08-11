@@ -83,3 +83,14 @@ describe("accessibility fallbacks", () => {
     expect(css).toMatch(/\.gradient-text\s*\{[^}]*color:\s*CanvasText/);
   });
 });
+
+describe("styles.css index", () => {
+  it("contains nothing but imports", () => {
+    const index = readFileSync(join(STYLES_DIR, "..", "styles.css"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .trim();
+    const lines = index.split("\n").map((l) => l.trim()).filter(Boolean);
+    expect(lines.every((line) => line.startsWith("@import"))).toBe(true);
+    expect(lines).toHaveLength(4);
+  });
+});

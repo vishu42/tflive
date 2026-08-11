@@ -35,7 +35,7 @@ export default function CreateStackScreen() {
   return (
     <section className="panel">
       <header>
-        <Link to="/stacks" className="muted" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
+        <Link to="/stacks" className="muted back-link">
           <ArrowLeft size={14} />
           Back to stacks
         </Link>

@@ -760,3 +760,89 @@
 .spin {
   animation: spin 0.9s linear infinite;
 }
+
+/* ---- Inline-style drain (Task 8) ---- */
+.alert .secondary-button {
+  margin-left: var(--space-3);
+}
+
+.confirm-label {
+  font-size: var(--text-sm);
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+@media (max-width: 920px) {
+  .workflow-grid,
+  .form-grid,
+  .variable-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    padding: var(--space-4);
+  }
+
+  .app-frame-header {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .app-frame-brand {
+    gap: var(--space-4);
+  }
+
+  .app-frame-content {
+    padding: var(--space-6) var(--space-4);
+  }
+
+  .app-frame-content .app-shell {
+    padding: 0;
+  }
+
+  .workspace-header,
+  .stacks-list-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .runtime-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .credential-form,
+  .credential-row {
+    grid-template-columns: 1fr;
+  }
+
+  .page-header h1 {
+    font-size: var(--text-2xl);
+  }
+
+  /* Primary CTAs go full width on mobile, per the design system. */
+  .form-actions .primary-button,
+  .stacks-list-header .primary-button {
+    width: 100%;
+  }
+
+  /* 44px minimum touch targets where density and accessibility conflict. */
+  .app-nav a,
+  .icon-button,
+  .selected-user-card button {
+    min-height: var(--touch-target);
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .undo-banner {
+    left: var(--space-4);
+    right: var(--space-4);
+    transform: none;
+  }
+}

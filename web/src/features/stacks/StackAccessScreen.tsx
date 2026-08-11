@@ -122,7 +122,6 @@ export default function StackAccessScreen() {
             <button
               className="secondary-button"
               onClick={() => grants.refetch()}
-              style={{ marginLeft: 10 }}
             >
               Retry
             </button>
@@ -146,7 +145,7 @@ export default function StackAccessScreen() {
                 <div className="grant-actions">
                   {confirmRevoke === grant.userSub ? (
                     <>
-                      <span style={{ fontSize: "0.82rem" }}>
+                      <span className="confirm-label">
                         Remove access?
                       </span>
                       <button
