@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/activities"
@@ -13,7 +12,6 @@ import (
 	"github.com/vishu42/tflive/internal/artifacts"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
-	"github.com/vishu42/tflive/internal/dispatch"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/queue"
@@ -41,10 +39,12 @@ type workerStore interface {
 	activities.StatusRecorder
 	activities.TemplateSyncStore
 	artifacts.LogMetadataRecorder
-	dispatch.Outbox
 	queue.Backend
 	queue.Enqueuer
 	app.StackStatusRepository
+	interface {
+		ReconcileTemplateRunCancellation(context.Context, traits.TenantID, traits.TemplateRunID, string) error
+	}
 }
 
 // workerAuthorizer is the authorization surface the worker needs: decisions
@@ -54,7 +54,7 @@ type workerAuthorizer interface {
 	authz.SubjectGrantLister
 }
 
-type outboxDispatcher interface {
+type queueController interface {
 	Run(context.Context)
 }
 
@@ -69,12 +69,10 @@ type workerDependencies struct {
 	dialTemporal func(context.Context, temporal.Config) (client.Client, error)
 	// newWorker creates the Temporal worker bound to the configured task queue.
 	newWorker func(client.Client, string, temporalworker.Options) temporalWorker
-	// newWorkflowStarter creates the idempotent Temporal workflow starter used by the outbox.
-	newWorkflowStarter func(client.Client, string) dispatch.WorkflowStarter
-	// newOutboxDispatcher builds the durable Postgres-to-Temporal dispatch loop.
-	newOutboxDispatcher     func(dispatch.Outbox, dispatch.WorkflowStarter) outboxDispatcher
+	// newDispatcher creates the Temporal workflow and signal dispatcher used by queue handlers.
+	newDispatcher           func(client.Client, string) app.WorkflowDispatcher
 	newAuthorizationAdapter func(config.OpenFGAConfig) (workerAuthorizer, error)
-	newQueueController      func(workerStore, workerAuthorizer) (outboxDispatcher, error)
+	newQueueController      func(workerStore, workerAuthorizer, app.WorkflowDispatcher) (queueController, error)
 	// registerWorkflow attaches the workflow implementations this process can execute.
 	registerWorkflow func(temporalWorker)
 	// registerActivities attaches activity handlers and their shared dependencies to the worker.
@@ -83,6 +81,19 @@ type workerDependencies struct {
 	newLogStore func(config.ArtifactStoreConfig, artifacts.LogMetadataRecorder) (activities.TemplateRunLogStore, error)
 	// interruptCh provides the shutdown signal consumed by the Temporal worker run loop.
 	interruptCh func() <-chan interface{}
+}
+
+func newQueueRegistry(store workerStore, authorizer workerAuthorizer, dispatcher app.WorkflowDispatcher) (*queue.Registry, error) {
+	service := app.NewService(app.Service{Authorizer: authorizer, StackStatuses: store})
+	return queue.NewRegistry(
+		app.NewStartTemplateRunHandler(dispatcher),
+		app.NewStartTemplateSyncHandler(dispatcher),
+		app.NewSignalRunApprovalHandler(dispatcher),
+		app.NewSignalRunCancellationHandler(dispatcher, store),
+		app.NewGrantStackOwnerHandler(service),
+		app.NewMarkStackReadyHandler(service),
+		authz.NewStackGrantHandler(authorizer),
+	)
 }
 
 func main() {
@@ -110,7 +121,7 @@ func defaultWorkerDependencies() workerDependencies {
 			}
 			// The worker both delivers work and enqueues the follow-ups handlers
 			// return, so its store needs the specs to derive resource keys.
-			specs, err := queue.NewSpecRegistry(app.GrantStackOwnerSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
+			specs, err := queue.NewSpecRegistry(app.QueueSpecs()...)
 			if err != nil {
 				return nil, fmt.Errorf("build queue specs: %w", err)
 			}
@@ -120,25 +131,14 @@ func defaultWorkerDependencies() workerDependencies {
 		newWorker: func(temporalClient client.Client, taskQueue string, options temporalworker.Options) temporalWorker {
 			return temporalworker.New(temporalClient, taskQueue, options)
 		},
-		newWorkflowStarter: func(temporalClient client.Client, taskQueue string) dispatch.WorkflowStarter {
+		newDispatcher: func(temporalClient client.Client, taskQueue string) app.WorkflowDispatcher {
 			return temporal.NewDispatcher(temporalClient, taskQueue)
-		},
-		newOutboxDispatcher: func(outbox dispatch.Outbox, starter dispatch.WorkflowStarter) outboxDispatcher {
-			return dispatch.NewDispatcher(outbox, starter, dispatch.Options{})
 		},
 		newAuthorizationAdapter: func(cfg config.OpenFGAConfig) (workerAuthorizer, error) {
 			return openfga.NewAuthorizationAdapter(openfga.Config{APIURL: cfg.APIURL, StoreID: cfg.StoreID, ModelID: cfg.ModelID, APIToken: cfg.APIToken.Value(), HTTPTimeout: cfg.RequestTimeout})
 		},
-		newQueueController: func(store workerStore, authorizer workerAuthorizer) (outboxDispatcher, error) {
-			// Stack provisioning is an app concern and the app Service already
-			// owns both dependencies it needs, so the handlers adapt to it
-			// rather than reimplementing the writes.
-			service := app.NewService(app.Service{Authorizer: authorizer, StackStatuses: store})
-			registry, err := queue.NewRegistry(
-				app.NewGrantStackOwnerHandler(service),
-				app.NewMarkStackReadyHandler(service),
-				authz.NewStackGrantHandler(authorizer),
-			)
+		newQueueController: func(store workerStore, authorizer workerAuthorizer, dispatcher app.WorkflowDispatcher) (queueController, error) {
+			registry, err := newQueueRegistry(store, authorizer, dispatcher)
 			if err != nil {
 				return nil, err
 			}
@@ -237,25 +237,22 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 	worker := deps.newWorker(temporalClient, cfg.TemporalTaskQueue, temporalworker.Options{EnableSessionWorker: true})
 	deps.registerWorkflow(worker)
 	deps.registerActivities(worker, store, cfg.WorkerRunRoot, logStore)
-	workflowStarter := deps.newWorkflowStarter(temporalClient, cfg.TemporalTaskQueue)
-	outbox := deps.newOutboxDispatcher(store, workflowStarter)
-	controller, err := deps.newQueueController(store, authorizer)
+	dispatcher := deps.newDispatcher(temporalClient, cfg.TemporalTaskQueue)
+	controller, err := deps.newQueueController(store, authorizer, dispatcher)
 	if err != nil {
 		return fmt.Errorf("build queue controller: %w", err)
 	}
 
-	dispatchCtx, cancelDispatch := context.WithCancel(ctx)
-	var dispatchGroup sync.WaitGroup
-	dispatchGroup.Add(2)
+	controllerCtx, cancelController := context.WithCancel(ctx)
+	controllerDone := make(chan struct{})
 	go func() {
-		defer dispatchGroup.Done()
-		outbox.Run(dispatchCtx)
+		defer close(controllerDone)
+		controller.Run(controllerCtx)
 	}()
-	go func() { defer dispatchGroup.Done(); controller.Run(dispatchCtx) }()
 
 	workerErr := worker.Run(deps.interruptCh())
-	cancelDispatch()
-	dispatchGroup.Wait()
+	cancelController()
+	<-controllerDone
 	if workerErr != nil {
 		return fmt.Errorf("run worker: %w", workerErr)
 	}

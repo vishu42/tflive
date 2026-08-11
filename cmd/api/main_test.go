@@ -20,9 +20,7 @@ import (
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/temporal"
 	"github.com/vishu42/tflive/internal/traits"
-	"go.temporal.io/sdk/client"
 )
 
 func TestRunRequiresDatabaseURL(t *testing.T) {
@@ -99,7 +97,7 @@ func TestWriteStartupErrorDoesNotLeakSecuritySecrets(t *testing.T) {
 	}
 }
 
-func TestRunWiresTemporalDispatcher(t *testing.T) {
+func TestRunWiresProducerOnlyQueueStore(t *testing.T) {
 	t.Parallel()
 
 	deps := newRecordingAPIDependencies(t)
@@ -116,18 +114,7 @@ func TestRunWiresTemporalDispatcher(t *testing.T) {
 	if !deps.migrated {
 		t.Fatal("postgres migrations did not run")
 	}
-	if deps.temporalConfig.Address != "localhost:7233" {
-		t.Fatalf("temporal address = %q, want localhost:7233", deps.temporalConfig.Address)
-	}
-	if deps.temporalConfig.Namespace != "tflive" {
-		t.Fatalf("temporal namespace = %q, want tflive", deps.temporalConfig.Namespace)
-	}
-	if deps.dispatcherTaskQueue != "terraform-runs-dev" {
-		t.Fatalf("dispatcher task queue = %q, want terraform-runs-dev", deps.dispatcherTaskQueue)
-	}
-	if deps.service.Workflows != deps.dispatcher {
-		t.Fatal("service Workflows is not the dispatcher")
-	}
+	assertAPIQueueSpecs(t, deps.queueSpecs)
 	if deps.service.Authorizer != deps.authorizer {
 		t.Fatal("service Authorizer is not the configured OpenFGA adapter")
 	}
@@ -173,11 +160,28 @@ func TestRunWiresTemporalDispatcher(t *testing.T) {
 	if deps.serverHandler == nil {
 		t.Fatal("server handler was not provided")
 	}
-	if !deps.temporalClient.closed {
-		t.Fatal("temporal client was not closed")
-	}
 	if !deps.pool.closed {
 		t.Fatal("postgres pool was not closed")
+	}
+}
+
+func assertAPIQueueSpecs(t *testing.T, registry *queue.SpecRegistry) {
+	t.Helper()
+	if registry == nil {
+		t.Fatal("queue spec registry was not passed to the API store")
+	}
+	for _, kind := range []queue.Kind{
+		app.KindStartTemplateRun,
+		app.KindStartTemplateSync,
+		app.KindSignalRunApproval,
+		app.KindSignalRunCancellation,
+		app.KindGrantStackOwner,
+		app.KindMarkStackReady,
+		authz.StackGrantSpec.Kind,
+	} {
+		if _, ok := registry.Spec(kind); !ok {
+			t.Fatalf("queue spec registry missing %q", kind)
+		}
 	}
 }
 
@@ -211,21 +215,6 @@ func TestRunWiresConfiguredTenantBoundary(t *testing.T) {
 	}
 }
 
-func TestRunUsesDefaultTemporalTaskQueue(t *testing.T) {
-	t.Parallel()
-
-	deps := newRecordingAPIDependencies(t)
-	values := apiTestValues()
-	delete(values, "TEMPORAL_TASK_QUEUE")
-	err := runWithDependencies(context.Background(), apiTestGetenv(values), deps.apiDependencies)
-	if err != nil {
-		t.Fatalf("runWithDependencies returned error: %v", err)
-	}
-	if deps.dispatcherTaskQueue != config.DefaultTemporalTaskQueue {
-		t.Fatalf("dispatcher task queue = %q, want %q", deps.dispatcherTaskQueue, config.DefaultTemporalTaskQueue)
-	}
-}
-
 func TestRunConstructsAndClosesOIDCVerifier(t *testing.T) {
 	deps := newRecordingAPIDependencies(t)
 	verifier := &recordingTokenVerifier{}
@@ -243,22 +232,6 @@ func TestRunConstructsAndClosesOIDCVerifier(t *testing.T) {
 	}
 	if !verifier.closed {
 		t.Fatal("verifier was not closed")
-	}
-}
-
-func TestRunWrapsTemporalDialFailure(t *testing.T) {
-	t.Parallel()
-
-	dialErr := errors.New("dial failed")
-	deps := newRecordingAPIDependencies(t)
-	deps.dialErr = dialErr
-
-	err := runWithDependencies(context.Background(), apiTestEnv, deps.apiDependencies)
-	if !errors.Is(err, dialErr) {
-		t.Fatalf("error = %v, want dialErr", err)
-	}
-	if !strings.Contains(err.Error(), "dial temporal") {
-		t.Fatalf("error = %q, want dial temporal", err)
 	}
 }
 
@@ -286,23 +259,13 @@ func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
 		t.Skip("tflive_POSTGRES_TEST_DSN is not set")
 	}
 
-	temporalClient := &recordingTemporalClient{}
 	deps := defaultAPIDependencies()
-	deps.dialTemporal = func(context.Context, temporal.Config) (client.Client, error) {
-		return temporalClient, nil
-	}
-	deps.newDispatcher = func(client.Client, string) app.WorkflowDispatcher {
-		return recordingWorkflowDispatcher{}
-	}
 
 	values := apiTestValues()
 	values["DATABASE_URL"] = dsn
 	err := runWithDependencies(context.Background(), apiTestGetenv(values), deps)
 	if err != nil {
 		t.Fatalf("runWithDependencies returned error: %v", err)
-	}
-	if !temporalClient.closed {
-		t.Fatal("temporal client was not closed")
 	}
 }
 
@@ -400,17 +363,13 @@ type recordingAPIDependencies struct {
 	apiDependencies
 	pool                *recordingPostgresPool
 	store               *recordingStore
-	temporalClient      *recordingTemporalClient
-	dispatcher          recordingWorkflowDispatcher
-	temporalConfig      temporal.Config
-	dispatcherTaskQueue string
+	queueSpecs          *queue.SpecRegistry
 	artifactStoreConfig config.ArtifactStoreConfig
 	logReader           recordingTemplateRunLogReader
 	service             app.Service
 	serverAddress       string
 	serverHandler       http.Handler
 	migrated            bool
-	dialErr             error
 	serviceErr          error
 	serverErr           error
 	openFGAConfig       openfga.Config
@@ -421,10 +380,8 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 	t.Helper()
 
 	deps := &recordingAPIDependencies{
-		pool:           &recordingPostgresPool{},
-		store:          &recordingStore{},
-		temporalClient: &recordingTemporalClient{},
-		dispatcher:     recordingWorkflowDispatcher{},
+		pool:  &recordingPostgresPool{},
+		store: &recordingStore{},
 	}
 	deps.apiDependencies = apiDependencies{
 		newPostgresPool: func(_ context.Context, databaseURL string) (postgresPool, error) {
@@ -438,25 +395,12 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 			deps.migrated = true
 			return nil
 		},
-		newStore: func(pool postgresPool) (appRepositories, error) {
+		newStore: func(pool postgresPool, specs *queue.SpecRegistry) (appRepositories, error) {
 			if pool != deps.pool {
 				t.Fatalf("newStore pool = %p, want %p", pool, deps.pool)
 			}
+			deps.queueSpecs = specs
 			return deps.store, nil
-		},
-		dialTemporal: func(_ context.Context, cfg temporal.Config) (client.Client, error) {
-			deps.temporalConfig = cfg
-			if deps.dialErr != nil {
-				return nil, deps.dialErr
-			}
-			return deps.temporalClient, nil
-		},
-		newDispatcher: func(temporalClient client.Client, taskQueue string) app.WorkflowDispatcher {
-			if temporalClient != deps.temporalClient {
-				t.Fatalf("newDispatcher temporalClient = %p, want %p", temporalClient, deps.temporalClient)
-			}
-			deps.dispatcherTaskQueue = taskQueue
-			return deps.dispatcher
 		},
 		newLogReader: func(cfg config.ArtifactStoreConfig) (app.TemplateRunLogReader, error) {
 			deps.artifactStoreConfig = cfg
@@ -537,15 +481,6 @@ func (pool *recordingPostgresPool) Ping(context.Context) error {
 
 func (pool *recordingPostgresPool) Close() {
 	pool.closed = true
-}
-
-type recordingTemporalClient struct {
-	client.Client
-	closed bool
-}
-
-func (temporalClient *recordingTemporalClient) Close() {
-	temporalClient.closed = true
 }
 
 type recordingStore struct{}
@@ -654,24 +589,6 @@ type recordingTemplateRunLogReader struct{}
 
 func (recordingTemplateRunLogReader) ReadTemplateRunLog(context.Context, traits.TemplateRunLog) ([]byte, error) {
 	return nil, nil
-}
-
-type recordingWorkflowDispatcher struct{}
-
-func (recordingWorkflowDispatcher) StartTemplateRun(context.Context, traits.TemplateRunWorkflowInput) error {
-	return nil
-}
-
-func (recordingWorkflowDispatcher) StartTemplateSync(context.Context, traits.TemplateSyncWorkflowInput) error {
-	return nil
-}
-
-func (recordingWorkflowDispatcher) ApproveTemplateRun(context.Context, traits.TenantID, traits.TemplateRunID, traits.ApprovalSignal) error {
-	return nil
-}
-
-func (recordingWorkflowDispatcher) CancelTemplateRun(context.Context, traits.TenantID, traits.TemplateRunID, traits.CancelSignal) error {
-	return nil
 }
 
 // The API store must satisfy the unit-of-work and queue-reader surfaces the
