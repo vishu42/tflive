@@ -422,3 +422,108 @@ textarea {
   background: var(--color-accent);
   box-shadow: var(--shadow-accent);
 }
+
+/* ---- Status tones ---- */
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
+  color: var(--color-muted-fg);
+  font-size: var(--text-sm);
+}
+
+.status-row strong {
+  min-width: 0;
+  font-weight: 500;
+  text-align: right;
+}
+
+.status-tone {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border-radius: var(--radius-full);
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.status-tone__glyph {
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+.status-tone--settled {
+  color: var(--color-success);
+  background: var(--color-success-soft);
+}
+
+.status-tone--progress {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.status-tone--progress .status-tone__glyph {
+  animation: pulse-dot 2s var(--ease-out) infinite;
+}
+
+.status-tone--waiting {
+  color: var(--color-warning);
+  background: var(--color-warning-soft);
+}
+
+.status-tone--failed {
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
+
+.status-tone--canceled {
+  color: var(--color-muted-fg);
+  background: var(--color-muted);
+}
+
+/* Destruction is settled, not failed, but consequential enough to deserve a
+   heavier rule than an ordinary finished phase. */
+.status-row[data-status="destroy_finished"] {
+  border-top-width: 2px;
+  border-top-color: var(--color-fg);
+}
+
+/* ---- Role badges ---- */
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 84px;
+  border-radius: var(--radius-full);
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.role-badge--owner {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.role-badge--operator {
+  color: var(--color-success);
+  background: var(--color-success-soft);
+}
+
+.role-badge--approver {
+  color: var(--color-warning);
+  background: var(--color-warning-soft);
+}
+
+.role-badge--viewer {
+  color: var(--color-muted-fg);
+  background: var(--color-muted);
+}

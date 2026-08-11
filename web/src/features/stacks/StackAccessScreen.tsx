@@ -142,7 +142,7 @@ export default function StackAccessScreen() {
                   <span>{grant.displayName}</span>
                   {grant.email && <small>{grant.email}</small>}
                 </div>
-                <span className={`role-badge ${grant.role}`}>{grant.role}</span>
+                <span className={`role-badge role-badge--${grant.role}`}>{grant.role}</span>
                 <div className="grant-actions">
                   {confirmRevoke === grant.userSub ? (
                     <>

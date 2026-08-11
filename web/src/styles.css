@@ -193,30 +193,6 @@
   text-decoration: none;
 }
 
-.status-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 14px;
-  border-top: 1px solid #e5e8e1;
-  padding-top: 12px;
-  color: #66705f;
-  font-size: 0.88rem;
-}
-
-.status-row strong {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  min-width: 0;
-  color: #202833;
-  font-weight: 750;
-  overflow-wrap: anywhere;
-  text-align: right;
-}
-
 .stack-template-list {
   display: grid;
   gap: 10px;
@@ -452,38 +428,6 @@
 .grant-row .grant-user small {
   color: #66705f;
   font-size: 0.78rem;
-}
-
-.role-badge {
-  display: inline-flex;
-  align-items: center;
-  min-width: 72px;
-  justify-content: center;
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.role-badge.owner {
-  color: #24467c;
-  background: #eef4ff;
-}
-
-.role-badge.operator {
-  color: #2f6f5e;
-  background: #eef7f3;
-}
-
-.role-badge.approver {
-  color: #7a5d3c;
-  background: #fef7ee;
-}
-
-.role-badge.viewer {
-  color: #536064;
-  background: #f8faf7;
 }
 
 .grant-actions {
