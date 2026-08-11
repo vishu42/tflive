@@ -1,0 +1,189 @@
+/* ---- Application frame ---- */
+.app-shell {
+  min-height: 100vh;
+  padding: var(--space-6);
+}
+
+.app-frame {
+  min-height: 100vh;
+}
+
+.app-frame-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-6);
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-4) var(--space-6);
+  background: var(--color-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.app-frame-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.app-wordmark {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  line-height: 1;
+}
+
+.app-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.app-nav a {
+  position: relative;
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-muted-fg);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-decoration: none;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.app-nav a:hover {
+  color: var(--color-fg);
+  background: var(--color-muted);
+  text-decoration: none;
+}
+
+.app-frame-identity {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+  font-size: var(--text-sm);
+}
+
+.identity-menu {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-muted-fg);
+}
+
+.identity-menu button {
+  min-height: var(--touch-target);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-2) var(--space-4);
+  color: var(--color-fg);
+  background: transparent;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.identity-menu button:hover {
+  border-color: var(--color-accent-border);
+  background: var(--color-muted);
+}
+
+.app-frame-identity .runtime-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.app-frame-identity .runtime-value {
+  min-height: 0;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+}
+
+.app-frame-content {
+  width: min(1280px, 100%);
+  margin: 0 auto;
+  padding: var(--space-10) var(--space-6);
+}
+
+/* The legacy console still carries its own standalone shell padding; zero it
+   out when nested inside the router frame so "/" doesn't double-pad. */
+.app-frame-content .app-shell {
+  min-height: 0;
+  padding: 0;
+}
+
+.workspace {
+  width: min(1280px, 100%);
+  margin: 0 auto;
+}
+
+.workspace-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-6);
+  margin-bottom: var(--space-6);
+}
+
+.runtime-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: var(--space-3);
+}
+
+.runtime-field {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--color-muted-fg);
+  font-size: var(--text-sm);
+}
+
+.runtime-value {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-fg);
+  background: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.debug-panel {
+  margin: var(--space-8) var(--space-6);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.debug-panel summary {
+  color: var(--color-muted-fg);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.id-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-4) 0 0;
+}
+
+.id-grid dt {
+  color: var(--color-muted-fg);
+}
+
+.id-grid dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+}
