@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Vendors the Minimalist Monochrome typefaces as latin-subset woff2 files into
+# Vendors the Minimalist Modern typefaces as latin-subset woff2 files into
 # web/public/fonts/. Run once; the resulting files are committed to the repo so
 # the console never depends on a third-party font host at runtime.
 set -euo pipefail
