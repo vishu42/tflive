@@ -15,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/app"
-	"github.com/vishu42/tflive/internal/dispatch"
 	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/traits"
 )
@@ -34,7 +33,6 @@ var (
 	_ app.TemplateRegistrationRepository     = (*Store)(nil)
 	_ app.TemplateRevisionRepository         = (*Store)(nil)
 	_ app.AuditRepository                    = (*Store)(nil)
-	_ dispatch.Outbox                        = (*Store)(nil)
 	_ interface {
 		RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error
 	} = (*Store)(nil)
@@ -63,7 +61,7 @@ func TestMigrateAppliesSchema(t *testing.T) {
 		"template_revisions",
 		"template_registrations",
 		"template_variables",
-		"workflow_outbox",
+		"work_queue",
 		"security_audit_log",
 	} {
 		table := table
@@ -113,6 +111,146 @@ func TestWorkflowOutboxMigrationDefinesDurablePendingQueue(t *testing.T) {
 		if !strings.Contains(sql, snippet) {
 			t.Fatalf("migration 0007 is missing durable outbox snippet %q", snippet)
 		}
+	}
+}
+
+func TestRetireWorkflowOutboxBackfillsPendingStarts(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	if _, err := pool.Exec(ctx, `
+		create table schema_migrations (
+			version text primary key,
+			applied_at timestamptz not null default now()
+		)
+	`); err != nil {
+		t.Fatalf("create schema migrations table: %v", err)
+	}
+	for _, version := range []string{
+		"0001_app_repositories",
+		"0002_template_run_logs",
+		"0003_template_registration",
+		"0004_stacks",
+		"0005_stack_templates_created_by",
+		"0006_template_sources_and_revision_pointers",
+		"0007_workflow_outbox",
+		"0008_authorization_outbox",
+		"0009_security_audit",
+		"0010_scoped_credentials",
+		"0011_terraform_command_statuses",
+		"0012_work_queue",
+		"0013_stack_status",
+	} {
+		if err := applyMigration(ctx, pool, version, "migrations/"+version+".sql"); err != nil {
+			t.Fatalf("apply migration %s: %v", version, err)
+		}
+	}
+
+	if _, err := pool.Exec(ctx, `
+		insert into template_revisions (
+			id, tenant_id, repo_owner, repo_name, source_ref,
+			resolved_commit_sha, root_path, name, status
+		) values
+			('revision-pending', 'tenant-1', 'org', 'repo', 'main', 'sha-pending', 'modules/demo', 'Demo', 'active'),
+			('revision-processed', 'tenant-1', 'other-org', 'other-repo', 'release', 'sha-processed', 'modules/other', 'Other', 'active')
+	`); err != nil {
+		t.Fatalf("seed template revisions: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		insert into template_runs (
+			id, tenant_id, stack_template_id, template_revision_id,
+			operation, selected_ref, workspace_name, config_json, status, trigger_actor
+		) values
+			('run-pending', 'tenant-1', 'stack-template-pending', 'revision-pending', 'plan', 'main', 'demo-workspace', '{"region":"us-east-1"}', 'queued', 'user-1'),
+			('run-processed', 'tenant-1', 'stack-template-processed', 'revision-processed', 'apply', 'release', 'other-workspace', '{"region":"us-west-2"}', 'queued', 'user-1')
+	`); err != nil {
+		t.Fatalf("seed template runs: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		insert into workflow_outbox (id, event_type, aggregate_id, processed_at)
+		values
+			('template-run/tenant-1/run-pending', 'start_template_run', 'run-pending', null),
+			('template-run/tenant-1/run-processed', 'start_template_run', 'run-processed', now())
+	`); err != nil {
+		t.Fatalf("seed workflow outbox: %v", err)
+	}
+
+	if err := applyMigration(ctx, pool, "0014_retire_workflow_outbox", "migrations/0014_retire_workflow_outbox.sql"); err != nil {
+		t.Fatalf("apply migration 0014_retire_workflow_outbox: %v", err)
+	}
+
+	var (
+		resourceKey string
+		actor       string
+		tenantID    string
+		payload     []byte
+	)
+	if err := pool.QueryRow(ctx, `
+		select resource_key, actor_subject, tenant_id, payload
+		from work_queue
+		where kind = 'start_template_run'
+	`).Scan(&resourceKey, &actor, &tenantID, &payload); err != nil {
+		t.Fatalf("read backfilled work queue row: %v", err)
+	}
+
+	var input traits.TemplateRunWorkflowInput
+	if err := json.Unmarshal(payload, &input); err != nil {
+		t.Fatalf("decode work queue payload: %v", err)
+	}
+	if resourceKey != "run:tenant-1/run-pending" {
+		t.Fatalf("resource key = %q, want %q", resourceKey, "run:tenant-1/run-pending")
+	}
+	if actor != "user-1" {
+		t.Fatalf("actor subject = %q, want user-1", actor)
+	}
+	if tenantID != "tenant-1" {
+		t.Fatalf("tenant ID = %q, want tenant-1", tenantID)
+	}
+	if input.RunID != "run-pending" {
+		t.Fatalf("RunID = %q, want run-pending", input.RunID)
+	}
+	if input.TenantID != "tenant-1" {
+		t.Fatalf("TenantID = %q, want tenant-1", input.TenantID)
+	}
+	if input.StackTemplateID != "stack-template-pending" {
+		t.Fatalf("StackTemplateID = %q, want stack-template-pending", input.StackTemplateID)
+	}
+	if input.Operation != traits.OperationPlan {
+		t.Fatalf("Operation = %q, want %q", input.Operation, traits.OperationPlan)
+	}
+	if input.SelectedRef != "main" {
+		t.Fatalf("SelectedRef = %q, want main", input.SelectedRef)
+	}
+	if input.WorkspaceName != "demo-workspace" {
+		t.Fatalf("WorkspaceName = %q, want demo-workspace", input.WorkspaceName)
+	}
+	if input.RepoOwner != "org" {
+		t.Fatalf("RepoOwner = %q, want org", input.RepoOwner)
+	}
+	if input.RepoName != "repo" {
+		t.Fatalf("RepoName = %q, want repo", input.RepoName)
+	}
+	if input.RootPath != "modules/demo" {
+		t.Fatalf("RootPath = %q, want modules/demo", input.RootPath)
+	}
+	if !sameJSON(t, input.ConfigJSON, []byte(`{"region":"us-east-1"}`)) {
+		t.Fatalf("ConfigJSON = %s, want region config", input.ConfigJSON)
+	}
+
+	var queuedStarts int
+	if err := pool.QueryRow(ctx, `select count(*) from work_queue where kind = 'start_template_run'`).Scan(&queuedStarts); err != nil {
+		t.Fatalf("count backfilled work queue rows: %v", err)
+	}
+	if queuedStarts != 1 {
+		t.Fatalf("backfilled work queue rows = %d, want 1", queuedStarts)
+	}
+
+	var workflowOutbox *string
+	if err := pool.QueryRow(ctx, `select to_regclass('workflow_outbox')::text`).Scan(&workflowOutbox); err != nil {
+		t.Fatalf("check workflow outbox relation: %v", err)
+	}
+	if workflowOutbox != nil {
+		t.Fatalf("workflow_outbox still exists as %q", *workflowOutbox)
 	}
 }
 
@@ -1408,12 +1546,12 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 		t.Fatalf("CompletedAt = %v, want %v", got.CompletedAt, run.CompletedAt)
 	}
 
-	var outboxCount int
-	if err := pool.QueryRow(ctx, `select count(*) from workflow_outbox where aggregate_id = $1`, run.ID).Scan(&outboxCount); err != nil {
-		t.Fatalf("count workflow outbox rows: %v", err)
+	var queuedStarts int
+	if err := pool.QueryRow(ctx, `select count(*) from work_queue where kind = 'start_template_run'`).Scan(&queuedStarts); err != nil {
+		t.Fatalf("count work queue rows: %v", err)
 	}
-	if outboxCount != 0 {
-		t.Fatalf("workflow outbox rows = %d, want none", outboxCount)
+	if queuedStarts != 0 {
+		t.Fatalf("work queue rows = %d, want none from standalone CreateTemplateRun", queuedStarts)
 	}
 }
 

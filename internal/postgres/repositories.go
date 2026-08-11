@@ -12,8 +12,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vishu42/tflive/internal/app"
-	"github.com/vishu42/tflive/internal/authz"
-	"github.com/vishu42/tflive/internal/dispatch"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -521,10 +519,6 @@ func (store *Store) MarkStackReady(ctx context.Context, tenantID traits.TenantID
 	return nil
 }
 
-func authorizationOutboxID(operation string, grant authz.Grant) string {
-	return operation + "/" + grant.Subject().String() + "/" + grant.Stack().String() + "/" + grant.Role().String()
-}
-
 func (store *Store) GetStack(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error) {
 	stack, err := store.getStack(ctx, tenantID, stackID)
 	if err != nil {
@@ -933,97 +927,6 @@ func createTemplateRun(ctx context.Context, exec pgxExecutor, run traits.Templat
 		return fmt.Errorf("create template run: %w", err)
 	}
 
-	return nil
-}
-
-func (store *Store) ClaimTemplateRun(ctx context.Context, availableAt, claimedUntil time.Time) (dispatch.Entry, bool, error) {
-	var entry dispatch.Entry
-	err := store.pool.QueryRow(ctx, `
-		with candidate as (
-			select id
-			from workflow_outbox
-			where event_type = 'start_template_run'
-				and processed_at is null
-				and available_at <= $1
-				and (claimed_until is null or claimed_until <= $1)
-			order by available_at, id
-			for update skip locked
-			limit 1
-		), claimed as (
-			update workflow_outbox outbox
-			set
-				claimed_until = $2,
-				attempts = attempts + 1
-			from candidate
-			where outbox.id = candidate.id
-			returning outbox.id, outbox.aggregate_id
-		)
-		select
-			claimed.id,
-			run.id,
-			run.tenant_id,
-			run.stack_template_id,
-			run.operation,
-			run.selected_ref,
-			run.workspace_name,
-			revision.repo_owner,
-			revision.repo_name,
-			revision.root_path,
-			run.config_json
-		from claimed
-		join template_runs run on run.id = claimed.aggregate_id
-		join template_revisions revision on revision.id = run.template_revision_id
-	`, availableAt, claimedUntil).Scan(
-		&entry.ID,
-		&entry.Input.RunID,
-		&entry.Input.TenantID,
-		&entry.Input.StackTemplateID,
-		&entry.Input.Operation,
-		&entry.Input.SelectedRef,
-		&entry.Input.WorkspaceName,
-		&entry.Input.RepoOwner,
-		&entry.Input.RepoName,
-		&entry.Input.RootPath,
-		&entry.Input.ConfigJSON,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return dispatch.Entry{}, false, nil
-	}
-	if err != nil {
-		return dispatch.Entry{}, false, fmt.Errorf("claim template run outbox entry: %w", err)
-	}
-	return entry, true, nil
-}
-
-func (store *Store) CompleteTemplateRun(ctx context.Context, id string) error {
-	_, err := store.pool.Exec(ctx, `
-		update workflow_outbox
-		set
-			processed_at = now(),
-			claimed_until = null,
-			last_error = ''
-		where id = $1
-			and processed_at is null
-	`, id)
-	if err != nil {
-		return fmt.Errorf("complete template run outbox entry: %w", err)
-	}
-	return nil
-}
-
-func (store *Store) RetryTemplateRun(ctx context.Context, id string, availableAt time.Time, lastError string) error {
-	_, err := store.pool.Exec(ctx, `
-		update workflow_outbox
-		set
-			available_at = $2,
-			claimed_until = null,
-			last_error = $3
-		where id = $1
-			and processed_at is null
-	`, id, availableAt, lastError)
-	if err != nil {
-		return fmt.Errorf("retry template run outbox entry: %w", err)
-	}
 	return nil
 }
 
