@@ -23,6 +23,22 @@ func (repo *txRepo) AppendAuditEvent(ctx context.Context, event traits.SecurityA
 	return appendAuditEvent(ctx, repo.tx, event)
 }
 
+func (repo *txRepo) CreateTemplateRun(ctx context.Context, run traits.TemplateRun) error {
+	return createTemplateRun(ctx, repo.tx, run)
+}
+
+func (repo *txRepo) CreateTemplateRegistration(ctx context.Context, registration traits.TemplateRegistration) error {
+	return createTemplateRegistration(ctx, repo.tx, registration)
+}
+
+func (repo *txRepo) ApproveTemplateRun(ctx context.Context, approval traits.TemplateRunApproval) error {
+	return approveTemplateRun(ctx, repo.tx, approval)
+}
+
+func (repo *txRepo) RequestTemplateRunCancellation(ctx context.Context, cancellation traits.TemplateRunCancellation) error {
+	return requestTemplateRunCancellation(ctx, repo.tx, cancellation)
+}
+
 // txEnqueuer enqueues inside the caller's transaction. This is the entire
 // reason the queue is an outbox rather than a message broker: the intent and
 // the domain write commit or roll back together, so a crash can never leave

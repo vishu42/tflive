@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/app"
-	"github.com/vishu42/tflive/internal/dispatch"
+	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -33,7 +33,6 @@ var (
 	_ app.TemplateRegistrationRepository     = (*Store)(nil)
 	_ app.TemplateRevisionRepository         = (*Store)(nil)
 	_ app.AuditRepository                    = (*Store)(nil)
-	_ dispatch.Outbox                        = (*Store)(nil)
 	_ interface {
 		RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error
 	} = (*Store)(nil)
@@ -62,7 +61,7 @@ func TestMigrateAppliesSchema(t *testing.T) {
 		"template_revisions",
 		"template_registrations",
 		"template_variables",
-		"workflow_outbox",
+		"work_queue",
 		"security_audit_log",
 	} {
 		table := table
@@ -112,6 +111,146 @@ func TestWorkflowOutboxMigrationDefinesDurablePendingQueue(t *testing.T) {
 		if !strings.Contains(sql, snippet) {
 			t.Fatalf("migration 0007 is missing durable outbox snippet %q", snippet)
 		}
+	}
+}
+
+func TestRetireWorkflowOutboxBackfillsPendingStarts(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	if _, err := pool.Exec(ctx, `
+		create table schema_migrations (
+			version text primary key,
+			applied_at timestamptz not null default now()
+		)
+	`); err != nil {
+		t.Fatalf("create schema migrations table: %v", err)
+	}
+	for _, version := range []string{
+		"0001_app_repositories",
+		"0002_template_run_logs",
+		"0003_template_registration",
+		"0004_stacks",
+		"0005_stack_templates_created_by",
+		"0006_template_sources_and_revision_pointers",
+		"0007_workflow_outbox",
+		"0008_authorization_outbox",
+		"0009_security_audit",
+		"0010_scoped_credentials",
+		"0011_terraform_command_statuses",
+		"0012_work_queue",
+		"0013_stack_status",
+	} {
+		if err := applyMigration(ctx, pool, version, "migrations/"+version+".sql"); err != nil {
+			t.Fatalf("apply migration %s: %v", version, err)
+		}
+	}
+
+	if _, err := pool.Exec(ctx, `
+		insert into template_revisions (
+			id, tenant_id, repo_owner, repo_name, source_ref,
+			resolved_commit_sha, root_path, name, status
+		) values
+			('revision-pending', 'tenant-1', 'org', 'repo', 'main', 'sha-pending', 'modules/demo', 'Demo', 'active'),
+			('revision-processed', 'tenant-1', 'other-org', 'other-repo', 'release', 'sha-processed', 'modules/other', 'Other', 'active')
+	`); err != nil {
+		t.Fatalf("seed template revisions: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		insert into template_runs (
+			id, tenant_id, stack_template_id, template_revision_id,
+			operation, selected_ref, workspace_name, config_json, status, trigger_actor
+		) values
+			('run-pending', 'tenant-1', 'stack-template-pending', 'revision-pending', 'plan', 'main', 'demo-workspace', '{"region":"us-east-1"}', 'queued', 'user-1'),
+			('run-processed', 'tenant-1', 'stack-template-processed', 'revision-processed', 'apply', 'release', 'other-workspace', '{"region":"us-west-2"}', 'queued', 'user-1')
+	`); err != nil {
+		t.Fatalf("seed template runs: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		insert into workflow_outbox (id, event_type, aggregate_id, processed_at)
+		values
+			('template-run/tenant-1/run-pending', 'start_template_run', 'run-pending', null),
+			('template-run/tenant-1/run-processed', 'start_template_run', 'run-processed', now())
+	`); err != nil {
+		t.Fatalf("seed workflow outbox: %v", err)
+	}
+
+	if err := applyMigration(ctx, pool, "0014_retire_workflow_outbox", "migrations/0014_retire_workflow_outbox.sql"); err != nil {
+		t.Fatalf("apply migration 0014_retire_workflow_outbox: %v", err)
+	}
+
+	var (
+		resourceKey string
+		actor       string
+		tenantID    string
+		payload     []byte
+	)
+	if err := pool.QueryRow(ctx, `
+		select resource_key, actor_subject, tenant_id, payload
+		from work_queue
+		where kind = 'start_template_run'
+	`).Scan(&resourceKey, &actor, &tenantID, &payload); err != nil {
+		t.Fatalf("read backfilled work queue row: %v", err)
+	}
+
+	var input traits.TemplateRunWorkflowInput
+	if err := json.Unmarshal(payload, &input); err != nil {
+		t.Fatalf("decode work queue payload: %v", err)
+	}
+	if resourceKey != "run:tenant-1/run-pending" {
+		t.Fatalf("resource key = %q, want %q", resourceKey, "run:tenant-1/run-pending")
+	}
+	if actor != "user-1" {
+		t.Fatalf("actor subject = %q, want user-1", actor)
+	}
+	if tenantID != "tenant-1" {
+		t.Fatalf("tenant ID = %q, want tenant-1", tenantID)
+	}
+	if input.RunID != "run-pending" {
+		t.Fatalf("RunID = %q, want run-pending", input.RunID)
+	}
+	if input.TenantID != "tenant-1" {
+		t.Fatalf("TenantID = %q, want tenant-1", input.TenantID)
+	}
+	if input.StackTemplateID != "stack-template-pending" {
+		t.Fatalf("StackTemplateID = %q, want stack-template-pending", input.StackTemplateID)
+	}
+	if input.Operation != traits.OperationPlan {
+		t.Fatalf("Operation = %q, want %q", input.Operation, traits.OperationPlan)
+	}
+	if input.SelectedRef != "main" {
+		t.Fatalf("SelectedRef = %q, want main", input.SelectedRef)
+	}
+	if input.WorkspaceName != "demo-workspace" {
+		t.Fatalf("WorkspaceName = %q, want demo-workspace", input.WorkspaceName)
+	}
+	if input.RepoOwner != "org" {
+		t.Fatalf("RepoOwner = %q, want org", input.RepoOwner)
+	}
+	if input.RepoName != "repo" {
+		t.Fatalf("RepoName = %q, want repo", input.RepoName)
+	}
+	if input.RootPath != "modules/demo" {
+		t.Fatalf("RootPath = %q, want modules/demo", input.RootPath)
+	}
+	if !sameJSON(t, input.ConfigJSON, []byte(`{"region":"us-east-1"}`)) {
+		t.Fatalf("ConfigJSON = %s, want region config", input.ConfigJSON)
+	}
+
+	var queuedStarts int
+	if err := pool.QueryRow(ctx, `select count(*) from work_queue where kind = 'start_template_run'`).Scan(&queuedStarts); err != nil {
+		t.Fatalf("count backfilled work queue rows: %v", err)
+	}
+	if queuedStarts != 1 {
+		t.Fatalf("backfilled work queue rows = %d, want 1", queuedStarts)
+	}
+
+	var workflowOutbox *string
+	if err := pool.QueryRow(ctx, `select to_regclass('workflow_outbox')::text`).Scan(&workflowOutbox); err != nil {
+		t.Fatalf("check workflow outbox relation: %v", err)
+	}
+	if workflowOutbox != nil {
+		t.Fatalf("workflow_outbox still exists as %q", *workflowOutbox)
 	}
 }
 
@@ -1407,55 +1546,55 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 		t.Fatalf("CompletedAt = %v, want %v", got.CompletedAt, run.CompletedAt)
 	}
 
-	var outboxID string
-	var eventType string
-	var aggregateID traits.TemplateRunID
-	err = pool.QueryRow(ctx, `
-		select id, event_type, aggregate_id
-		from workflow_outbox
-		where aggregate_id = $1
-	`, run.ID).Scan(&outboxID, &eventType, &aggregateID)
+	var queuedStarts int
+	if err := pool.QueryRow(ctx, `select count(*) from work_queue where kind = 'start_template_run'`).Scan(&queuedStarts); err != nil {
+		t.Fatalf("count work queue rows: %v", err)
+	}
+	if queuedStarts != 0 {
+		t.Fatalf("work queue rows = %d, want none from standalone CreateTemplateRun", queuedStarts)
+	}
+}
+
+func TestUnitOfWorkTemplateWritesRollbackTogether(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	_, err := pool.Exec(ctx, `insert into template_revisions (id, tenant_id, repo_owner, repo_name, source_ref, resolved_commit_sha, root_path, name, status) values ('revision_123', 'tenant_123', 'acme', 'infra', 'main', 'sha_123', 'modules/vpc', 'VPC', 'active')`)
 	if err != nil {
-		t.Fatalf("read workflow outbox: %v", err)
+		t.Fatalf("seed template revision: %v", err)
 	}
-	if outboxID != "template-run/tenant_123/run_123" {
-		t.Fatalf("outbox ID = %q, want template-run/tenant_123/run_123", outboxID)
-	}
-	if eventType != "start_template_run" {
-		t.Fatalf("event type = %q, want start_template_run", eventType)
-	}
-	if aggregateID != run.ID {
-		t.Fatalf("aggregate ID = %q, want %q", aggregateID, run.ID)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{ID: "run_approval", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: traits.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: traits.TemplateRunWaitingApproval, TriggerActor: "user_123"})
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{ID: "run_cancel", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: traits.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: traits.TemplateRunQueued, TriggerActor: "user_123"})
+	sentinel := errors.New("rollback")
+
+	err = store.InTx(ctx, func(repo app.TxRepo, _ queue.Enqueuer) error {
+		if err := repo.CreateTemplateRegistration(ctx, traits.TemplateRegistration{ID: "registration_123", TenantID: "tenant_123", RepoOwner: "acme", RepoName: "infra", SourceRef: "main", RootPath: "modules/vpc", Status: traits.TemplateRegistrationPending, RequestedBy: "user_123", RequestedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil {
+			return err
+		}
+		if err := repo.CreateTemplateRun(ctx, traits.TemplateRun{ID: "run_created", TenantID: "tenant_123", StackTemplateID: "stack_template_123", TemplateRevisionID: "revision_123", Operation: traits.OperationPlan, SelectedRef: "main", WorkspaceName: "workspace", ConfigJSON: json.RawMessage(`{}`), Status: traits.TemplateRunQueued, TriggerActor: "user_123"}); err != nil {
+			return err
+		}
+		if err := repo.ApproveTemplateRun(ctx, traits.TemplateRunApproval{TenantID: "tenant_123", RunID: "run_approval", ApprovedBy: "user_123", ApprovedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil {
+			return err
+		}
+		if err := repo.RequestTemplateRunCancellation(ctx, traits.TemplateRunCancellation{TenantID: "tenant_123", RunID: "run_cancel", RequestedBy: "user_123", Reason: "superseded", RequestedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil {
+			return err
+		}
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("InTx error = %v, want rollback sentinel", err)
 	}
 
-	claimAt := time.Now().Add(time.Minute)
-	entry, found, err := store.ClaimTemplateRun(ctx, claimAt, claimAt.Add(30*time.Second))
-	if err != nil {
-		t.Fatalf("ClaimTemplateRun returned error: %v", err)
+	var registrations, createdRuns, approvals int
+	var approvalStatus, cancellationStatus traits.TemplateRunStatus
+	if err := pool.QueryRow(ctx, `select (select count(*) from template_registrations where id = 'registration_123'), (select count(*) from template_runs where id = 'run_created'), (select count(*) from template_run_approvals where run_id = 'run_approval'), (select status from template_runs where id = 'run_approval'), (select status from template_runs where id = 'run_cancel')`).Scan(&registrations, &createdRuns, &approvals, &approvalStatus, &cancellationStatus); err != nil {
+		t.Fatalf("read transaction state: %v", err)
 	}
-	if !found {
-		t.Fatal("ClaimTemplateRun found = false, want true")
-	}
-	if entry.ID != outboxID || entry.Input.RunID != run.ID || entry.Input.RepoOwner != "acme" || entry.Input.RootPath != "modules/vpc" {
-		t.Fatalf("claimed entry = %#v", entry)
-	}
-
-	retryAt := claimAt.Add(time.Minute)
-	if err := store.RetryTemplateRun(ctx, entry.ID, retryAt, "temporal unavailable"); err != nil {
-		t.Fatalf("RetryTemplateRun returned error: %v", err)
-	}
-	if _, found, err := store.ClaimTemplateRun(ctx, retryAt.Add(-time.Second), retryAt); err != nil || found {
-		t.Fatalf("claim before retry: found = %v, error = %v", found, err)
-	}
-	entry, found, err = store.ClaimTemplateRun(ctx, retryAt, retryAt.Add(30*time.Second))
-	if err != nil || !found {
-		t.Fatalf("claim at retry: found = %v, error = %v", found, err)
-	}
-	if err := store.CompleteTemplateRun(ctx, entry.ID); err != nil {
-		t.Fatalf("CompleteTemplateRun returned error: %v", err)
-	}
-	if _, found, err := store.ClaimTemplateRun(ctx, retryAt.Add(time.Minute), retryAt.Add(2*time.Minute)); err != nil || found {
-		t.Fatalf("claim completed entry: found = %v, error = %v", found, err)
+	if registrations != 0 || createdRuns != 0 || approvals != 0 || approvalStatus != traits.TemplateRunWaitingApproval || cancellationStatus != traits.TemplateRunQueued {
+		t.Fatalf("registrations=%d createdRuns=%d approvals=%d approvalStatus=%q cancellationStatus=%q", registrations, createdRuns, approvals, approvalStatus, cancellationStatus)
 	}
 }
 

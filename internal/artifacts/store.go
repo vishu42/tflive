@@ -54,6 +54,7 @@ func (store LogStore) PutTemplateRunLog(ctx context.Context, tenantID traits.Ten
 	if err != nil {
 		return fmt.Errorf("read template run log: %w", err)
 	}
+	// Object persistence is intentionally first: the deterministic key and metadata upsert make retries idempotent, while Temporal activity retry converges the two stores without queueing metadata.
 	if err := store.store.PutObject(ctx, key, logContentType, bytes.NewReader(content)); err != nil {
 		return fmt.Errorf("put template run log: %w", err)
 	}

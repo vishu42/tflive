@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/activities"
+	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/artifacts"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
-	"github.com/vishu42/tflive/internal/dispatch"
 	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/temporal"
 	"github.com/vishu42/tflive/internal/traits"
@@ -117,11 +117,11 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if !deps.worker.ran {
 		t.Fatal("worker was not run")
 	}
-	if !deps.outboxDispatcher.ran {
-		t.Fatal("workflow outbox dispatcher was not run")
+	if !deps.queueController.ran {
+		t.Fatal("queue controller was not run")
 	}
-	if !deps.outboxDispatcher.stopped {
-		t.Fatal("workflow outbox dispatcher was not stopped with the worker")
+	if !deps.queueController.stopped {
+		t.Fatal("queue controller was not stopped with the worker")
 	}
 	if !deps.temporalClient.closed {
 		t.Fatal("temporal client was not closed")
@@ -156,6 +156,32 @@ func TestRunUsesDefaultTemporalTaskQueue(t *testing.T) {
 	}
 	if deps.workerTaskQueue != config.DefaultTemporalTaskQueue {
 		t.Fatalf("worker task queue = %q, want %q", deps.workerTaskQueue, config.DefaultTemporalTaskQueue)
+	}
+}
+
+func TestNewQueueRegistryRegistersAllHandlers(t *testing.T) {
+	registry, err := newQueueRegistry(&recordingWorkerStore{}, &recordingWorkerAuthorizer{}, recordingWorkflowDispatcher{})
+	if err != nil {
+		t.Fatalf("newQueueRegistry returned error: %v", err)
+	}
+
+	want := map[queue.Kind]bool{
+		app.KindStartTemplateRun:      true,
+		app.KindStartTemplateSync:     true,
+		app.KindSignalRunApproval:     true,
+		app.KindSignalRunCancellation: true,
+		app.KindGrantStackOwner:       true,
+		app.KindMarkStackReady:        true,
+		authz.StackGrantSpec.Kind:     true,
+	}
+	got := registry.Kinds()
+	if len(got) != len(want) {
+		t.Fatalf("registered handler count = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for _, kind := range got {
+		if !want[kind] {
+			t.Fatalf("unexpected registered handler %q", kind)
+		}
 	}
 }
 
@@ -289,20 +315,19 @@ type recordingWorkerDependencies struct {
 	logStore             recordingWorkerLogStore
 	logMetadataRecorder  artifacts.LogMetadataRecorder
 	dialErr              error
-	outboxDispatcher     *recordingOutboxDispatcher
-	workflowStarter      *recordingWorkflowStarter
+	dispatcher           recordingWorkflowDispatcher
+	queueController      *recordingQueueController
 }
 
 func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 	t.Helper()
 
 	deps := &recordingWorkerDependencies{
-		temporalClient:   &recordingWorkerTemporalClient{},
-		worker:           &recordingTemporalWorker{},
-		pool:             &recordingWorkerPostgresPool{},
-		store:            &recordingWorkerStore{},
-		outboxDispatcher: &recordingOutboxDispatcher{},
-		workflowStarter:  &recordingWorkflowStarter{},
+		temporalClient:  &recordingWorkerTemporalClient{},
+		worker:          &recordingTemporalWorker{},
+		pool:            &recordingWorkerPostgresPool{},
+		store:           &recordingWorkerStore{},
+		queueController: &recordingQueueController{},
 	}
 	deps.workerDependencies = workerDependencies{
 		newPostgresPool: func(_ context.Context, databaseURL string) (postgresPool, error) {
@@ -337,27 +362,24 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			deps.workerOptions = options
 			return deps.worker
 		},
-		newWorkflowStarter: func(temporalClient client.Client, taskQueue string) dispatch.WorkflowStarter {
+		newDispatcher: func(temporalClient client.Client, taskQueue string) app.WorkflowDispatcher {
 			if temporalClient != deps.temporalClient {
-				t.Fatalf("newWorkflowStarter temporalClient = %p, want %p", temporalClient, deps.temporalClient)
+				t.Fatalf("newDispatcher temporalClient = %p, want %p", temporalClient, deps.temporalClient)
 			}
 			if taskQueue != "terraform-runs-dev" && taskQueue != config.DefaultTemporalTaskQueue {
-				t.Fatalf("newWorkflowStarter task queue = %q", taskQueue)
+				t.Fatalf("newDispatcher task queue = %q", taskQueue)
 			}
-			return deps.workflowStarter
-		},
-		newOutboxDispatcher: func(outbox dispatch.Outbox, starter dispatch.WorkflowStarter) outboxDispatcher {
-			if outbox != deps.store {
-				t.Fatalf("newOutboxDispatcher outbox = %p, want store %p", outbox, deps.store)
-			}
-			if starter != deps.workflowStarter {
-				t.Fatalf("newOutboxDispatcher starter = %p, want %p", starter, deps.workflowStarter)
-			}
-			return deps.outboxDispatcher
+			return deps.dispatcher
 		},
 		newAuthorizationAdapter: func(config.OpenFGAConfig) (workerAuthorizer, error) { return &recordingWorkerAuthorizer{}, nil },
-		newQueueController: func(workerStore, workerAuthorizer) (outboxDispatcher, error) {
-			return &recordingOutboxDispatcher{}, nil
+		newQueueController: func(store workerStore, _ workerAuthorizer, dispatcher app.WorkflowDispatcher) (queueController, error) {
+			if store != workerStore(deps.store) {
+				t.Fatalf("newQueueController store = %p, want %p", store, deps.store)
+			}
+			if dispatcher != deps.dispatcher {
+				t.Fatalf("newQueueController dispatcher = %p, want %p", dispatcher, deps.dispatcher)
+			}
+			return deps.queueController, nil
 		},
 		registerWorkflow: func(worker temporalWorker) {
 			if worker != deps.worker {
@@ -371,7 +393,7 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			if worker != deps.worker {
 				t.Fatalf("registerActivities worker = %p, want %p", worker, deps.worker)
 			}
-			if recorder != deps.store {
+			if recorder != workerStore(deps.store) {
 				t.Fatalf("activity recorder = %p, want store %p", recorder, deps.store)
 			}
 			deps.activityStoreIsWired = true
@@ -457,27 +479,17 @@ func (store *recordingWorkerStore) RecordTemplateRunLog(context.Context, traits.
 	return nil
 }
 
-func (store *recordingWorkerStore) ClaimTemplateRun(context.Context, time.Time, time.Time) (dispatch.Entry, bool, error) {
-	return dispatch.Entry{}, false, nil
-}
-
-func (store *recordingWorkerStore) CompleteTemplateRun(context.Context, string) error {
-	return nil
-}
-
-func (store *recordingWorkerStore) RetryTemplateRun(context.Context, string, time.Time, string) error {
-	return nil
-}
-
 func (store *recordingWorkerStore) Enqueue(context.Context, ...queue.Request) error {
+	return nil
+}
+
+func (store *recordingWorkerStore) ReconcileTemplateRunCancellation(context.Context, traits.TenantID, traits.TemplateRunID, string) error {
 	return nil
 }
 
 func (store *recordingWorkerStore) MarkStackReady(context.Context, traits.TenantID, traits.StackID) error {
 	return nil
 }
-
-type recordingWorkflowStarter struct{}
 
 type recordingWorkerAuthorizer struct{}
 
@@ -500,16 +512,30 @@ func (*recordingWorkerAuthorizer) DeleteRelationships(context.Context, authz.Mut
 	return nil
 }
 
-func (*recordingWorkflowStarter) StartTemplateRun(context.Context, traits.TemplateRunWorkflowInput) error {
+type recordingWorkflowDispatcher struct{}
+
+func (recordingWorkflowDispatcher) StartTemplateRun(context.Context, traits.TemplateRunWorkflowInput) error {
 	return nil
 }
 
-type recordingOutboxDispatcher struct {
+func (recordingWorkflowDispatcher) StartTemplateSync(context.Context, traits.TemplateSyncWorkflowInput) error {
+	return nil
+}
+
+func (recordingWorkflowDispatcher) ApproveTemplateRun(context.Context, traits.TenantID, traits.TemplateRunID, traits.ApprovalSignal) error {
+	return nil
+}
+
+func (recordingWorkflowDispatcher) CancelTemplateRun(context.Context, traits.TenantID, traits.TemplateRunID, traits.CancelSignal) error {
+	return nil
+}
+
+type recordingQueueController struct {
 	ran     bool
 	stopped bool
 }
 
-func (dispatcher *recordingOutboxDispatcher) Run(ctx context.Context) {
+func (dispatcher *recordingQueueController) Run(ctx context.Context) {
 	dispatcher.ran = true
 	<-ctx.Done()
 	dispatcher.stopped = true

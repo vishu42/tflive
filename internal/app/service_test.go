@@ -12,7 +12,6 @@ import (
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/traits"
-	"go.temporal.io/api/serviceerror"
 )
 
 const keycloakSubject = "6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91"
@@ -581,14 +580,14 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 		},
 	}
 	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
-	workflows := &recordingWorkflowDispatcher{}
+	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
 		Authorizer:               &permissionAuthorizer{allowed: true},
+		Work:                     work,
 		StackTemplates:           stackTemplates,
 		TemplateRuns:             runs,
 		TemplateRevisionMetadata: templates,
-		Workflows:                workflows,
 		RunIDs:                   fixedTemplateRunIDGenerator{runID: traits.TemplateRunID("run_123")},
 		Clock:                    fixedClock{now: now},
 	})
@@ -649,8 +648,8 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 		t.Fatalf("created run ID = %q, want %q", runs.created.ID, run.ID)
 	}
 
-	if workflows.startTemplateRunCalls != 0 {
-		t.Fatalf("workflow dispatch calls = %d, want 0", workflows.startTemplateRunCalls)
+	if len(work.requests) != 1 || work.requests[0].Kind != KindStartTemplateRun {
+		t.Fatalf("queued requests = %#v, want one start_template_run request", work.requests)
 	}
 
 	if templates.gotGetTemplateTenantID != traits.TenantID("tenant_123") {
@@ -829,7 +828,6 @@ func TestStartTemplateRunRejectsInvalidOperation(t *testing.T) {
 	service := NewService(Service{
 		StackTemplates: &recordingStackTemplateRepository{},
 		TemplateRuns:   &recordingTemplateRunRepository{},
-		Workflows:      &recordingWorkflowDispatcher{},
 		RunIDs:         fixedTemplateRunIDGenerator{runID: traits.TemplateRunID("run_123")},
 		Clock:          fixedClock{now: time.Now()},
 	})
@@ -856,13 +854,10 @@ func TestStartTemplateRunRejectsInactiveStackTemplate(t *testing.T) {
 		},
 	}
 	runs := &recordingTemplateRunRepository{}
-	workflows := &recordingWorkflowDispatcher{}
-
 	service := NewService(Service{
 		Authorizer:     &permissionAuthorizer{allowed: true},
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
-		Workflows:      workflows,
 		RunIDs:         fixedTemplateRunIDGenerator{runID: traits.TemplateRunID("run_123")},
 		Clock:          fixedClock{now: time.Now()},
 	})
@@ -880,9 +875,6 @@ func TestStartTemplateRunRejectsInactiveStackTemplate(t *testing.T) {
 		t.Fatalf("created run ID = %q, want no persisted run", runs.created.ID)
 	}
 
-	if workflows.input.RunID != "" {
-		t.Fatalf("workflow run ID = %q, want no workflow dispatch", workflows.input.RunID)
-	}
 }
 
 func TestStartTemplateRunRejectsMissingDesiredRevision(t *testing.T) {
@@ -897,13 +889,10 @@ func TestStartTemplateRunRejectsMissingDesiredRevision(t *testing.T) {
 		},
 	}
 	runs := &recordingTemplateRunRepository{}
-	workflows := &recordingWorkflowDispatcher{}
-
 	service := NewService(Service{
 		Authorizer:     &permissionAuthorizer{allowed: true},
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
-		Workflows:      workflows,
 		TemplateRevisionMetadata: &recordingTemplateRepository{
 			template: traits.TemplateRevision{
 				ID:     traits.TemplateRevisionID("template_123"),
@@ -925,9 +914,6 @@ func TestStartTemplateRunRejectsMissingDesiredRevision(t *testing.T) {
 	if runs.created.ID != "" {
 		t.Fatalf("created run ID = %q, want no persisted run", runs.created.ID)
 	}
-	if workflows.input.RunID != "" {
-		t.Fatalf("workflow run ID = %q, want no workflow dispatch", workflows.input.RunID)
-	}
 }
 
 func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
@@ -945,6 +931,7 @@ func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
 	runs := &recordingTemplateRunRepository{}
 	service := NewService(Service{
 		Authorizer:     &permissionAuthorizer{allowed: true},
+		Work:           &recordingUnitOfWork{templateRuns: runs},
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
 		TemplateRevisionMetadata: &recordingTemplateRepository{
@@ -957,8 +944,7 @@ func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
 				Status:    traits.TemplateRevisionActive,
 			},
 		},
-		Workflows: &recordingWorkflowDispatcher{},
-		Clock:     fixedClock{now: time.Now()},
+		Clock: fixedClock{now: time.Now()},
 	})
 
 	run, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
@@ -984,11 +970,11 @@ func TestRegisterTemplateCreatesPendingRegistrationAndDispatchesWorkflow(t *test
 	ctx := authenticatedContext()
 	now := time.Date(2026, 7, 6, 10, 30, 0, 0, time.UTC)
 	registrations := &recordingTemplateRegistrationRepository{}
-	workflows := &recordingWorkflowDispatcher{}
+	work := &recordingUnitOfWork{templateRegistrations: registrations}
 
 	service := NewService(Service{
+		Work:                  work,
 		TemplateRegistrations: registrations,
-		Workflows:             workflows,
 		RegistrationIDs:       fixedTemplateRegistrationIDGenerator{id: traits.TemplateRegistrationID("template_registration_123")},
 		Clock:                 fixedClock{now: now},
 	})
@@ -1019,11 +1005,8 @@ func TestRegisterTemplateCreatesPendingRegistrationAndDispatchesWorkflow(t *test
 	if registrations.created != registration {
 		t.Fatalf("created registration = %#v, want %#v", registrations.created, registration)
 	}
-	if workflows.syncInput.RegistrationID != registration.ID {
-		t.Fatalf("workflow registration ID = %q, want %q", workflows.syncInput.RegistrationID, registration.ID)
-	}
-	if workflows.syncInput.SourceRef != "v0.0.1" {
-		t.Fatalf("workflow source ref = %q, want v0.0.1", workflows.syncInput.SourceRef)
+	if len(work.requests) != 1 || work.requests[0].Kind != KindStartTemplateSync {
+		t.Fatalf("queued requests = %#v, want one start_template_sync request", work.requests)
 	}
 }
 
@@ -1032,7 +1015,6 @@ func TestRegisterTemplateRejectsMissingSourceRef(t *testing.T) {
 
 	service := NewService(Service{
 		TemplateRegistrations: &recordingTemplateRegistrationRepository{},
-		Workflows:             &recordingWorkflowDispatcher{},
 	})
 
 	_, err := service.RegisterTemplate(authenticatedContext(), RegisterTemplateCommand{
@@ -1051,10 +1033,10 @@ func TestRegisterTemplateDoesNotDispatchWhenPersistenceFails(t *testing.T) {
 
 	persistErr := errors.New("database unavailable")
 	registrations := &recordingTemplateRegistrationRepository{createErr: persistErr}
-	workflows := &recordingWorkflowDispatcher{}
+	work := &recordingUnitOfWork{templateRegistrations: registrations}
 	service := NewService(Service{
+		Work:                  work,
 		TemplateRegistrations: registrations,
-		Workflows:             workflows,
 		RegistrationIDs:       fixedTemplateRegistrationIDGenerator{id: traits.TemplateRegistrationID("template_registration_123")},
 	})
 
@@ -1068,8 +1050,8 @@ func TestRegisterTemplateDoesNotDispatchWhenPersistenceFails(t *testing.T) {
 	if !errors.Is(err, persistErr) {
 		t.Fatalf("error = %v, want wrapped persistence error", err)
 	}
-	if workflows.syncInput.RegistrationID != "" {
-		t.Fatalf("workflow registration ID = %q, want no dispatch", workflows.syncInput.RegistrationID)
+	if len(work.requests) != 0 {
+		t.Fatalf("queued requests = %#v, want none", work.requests)
 	}
 }
 
@@ -1084,13 +1066,13 @@ func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 		StackTemplateID: "stack_template_123",
 		TriggerActor:    traits.UserID("different-user"),
 	}}
-	workflows := &recordingWorkflowDispatcher{}
+	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
 		Authorizer:     &permissionAuthorizer{allowed: true},
+		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Workflows:      workflows,
 		Clock:          fixedClock{now: now},
 	})
 
@@ -1118,12 +1100,8 @@ func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 		t.Fatalf("approval time = %v, want %v", runs.approval.ApprovedAt, now)
 	}
 
-	if workflows.approvalRunID != traits.TemplateRunID("run_123") {
-		t.Fatalf("workflow approval run ID = %q, want run_123", workflows.approvalRunID)
-	}
-
-	if workflows.approvalSignal.ApprovedBy != traits.UserID(keycloakSubject) {
-		t.Fatalf("workflow approval actor = %q, want %q", workflows.approvalSignal.ApprovedBy, keycloakSubject)
+	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunApproval {
+		t.Fatalf("queued requests = %#v, want one signal_run_approval request", work.requests)
 	}
 }
 
@@ -1131,13 +1109,13 @@ func TestApproveRunDoesNotSignalWhenRunIsNotApprovable(t *testing.T) {
 	t.Parallel()
 
 	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}, approvalErr: ErrRunNotApprovable}
-	workflows := &recordingWorkflowDispatcher{}
+	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
 		Authorizer:     &permissionAuthorizer{allowed: true},
+		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Workflows:      workflows,
 		Clock:          fixedClock{now: time.Now()},
 	})
 
@@ -1149,8 +1127,8 @@ func TestApproveRunDoesNotSignalWhenRunIsNotApprovable(t *testing.T) {
 		t.Fatalf("error = %v, want ErrRunNotApprovable", err)
 	}
 
-	if workflows.approvalRunID != "" {
-		t.Fatalf("workflow approval run ID = %q, want no workflow signal", workflows.approvalRunID)
+	if len(work.requests) != 0 {
+		t.Fatalf("queued requests = %#v, want none", work.requests)
 	}
 }
 
@@ -1164,14 +1142,14 @@ func TestApproveRunAllowsSelfApproval(t *testing.T) {
 		StackTemplateID: "stack_template_123",
 		TriggerActor:    traits.UserID(keycloakSubject),
 	}}
-	workflows := &recordingWorkflowDispatcher{}
+	work := &recordingUnitOfWork{templateRuns: runs}
 	audit := &recordingAuditRepository{}
 
 	service := NewService(Service{
 		Authorizer:     &permissionAuthorizer{allowed: true},
+		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Workflows:      workflows,
 		Audit:          audit,
 	})
 
@@ -1187,8 +1165,8 @@ func TestApproveRunAllowsSelfApproval(t *testing.T) {
 		t.Fatalf("approval was not recorded, want approval")
 	}
 
-	if workflows.approvalRunID == "" {
-		t.Fatalf("workflow approval run ID = %q, want signal", workflows.approvalRunID)
+	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunApproval {
+		t.Fatalf("queued requests = %#v, want one approval signal", work.requests)
 	}
 }
 
@@ -1204,14 +1182,14 @@ func TestApproveRunSelfApprovalWorksForPlatformAdmins(t *testing.T) {
 		StackTemplateID: "stack_template_123",
 		TriggerActor:    traits.UserID(keycloakSubject),
 	}}
-	workflows := &recordingWorkflowDispatcher{}
+	work := &recordingUnitOfWork{templateRuns: runs}
 	audit := &recordingAuditRepository{}
 
 	service := NewService(Service{
 		Authorizer:     &permissionAuthorizer{allowed: true},
+		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Workflows:      workflows,
 		Audit:          audit,
 	})
 
@@ -1223,8 +1201,8 @@ func TestApproveRunSelfApprovalWorksForPlatformAdmins(t *testing.T) {
 		t.Fatalf("error = %v, want nil", err)
 	}
 
-	if workflows.approvalRunID == "" {
-		t.Fatalf("workflow approval run ID = %q, want signal", workflows.approvalRunID)
+	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunApproval {
+		t.Fatalf("queued requests = %#v, want one approval signal", work.requests)
 	}
 }
 
@@ -1239,14 +1217,14 @@ func TestApproveRunAuditsSuccessfulApproval(t *testing.T) {
 		StackTemplateID: "stack_template_123",
 		TriggerActor:    traits.UserID("different-user"),
 	}}
-	workflows := &recordingWorkflowDispatcher{}
+	work := &recordingUnitOfWork{templateRuns: runs}
 	audit := &recordingAuditRepository{}
 
 	service := NewService(Service{
 		Authorizer:     &permissionAuthorizer{allowed: true},
+		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Workflows:      workflows,
 		Clock:          fixedClock{now: now},
 		Audit:          audit,
 	})
@@ -1259,30 +1237,30 @@ func TestApproveRunAuditsSuccessfulApproval(t *testing.T) {
 		t.Fatalf("ApproveRun returned error: %v", err)
 	}
 
-	if len(audit.events) != 1 {
-		t.Fatalf("audit events = %d, want 1", len(audit.events))
+	if len(work.audits) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(work.audits))
 	}
-	if audit.events[0].Action != traits.AuditActionApprovalGranted {
-		t.Fatalf("audit action = %q, want %q", audit.events[0].Action, traits.AuditActionApprovalGranted)
+	if work.audits[0].Action != traits.AuditActionApprovalGranted {
+		t.Fatalf("audit action = %q, want %q", work.audits[0].Action, traits.AuditActionApprovalGranted)
 	}
-	if audit.events[0].Outcome != traits.AuditOutcomeSuccess {
-		t.Fatalf("audit outcome = %q, want %q", audit.events[0].Outcome, traits.AuditOutcomeSuccess)
+	if work.audits[0].Outcome != traits.AuditOutcomeSuccess {
+		t.Fatalf("audit outcome = %q, want %q", work.audits[0].Outcome, traits.AuditOutcomeSuccess)
 	}
 }
 
-func TestCancelRunRecordsCancellationAndSignalsWorkflow(t *testing.T) {
+func TestCancelRunRecordsCancellationAndQueuesSignal(t *testing.T) {
 	t.Parallel()
 
 	ctx := authenticatedContext()
 	now := time.Date(2026, 7, 2, 10, 45, 0, 0, time.UTC)
 	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
-	workflows := &recordingWorkflowDispatcher{}
+	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
 		Authorizer:     &permissionAuthorizer{allowed: true},
+		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", StackID: "stack_123"}},
-		Workflows:      workflows,
 		Clock:          fixedClock{now: now},
 	})
 
@@ -1311,59 +1289,29 @@ func TestCancelRunRecordsCancellationAndSignalsWorkflow(t *testing.T) {
 		t.Fatalf("cancellation time = %v, want %v", runs.cancellation.RequestedAt, now)
 	}
 
-	if workflows.cancelRunID != traits.TemplateRunID("run_123") {
-		t.Fatalf("workflow cancel run ID = %q, want run_123", workflows.cancelRunID)
-	}
-
-	if workflows.cancelSignal.RequestedBy != traits.UserID(keycloakSubject) {
-		t.Fatalf("workflow cancel actor = %q, want %q", workflows.cancelSignal.RequestedBy, keycloakSubject)
+	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunCancellation {
+		t.Fatalf("queued requests = %#v, want one cancellation signal", work.requests)
 	}
 }
 
-func TestCancelRunReconcilesWhenWorkflowIsClosed(t *testing.T) {
+func TestCancelRunDoesNotReconcileWorkflowInline(t *testing.T) {
 	t.Parallel()
 
 	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
-	workflows := &recordingWorkflowDispatcher{cancelErr: serviceerror.NewNotFound("workflow not found")}
+	work := &recordingUnitOfWork{templateRuns: runs}
 	service := NewService(Service{
 		Authorizer:     &permissionAuthorizer{allowed: true},
+		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Workflows:      workflows,
 		Clock:          fixedClock{now: time.Now()},
 	})
 
 	if err := service.CancelRun(authenticatedContext(), CancelRunCommand{TenantID: "tenant_123", RunID: "run_123"}); err != nil {
 		t.Fatalf("CancelRun returned error: %v", err)
 	}
-	if runs.reconciledRunID != "run_123" {
-		t.Fatalf("reconciled run ID = %q, want run_123", runs.reconciledRunID)
-	}
-	if runs.reconciledSummary != "workflow closed before cancellation was processed" {
-		t.Fatalf("reconciled summary = %q", runs.reconciledSummary)
-	}
-}
-
-func TestCancelRunReturnsUnknownWorkflowSignalError(t *testing.T) {
-	t.Parallel()
-
-	signalErr := errors.New("temporal unavailable")
-	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
-	workflows := &recordingWorkflowDispatcher{cancelErr: signalErr}
-	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
-		TemplateRuns:   runs,
-		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Workflows:      workflows,
-		Clock:          fixedClock{now: time.Now()},
-	})
-
-	err := service.CancelRun(authenticatedContext(), CancelRunCommand{TenantID: "tenant_123", RunID: "run_123"})
-	if !errors.Is(err, signalErr) {
-		t.Fatalf("error = %v, want signal error", err)
-	}
 	if runs.reconciledRunID != "" {
-		t.Fatalf("reconciled run ID = %q, want no reconciliation", runs.reconciledRunID)
+		t.Fatalf("reconciled run ID = %q, want no inline reconciliation", runs.reconciledRunID)
 	}
 }
 
@@ -1371,13 +1319,13 @@ func TestCancelRunDoesNotSignalWhenRunIsNotCancelable(t *testing.T) {
 	t.Parallel()
 
 	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}, cancellationErr: ErrRunNotCancelable}
-	workflows := &recordingWorkflowDispatcher{}
+	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
 		Authorizer:     &permissionAuthorizer{allowed: true},
+		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Workflows:      workflows,
 		Clock:          fixedClock{now: time.Now()},
 	})
 
@@ -1389,8 +1337,8 @@ func TestCancelRunDoesNotSignalWhenRunIsNotCancelable(t *testing.T) {
 		t.Fatalf("error = %v, want ErrRunNotCancelable", err)
 	}
 
-	if workflows.cancelRunID != "" {
-		t.Fatalf("workflow cancel run ID = %q, want no workflow signal", workflows.cancelRunID)
+	if len(work.requests) != 0 {
+		t.Fatalf("queued requests = %#v, want none", work.requests)
 	}
 }
 
@@ -1811,14 +1759,13 @@ func TestCreateStackAuditsOwnerGrant(t *testing.T) {
 
 	ctx := authenticatedContext()
 	now := time.Date(2026, 7, 6, 13, 30, 0, 0, time.UTC)
-	audit := &recordingAuditRepository{}
+	work := newRecordingWork(&recordingStackRepository{})
 	service := NewService(Service{
 		Stacks:     &recordingStackRepository{},
-		Work:       newRecordingWork(&recordingStackRepository{}),
+		Work:       work,
 		Authorizer: &recordingAuthorizer{},
 		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
 		Clock:      fixedClock{now: now},
-		Audit:      audit,
 	})
 
 	_, err := service.CreateStack(ctx, CreateStackCommand{
@@ -1830,10 +1777,10 @@ func TestCreateStackAuditsOwnerGrant(t *testing.T) {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
 
-	if len(audit.events) != 1 {
-		t.Fatalf("audit events = %d, want 1", len(audit.events))
+	if len(work.audits) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(work.audits))
 	}
-	event := audit.events[0]
+	event := work.audits[0]
 	if event.ActorSubject != keycloakSubject {
 		t.Fatalf("actor_subject = %q, want %q", event.ActorSubject, keycloakSubject)
 	}
@@ -2378,10 +2325,13 @@ func (clock fixedClock) Now() time.Time {
 // against a real database in internal/postgres/unitofwork_test.go, so here it
 // only needs to record what the service asked for.
 type recordingUnitOfWork struct {
-	stacks   StackRepository
-	audits   []traits.SecurityAuditEvent
-	requests []queue.Request
-	err      error
+	stacks                StackRepository
+	templateRuns          TemplateRunRepository
+	templateRegistrations TemplateRegistrationRepository
+	audits                []traits.SecurityAuditEvent
+	requests              []queue.Request
+	err                   error
+	inTxCalls             int
 }
 
 func newRecordingWork(stacks StackRepository) *recordingUnitOfWork {
@@ -2389,6 +2339,7 @@ func newRecordingWork(stacks StackRepository) *recordingUnitOfWork {
 }
 
 func (unit *recordingUnitOfWork) InTx(ctx context.Context, fn func(TxRepo, queue.Enqueuer) error) error {
+	unit.inTxCalls++
 	if unit.err != nil {
 		return unit.err
 	}
@@ -2407,9 +2358,172 @@ func (unit *recordingUnitOfWork) AppendAuditEvent(_ context.Context, event trait
 	return nil
 }
 
+func (unit *recordingUnitOfWork) CreateTemplateRun(ctx context.Context, run traits.TemplateRun) error {
+	if unit.templateRuns == nil {
+		return nil
+	}
+	return unit.templateRuns.CreateTemplateRun(ctx, run)
+}
+
+func (unit *recordingUnitOfWork) CreateTemplateRegistration(ctx context.Context, registration traits.TemplateRegistration) error {
+	if unit.templateRegistrations == nil {
+		return nil
+	}
+	return unit.templateRegistrations.CreateTemplateRegistration(ctx, registration)
+}
+
+func (unit *recordingUnitOfWork) ApproveTemplateRun(ctx context.Context, approval traits.TemplateRunApproval) error {
+	if unit.templateRuns == nil {
+		return nil
+	}
+	return unit.templateRuns.ApproveTemplateRun(ctx, approval)
+}
+
+func (unit *recordingUnitOfWork) RequestTemplateRunCancellation(ctx context.Context, cancellation traits.TemplateRunCancellation) error {
+	if unit.templateRuns == nil {
+		return nil
+	}
+	return unit.templateRuns.RequestTemplateRunCancellation(ctx, cancellation)
+}
+
 func (unit *recordingUnitOfWork) Enqueue(_ context.Context, requests ...queue.Request) error {
 	unit.requests = append(unit.requests, requests...)
 	return nil
+}
+
+func TestRegisterTemplatePairsRegistrationWithSyncIntentInTransaction(t *testing.T) {
+	t.Parallel()
+
+	registrations := &recordingTemplateRegistrationRepository{}
+	work := &recordingUnitOfWork{templateRegistrations: registrations}
+	service := NewService(Service{
+		Work:                  work,
+		TemplateRegistrations: registrations,
+		RegistrationIDs:       fixedTemplateRegistrationIDGenerator{id: "registration_123"},
+		Clock:                 fixedClock{now: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)},
+	})
+
+	registration, err := service.RegisterTemplate(authenticatedContext(), RegisterTemplateCommand{
+		TenantID: "tenant_123", RepoOwner: "acme", RepoName: "infra", SourceRef: "main", RootPath: "modules/vpc",
+	})
+	if err != nil {
+		t.Fatalf("RegisterTemplate returned error: %v", err)
+	}
+	if work.inTxCalls != 1 || registrations.created.ID != registration.ID {
+		t.Fatalf("transaction calls = %d, registration = %#v", work.inTxCalls, registrations.created)
+	}
+	if len(work.requests) != 1 || work.requests[0].Kind != KindStartTemplateSync || work.requests[0].ActorSubject != keycloakSubject || work.requests[0].TenantID != "tenant_123" {
+		t.Fatalf("requests = %#v", work.requests)
+	}
+	var payload StartTemplateSyncPayload
+	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
+		t.Fatalf("decode sync intent: %v", err)
+	}
+	if payload.RegistrationID != registration.ID || payload.TenantID != registration.TenantID || payload.RepoOwner != "acme" || payload.RepoName != "infra" || payload.SourceRef != "main" || payload.RootPath != "modules/vpc" {
+		t.Fatalf("sync payload = %#v", payload)
+	}
+}
+
+func TestStartTemplateRunPairsRunWithStartIntentInTransaction(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{}
+	work := &recordingUnitOfWork{templateRuns: runs}
+	service := NewService(Service{
+		Work:         work,
+		Authorizer:   &permissionAuthorizer{allowed: true},
+		TemplateRuns: runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{
+			ID: "stack_template_123", TenantID: "tenant_123", SourceTemplateID: "source_123", DesiredTemplateRevisionID: "revision_123", DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`), SelectedRef: "main", WorkspaceName: "workspace", Lifecycle: traits.StackTemplateActive,
+		}},
+		TemplateRevisionMetadata: &recordingTemplateRepository{template: traits.TemplateRevision{ID: "revision_123", TenantID: "tenant_123", SourceTemplateID: "source_123", RepoOwner: "acme", RepoName: "infra", ResolvedCommitSHA: "sha_123", RootPath: "modules/vpc"}},
+		RunIDs:                   fixedTemplateRunIDGenerator{runID: "run_123"},
+		Clock:                    fixedClock{now: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)},
+	})
+
+	run, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: traits.OperationApply})
+	if err != nil {
+		t.Fatalf("StartTemplateRun returned error: %v", err)
+	}
+	if work.inTxCalls != 1 || runs.created.ID != run.ID {
+		t.Fatalf("transaction calls = %d, run = %#v", work.inTxCalls, runs.created)
+	}
+	if len(work.requests) != 1 || work.requests[0].Kind != KindStartTemplateRun || work.requests[0].ActorSubject != keycloakSubject || work.requests[0].TenantID != "tenant_123" {
+		t.Fatalf("requests = %#v", work.requests)
+	}
+	var payload StartTemplateRunPayload
+	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
+		t.Fatalf("decode start intent: %v", err)
+	}
+	if payload.RunID != run.ID || payload.TenantID != run.TenantID || payload.StackTemplateID != run.StackTemplateID || payload.Operation != run.Operation || payload.SelectedRef != run.SelectedRef || payload.WorkspaceName != run.WorkspaceName || payload.RepoOwner != "acme" || payload.RepoName != "infra" || payload.RootPath != "modules/vpc" || string(payload.ConfigJSON) != `{"region":"us-east-1"}` {
+		t.Fatalf("start payload = %#v", payload)
+	}
+}
+
+func TestApproveRunPairsApprovalAuditAndSignalIntentInTransaction(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
+	work := &recordingUnitOfWork{templateRuns: runs}
+	workflows := &recordingWorkflowDispatcher{}
+	service := NewService(Service{
+		Work:           work,
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
+		Workflows:      workflows,
+		Clock:          fixedClock{now: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)},
+	})
+
+	if err := service.ApproveRun(authenticatedContext(), ApproveRunCommand{TenantID: "tenant_123", RunID: "run_123"}); err != nil {
+		t.Fatalf("ApproveRun returned error: %v", err)
+	}
+	if work.inTxCalls != 1 || runs.approval.RunID != "run_123" || len(work.audits) != 1 {
+		t.Fatalf("transaction calls = %d, approval = %#v, audits = %#v", work.inTxCalls, runs.approval, work.audits)
+	}
+	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunApproval || work.requests[0].ActorSubject != keycloakSubject || work.requests[0].TenantID != "tenant_123" || workflows.approvalRunID != "" {
+		t.Fatalf("requests = %#v, direct approval = %q", work.requests, workflows.approvalRunID)
+	}
+	var payload SignalRunApprovalPayload
+	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
+		t.Fatalf("decode approval intent: %v", err)
+	}
+	if payload.TenantID != "tenant_123" || payload.RunID != "run_123" || payload.Signal.ApprovedBy != keycloakSubject {
+		t.Fatalf("approval payload = %#v", payload)
+	}
+}
+
+func TestCancelRunPairsCancellationWithSignalIntentInTransaction(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
+	work := &recordingUnitOfWork{templateRuns: runs}
+	workflows := &recordingWorkflowDispatcher{}
+	service := NewService(Service{
+		Work:           work,
+		Authorizer:     &permissionAuthorizer{allowed: true},
+		TemplateRuns:   runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
+		Workflows:      workflows,
+		Clock:          fixedClock{now: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)},
+	})
+
+	if err := service.CancelRun(authenticatedContext(), CancelRunCommand{TenantID: "tenant_123", RunID: "run_123", Reason: "superseded"}); err != nil {
+		t.Fatalf("CancelRun returned error: %v", err)
+	}
+	if work.inTxCalls != 1 || runs.cancellation.RunID != "run_123" {
+		t.Fatalf("transaction calls = %d, cancellation = %#v", work.inTxCalls, runs.cancellation)
+	}
+	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunCancellation || work.requests[0].ActorSubject != keycloakSubject || work.requests[0].TenantID != "tenant_123" || workflows.cancelRunID != "" {
+		t.Fatalf("requests = %#v, direct cancellation = %q", work.requests, workflows.cancelRunID)
+	}
+	var payload SignalRunCancellationPayload
+	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
+		t.Fatalf("decode cancellation intent: %v", err)
+	}
+	if payload.TenantID != "tenant_123" || payload.RunID != "run_123" || payload.Signal.RequestedBy != keycloakSubject || payload.Signal.Reason != "superseded" {
+		t.Fatalf("cancellation payload = %#v", payload)
+	}
 }
 
 func adminContext() context.Context {

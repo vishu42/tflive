@@ -346,8 +346,8 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 	if deps.registrations.created.RequestedBy != traits.UserID(apiKeycloakSubject) {
 		t.Fatalf("requested by = %q, want %q", deps.registrations.created.RequestedBy, apiKeycloakSubject)
 	}
-	if deps.workflows.syncInput.RegistrationID != traits.TemplateRegistrationID("template_registration_123") {
-		t.Fatalf("workflow registration id = %q", deps.workflows.syncInput.RegistrationID)
+	if len(deps.work.requests) != 1 || deps.work.requests[0].Kind != app.KindStartTemplateSync {
+		t.Fatalf("queued requests = %#v, want one start_template_sync request", deps.work.requests)
 	}
 
 	var body traits.TemplateRegistration
@@ -1270,11 +1270,8 @@ func TestApproveRunCallsService(t *testing.T) {
 	if deps.templateRuns.approval.ApprovedBy != traits.UserID(apiKeycloakSubject) {
 		t.Fatalf("approved by = %q, want %q", deps.templateRuns.approval.ApprovedBy, apiKeycloakSubject)
 	}
-	if deps.workflows.approvalRunID != traits.TemplateRunID("run_123") {
-		t.Fatalf("workflow run id = %q", deps.workflows.approvalRunID)
-	}
-	if deps.workflows.approvalSignal.ApprovedBy != traits.UserID(apiKeycloakSubject) {
-		t.Fatalf("workflow approved by = %q, want %q", deps.workflows.approvalSignal.ApprovedBy, apiKeycloakSubject)
+	if len(deps.work.requests) != 1 || deps.work.requests[0].Kind != app.KindSignalRunApproval {
+		t.Fatalf("queued requests = %#v, want one signal_run_approval request", deps.work.requests)
 	}
 }
 
@@ -1304,8 +1301,8 @@ func TestApproveRunAllowsSelfApproval(t *testing.T) {
 	if deps.templateRuns.approval.RunID == "" {
 		t.Fatalf("approval was not recorded, want approval")
 	}
-	if deps.workflows.approvalRunID == "" {
-		t.Fatalf("workflow approval run ID = %q, want signal", deps.workflows.approvalRunID)
+	if len(deps.work.requests) != 1 || deps.work.requests[0].Kind != app.KindSignalRunApproval {
+		t.Fatalf("queued requests = %#v, want one approval signal", deps.work.requests)
 	}
 }
 
@@ -1338,11 +1335,8 @@ func TestCancelRunCallsService(t *testing.T) {
 	if deps.templateRuns.cancellation.Reason != "testing" {
 		t.Fatalf("reason = %q", deps.templateRuns.cancellation.Reason)
 	}
-	if deps.workflows.cancelRunID != traits.TemplateRunID("run_123") {
-		t.Fatalf("workflow run id = %q", deps.workflows.cancelRunID)
-	}
-	if deps.workflows.cancelSignal.RequestedBy != traits.UserID(apiKeycloakSubject) {
-		t.Fatalf("workflow requested by = %q, want %q", deps.workflows.cancelSignal.RequestedBy, apiKeycloakSubject)
+	if len(deps.work.requests) != 1 || deps.work.requests[0].Kind != app.KindSignalRunCancellation {
+		t.Fatalf("queued requests = %#v, want one cancellation signal", deps.work.requests)
 	}
 }
 
@@ -2305,6 +2299,7 @@ type apiTestDependencies struct {
 	runID                  traits.TemplateRunID
 	registrationID         traits.TemplateRegistrationID
 	now                    time.Time
+	work                   *apiUnitOfWork
 }
 
 func newAPITestDependencies() *apiTestDependencies {
@@ -2324,9 +2319,15 @@ func (deps *apiTestDependencies) withGrants(grants ...authz.Grant) *apiTestDepen
 }
 
 func (deps *apiTestDependencies) service() *app.Service {
+	work := &apiUnitOfWork{
+		stacks:                &deps.stacks,
+		templateRuns:          &deps.templateRuns,
+		templateRegistrations: &deps.registrations,
+	}
+	deps.work = work
 	return app.NewService(app.Service{
 		Authorizer:               deps.authorizer,
-		Work:                     &apiUnitOfWork{stacks: &deps.stacks},
+		Work:                     work,
 		Stacks:                   &deps.stacks,
 		StackTemplates:           &deps.stackTemplates,
 		StackTemplateInstaller:   &deps.stackTemplateInstaller,
@@ -2349,9 +2350,12 @@ func (deps *apiTestDependencies) service() *app.Service {
 // apiUnitOfWork applies writes immediately; transactional behaviour is proven
 // against a real database in internal/postgres/unitofwork_test.go.
 type apiUnitOfWork struct {
-	stacks   app.StackRepository
-	requests []queue.Request
-	err      error
+	stacks                app.StackRepository
+	templateRuns          app.TemplateRunRepository
+	templateRegistrations app.TemplateRegistrationRepository
+	requests              []queue.Request
+	audits                []traits.SecurityAuditEvent
+	err                   error
 }
 
 func (unit *apiUnitOfWork) InTx(ctx context.Context, fn func(app.TxRepo, queue.Enqueuer) error) error {
@@ -2368,7 +2372,44 @@ func (unit *apiUnitOfWork) CreateStack(ctx context.Context, stack traits.Stack) 
 	return unit.stacks.CreateStack(ctx, stack)
 }
 
-func (unit *apiUnitOfWork) AppendAuditEvent(context.Context, traits.SecurityAuditEvent) error {
+func (unit *apiUnitOfWork) AppendAuditEvent(_ context.Context, event traits.SecurityAuditEvent) error {
+	unit.audits = append(unit.audits, event)
+	return nil
+}
+
+func (unit *apiUnitOfWork) CreateTemplateRun(ctx context.Context, run traits.TemplateRun) error {
+	if repository, ok := unit.templateRuns.(interface {
+		CreateTemplateRun(context.Context, traits.TemplateRun) error
+	}); ok {
+		return repository.CreateTemplateRun(ctx, run)
+	}
+	return nil
+}
+
+func (unit *apiUnitOfWork) CreateTemplateRegistration(ctx context.Context, registration traits.TemplateRegistration) error {
+	if repository, ok := unit.templateRegistrations.(interface {
+		CreateTemplateRegistration(context.Context, traits.TemplateRegistration) error
+	}); ok {
+		return repository.CreateTemplateRegistration(ctx, registration)
+	}
+	return nil
+}
+
+func (unit *apiUnitOfWork) ApproveTemplateRun(ctx context.Context, approval traits.TemplateRunApproval) error {
+	if repository, ok := unit.templateRuns.(interface {
+		ApproveTemplateRun(context.Context, traits.TemplateRunApproval) error
+	}); ok {
+		return repository.ApproveTemplateRun(ctx, approval)
+	}
+	return nil
+}
+
+func (unit *apiUnitOfWork) RequestTemplateRunCancellation(ctx context.Context, cancellation traits.TemplateRunCancellation) error {
+	if repository, ok := unit.templateRuns.(interface {
+		RequestTemplateRunCancellation(context.Context, traits.TemplateRunCancellation) error
+	}); ok {
+		return repository.RequestTemplateRunCancellation(ctx, cancellation)
+	}
 	return nil
 }
 

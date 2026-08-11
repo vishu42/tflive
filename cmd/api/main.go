@@ -22,8 +22,6 @@ import (
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/temporal"
-	"go.temporal.io/sdk/client"
 )
 
 type postgresPool interface {
@@ -53,9 +51,7 @@ type tokenVerifier interface {
 type apiDependencies struct {
 	newPostgresPool func(context.Context, string) (postgresPool, error)
 	migratePostgres func(context.Context, postgresPool) error
-	newStore        func(postgresPool) (appRepositories, error)
-	dialTemporal    func(context.Context, temporal.Config) (client.Client, error)
-	newDispatcher   func(client.Client, string) app.WorkflowDispatcher
+	newStore        func(postgresPool, *queue.SpecRegistry) (appRepositories, error)
 	newLogReader    func(config.ArtifactStoreConfig) (app.TemplateRunLogReader, error)
 	newService      func(app.Service) (*app.Service, error)
 	newVerifier     func(context.Context, authn.OIDCVerifierConfig) (tokenVerifier, error)
@@ -96,22 +92,12 @@ func defaultAPIDependencies() apiDependencies {
 			}
 			return postgres.Migrate(ctx, pgxPool)
 		},
-		newStore: func(pool postgresPool) (appRepositories, error) {
+		newStore: func(pool postgresPool, specs *queue.SpecRegistry) (appRepositories, error) {
 			pgxPool, ok := pool.(*pgxpool.Pool)
 			if !ok {
 				return nil, fmt.Errorf("unexpected postgres pool type %T", pool)
 			}
-			// The API only produces work; delivery belongs to the worker. Specs
-			// carry no dependencies, so registering them here needs no handlers.
-			specs, err := queue.NewSpecRegistry(app.GrantStackOwnerSpec, app.MarkStackReadySpec, authz.StackGrantSpec)
-			if err != nil {
-				return nil, fmt.Errorf("build queue specs: %w", err)
-			}
 			return postgres.NewStore(pgxPool, postgres.WithQueueSpecs(specs)), nil
-		},
-		dialTemporal: temporal.Dial,
-		newDispatcher: func(temporalClient client.Client, taskQueue string) app.WorkflowDispatcher {
-			return temporal.NewDispatcher(temporalClient, taskQueue)
 		},
 		newLogReader: func(cfg config.ArtifactStoreConfig) (app.TemplateRunLogReader, error) {
 			store, err := artifacts.NewObjectStore(cfg)
@@ -173,21 +159,15 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("migrate postgres: %w", err)
 	}
 
-	store, err := deps.newStore(pool)
+	specs, err := queue.NewSpecRegistry(app.QueueSpecs()...)
+	if err != nil {
+		return fmt.Errorf("build queue specs: %w", err)
+	}
+	store, err := deps.newStore(pool, specs)
 	if err != nil {
 		return fmt.Errorf("wire service: %w", err)
 	}
 
-	temporalClient, err := deps.dialTemporal(ctx, temporal.Config{
-		Address:   cfg.TemporalAddress,
-		Namespace: cfg.TemporalNamespace,
-	})
-	if err != nil {
-		return fmt.Errorf("dial temporal: %w", err)
-	}
-	defer temporalClient.Close()
-
-	dispatcher := deps.newDispatcher(temporalClient, cfg.TemporalTaskQueue)
 	logReader, err := deps.newLogReader(cfg.ArtifactStore)
 	if err != nil {
 		return fmt.Errorf("wire log reader: %w", err)
@@ -219,7 +199,6 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		TemplateRevisions:        store,
 		TemplateRunLogs:          logReader,
 		TemplateRunLogMetadata:   store,
-		Workflows:                dispatcher,
 		Audit:                    store,
 		UserDirectory:            directoryClient,
 	})
