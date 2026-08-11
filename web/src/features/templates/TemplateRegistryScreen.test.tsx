@@ -7,7 +7,7 @@ import { AuthContext } from "../../auth/AuthContext";
 import type { AuthContextValue } from "../../auth/AuthContext";
 import TemplateRegistryScreen from "./TemplateRegistryScreen";
 import { queryKeys } from "../../api/queryKeys";
-import type { TemplateRegistration, TemplateRevision } from "../../api/types";
+import type { TemplateRevision } from "../../api/types";
 
 function revision(overrides: Partial<TemplateRevision> = {}): TemplateRevision {
   return {
@@ -28,24 +28,6 @@ function revision(overrides: Partial<TemplateRevision> = {}): TemplateRevision {
   };
 }
 
-function registration(overrides: Partial<TemplateRegistration> = {}): TemplateRegistration {
-  return {
-    id: "reg_1",
-    tenant_id: "tenant_123",
-    repo_owner: "hashicorp",
-    repo_name: "terraform-aws-vpc",
-    source_ref: "main",
-    root_path: ".",
-    status: "completed",
-    template_revision_id: "rev_2",
-    resolved_commit_sha: "1234567abcdef",
-    requested_by: "user_123",
-    requested_at: "2026-07-20T00:00:00Z",
-    error_summary: "",
-    ...overrides
-  };
-}
-
 // staleTime: Infinity keeps seeded cache data from triggering a background
 // refetch on mount — see the identical rationale in StacksListScreen.test.tsx.
 function testQueryClient(): QueryClient {
@@ -61,11 +43,11 @@ function authValue(): AuthContextValue {
   };
 }
 
-function renderScreen(queryClient: QueryClient, auth?: AuthContextValue) {
+function renderScreen(queryClient: QueryClient, initialEntry = "/templates") {
   return render(
     <QueryClientProvider client={queryClient}>
-      <AuthContext.Provider value={auth ?? authValue()}>
-        <MemoryRouter initialEntries={["/templates"]}>
+      <AuthContext.Provider value={authValue()}>
+        <MemoryRouter initialEntries={[initialEntry]}>
           <TemplateRegistryScreen />
         </MemoryRouter>
       </AuthContext.Provider>
@@ -91,7 +73,7 @@ describe("TemplateRegistryScreen", () => {
     expect(screen.getByTestId("template-registry-loading")).toBeTruthy();
   });
 
-  it("lists saved template revisions and auto-selects the first one", () => {
+  it("lists registered template revisions as rows", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
       revision(),
@@ -100,11 +82,115 @@ describe("TemplateRegistryScreen", () => {
 
     renderScreen(queryClient);
 
-    const select = screen.getByLabelText<HTMLSelectElement>(/Saved template/);
-    expect(select.value).toBe("rev_1");
-    const optionText = Array.from(select.options).map((option) => option.textContent);
-    expect(optionText.some((text) => text?.includes("VPC"))).toBe(true);
-    expect(optionText.some((text) => text?.includes("EKS"))).toBe(true);
+    expect(screen.getByTestId("templates-list")).toBeTruthy();
+    expect(screen.getByTestId("template-row-rev_1").textContent).toContain("VPC");
+    expect(screen.getByTestId("template-row-rev_2").textContent).toContain("EKS");
+  });
+
+  it("groups revisions under one heading per repository", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      revision({ id: "rev_1", source_ref: "main" }),
+      revision({ id: "rev_2", source_ref: "v2", resolved_commit_sha: "44b2e0199999" }),
+      revision({ id: "rev_3", name: "EKS", repo_name: "terraform-aws-eks" })
+    ]);
+
+    renderScreen(queryClient);
+
+    const vpcGroup = screen.getByTestId("template-group-hashicorp/terraform-aws-vpc");
+    const eksGroup = screen.getByTestId("template-group-hashicorp/terraform-aws-eks");
+
+    expect(vpcGroup.textContent).toContain("hashicorp/terraform-aws-vpc");
+    expect(vpcGroup.querySelectorAll("li")).toHaveLength(2);
+    expect(eksGroup.querySelectorAll("li")).toHaveLength(1);
+    // Each row belongs to exactly one group.
+    expect(vpcGroup.contains(screen.getByTestId("template-row-rev_2"))).toBe(true);
+    expect(eksGroup.contains(screen.getByTestId("template-row-rev_3"))).toBe(true);
+  });
+
+  it("shows how many revisions each repository has", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      revision({ id: "rev_1" }),
+      revision({ id: "rev_2", resolved_commit_sha: "44b2e0199999" })
+    ]);
+
+    renderScreen(queryClient);
+
+    expect(screen.getByTestId("template-group-count-hashicorp/terraform-aws-vpc").textContent).toBe("2");
+  });
+
+  it("keeps the repository out of the row itself now that the heading carries it", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
+
+    renderScreen(queryClient);
+
+    const row = screen.getByTestId("template-row-rev_1");
+    expect(row.textContent).not.toContain("hashicorp/terraform-aws-vpc");
+    expect(row.textContent).toContain("main");
+    expect(row.textContent).toContain("abcdef1");
+  });
+
+  it("highlights a selected revision inside its repository group", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      revision({ id: "rev_1" }),
+      revision({ id: "rev_2", name: "EKS", repo_name: "terraform-aws-eks" })
+    ]);
+
+    renderScreen(queryClient, "/templates?selected=rev_2");
+
+    const eksGroup = screen.getByTestId("template-group-hashicorp/terraform-aws-eks");
+    const selected = screen.getByTestId("template-row-rev_2");
+    expect(selected.getAttribute("data-selected")).toBe("true");
+    expect(eksGroup.contains(selected)).toBe(true);
+  });
+
+  it("does not render the registration form — it lives at /templates/new", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
+
+    renderScreen(queryClient);
+
+    expect(screen.queryByLabelText(/Repository/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Register/ })).toBeNull();
+  });
+
+  it("links to the registration route from the header", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
+
+    renderScreen(queryClient);
+
+    const link = screen.getByTestId("register-template-link");
+    expect(link.getAttribute("href")).toBe("/templates/new");
+  });
+
+  it("highlights the revision named by the selected search param", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      revision(),
+      revision({ id: "rev_2", name: "EKS", repo_name: "terraform-aws-eks" })
+    ]);
+
+    renderScreen(queryClient, "/templates?selected=rev_2");
+
+    expect(screen.getByTestId("template-row-rev_2").getAttribute("data-selected")).toBe("true");
+    expect(screen.getByTestId("template-row-rev_1").getAttribute("data-selected")).toBeNull();
+  });
+
+  it("renders an empty state when no templates are registered", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), []);
+
+    renderScreen(queryClient);
+
+    expect(screen.getByTestId("templates-list-empty")).toBeTruthy();
+    expect(screen.queryByTestId("templates-list")).toBeNull();
+    // The register affordance must survive the empty state — it is the only
+    // way out of it.
+    expect(screen.getByTestId("register-template-link")).toBeTruthy();
   });
 
   it("renders the shared boundary screen for a handled API error status", async () => {
@@ -157,55 +243,7 @@ describe("TemplateRegistryScreen", () => {
 
     await waitFor(() => expect(screen.getByTestId("template-registry-error")).toBeTruthy());
     fireEvent.click(screen.getByTestId("template-registry-retry"));
-    await waitFor(() => expect(screen.getByLabelText(/Saved template/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("templates-list")).toBeTruthy());
     expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("registers a template and selects the new revision once registration completes", async () => {
-    const queryClient = testQueryClient();
-    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      if (init?.method === "POST") {
-        return jsonResponse(registration());
-      }
-      if (String(input).endsWith("/template-revisions")) {
-        return jsonResponse([revision(), revision({ id: "rev_2", name: "EKS", repo_name: "terraform-aws-eks" })]);
-      }
-      throw new Error(`unexpected fetch: ${String(input)}`);
-    });
-
-    renderScreen(queryClient);
-
-    fireEvent.change(screen.getByLabelText(/Repository/), { target: { value: "terraform-aws-eks" } });
-    fireEvent.click(screen.getByRole("button", { name: /Register/ }));
-
-    await waitFor(() => expect(screen.getByText("completed")).toBeTruthy());
-    await waitFor(() => expect(screen.getByLabelText<HTMLSelectElement>(/Saved template/).value).toBe("rev_2"));
-
-    const postCall = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
-    expect(postCall).toBeTruthy();
-    expect(JSON.parse(String(postCall?.[1]?.body))).toEqual({
-      repo_owner: "hashicorp",
-      repo_name: "terraform-aws-eks",
-      source_ref: "main",
-      root_path: "."
-    });
-  });
-
-  it("shows an error message when registration fails", async () => {
-    const queryClient = testQueryClient();
-    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
-      if (init?.method === "POST") {
-        return jsonResponse({ error: "invalid_request", message: "repo_name is required" }, 400);
-      }
-      throw new Error("unexpected fetch");
-    });
-
-    renderScreen(queryClient);
-
-    fireEvent.click(screen.getByRole("button", { name: /Register/ }));
-
-    await waitFor(() => expect(screen.getByText(/repo_name is required/)).toBeTruthy());
   });
 });

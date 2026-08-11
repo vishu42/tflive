@@ -236,9 +236,30 @@ describe("routeConfig", () => {
       </QueryClientProvider>
     );
 
-    expect(markup).toContain("Saved template");
+    expect(markup).toContain('data-testid="templates-list"');
     expect(markup).toContain("VPC");
     expect(markup).not.toContain('data-testid="route-placeholder"');
+  });
+
+  it("renders the template registration screen at /templates/new", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const { routeConfig } = await import("./router");
+
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+
+    const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/templates/new"] });
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={authValue()}>
+          <RouterProvider router={testRouter} />
+        </AuthContext.Provider>
+      </QueryClientProvider>
+    );
+
+    expect(markup).toContain("Register template");
+    expect(markup).toContain("Root path");
+    expect(markup).not.toContain('data-testid="route-not-found"');
   });
 
   it("renders a 404, not a permission leak, when canView is denied for a stack route", async () => {

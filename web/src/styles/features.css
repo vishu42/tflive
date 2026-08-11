@@ -264,7 +264,10 @@
 }
 
 /* ---- Stacks list ---- */
-.stacks-list-header {
+/* The templates list shares the stacks list's card treatment; only its row
+   contents differ, so the shell rules are grouped rather than duplicated. */
+.stacks-list-header,
+.templates-list-header {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -272,7 +275,8 @@
   margin-bottom: var(--space-6);
 }
 
-.stacks-list {
+.stacks-list,
+.templates-list {
   display: grid;
   gap: var(--space-3);
   margin: 0;
@@ -280,7 +284,8 @@
   list-style: none;
 }
 
-.stacks-list li {
+.stacks-list li,
+.templates-list li {
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -292,7 +297,8 @@
   transition: all var(--duration-lift) var(--ease-out);
 }
 
-.stacks-list li:hover {
+.stacks-list li:hover,
+.templates-list li:hover {
   transform: translateY(-2px);
   border-color: var(--color-accent-border);
   box-shadow: var(--shadow-lg);
@@ -313,6 +319,72 @@
 
 /* The stacks empty state reuses `.showcase .showcase--compact` from Task 5.
    No `.empty-state` rules are needed — do not add any. */
+
+/* ---- Templates list ---- */
+/* Revisions are grouped by repository. Groups are always expanded — the
+   heading is a landmark, not a control. */
+.templates-groups {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.templates-group__heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.templates-group__repo {
+  color: var(--color-muted-fg);
+  overflow-wrap: anywhere;
+}
+
+.templates-group__count {
+  flex: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  padding: 0 var(--space-2);
+  color: var(--color-muted-fg);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.templates-list li {
+  justify-content: space-between;
+}
+
+/* The revision just registered arrives via ?selected=<id>. It is marked with
+   the accent border rather than a fill so the row still reads as one of the
+   list, and so the cue survives a reload of the shared URL. */
+.templates-list li[data-selected="true"] {
+  border-color: var(--color-accent-border);
+  box-shadow: var(--shadow-md);
+}
+
+.templates-list__main {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.templates-list__name {
+  color: var(--color-fg);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.templates-list li small {
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
 
 /* ---- Tabs ---- */
 .stack-detail-header {
@@ -619,6 +691,7 @@
    header rows it would push the heading block off the baseline its sibling
    button sits on, because flex aligns by margin box. */
 .stacks-list-header .page-header,
+.templates-list-header .page-header,
 .stack-detail-header .page-header {
   margin-bottom: 0;
 }
@@ -807,9 +880,17 @@
   }
 
   .workspace-header,
-  .stacks-list-header {
+  .stacks-list-header,
+  .templates-list-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  /* Row contents stack so the status never gets squeezed against the name. */
+  .templates-list li {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-2);
   }
 
   .runtime-fields {
@@ -838,7 +919,8 @@
 
   /* Primary CTAs go full width on mobile, per the design system. */
   .form-actions .primary-button,
-  .stacks-list-header .primary-button {
+  .stacks-list-header .primary-button,
+  .templates-list-header .primary-button {
     width: 100%;
   }
 
