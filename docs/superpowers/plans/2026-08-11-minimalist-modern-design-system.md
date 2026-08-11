@@ -2160,6 +2160,14 @@ Append to `web/src/styles/features.css`:
   margin-bottom: var(--space-6);
 }
 
+/* .page-header's bottom margin is page-level spacing. Inside these flex
+   header rows it would push the heading block off the baseline its sibling
+   button sits on, because flex aligns children by their margin box. */
+.stacks-list-header .page-header,
+.stack-detail-header .page-header {
+  margin-bottom: 0;
+}
+
 .stacks-list {
   display: grid;
   gap: var(--space-3);
@@ -2528,21 +2536,23 @@ import { statusTone } from "../../shared/statusTone";
       </div>
 ```
 
-Immediately after that header block, derive the band from data already on the client — no new query:
+Immediately after that header block, derive the band from data already on the client — no new query. Render it **only when at least one stack loaded**; in the empty branch the hero already carries the message, and a band reading "Stacks: 0" directly above it is redundant.
 
 ```tsx
       <StatBand
         items={[
           { label: "Stacks", value: stacks.length },
           {
-            label: "Active",
-            value: stacks.filter((s) => statusTone(s.status ?? "") === "progress").length
+            label: "You can operate",
+            value: stacks.filter((s) => s.effectiveCapabilities.canOperate).length
           }
         ]}
       />
 ```
 
-Replace `stacks` with whatever the component already calls its loaded array. If the stack objects carry no status field, render only the `Stacks` count — do **not** add a query to obtain one.
+Replace `stacks` with whatever the component already calls its loaded array. `effectiveCapabilities` is already on every `Stack` (see `web/src/auth/types.ts` — `canView`, `canOperate`, `canApprove`, `canManageAccess`), resolved by the backend and present in the fetched payload, so this needs no query.
+
+Two stats is the minimum worth banding. A `<dl>` rendering a single number directly above a list of exactly that many rows tells the operator nothing they cannot already see. Guard the band at the call site rather than changing `StatBand`.
 
 - [ ] **Step 4: Add the empty-state hero**
 
