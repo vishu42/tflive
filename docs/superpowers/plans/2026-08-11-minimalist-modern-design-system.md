@@ -2079,14 +2079,18 @@ Append to `web/src/styles/features.css`:
 
 - [ ] **Step 3: Restructure each screen**
 
-Apply this shape to all four, substituting the label and title, and keeping each file's existing copy, links, and `data-testid` attributes exactly as found in Step 1.
+Apply this shape to all four, substituting only the label, and keeping each file's existing heading text, copy, links, and `data-testid` attributes exactly as found in Step 1.
 
-| File | Label | Title | Gradient word |
-|---|---|---|---|
-| `NotFound.tsx` | `Error 404` | `Page not found` | `found` |
-| `AccessDenied.tsx` | `Access` | `Access denied` | `denied` |
-| `ServiceUnavailable.tsx` | `Status` | `Service unavailable` | `unavailable` |
-| `RoutePlaceholder.tsx` | `Coming soon` | `Not built yet` | `yet` |
+| File | Section label | Heading |
+|---|---|---|
+| `NotFound.tsx` | `Error 404` | keep existing (`Page not found`) |
+| `AccessDenied.tsx` | `Access` | keep existing (`Not permitted`) |
+| `ServiceUnavailable.tsx` | `Status` | keep existing |
+| `RoutePlaceholder.tsx` | `Coming soon` | keep the dynamic `{title}` prop |
+
+**The gradient goes on the whole `<h1>`, never on an inner `<span>` wrapping one word.** These four screens' tests use `renderToStaticMarkup` with `expect(markup).toContain("<phrase>")`, which requires the heading text to be a *contiguous* substring of the rendered HTML. Splitting a word into `<span class="gradient-text">…</span>` breaks that contiguity and fails the test. Putting the class on the `h1` itself keeps the text node whole, adds no extra element, and passes.
+
+Do not add `pulse` to these `SectionLabel`s — a pulsing "live" dot on an error screen signals activity where there is none.
 
 The pattern, shown for `NotFound.tsx`:
 
@@ -2099,9 +2103,7 @@ import SectionLabel from "../shared/SectionLabel";
     <section className="showcase" data-testid="not-found">
       <div className="showcase__body">
         <SectionLabel>Error 404</SectionLabel>
-        <h1 className="showcase__title">
-          Page not <span className="gradient-text">found</span>
-        </h1>
+        <h1 className="showcase__title gradient-text">Page not found</h1>
         <p className="showcase__lede">{/* existing copy, unchanged */}</p>
         {/* existing link/button, unchanged, with className="secondary-button" */}
       </div>
@@ -2111,7 +2113,7 @@ import SectionLabel from "../shared/SectionLabel";
     </section>
 ```
 
-Keep each file's original root `data-testid` rather than the illustrative `not-found` shown here.
+Keep each file's original root `data-testid` rather than the illustrative `not-found` shown here, and its original heading string rather than the illustrative one.
 
 - [ ] **Step 4: Run the full suite and build**
 
