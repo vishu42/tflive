@@ -16,6 +16,25 @@ import RunsListScreen from "../features/runs/RunsListScreen";
 import RunDetailScreen from "../features/runs/RunDetailScreen";
 import StackAccessScreen from "../features/stacks/StackAccessScreen";
 import CreateStackScreen from "../features/stacks/CreateStackScreen";
+// The design system gallery is a development-only route, and deliberately a
+// sibling of "/" rather than a child: everything under "/" renders inside
+// OidcAuthProvider, which cannot resolve without Keycloak, so a nested
+// styleguide would never mount locally.
+//
+// It is imported dynamically inside the DEV branch rather than statically at
+// the top of this file. A static import would tree-shake its JavaScript out
+// of production but NOT its stylesheet — CSS imports are side effects and
+// survive tree-shaking, which shipped ~3KB of gallery layout to every user.
+// With the import inside a statically-false branch, Rollup drops the chunk
+// entirely and no CSS is emitted.
+const devRoutes: RouteObject[] = import.meta.env.DEV
+  ? [
+      {
+        path: "/styleguide",
+        lazy: async () => ({ Component: (await import("../dev/StyleGuide")).default })
+      }
+    ]
+  : [];
 
 // The legacy console renders unchanged at "/" until the feature screens
 // fully replace it; routes still rendering RoutePlaceholder are reserved
@@ -23,6 +42,7 @@ import CreateStackScreen from "../features/stacks/CreateStackScreen";
 // route map are wrapped in a <RequireCapability mode="route"> layout route —
 // see docs/superpowers/specs/2026-07-19-capability-gating-primitives-design.md.
 export const routeConfig: RouteObject[] = [
+  ...devRoutes,
   {
     path: "/",
     element: <OidcAuthProvider />,
