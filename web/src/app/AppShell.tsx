@@ -50,7 +50,7 @@ export default function AppShell() {
           </div>
         </div>
       </header>
-      <main className="app-frame-content" id="main-content">
+      <main className="app-frame-content" id="main-content" tabIndex={-1}>
         <Outlet />
       </main>
       {isDebug && (

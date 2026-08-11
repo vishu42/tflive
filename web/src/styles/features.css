@@ -11,7 +11,9 @@
 .app-frame-header {
   position: sticky;
   top: 0;
-  z-index: 30;
+  /* Must stay below .search-dropdown (10) and .undo-banner (20) in
+     styles.css — those overlays need to paint above the sticky header. */
+  z-index: 5;
   display: flex;
   align-items: center;
   justify-content: space-between;
