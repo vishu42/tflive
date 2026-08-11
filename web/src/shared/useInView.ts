@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 /**
  * Fires once when the element first enters the viewport, then disconnects.
@@ -6,12 +6,14 @@ import { useEffect, useRef, useState } from "react";
  * 60px bottom margin so content settles before it animates.
  */
 export function useInView<T extends Element>() {
-  const ref = useRef<T | null>(null);
+  const [node, setNode] = useState<T | null>(null);
   const [visible, setVisible] = useState(false);
+  const ref = useCallback((element: T | null) => {
+    setNode(element);
+  }, []);
 
   useEffect(() => {
-    const node = ref.current;
-    if (!node) return;
+    if (!node || visible) return;
 
     // Environments without IntersectionObserver (older jsdom, SSR) should show
     // content rather than hide it forever.
@@ -32,7 +34,7 @@ export function useInView<T extends Element>() {
 
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [node, visible]);
 
   return { ref, visible };
 }

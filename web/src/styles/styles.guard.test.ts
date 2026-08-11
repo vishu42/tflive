@@ -45,10 +45,11 @@ describe("tokens.css", () => {
 
   it("uses the AA-safe status colours for text", () => {
     const tokens = readFileSync(join(STYLES_DIR, "tokens.css"), "utf8");
-    // #16A34A is 3.24:1 on white and #D97706 is 3.20:1 — both fail AA for
-    // normal text. They may only appear as the -dot variants.
-    expect(tokens).toMatch(/--color-success:\s*#15803D/i);
-    expect(tokens).toMatch(/--color-warning:\s*#B45309/i);
+    // The text colours must remain darker than the brighter dot/fill variants.
+    expect(tokens).toMatch(/--color-success:\s*#166534/i);
+    expect(tokens).toMatch(/--color-warning:\s*#92400E/i);
+    expect(tokens).toMatch(/--color-danger:\s*#B91C1C/i);
+    expect(tokens).toMatch(/--color-muted-fg:\s*#475569/i);
   });
 });
 

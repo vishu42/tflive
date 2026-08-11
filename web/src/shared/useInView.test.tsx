@@ -31,10 +31,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function Probe() {
+function Probe({ attached = true }: { attached?: boolean }) {
   const { ref, visible } = useInView<HTMLDivElement>();
   return (
-    <div ref={ref} data-testid="probe" data-visible={visible}>
+    <div ref={attached ? ref : undefined} data-testid="probe" data-visible={visible}>
       content
     </div>
   );
@@ -48,6 +48,20 @@ describe("useInView", () => {
 
   it("becomes visible once the element intersects", () => {
     render(<Probe />);
+    act(() => {
+      callbacks[0]([{ isIntersecting: true }]);
+    });
+    expect(screen.getByTestId("probe").dataset.visible).toBe("true");
+  });
+
+  it("observes an element attached after the initial render", () => {
+    const view = render(<Probe attached={false} />);
+
+    act(() => {
+      view.rerender(<Probe />);
+    });
+
+    expect(callbacks).toHaveLength(1);
     act(() => {
       callbacks[0]([{ isIntersecting: true }]);
     });

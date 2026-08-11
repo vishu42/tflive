@@ -7,7 +7,7 @@
 export type StatusTone = "settled" | "progress" | "waiting" | "failed" | "canceled";
 
 const FAILED = new Set(["failed", "invalid", "error"]);
-const CANCELED = new Set(["canceled", "cancel_requested"]);
+const CANCELED = new Set(["canceled"]);
 const WAITING = new Set([
   "pending",
   "pending_validation",
@@ -15,7 +15,7 @@ const WAITING = new Set([
   "locked",
   "waiting_approval"
 ]);
-const PROGRESS = new Set(["running", "validating", "canceling"]);
+const PROGRESS = new Set(["running", "validating", "cancel_requested", "canceling"]);
 
 export function statusTone(value: string): StatusTone {
   if (FAILED.has(value)) return "failed";

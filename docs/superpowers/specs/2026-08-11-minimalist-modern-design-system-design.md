@@ -47,7 +47,7 @@ The app cannot be driven end to end in development: `oidc-client-ts` cannot reac
   --color-bg:        #FAFAFA;
   --color-fg:        #0F172A;
   --color-muted:     #F1F5F9;
-  --color-muted-fg:  #64748B;
+  --color-muted-fg:  #475569;
   --color-border:    #E2E8F0;
   --color-card:      #FFFFFF;
 
@@ -62,9 +62,9 @@ The app cannot be driven end to end in development: `oidc-client-ts` cannot reac
   --color-accent-border: rgba(0, 82, 255, 0.30);
 
   /* Semantic status — text-safe values, see contrast note */
-  --color-success:      #15803D;
-  --color-warning:      #B45309;
-  --color-danger:       #DC2626;
+  --color-success:      #166534;
+  --color-warning:      #92400E;
+  --color-danger:       #B91C1C;
   --color-success-dot:  #16A34A;
   --color-warning-dot:  #D97706;
   --color-success-soft: rgba(22, 163, 74, 0.10);
@@ -108,11 +108,11 @@ The semantic colours implied by the brief were checked against the white card su
 | Colour | Contrast on white | Verdict |
 |---|---|---|
 | `#0052FF` accent | 5.70:1 | Passes AA |
-| `#DC2626` danger | 4.80:1 | Passes AA |
+| `#B91C1C` danger | 5.54:1 on the tinted surface | Passes AA |
 | `#16A34A` green | 3.24:1 | Fails AA for normal text |
 | `#D97706` amber | 3.20:1 | Fails AA for normal text |
 
-Green and amber at those values would put "completed" and "queued" labels below the accessible threshold on a console where those words carry operational meaning. Text-bearing status therefore uses `#15803D` (4.99:1) and `#B45309` (5.02:1). The brighter values are retained as `--color-success-dot` and `--color-warning-dot` for dots and fills, where the 3:1 UI-component threshold applies. The visual language is unchanged; only the text values shift.
+Green and amber at the brighter dot values would put "completed" and "queued" labels below the accessible threshold on a console where those words carry operational meaning. Text-bearing status uses the darker `#166534` and `#92400E` values, and danger uses `#B91C1C`, so text remains AA-readable against the tinted surfaces as well as the canvas. The brighter values are retained as `--color-success-dot` and `--color-warning-dot` for dots and fills, where the 3:1 UI-component threshold applies. The visual language is unchanged; only the text values shift.
 
 ### Fonts
 

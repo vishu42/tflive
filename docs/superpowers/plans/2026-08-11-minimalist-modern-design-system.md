@@ -15,7 +15,7 @@
 - **Raw hex literals are permitted only in `web/src/styles/tokens.css`.** Enforced by the guard test.
 - **Every `border-radius` must reference a `var(--radius-*)` token.** Enforced.
 - **Every `box-shadow` must reference a `var(--shadow-*)` token.** Enforced. This is why the input focus ring is defined as `--shadow-ring` rather than written inline.
-- **Text-bearing status colours are `#15803D` and `#B45309`**, never `#16A34A` / `#D97706`, which fail WCAG AA on white at 3.2:1. The brighter values exist only as `--color-success-dot` / `--color-warning-dot` for dots and fills.
+- **Text-bearing status colours use `#166534`, `#92400E`, and `#B91C1C`**, never the brighter dot/fill values, so they pass WCAG AA against their tinted surfaces as well as white. The brighter values exist only as `--color-success-dot` / `--color-warning-dot` for dots and fills.
 - **Every continuous animation sits behind `prefers-reduced-motion: reduce`**, and reduced motion must resolve `.reveal` elements to *visible*, never leave them hidden.
 - **`.gradient-text` and `.panel--featured` require `forced-colors: active` fallbacks.** Both draw colour from background layers, which forced-colors replaces.
 - **`data-testid` attributes and ARIA roles are immovable.** No test asserts on class names; these are the entire test contract.
@@ -113,7 +113,7 @@ Replace the entire contents of `web/src/styles/tokens.css`:
   --color-bg:        #FAFAFA;
   --color-fg:        #0F172A;
   --color-muted:     #F1F5F9;
-  --color-muted-fg:  #64748B;
+  --color-muted-fg:  #475569;
   --color-border:    #E2E8F0;
   --color-card:      #FFFFFF;
 
@@ -131,10 +131,11 @@ Replace the entire contents of `web/src/styles/tokens.css`:
      The -dot values are brighter and are ONLY for dots and fills, where the
      3:1 UI-component contrast threshold applies. Text uses the darker values:
      #16A34A is 3.24:1 on white and #D97706 is 3.20:1, both failing AA for
-     normal text, while #15803D is 4.99:1 and #B45309 is 5.02:1. */
-  --color-success:      #15803D;
-  --color-warning:      #B45309;
-  --color-danger:       #DC2626;
+     normal text. The darker values below preserve AA contrast on their
+     tinted surfaces as well as on the canvas. */
+  --color-success:      #166534;
+  --color-warning:      #92400E;
+  --color-danger:       #B91C1C;
   --color-success-dot:  #16A34A;
   --color-warning-dot:  #D97706;
   --color-success-soft: rgba(22, 163, 74, 0.10);
@@ -787,10 +788,12 @@ describe("tokens.css", () => {
 
   it("uses the AA-safe status colours for text", () => {
     const tokens = readFileSync(join(STYLES_DIR, "tokens.css"), "utf8");
-    // #16A34A is 3.24:1 on white and #D97706 is 3.20:1 — both fail AA for
-    // normal text. They may only appear as the -dot variants.
-    expect(tokens).toMatch(/--color-success:\s*#15803D/i);
-    expect(tokens).toMatch(/--color-warning:\s*#B45309/i);
+    // The darker semantic values remain readable on their tinted surfaces;
+    // brighter values are restricted to dots and fills.
+    expect(tokens).toMatch(/--color-success:\s*#166534/i);
+    expect(tokens).toMatch(/--color-warning:\s*#92400E/i);
+    expect(tokens).toMatch(/--color-danger:\s*#B91C1C/i);
+    expect(tokens).toMatch(/--color-muted-fg:\s*#475569/i);
   });
 });
 
@@ -890,7 +893,7 @@ Adds the four new shared modules. No existing screen changes yet.
 **Interfaces:**
 - Consumes: all tokens and `.reveal`, keyframes from Task 1.
 - Produces:
-  - `useInView<T extends Element>(): { ref: RefObject<T | null>; visible: boolean }`
+  - `useInView<T extends Element>(): { ref: (element: T | null) => void; visible: boolean }`
   - `<SectionLabel pulse?: boolean>{children}</SectionLabel>`
   - `<HeroGraphic />` — no props
   - `<StatBand items: { label: string; value: string | number }[] />`
@@ -933,10 +936,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function Probe() {
+function Probe({ attached = true }: { attached?: boolean }) {
   const { ref, visible } = useInView<HTMLDivElement>();
   return (
-    <div ref={ref} data-testid="probe" data-visible={visible}>
+    <div ref={attached ? ref : undefined} data-testid="probe" data-visible={visible}>
       content
     </div>
   );
@@ -950,6 +953,14 @@ describe("useInView", () => {
 
   it("becomes visible once the element intersects", () => {
     render(<Probe />);
+    callbacks[0]([{ isIntersecting: true }]);
+    expect(screen.getByTestId("probe").dataset.visible).toBe("true");
+  });
+
+  it("observes an element attached after the initial render", () => {
+    const view = render(<Probe attached={false} />);
+    view.rerender(<Probe />);
+    expect(callbacks).toHaveLength(1);
     callbacks[0]([{ isIntersecting: true }]);
     expect(screen.getByTestId("probe").dataset.visible).toBe("true");
   });
@@ -982,7 +993,7 @@ Expected: FAIL — cannot resolve `./useInView`.
 Create `web/src/shared/useInView.ts`:
 
 ```ts
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 /**
  * Fires once when the element first enters the viewport, then disconnects.
@@ -990,12 +1001,14 @@ import { useEffect, useRef, useState } from "react";
  * 60px bottom margin so content settles before it animates.
  */
 export function useInView<T extends Element>() {
-  const ref = useRef<T | null>(null);
+  const [node, setNode] = useState<T | null>(null);
   const [visible, setVisible] = useState(false);
+  const ref = useCallback((element: T | null) => {
+    setNode(element);
+  }, []);
 
   useEffect(() => {
-    const node = ref.current;
-    if (!node) return;
+    if (!node || visible) return;
 
     // Environments without IntersectionObserver (older jsdom, SSR) should show
     // content rather than hide it forever.
@@ -1016,7 +1029,7 @@ export function useInView<T extends Element>() {
 
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [node, visible]);
 
   return { ref, visible };
 }
@@ -1028,7 +1041,7 @@ export function useInView<T extends Element>() {
 cd web && npx vitest run src/shared/useInView.test.tsx
 ```
 
-Expected: PASS, 4 tests.
+Expected: PASS, 5 tests.
 
 - [ ] **Step 5: Write the SectionLabel and StatBand tests**
 
@@ -1417,6 +1430,7 @@ describe("statusTone", () => {
   it("classifies active work as progress", () => {
     expect(statusTone("running")).toBe("progress");
     expect(statusTone("validating")).toBe("progress");
+    expect(statusTone("cancel_requested")).toBe("progress");
     expect(statusTone("canceling")).toBe("progress");
     expect(statusTone("init_started")).toBe("progress");
     expect(statusTone("plan_started")).toBe("progress");
@@ -1438,9 +1452,8 @@ describe("statusTone", () => {
     expect(statusTone("error")).toBe("failed");
   });
 
-  it("classifies cancellation as canceled", () => {
+  it("distinguishes a requested cancellation from a completed cancellation", () => {
     expect(statusTone("canceled")).toBe("canceled");
-    expect(statusTone("cancel_requested")).toBe("canceled");
   });
 
   it("treats 'not ...' phrasing used by StatusRow callers as waiting", () => {
@@ -1487,7 +1500,7 @@ Create `web/src/shared/statusTone.ts`:
 export type StatusTone = "settled" | "progress" | "waiting" | "failed" | "canceled";
 
 const FAILED = new Set(["failed", "invalid", "error"]);
-const CANCELED = new Set(["canceled", "cancel_requested"]);
+const CANCELED = new Set(["canceled"]);
 const WAITING = new Set([
   "pending",
   "pending_validation",
@@ -1495,7 +1508,7 @@ const WAITING = new Set([
   "locked",
   "waiting_approval"
 ]);
-const PROGRESS = new Set(["running", "validating", "canceling"]);
+const PROGRESS = new Set(["running", "validating", "cancel_requested", "canceling"]);
 
 export function statusTone(value: string): StatusTone {
   if (FAILED.has(value)) return "failed";

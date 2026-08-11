@@ -46,9 +46,9 @@ describe("statusTone", () => {
     expect(statusTone("error")).toBe("failed");
   });
 
-  it("classifies cancellation as canceled", () => {
+  it("distinguishes a requested cancellation from a completed cancellation", () => {
     expect(statusTone("canceled")).toBe("canceled");
-    expect(statusTone("cancel_requested")).toBe("canceled");
+    expect(statusTone("cancel_requested")).toBe("progress");
   });
 
   it("treats 'not ...' phrasing used by StatusRow callers as waiting", () => {
