@@ -6,7 +6,6 @@ import { tenantID } from "../../config";
 import HeroGraphic from "../../shared/HeroGraphic";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import SectionLabel from "../../shared/SectionLabel";
-import StatBand from "../../shared/StatBand";
 import { useInView } from "../../shared/useInView";
 
 // The list is authz-filtered by the backend (AUTH-013) — the screen renders
@@ -56,17 +55,6 @@ export default function StacksListScreen() {
           </Link>
         </RequireCapability>
       </header>
-      {stacks.length > 0 && (
-        <StatBand
-          items={[
-            { label: "Stacks", value: stacks.length },
-            {
-              label: "You can operate",
-              value: stacks.filter((s) => s.effectiveCapabilities.canOperate).length
-            }
-          ]}
-        />
-      )}
       {stacks.length === 0 ? (
         <section className="showcase showcase--compact" data-testid="stacks-list-empty">
           <div className="showcase__body reveal" ref={emptyStateRef} data-visible={emptyStateVisible}>
