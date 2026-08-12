@@ -51,6 +51,66 @@ export function canSaveStackTemplateConfig(
   return !areStringRecordEqual(currentConfig, savedConfig);
 }
 
+export interface UpgradeVariablePartition {
+  added: TemplateVariable[];
+  carried: TemplateVariable[];
+  removed: TemplateVariable[];
+}
+
+/**
+ * Revisions this stack template can be upgraded to: active revisions of the
+ * same source template, minus the one already desired. The API returns
+ * revisions newest-first and that order is preserved, so the first candidate
+ * is the newest.
+ */
+export function upgradeCandidateRevisions(
+  revisions: TemplateRevision[],
+  stackTemplate: StackTemplate | null
+): TemplateRevision[] {
+  if (!stackTemplate) {
+    return [];
+  }
+  return revisions.filter((revision) => canUpgradeStackTemplate(stackTemplate, revision));
+}
+
+/**
+ * Compares the installed revision's variables against a target revision's, by
+ * name. Carried variables carry the *target* revision's definition, because
+ * that is what the upgrade will be validated against — a variable can stay
+ * named the same while becoming required or changing type.
+ */
+export function partitionUpgradeVariables(
+  currentVariables: TemplateVariable[],
+  targetVariables: TemplateVariable[]
+): UpgradeVariablePartition {
+  const currentNames = new Set(currentVariables.map((variable) => variable.name));
+  const targetNames = new Set(targetVariables.map((variable) => variable.name));
+  return {
+    added: targetVariables.filter((variable) => !currentNames.has(variable.name)),
+    carried: targetVariables.filter((variable) => currentNames.has(variable.name)),
+    removed: currentVariables.filter((variable) => !targetNames.has(variable.name))
+  };
+}
+
+/**
+ * Save is available when the edited values differ from what is stored on the
+ * stack template. Unlike canSaveStackTemplateConfig this takes no revision:
+ * the template screen always renders the installed template's desired
+ * revision, so there is no selection that could disagree with it.
+ */
+export function canSaveInstalledTemplateConfig(
+  stackTemplate: StackTemplate | null,
+  variables: TemplateVariable[],
+  variableValues: Record<string, string>
+): boolean {
+  if (!stackTemplate) {
+    return false;
+  }
+  const currentConfig = configFromVariableValues(variables, variableValues);
+  const savedConfig = configFromVariableValues(variables, variableValuesFromConfig(stackTemplate.config, variables));
+  return !areStringRecordEqual(currentConfig, savedConfig);
+}
+
 export function variableValuesFromConfig(config: Record<string, unknown>, variables: TemplateVariable[]): Record<string, string> {
   const values: Record<string, string> = {};
   for (const variable of variables) {
