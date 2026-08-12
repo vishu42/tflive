@@ -50,6 +50,10 @@ switched by state the user cannot see.
   row still shows one.
 - The runs screen (issue #130) is untouched by this spec.
 - Complex/sensitive variable input (epic #148) is untouched.
+- The legacy console at `/` (`App.tsx`) is untouched. It carries its own copy
+  of this workflow and is slated for removal once the feature screens replace
+  it; rewriting it here would double the work for a screen already scheduled
+  to die.
 
 ## Routes
 
@@ -226,8 +230,8 @@ latest revision" with a link back, and no form.
 
 | File | Change |
 |---|---|
-| `InstalledTemplatePanel.tsx` | **deleted** |
-| `VariablesPanel.tsx` | **deleted** — its three-action form is the thing being dismantled |
+| `InstalledTemplatePanel.tsx` | **unused by this screen** — retained only because the legacy console (`App.tsx`, rendered at `/`) still imports it; dies with that console |
+| `VariablesPanel.tsx` | **unused by this screen** — its three-action form is the thing being dismantled, but `App.tsx` still imports it; dies with that console |
 | `VariableFields.tsx` | **new** — presentational only: variables, values, onChange, disabled. Shared by all three screens |
 | `StackTemplateConfigPanel.tsx` | **new** — `VariableFields` plus a single Save config action and the `disabledReason` locked state |
 | `AddStackTemplateScreen.tsx` | **new** |
@@ -255,15 +259,20 @@ partitionUpgradeVariables(
 ): { added: TemplateVariable[]; carried: TemplateVariable[]; removed: TemplateVariable[] }
 // compared by variable name.
 
-canSaveStackTemplateConfig(
+canSaveInstalledTemplateConfig(
   stackTemplate: StackTemplate | null,
   variables: TemplateVariable[],
   variableValues: Record<string, string>
 ): boolean
-// signature change: the templateRevision parameter and its
-// "selected revision equals desired" guard are removed, because the
-// screen no longer has a revision selector to disagree with.
+// New, narrower sibling of canSaveStackTemplateConfig: it drops the
+// "selected revision equals desired" guard, which is vacuous on a screen
+// with no revision selector to disagree with.
 ```
+
+`canSaveStackTemplateConfig` keeps its existing four-argument signature. The
+legacy console still has a revision selector, so the guard is not vacuous
+there and removing it would silently change that screen's behavior. The two
+functions converge into one when the legacy console is deleted.
 
 `canUpgradeStackTemplate` is retained — `upgradeCandidateRevisions` uses the
 same rule, and the upgrade screen uses it to validate the chosen target before
