@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeft, ArrowUpCircle, Loader2, RefreshCw } from "lucide-react";
+import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   useStackQuery,
@@ -174,7 +174,7 @@ export default function UpgradeStackTemplateScreen() {
     return (
       <section className="upgrade-stack-template-screen" data-testid="upgrade-destroying">
         {backLink}
-        <p className="muted">Destroy in progress — this template cannot be upgraded right now.</p>
+        <p className="muted">Destroy in progress — this template cannot change revision right now.</p>
       </section>
     );
   }
@@ -183,7 +183,7 @@ export default function UpgradeStackTemplateScreen() {
     <section className="upgrade-stack-template-screen" data-testid="upgrade-stack-template-screen">
       <header className="page-header">
         {backLink}
-        <SectionLabel>Upgrade</SectionLabel>
+        <SectionLabel>Change revision</SectionLabel>
         <h1>{stackTemplateLabel(stackTemplate)}</h1>
       </header>
 
@@ -194,13 +194,13 @@ export default function UpgradeStackTemplateScreen() {
       )}
 
       {candidates.length === 0 ? (
-        <section className="panel" data-testid="upgrade-already-latest">
-          <p className="muted">Already on the latest revision.</p>
+        <section className="panel" data-testid="upgrade-no-alternatives">
+          <p className="muted">No other active revisions available.</p>
         </section>
       ) : (
         <section className="panel wide">
           <label className="selector-label">
-            Target revision
+            Revision to apply
             <select
               data-testid="upgrade-target-select"
               value={targetRevision?.id ?? ""}
@@ -270,9 +270,9 @@ export default function UpgradeStackTemplateScreen() {
               {upgradeStackTemplateMutation.isPending ? (
                 <Loader2 size={16} className="spin" />
               ) : (
-                <ArrowUpCircle size={16} />
+                <RefreshCw size={16} />
               )}
-              Upgrade
+              Change revision
             </button>
           </div>
         </section>

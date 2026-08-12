@@ -186,40 +186,64 @@ describe("StackTemplateScreen", () => {
     expect(screen.getByTestId("add-stack-template-link").getAttribute("href")).toBe("/stacks/stack_1/template/new");
   });
 
-  it("offers an upgrade link when a newer active revision of the same source exists", () => {
+  it("keeps a visible gap between the template list header and its choices", () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient);
 
     renderScreen(queryClient);
 
-    expect(screen.getByTestId("stack-template-update-available")).toBeTruthy();
-    expect(screen.getByTestId("upgrade-stack-template-link").getAttribute("href")).toBe(
+    const listContent = screen.getByTestId("stack-template-list-content");
+    const header = screen.getByTestId("stack-template-panel-header");
+    const items = screen.getByTestId("stack-template-items");
+
+    expect(listContent.contains(header)).toBe(true);
+    expect(listContent.contains(items)).toBe(true);
+    expect(listContent.className).toContain("stack-template-list-content");
+  });
+
+  it("offers a revision-selection link for an installed template", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    expect(screen.getByTestId("stack-template-revision-action")).toBeTruthy();
+    expect(screen.getByTestId("change-stack-template-revision-link").getAttribute("href")).toBe(
       "/stacks/stack_1/template/st_1/upgrade"
     );
   });
 
-  it("reports being up to date when the only revision is the installed one", () => {
+  it("keeps the revision action visually secondary to the configuration panel", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    const revisionAction = screen.getByTestId("stack-template-revision-action");
+    expect(revisionAction.className).toContain("stack-template-revision-action");
+    expect(revisionAction.className).not.toContain("panel");
+  });
+
+  it("keeps revision selection available when the only revision is installed", () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient);
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [templateRevision()]);
 
     renderScreen(queryClient);
 
-    expect(screen.getByTestId("stack-template-up-to-date")).toBeTruthy();
-    expect(screen.queryByTestId("upgrade-stack-template-link")).toBeNull();
+    expect(screen.getByTestId("stack-template-revision-action")).toBeTruthy();
+    expect(screen.getByTestId("change-stack-template-revision-link")).toBeTruthy();
   });
 
-  it("ignores revisions of a different source template when deciding the update cue", () => {
+  it("does not wait for the tenant revision list before showing revision selection", () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient);
-    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
-      templateRevision(),
-      templateRevision({ id: "rev_elsewhere", source_template_id: "tmpl_src_2" })
-    ]);
+    queryClient.removeQueries({ queryKey: queryKeys.templateRevisions("tenant_123") });
 
     renderScreen(queryClient);
 
-    expect(screen.getByTestId("stack-template-up-to-date")).toBeTruthy();
+    expect(screen.getByTestId("stack-template-revision-action")).toBeTruthy();
+    expect(screen.getByTestId("change-stack-template-revision-link")).toBeTruthy();
   });
 
   it("renders the template selected by the URL rather than the first installed one", () => {
@@ -256,6 +280,18 @@ describe("StackTemplateScreen", () => {
     expect(screen.getByText("Overrides the stack environment for this template only.")).toBeTruthy();
   });
 
+  it("keeps the revision action, variables, and credentials panels in the right column", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    const rightColumn = screen.getByTestId("stack-template-right-column");
+    expect(rightColumn.contains(screen.getByTestId("stack-template-revision-action"))).toBe(true);
+    expect(rightColumn.contains(screen.getByTestId("stack-template-config"))).toBe(true);
+    expect(rightColumn.contains(screen.getByText("Template credentials"))).toBe(true);
+  });
+
   it("disables save while values match the installed config and enables it after an edit", () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient);
@@ -277,7 +313,7 @@ describe("StackTemplateScreen", () => {
     expect(actionButton(/Save config/).disabled).toBe(true);
     expect((screen.getByLabelText(/region/) as HTMLInputElement).disabled).toBe(true);
     expect(screen.queryByTestId("add-stack-template-link")).toBeNull();
-    expect(screen.queryByTestId("upgrade-stack-template-link")).toBeNull();
+    expect(screen.queryByTestId("change-stack-template-revision-link")).toBeNull();
   });
 
   it("prompts to add a template when the stack has none installed", () => {
@@ -292,24 +328,15 @@ describe("StackTemplateScreen", () => {
     expect(screen.queryByTestId("stack-template-config")).toBeNull();
   });
 
-  it("still shows the screen when only the revisions query fails", async () => {
+  it("does not need the revisions query to render the installed template", async () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient);
-    // removeQueries, not setQueryData(..., undefined) — TanStack Query
-    // ignores an undefined value, which would leave the seeded list in place.
     queryClient.removeQueries({ queryKey: queryKeys.templateRevisions("tenant_123") });
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ error: "unauthorized", message: "unauthorized" }), {
-        status: 401,
-        headers: { "content-type": "application/json" }
-      })
-    );
 
     renderScreen(queryClient);
 
     await waitFor(() => expect(screen.getByTestId("stack-template-config")).toBeTruthy());
-    expect(screen.queryByTestId("stack-template-update-available")).toBeNull();
-    expect(screen.queryByTestId("stack-template-up-to-date")).toBeNull();
+    expect(screen.getByTestId("change-stack-template-revision-link")).toBeTruthy();
   });
 
   it("shows Destroying badge when lifecycle is destroying", () => {
@@ -323,7 +350,7 @@ describe("StackTemplateScreen", () => {
     expect(screen.getByText("Destroying…")).toBeTruthy();
   });
 
-  it("disables the upgrade link instead of offering it while the installed template is destroying", () => {
+  it("disables revision selection while the installed template is destroying", () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient, allAllowed);
     queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"),
@@ -331,14 +358,10 @@ describe("StackTemplateScreen", () => {
 
     renderScreen(queryClient);
 
-    // An update is available (rev_2 exists), but the config panel already
-    // reads "Destroy in progress" — offering an enabled Upgrade action next
-    // to it would contradict what the screen itself knows and the backend
-    // would reject it with a 409 anyway.
-    expect(screen.getByTestId("stack-template-update-available")).toBeTruthy();
-    const upgradeControl = screen.getByTestId("upgrade-stack-template-link") as HTMLButtonElement;
-    expect(upgradeControl.tagName).toBe("BUTTON");
-    expect(upgradeControl.disabled).toBe(true);
+    expect(screen.getByTestId("stack-template-revision-action")).toBeTruthy();
+    const changeRevisionControl = screen.getByTestId("change-stack-template-revision-link") as HTMLButtonElement;
+    expect(changeRevisionControl.tagName).toBe("BUTTON");
+    expect(changeRevisionControl.disabled).toBe(true);
     expect(screen.getByTestId("upgrade-disabled-reason").textContent).toBe("Destroy in progress");
   });
 

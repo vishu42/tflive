@@ -56,10 +56,9 @@ export interface UpgradeVariablePartition {
 }
 
 /**
- * Revisions this stack template can be upgraded to: active revisions of the
- * same source template, minus the one already desired. The API returns
- * revisions newest-first and that order is preserved, so the first candidate
- * is the newest.
+ * Revisions this stack template can change to: active revisions of the same
+ * source template, minus the one already desired. The API's order is
+ * preserved, but it is not treated as commit ancestry or recency.
  */
 export function upgradeCandidateRevisions(
   revisions: TemplateRevision[],

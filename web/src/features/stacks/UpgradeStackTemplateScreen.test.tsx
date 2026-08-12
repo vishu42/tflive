@@ -142,13 +142,33 @@ describe("UpgradeStackTemplateScreen", () => {
     vi.restoreAllMocks();
   });
 
-  it("preselects the newest candidate revision", () => {
+  it("preselects the first same-source alternative revision", () => {
     const queryClient = testQueryClient();
     seedUpgradeable(queryClient);
 
     renderScreen(queryClient);
 
     expect((screen.getByTestId("upgrade-target-select") as HTMLSelectElement).value).toBe("rev_next");
+  });
+
+  it("allows selecting an active same-source revision even when its commit is older", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), stackView([stackTemplate()]));
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      templateRevision({
+        id: "rev_older",
+        resolved_commit_sha: "0000000000000000",
+        created_at: "2026-07-01T00:00:00Z"
+      }),
+      templateRevision({ id: "rev_current" })
+    ]);
+    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_current"), [variable()]);
+    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_older"), [variable({ template_revision_id: "rev_older" })]);
+
+    renderScreen(queryClient);
+
+    const options = Array.from((screen.getByTestId("upgrade-target-select") as HTMLSelectElement).options);
+    expect(options.map((option) => option.value)).toEqual(["rev_older"]);
   });
 
   it("excludes the installed revision and other source templates from the candidates", () => {
@@ -191,7 +211,7 @@ describe("UpgradeStackTemplateScreen", () => {
     renderScreen(queryClient);
 
     fireEvent.change(screen.getByLabelText(/new_var/), { target: { value: "enabled" } });
-    fireEvent.click(screen.getByRole("button", { name: /Upgrade/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Change revision/ }));
 
     await waitFor(() => expect(screen.getByTestId("location")).toBeTruthy());
     expect(screen.getByTestId("location").textContent).toBe("/stacks/stack_1/template?selected=st_1");
@@ -226,7 +246,7 @@ describe("UpgradeStackTemplateScreen", () => {
     expect(screen.getByTestId("upgrade-loading")).toBeTruthy();
     expect(screen.queryByText(/is no longer used and will be dropped/)).toBeNull();
     expect(screen.queryByText(/is new in this revision/)).toBeNull();
-    expect(screen.queryByRole("button", { name: /Upgrade/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Change revision/ })).toBeNull();
   });
 
   it("suppresses the previous target's fields and diff notes while switching to a target whose variables have not loaded", () => {
@@ -249,7 +269,7 @@ describe("UpgradeStackTemplateScreen", () => {
 
     renderScreen(queryClient);
 
-    // The preselected (newest) candidate, rev_next, has already loaded.
+    // The preselected first candidate, rev_next, has already loaded.
     expect(screen.getByTestId("upgrade-added-new_var")).toBeTruthy();
     expect(screen.getByLabelText(/new_var/)).toBeTruthy();
 
@@ -265,7 +285,7 @@ describe("UpgradeStackTemplateScreen", () => {
     expect(screen.queryByLabelText(/new_var/)).toBeNull();
     expect(screen.queryByTestId("upgrade-added-new_var")).toBeNull();
     expect(screen.queryByTestId("upgrade-removed-legacy_flag")).toBeNull();
-    expect((screen.getByRole("button", { name: /Upgrade/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /Change revision/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("guards the direct-URL path when the installed template is mid-destroy", () => {
@@ -279,18 +299,19 @@ describe("UpgradeStackTemplateScreen", () => {
     renderScreen(queryClient);
 
     expect(screen.getByTestId("upgrade-destroying")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Upgrade/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Change revision/ })).toBeNull();
   });
 
-  it("reports being on the latest revision when nothing can be upgraded to", () => {
+  it("reports when no other active revisions are available", () => {
     const queryClient = testQueryClient();
     seedUpgradeable(queryClient);
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [templateRevision({ id: "rev_current" })]);
 
     renderScreen(queryClient);
 
-    expect(screen.getByTestId("upgrade-already-latest")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Upgrade/ })).toBeNull();
+    expect(screen.getByTestId("upgrade-no-alternatives")).toBeTruthy();
+    expect(screen.getByText("No other active revisions available.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Change revision/ })).toBeNull();
   });
 
   it("surfaces a failed upgrade without leaving the screen", async () => {
@@ -305,7 +326,7 @@ describe("UpgradeStackTemplateScreen", () => {
 
     renderScreen(queryClient);
 
-    fireEvent.click(screen.getByRole("button", { name: /Upgrade/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Change revision/ }));
 
     await waitFor(() => expect(screen.getByTestId("upgrade-stack-template-error")).toBeTruthy());
   });

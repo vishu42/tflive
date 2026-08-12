@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowUpCircle, CheckCircle2, Loader2, Plus, RefreshCw } from "lucide-react";
+import { Loader2, Plus, RefreshCw } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   useCreateStackTemplateCredentialMutation,
@@ -7,7 +7,6 @@ import {
   useStackQuery,
   useStackTemplateCredentialsQuery,
   useTemplateRevisionVariablesQuery,
-  useTemplateRevisionsQuery,
   useUpdateStackTemplateConfigMutation
 } from "../../api/queries";
 import { tenantID } from "../../config";
@@ -21,14 +20,13 @@ import {
   findSelectedStackTemplate,
   isDestroyingStackTemplate,
   stackTemplateLabel,
-  upgradeCandidateRevisions,
   variableValuesFromConfig
 } from "./stackWorkflow";
 
-// /stacks/:stackId/template — configures the installed template and nothing
-// else. Installing lives at template/new and upgrading at
+// /stacks/:stackId/template — configures the installed template. Installing
+// lives at template/new and choosing another revision lives at
 // template/:stackTemplateId/upgrade, so this screen has no revision selector
-// and its form has exactly one action.
+// and its configuration form has exactly one action.
 //
 // Selection is URL state (?selected=<stackTemplateID>) rather than component
 // state, so the add and upgrade screens can hand back the template they just
@@ -49,13 +47,6 @@ export default function StackTemplateScreen() {
     installedTemplate?.desired_template_revision_id ?? ""
   );
   const variables = variablesQuery.data ?? [];
-
-  // Answers one question only: does a newer active revision of this
-  // template's source template exist? A failure here costs the update cue,
-  // not the screen, so it is deliberately absent from the error boundary.
-  const templateRevisionsQuery = useTemplateRevisionsQuery(tenantID);
-  const upgradeCandidates = upgradeCandidateRevisions(templateRevisionsQuery.data ?? [], installedTemplate);
-  const updateCueReady = installedTemplate !== null && templateRevisionsQuery.status === "success";
 
   const boundary = useQueryErrorBoundary(stackQuery.error ?? variablesQuery.error);
 
@@ -165,77 +156,68 @@ export default function StackTemplateScreen() {
       {errorMessage && <div className="alert">{errorMessage}</div>}
       <div className="workflow-grid">
         <section className="panel">
-          <header className="panel-header">
-            <h2>Stack templates</h2>
-            <RequireCapability capability="canOperate">{addTemplateLink}</RequireCapability>
-          </header>
-          {stackTemplates.length === 0 ? (
-            <p className="muted" data-testid="stack-template-empty">
-              No stack templates installed
-            </p>
-          ) : (
-            <div className="stack-template-items">
-              {stackTemplates.map((item) => (
-                <button
-                  className={item.id === installedTemplate?.id ? "active" : ""}
-                  key={item.id}
-                  onClick={() => handleSelectStackTemplate(item.id)}
-                  type="button"
-                >
-                  <span>{stackTemplateLabel(item)}</span>
-                  {item.lifecycle === "destroying" && (
-                    <small className="lifecycle-badge destroying">Destroying…</small>
-                  )}
-                  <small>{item.desired_template_revision_id}</small>
-                </button>
-              ))}
-            </div>
-          )}
+          <div className="stack-template-list-content" data-testid="stack-template-list-content">
+            <header className="panel-header" data-testid="stack-template-panel-header">
+              <h2>Stack templates</h2>
+              <RequireCapability capability="canOperate">{addTemplateLink}</RequireCapability>
+            </header>
+            {stackTemplates.length === 0 ? (
+              <p className="muted" data-testid="stack-template-empty">
+                No stack templates installed
+              </p>
+            ) : (
+              <div className="stack-template-items" data-testid="stack-template-items">
+                {stackTemplates.map((item) => (
+                  <button
+                    className={item.id === installedTemplate?.id ? "active" : ""}
+                    key={item.id}
+                    onClick={() => handleSelectStackTemplate(item.id)}
+                    type="button"
+                  >
+                    <span>{stackTemplateLabel(item)}</span>
+                    {item.lifecycle === "destroying" && (
+                      <small className="lifecycle-badge destroying">Destroying…</small>
+                    )}
+                    <small>{item.desired_template_revision_id}</small>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </section>
         {installedTemplate && (
-          <>
-            {updateCueReady && (
-              <section className="panel stack-template-update">
-                {upgradeCandidates.length === 0 ? (
-                  <p className="muted" data-testid="stack-template-up-to-date">
-                    <CheckCircle2 size={16} />
-                    Up to date
-                  </p>
-                ) : (
+          <div className="stack-template-right-column" data-testid="stack-template-right-column">
+            <section className="stack-template-revision-action" data-testid="stack-template-revision-action">
+              <p className="muted">
+                <RefreshCw size={16} />
+                Choose a template revision
+              </p>
+              <RequireCapability capability="canOperate">
+                {destroying ? (
                   <>
-                    <p data-testid="stack-template-update-available">
-                      <ArrowUpCircle size={16} />
-                      Update available
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      disabled
+                      data-testid="change-stack-template-revision-link"
+                    >
+                      Change revision
+                    </button>
+                    <p className="muted" data-testid="upgrade-disabled-reason">
+                      Destroy in progress
                     </p>
-                    <RequireCapability capability="canOperate">
-                      {destroying ? (
-                        <>
-                          <button
-                            className="secondary-button"
-                            type="button"
-                            disabled
-                            data-testid="upgrade-stack-template-link"
-                          >
-                            Upgrade
-                          </button>
-                          <p className="muted" data-testid="upgrade-disabled-reason">
-                            Destroy in progress
-                          </p>
-                        </>
-                      ) : (
-                        <Link
-                          className="secondary-button"
-                          to={`/stacks/${stackId}/template/${installedTemplate.id}/upgrade`}
-                          data-testid="upgrade-stack-template-link"
-                        >
-                          Upgrade
-                        </Link>
-                      )}
-                    </RequireCapability>
                   </>
+                ) : (
+                  <Link
+                    className="secondary-button"
+                    to={`/stacks/${stackId}/template/${installedTemplate.id}/upgrade`}
+                    data-testid="change-stack-template-revision-link"
+                  >
+                    Change revision
+                  </Link>
                 )}
-              </section>
-            )}
+              </RequireCapability>
+            </section>
             <RequireCapability
               capability="canOperate"
               fallback={
@@ -260,7 +242,7 @@ export default function StackTemplateScreen() {
                 onDelete={(id) => deleteTemplateCredentialMutation.mutateAsync(id)}
               />
             </RequireCapability>
-          </>
+          </div>
         )}
       </div>
     </section>

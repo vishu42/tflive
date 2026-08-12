@@ -38,7 +38,8 @@ switched by state the user cannot see.
 
 - The template screen configures the installed template. Nothing else.
 - Installing a template is a deliberate, separate flow.
-- Upgrading is a deliberate, separate flow that shows what actually changes.
+- Changing the installed revision is a deliberate, separate flow that shows
+  what actually changes.
 - Delete the raw-ID panel.
 
 ## Non-goals
@@ -120,21 +121,17 @@ Queries:
 - `useStackQuery(tenantID, stackId)` — unchanged.
 - `useTemplateRevisionVariablesQuery(tenantID, installedTemplate.desired_template_revision_id)`
   — now pinned to the installed revision rather than a selected one.
-- `useTemplateRevisionsQuery(tenantID)` — **retained with a new job**. It no
-  longer feeds an install picker; it answers only "does a newer active
-  revision of this template's source template exist?", which drives the
-  up-to-date / update-available cue. The query key is shared with other
-  screens, so this is usually a cache hit.
+The detail screen does not infer revision recency. The template revision
+record has no Git ancestry relation, and neither registration order nor a
+timestamp proves that one commit is newer than another. Instead, every
+installed template gets a neutral **Change revision** action that links to
+`template/:stackTemplateId/upgrade`. The chooser performs the safe filtering
+there: active revisions from the same source template, excluding the current
+desired revision. The first returned candidate is only the default selection,
+not a claim that it is newer. If there are no alternatives, the chooser says
+**No other active revisions available.**
 
-The cue renders in three states, derived from `upgradeCandidateRevisions()`:
-
-| Condition | Render |
-|---|---|
-| revisions query pending | nothing (no flash) |
-| no candidates | `✓ Up to date` |
-| one or more candidates | `↑ Update available` + Upgrade link to `template/:stackTemplateId/upgrade` |
-
-The Upgrade link and the `+ Add template` link are both wrapped in a
+The Change revision link and the `+ Add template` link are both wrapped in a
 `canOperate` gate so a viewer does not see actions they cannot take; the route
 guards are the actual enforcement.
 
@@ -193,9 +190,10 @@ hides the most behavior, so the screen states it explicitly.
 Candidates are active revisions of the *same source template*, excluding the
 current desired revision — the constraint `canUpgradeStackTemplate` already
 enforces but never surfaces. They are offered in a `<select>` holding only
-those candidates. The API returns revisions newest-first, so the first
-candidate is the newest and is preselected; changing the selection re-runs the
-variable diff below.
+those candidates. The first candidate returned by the API is preselected as a
+convenience; the UI makes no claim about commit age or ancestry. This supports
+forward changes, rollbacks, and selecting an older commit; changing the
+selection re-runs the variable diff below.
 
 Because `upgradeStackTemplate` sends a full `config` alongside
 `target_template_revision_id`, the screen loads variables for **both** the
@@ -223,8 +221,8 @@ values)`, so removed variables are excluded structurally, not by convention.
 
 On success, navigate to `../../template?selected=<stackTemplateId>`.
 
-Empty state: when there are no candidates, the screen renders "Already on the
-latest revision" with a link back, and no form.
+Empty state: when there are no candidates, the screen renders "No other active
+revisions available." with a link back, and no form.
 
 ## Component inventory
 
@@ -251,7 +249,7 @@ upgradeCandidateRevisions(
   stackTemplate: StackTemplate | null
 ): TemplateRevision[]
 // active revisions sharing source_template_id, excluding the current
-// desired revision; input order (newest-first) preserved.
+// desired revision; input order preserved without inferring recency.
 
 partitionUpgradeVariables(
   currentVariables: TemplateVariable[],
@@ -301,14 +299,16 @@ Component tests:
 - `AddStackTemplateScreen` — variables form hidden until a revision is picked;
   non-active revisions not selectable; Install posts the expected body;
   navigates back with `?selected=`; empty-registry state.
-- `UpgradeStackTemplateScreen` — only same-source candidates listed; newest
-  preselected; added/carried/removed each render distinctly; Upgrade posts
-  `target_template_revision_id` plus a config excluding removed variables;
-  "already on the latest revision" state.
+- `UpgradeStackTemplateScreen` — only same-source candidates listed; the first
+  candidate is preselected without a recency claim; older same-source commits
+  remain selectable; added/carried/removed each render distinctly; Change
+  revision posts `target_template_revision_id` plus a config excluding
+  removed variables; no-alternatives state.
 - `StackTemplateScreen` — install button and revision dropdown are **gone**;
-  raw IDs are **gone**; Save config is the only form action; up-to-date vs
-  update-available cue; credentials panel titled "Template credentials";
-  `?selected=` drives the rendered template.
+  raw IDs are **gone**; Save config is the only configuration action; the
+  neutral Change revision action is always available for an installed
+  template; credentials panel titled "Template credentials"; `?selected=`
+  drives the rendered template.
 - `router.test.tsx` — the two new routes resolve and are capability-guarded.
 
 Validation: `npm test` and `npm run build` from `web/`.

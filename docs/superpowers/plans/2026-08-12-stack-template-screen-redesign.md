@@ -10,6 +10,18 @@
 
 **Design spec:** `docs/superpowers/specs/2026-08-12-stack-template-screen-redesign-design.md`
 
+## Revision-order correction
+
+The template revision record does not expose Git ancestry, so registration
+order, timestamps, and commit SHAs cannot safely identify a newer revision.
+The implemented flow therefore treats the existing upgrade endpoint as a
+neutral revision-change action: the detail screen always offers **Change
+revision** for an installed template, and the chooser lists every active
+revision belonging to the same source template except the installed one. The
+first returned candidate is only the default selection; it is not presented as
+newer. When no alternatives exist, the chooser reports that plainly instead of
+claiming the installed revision is latest.
+
 ## Global Constraints
 
 - Work from `web/`. Verify with `npm test` and `npm run build` (build type-checks).
