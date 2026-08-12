@@ -49,6 +49,25 @@ export default function UpgradeStackTemplateScreen() {
   const targetVariablesQuery = useTemplateRevisionVariablesQuery(tenantID, targetRevision?.id ?? "");
   const partition = partitionUpgradeVariables(currentVariablesQuery.data ?? [], targetVariablesQuery.data ?? []);
 
+  // useTemplateRevisionVariablesQuery sets placeholderData: keepPreviousData,
+  // so switching the target dropdown flips targetVariablesQuery.status to
+  // "success" immediately while data still serves the *previous* target's
+  // variables during the refetch — status/isPending can't see this, only
+  // isFetching can (same distinction AddStackTemplateScreen's revision
+  // switch relies on). Left ungated, the diff notes and the posted config
+  // would both be built from the stale target while target_template_revision_id
+  // (computed synchronously above) already points at the new one.
+  //
+  // currentVariablesQuery does not need the same treatment: its query key is
+  // stackTemplate.desired_template_revision_id, which only changes if the
+  // installed template itself changes — and nothing on this screen lets a
+  // user do that without a fresh navigation to a different stackTemplateId
+  // (no in-page control mutates it, unlike the target dropdown). A URL edit
+  // or history navigation to a different stackTemplateId while this
+  // component stays mounted could in principle hit the same window, but
+  // that's not a control this screen exposes, so it's out of scope here.
+  const targetVariablesRefreshing = targetRevision !== null && targetVariablesQuery.isFetching;
+
   // The config sent with the upgrade covers the target revision's variables
   // only, so anything the new revision dropped is excluded structurally.
   const targetVariables = [...partition.added, ...partition.carried];
@@ -61,7 +80,7 @@ export default function UpgradeStackTemplateScreen() {
   const upgradeStackTemplateMutation = useUpgradeStackTemplateMutation(tenantID, stackId);
 
   async function handleUpgrade() {
-    if (!stackTemplate || !targetRevision) {
+    if (!stackTemplate || !targetRevision || targetVariablesRefreshing) {
       return;
     }
     setErrorMessage("");
@@ -199,38 +218,53 @@ export default function UpgradeStackTemplateScreen() {
           </label>
 
           <h2>Variables</h2>
-          <VariableFields
-            variables={targetVariables}
-            variableValues={variableValues}
-            onVariableValueChange={(name, value) => setEditedValues((current) => ({ ...current, [name]: value }))}
-            emptyMessage="This revision declares no variables"
-          />
+          {targetVariablesRefreshing ? (
+            // Inline, not the full-screen upgrade-loading state: a dropdown
+            // change is a small update to an already-rendered screen, not a
+            // fresh page load, and a full-screen spinner on every selection
+            // would be a worse experience than the bug this suppresses. This
+            // only replaces the parts that are wrong while the previous
+            // target's data is still being served — the fields themselves
+            // and the diff notes below — not the revision picker.
+            <p className="muted" data-testid="upgrade-target-variables-loading">
+              <Loader2 size={16} className="spin" /> Loading variables for the selected revision…
+            </p>
+          ) : (
+            <>
+              <VariableFields
+                variables={targetVariables}
+                variableValues={variableValues}
+                onVariableValueChange={(name, value) => setEditedValues((current) => ({ ...current, [name]: value }))}
+                emptyMessage="This revision declares no variables"
+              />
 
-          {partition.added.length > 0 && (
-            <ul className="upgrade-variable-notes">
-              {partition.added.map((variable) => (
-                <li key={variable.name} data-testid={`upgrade-added-${variable.name}`}>
-                  {variable.name} is new in this revision
-                </li>
-              ))}
-            </ul>
-          )}
+              {partition.added.length > 0 && (
+                <ul className="upgrade-variable-notes">
+                  {partition.added.map((variable) => (
+                    <li key={variable.name} data-testid={`upgrade-added-${variable.name}`}>
+                      {variable.name} is new in this revision
+                    </li>
+                  ))}
+                </ul>
+              )}
 
-          {partition.removed.length > 0 && (
-            <ul className="upgrade-variable-notes upgrade-variable-notes--removed">
-              {partition.removed.map((variable) => (
-                <li key={variable.name} data-testid={`upgrade-removed-${variable.name}`}>
-                  {variable.name} is no longer used and will be dropped
-                </li>
-              ))}
-            </ul>
+              {partition.removed.length > 0 && (
+                <ul className="upgrade-variable-notes upgrade-variable-notes--removed">
+                  {partition.removed.map((variable) => (
+                    <li key={variable.name} data-testid={`upgrade-removed-${variable.name}`}>
+                      {variable.name} is no longer used and will be dropped
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
           )}
 
           <div className="button-row form-actions">
             <button
               className="primary-button"
               type="button"
-              disabled={upgradeStackTemplateMutation.isPending}
+              disabled={targetVariablesRefreshing || upgradeStackTemplateMutation.isPending}
               onClick={handleUpgrade}
             >
               {upgradeStackTemplateMutation.isPending ? (

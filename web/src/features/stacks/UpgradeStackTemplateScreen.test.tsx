@@ -229,6 +229,45 @@ describe("UpgradeStackTemplateScreen", () => {
     expect(screen.queryByRole("button", { name: /Upgrade/ })).toBeNull();
   });
 
+  it("suppresses the previous target's fields and diff notes while switching to a target whose variables have not loaded", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), stackView([stackTemplate()]));
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      templateRevision({ id: "rev_next", source_ref: "main", resolved_commit_sha: "9f21abc0000000" }),
+      templateRevision({ id: "rev_next_2", source_ref: "main", resolved_commit_sha: "aa00bb1111111" }),
+      templateRevision({ id: "rev_current" })
+    ]);
+    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_current"), [
+      variable({ name: "region" }),
+      variable({ name: "legacy_flag" })
+    ]);
+    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_next"), [
+      variable({ name: "region", template_revision_id: "rev_next" }),
+      variable({ name: "new_var", template_revision_id: "rev_next" })
+    ]);
+    // rev_next_2's variables are deliberately left unseeded.
+
+    renderScreen(queryClient);
+
+    // The preselected (newest) candidate, rev_next, has already loaded.
+    expect(screen.getByTestId("upgrade-added-new_var")).toBeTruthy();
+    expect(screen.getByLabelText(/new_var/)).toBeTruthy();
+
+    // Switch to the second candidate with fetch stalled: keepPreviousData
+    // means targetVariablesQuery.status flips to "success" immediately and
+    // keeps serving rev_next's variables/diff while the rev_next_2 fetch
+    // never resolves. Only isFetching-gating stops that from being shown as
+    // current.
+    vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
+    fireEvent.change(screen.getByTestId("upgrade-target-select"), { target: { value: "rev_next_2" } });
+
+    expect(screen.getByTestId("upgrade-target-variables-loading")).toBeTruthy();
+    expect(screen.queryByLabelText(/new_var/)).toBeNull();
+    expect(screen.queryByTestId("upgrade-added-new_var")).toBeNull();
+    expect(screen.queryByTestId("upgrade-removed-legacy_flag")).toBeNull();
+    expect((screen.getByRole("button", { name: /Upgrade/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("guards the direct-URL path when the installed template is mid-destroy", () => {
     const queryClient = testQueryClient();
     seedUpgradeable(queryClient);
