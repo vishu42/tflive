@@ -14,6 +14,7 @@ import { templateRevisionLabel } from "../templates/templateWorkflow";
 import {
   configFromVariableValues,
   findSelectedStackTemplate,
+  isDestroyingStackTemplate,
   partitionUpgradeVariables,
   stackTemplateLabel,
   upgradeCandidateRevisions,
@@ -78,7 +79,24 @@ export default function UpgradeStackTemplateScreen() {
     }
   }
 
-  if (stackQuery.status === "pending" || templateRevisionsQuery.status === "pending") {
+  // Both variable queries are disabled (and so sit in "pending" forever)
+  // whenever there is no revision id to fetch yet — no installed template, or
+  // no upgrade candidate. Only wait on a query once something is actually
+  // being fetched, mirroring StackTemplateScreen's waitingOnVariables guard.
+  // Both sides matter: if only the target were gated, the partition below
+  // would compare a real "current" list against an empty "target" list and
+  // mislabel everything carried as newly added; if only the current side were
+  // gated, first paint would compare an empty "current" against the real
+  // target and mislabel everything as dropped.
+  const waitingOnCurrentVariables = stackTemplate !== null && currentVariablesQuery.status === "pending";
+  const waitingOnTargetVariables = targetRevision !== null && targetVariablesQuery.status === "pending";
+
+  if (
+    stackQuery.status === "pending" ||
+    templateRevisionsQuery.status === "pending" ||
+    waitingOnCurrentVariables ||
+    waitingOnTargetVariables
+  ) {
     return (
       <section className="upgrade-stack-template-screen" data-testid="upgrade-loading">
         <p className="muted">
@@ -123,6 +141,21 @@ export default function UpgradeStackTemplateScreen() {
       <section className="upgrade-stack-template-screen" data-testid="upgrade-template-missing">
         {backLink}
         <p className="muted">That template is not installed on this stack.</p>
+      </section>
+    );
+  }
+
+  // Guards the direct-URL path: the template screen already hides/disables
+  // the link that would bring a user here while a destroy is in progress
+  // (see StackTemplateScreen.tsx), but this route is still reachable
+  // directly. The backend rejects the upgrade with a 409 regardless — this
+  // just states that outright instead of rendering a form for an action that
+  // cannot succeed.
+  if (isDestroyingStackTemplate(stackTemplate)) {
+    return (
+      <section className="upgrade-stack-template-screen" data-testid="upgrade-destroying">
+        {backLink}
+        <p className="muted">Destroy in progress — this template cannot be upgraded right now.</p>
       </section>
     );
   }

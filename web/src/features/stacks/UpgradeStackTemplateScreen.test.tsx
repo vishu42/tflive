@@ -205,6 +205,44 @@ describe("UpgradeStackTemplateScreen", () => {
     });
   });
 
+  it("renders the loading state instead of a false diff while the target revision's variables have not loaded", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), stackView([stackTemplate()]));
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      templateRevision({ id: "rev_next", source_ref: "main", resolved_commit_sha: "9f21abc0000000" }),
+      templateRevision({ id: "rev_current" })
+    ]);
+    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_current"), [
+      variable({ name: "region" }),
+      variable({ name: "legacy_flag" })
+    ]);
+    // rev_next's variables are deliberately left unseeded, and fetch never
+    // resolves — on arrival this is the default first frame, not an edge
+    // case, since the target revision's variables are never in cache yet.
+    vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
+
+    renderScreen(queryClient);
+
+    expect(screen.getByTestId("upgrade-loading")).toBeTruthy();
+    expect(screen.queryByText(/is no longer used and will be dropped/)).toBeNull();
+    expect(screen.queryByText(/is new in this revision/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Upgrade/ })).toBeNull();
+  });
+
+  it("guards the direct-URL path when the installed template is mid-destroy", () => {
+    const queryClient = testQueryClient();
+    seedUpgradeable(queryClient);
+    queryClient.setQueryData(
+      queryKeys.stack("tenant_123", "stack_1"),
+      stackView([stackTemplate({ lifecycle: "destroying" })])
+    );
+
+    renderScreen(queryClient);
+
+    expect(screen.getByTestId("upgrade-destroying")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Upgrade/ })).toBeNull();
+  });
+
   it("reports being on the latest revision when nothing can be upgraded to", () => {
     const queryClient = testQueryClient();
     seedUpgradeable(queryClient);

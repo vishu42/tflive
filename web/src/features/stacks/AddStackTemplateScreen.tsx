@@ -27,6 +27,11 @@ export default function AddStackTemplateScreen() {
 
   const variablesQuery = useTemplateRevisionVariablesQuery(tenantID, chosenRevision?.id ?? "");
   const variables = variablesQuery.data ?? [];
+  // useTemplateRevisionVariablesQuery keeps the previous revision's variables
+  // visible (placeholderData: keepPreviousData) while it fetches the newly
+  // chosen one, so isPending alone misses the revision-switch case — only
+  // isFetching covers both "never fetched" and "refetching for a new key".
+  const variablesLoading = chosenRevision !== null && variablesQuery.isFetching;
 
   const addTemplateToStackMutation = useAddTemplateToStackMutation(tenantID, stackId);
 
@@ -141,17 +146,23 @@ export default function AddStackTemplateScreen() {
       {chosenRevision && (
         <section className="panel wide" data-testid="add-stack-template-variables">
           <h2>Variables</h2>
-          <VariableFields
-            variables={variables}
-            variableValues={values}
-            onVariableValueChange={(name, value) => setValues((current) => ({ ...current, [name]: value }))}
-            emptyMessage="This template declares no variables"
-          />
+          {variablesLoading ? (
+            <p className="muted" data-testid="add-stack-template-variables-loading">
+              <Loader2 size={16} className="spin" /> Loading variables…
+            </p>
+          ) : (
+            <VariableFields
+              variables={variables}
+              variableValues={values}
+              onVariableValueChange={(name, value) => setValues((current) => ({ ...current, [name]: value }))}
+              emptyMessage="This template declares no variables"
+            />
+          )}
           <div className="button-row form-actions">
             <button
               className="primary-button"
               type="button"
-              disabled={addTemplateToStackMutation.isPending}
+              disabled={variablesLoading || addTemplateToStackMutation.isPending}
               onClick={handleInstall}
             >
               {addTemplateToStackMutation.isPending ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}

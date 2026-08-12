@@ -177,6 +177,45 @@ describe("AddStackTemplateScreen", () => {
     await waitFor(() => expect(screen.getByTestId("add-stack-template-error")).toBeTruthy());
   });
 
+  it("disables Install and hides the empty-variables message while the chosen revision's variables are loading", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [templateRevision()]);
+    // Variables for rev_1 are deliberately left unseeded, and fetch never
+    // resolves, so useTemplateRevisionVariablesQuery stays pending.
+    vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
+
+    renderScreen(queryClient);
+
+    fireEvent.click(screen.getByTestId("add-template-choice-rev_1"));
+
+    expect(screen.getByTestId("add-stack-template-variables-loading")).toBeTruthy();
+    expect(screen.queryByText("This template declares no variables")).toBeNull();
+    expect((screen.getByRole("button", { name: /Install/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("does not render the previous revision's variable names after switching to a revision whose variables have not loaded", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      templateRevision(),
+      templateRevision({ id: "rev_2", repo_owner: "my-org", repo_name: "rds" })
+    ]);
+    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_1"), [variable()]);
+    // rev_2's variables are deliberately left unseeded, and fetch never
+    // resolves. Without gating on isFetching, keepPreviousData would keep
+    // rendering rev_1's "region" field under rev_2's name.
+    vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
+
+    renderScreen(queryClient);
+
+    fireEvent.click(screen.getByTestId("add-template-choice-rev_1"));
+    expect(screen.getByLabelText(/region/)).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("add-template-choice-rev_2"));
+
+    expect(screen.queryByLabelText(/region/)).toBeNull();
+    expect(screen.getByTestId("add-stack-template-variables-loading")).toBeTruthy();
+  });
+
   it("points at template registration when the tenant has none", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), []);

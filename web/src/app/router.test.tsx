@@ -449,4 +449,76 @@ describe("routeConfig", () => {
     // the screen's own missing-template state rather than a 404.
     expect(markup).toContain('data-testid="upgrade-template-missing"');
   });
+
+  it("renders AccessDenied for /stacks/:stackId/template/new when canOperate is denied but canView is allowed", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const { routeConfig } = await import("./router");
+    const { createMemoryRouter, RouterProvider } = await import("react-router-dom");
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const { queryKeys } = await import("../api/queryKeys");
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), {
+      stack: {
+        id: "stack_1",
+        tenant_id: "tenant_123",
+        name: "Payments",
+        slug: "payments",
+        tags: {},
+        default_credential_ids: [],
+        created_by: "user_123",
+        created_at: "2026-07-19T00:00:00Z",
+        effectiveCapabilities: { canView: true, canOperate: false, canApprove: false, canManageAccess: false }
+      },
+      templates: []
+    });
+
+    const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/template/new"] });
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={authValue()}>
+          <RouterProvider router={testRouter} />
+        </AuthContext.Provider>
+      </QueryClientProvider>
+    );
+
+    expect(markup).toContain('data-testid="route-access-denied"');
+  });
+
+  it("renders AccessDenied for /stacks/:stackId/template/:stackTemplateId/upgrade when canOperate is denied but canView is allowed", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const { routeConfig } = await import("./router");
+    const { createMemoryRouter, RouterProvider } = await import("react-router-dom");
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const { queryKeys } = await import("../api/queryKeys");
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), {
+      stack: {
+        id: "stack_1",
+        tenant_id: "tenant_123",
+        name: "Payments",
+        slug: "payments",
+        tags: {},
+        default_credential_ids: [],
+        created_by: "user_123",
+        created_at: "2026-07-19T00:00:00Z",
+        effectiveCapabilities: { canView: true, canOperate: false, canApprove: false, canManageAccess: false }
+      },
+      templates: []
+    });
+
+    const testRouter = createMemoryRouter(routeConfig, {
+      initialEntries: ["/stacks/stack_1/template/st_1/upgrade"]
+    });
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={authValue()}>
+          <RouterProvider router={testRouter} />
+        </AuthContext.Provider>
+      </QueryClientProvider>
+    );
+
+    expect(markup).toContain('data-testid="route-access-denied"');
+  });
 });

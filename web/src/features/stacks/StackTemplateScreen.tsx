@@ -208,13 +208,29 @@ export default function StackTemplateScreen() {
                       Update available
                     </p>
                     <RequireCapability capability="canOperate">
-                      <Link
-                        className="secondary-button"
-                        to={`/stacks/${stackId}/template/${installedTemplate.id}/upgrade`}
-                        data-testid="upgrade-stack-template-link"
-                      >
-                        Upgrade
-                      </Link>
+                      {destroying ? (
+                        <>
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            disabled
+                            data-testid="upgrade-stack-template-link"
+                          >
+                            Upgrade
+                          </button>
+                          <p className="muted" data-testid="upgrade-disabled-reason">
+                            Destroy in progress
+                          </p>
+                        </>
+                      ) : (
+                        <Link
+                          className="secondary-button"
+                          to={`/stacks/${stackId}/template/${installedTemplate.id}/upgrade`}
+                          data-testid="upgrade-stack-template-link"
+                        >
+                          Upgrade
+                        </Link>
+                      )}
                     </RequireCapability>
                   </>
                 )}

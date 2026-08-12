@@ -323,6 +323,25 @@ describe("StackTemplateScreen", () => {
     expect(screen.getByText("Destroying…")).toBeTruthy();
   });
 
+  it("disables the upgrade link instead of offering it while the installed template is destroying", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient, allAllowed);
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"),
+      stackView(allAllowed, [stackTemplate({ lifecycle: "destroying" })]));
+
+    renderScreen(queryClient);
+
+    // An update is available (rev_2 exists), but the config panel already
+    // reads "Destroy in progress" — offering an enabled Upgrade action next
+    // to it would contradict what the screen itself knows and the backend
+    // would reject it with a 409 anyway.
+    expect(screen.getByTestId("stack-template-update-available")).toBeTruthy();
+    const upgradeControl = screen.getByTestId("upgrade-stack-template-link") as HTMLButtonElement;
+    expect(upgradeControl.tagName).toBe("BUTTON");
+    expect(upgradeControl.disabled).toBe(true);
+    expect(screen.getByTestId("upgrade-disabled-reason").textContent).toBe("Destroy in progress");
+  });
+
   it("renders the shared boundary screen for a handled API error status", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ error: "unavailable", message: "service unavailable" }), {
