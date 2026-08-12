@@ -46,9 +46,7 @@ export function canSaveStackTemplateConfig(
     return false;
   }
 
-  const currentConfig = configFromVariableValues(variables, variableValues);
-  const savedConfig = configFromVariableValues(variables, variableValuesFromConfig(stackTemplate.config, variables));
-  return !areStringRecordEqual(currentConfig, savedConfig);
+  return hasConfigChanged(stackTemplate, variables, variableValues);
 }
 
 export interface UpgradeVariablePartition {
@@ -106,9 +104,7 @@ export function canSaveInstalledTemplateConfig(
   if (!stackTemplate) {
     return false;
   }
-  const currentConfig = configFromVariableValues(variables, variableValues);
-  const savedConfig = configFromVariableValues(variables, variableValuesFromConfig(stackTemplate.config, variables));
-  return !areStringRecordEqual(currentConfig, savedConfig);
+  return hasConfigChanged(stackTemplate, variables, variableValues);
 }
 
 export function variableValuesFromConfig(config: Record<string, unknown>, variables: TemplateVariable[]): Record<string, string> {
@@ -158,4 +154,14 @@ function areStringRecordEqual(left: Record<string, string>, right: Record<string
     }
   }
   return true;
+}
+
+function hasConfigChanged(
+  stackTemplate: StackTemplate,
+  variables: TemplateVariable[],
+  variableValues: Record<string, string>
+): boolean {
+  const currentConfig = configFromVariableValues(variables, variableValues);
+  const savedConfig = configFromVariableValues(variables, variableValuesFromConfig(stackTemplate.config, variables));
+  return !areStringRecordEqual(currentConfig, savedConfig);
 }
