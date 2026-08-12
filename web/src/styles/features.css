@@ -968,3 +968,27 @@
 .stack-template-update [data-testid="stack-template-update-available"] {
   color: var(--color-accent);
 }
+
+.template-choice {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-fg);
+  cursor: pointer;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.6rem 0.8rem;
+  width: 100%;
+}
+
+.template-choice:disabled {
+  color: var(--color-muted-fg);
+  cursor: not-allowed;
+}
+
+.template-choice[data-selected="true"] {
+  border-color: var(--color-accent-border);
+  box-shadow: var(--shadow-ring);
+}
