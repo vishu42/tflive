@@ -94,11 +94,13 @@ describe("StackDetailShell", () => {
     expect(environmentMarkup).toContain('data-testid="stack-detail-shell"');
     expect(environmentMarkup).toContain('data-testid="environment-loading"');
 
-    // The template tab is a real screen now; its revisions query is unseeded
-    // here, so the shell renders its loading state as the nested content.
+    // The template tab is a real screen now; the seeded stack view has no
+    // installed templates and the stack query itself is seeded, so the
+    // screen renders its empty state as the nested content rather than
+    // waiting on the (unseeded) revisions query.
     const templateMarkup = await renderStackRoute("/stacks/stack_1/template", allAllowed);
     expect(templateMarkup).toContain('data-testid="stack-detail-shell"');
-    expect(templateMarkup).toContain('data-testid="stack-template-loading"');
+    expect(templateMarkup).toContain('data-testid="stack-template-empty"');
 
     // Runs list is a real screen too; the seeded stack view has no installed
     // templates, so it renders its empty state as the nested content.

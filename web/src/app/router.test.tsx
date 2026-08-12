@@ -156,7 +156,7 @@ describe("routeConfig", () => {
     );
 
     expect(markup).toContain('data-testid="stack-template-screen"');
-    expect(markup).toContain("Template revision");
+    expect(markup).toContain('data-testid="stack-template-empty"');
     expect(markup).not.toContain('data-testid="route-placeholder"');
   });
 
