@@ -409,4 +409,44 @@ describe("routeConfig", () => {
 
     expect(markup).toContain('data-testid="add-stack-template-none"');
   });
+
+  it("renders the upgrade screen at /stacks/:stackId/template/:stackTemplateId/upgrade", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const { routeConfig } = await import("./router");
+    const { createMemoryRouter, RouterProvider } = await import("react-router-dom");
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const { queryKeys } = await import("../api/queryKeys");
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), {
+      stack: {
+        id: "stack_1",
+        tenant_id: "tenant_123",
+        name: "Payments",
+        slug: "payments",
+        tags: {},
+        default_credential_ids: [],
+        created_by: "user_123",
+        created_at: "2026-07-19T00:00:00Z",
+        effectiveCapabilities: { canView: true, canOperate: true, canApprove: true, canManageAccess: true }
+      },
+      templates: []
+    });
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), []);
+
+    const testRouter = createMemoryRouter(routeConfig, {
+      initialEntries: ["/stacks/stack_1/template/st_1/upgrade"]
+    });
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={authValue()}>
+          <RouterProvider router={testRouter} />
+        </AuthContext.Provider>
+      </QueryClientProvider>
+    );
+
+    // The seeded stack has no installed templates, so the route resolves to
+    // the screen's own missing-template state rather than a 404.
+    expect(markup).toContain('data-testid="upgrade-template-missing"');
+  });
 });

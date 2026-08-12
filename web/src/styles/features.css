@@ -992,3 +992,19 @@
   border-color: var(--color-accent-border);
   box-shadow: var(--shadow-ring);
 }
+
+.upgrade-variable-notes {
+  color: var(--color-muted-fg);
+  font-size: 0.85rem;
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+}
+
+.upgrade-variable-notes li {
+  padding: 0.15rem 0;
+}
+
+.upgrade-variable-notes--removed li {
+  color: var(--color-warning);
+}
