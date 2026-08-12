@@ -96,7 +96,7 @@ Then append these tests inside the existing `describe("stack workflow helpers", 
       templateRevision({ id: "rev_new", source_template_id: "src_1", status: "active" }),
       templateRevision({ id: "rev_current", source_template_id: "src_1", status: "active" }),
       templateRevision({ id: "rev_other_source", source_template_id: "src_2", status: "active" }),
-      templateRevision({ id: "rev_pending", source_template_id: "src_1", status: "pending" })
+      templateRevision({ id: "rev_pending", source_template_id: "src_1", status: "pending_validation" })
     ];
 
     expect(upgradeCandidateRevisions(revisions, installed).map((item) => item.id)).toEqual(["rev_new"]);
@@ -1248,7 +1248,7 @@ describe("AddStackTemplateScreen", () => {
   it("does not allow choosing a revision that is not active", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
-      templateRevision({ id: "rev_pending", status: "pending" })
+      templateRevision({ id: "rev_pending", status: "pending_validation" })
     ]);
 
     renderScreen(queryClient);
@@ -1766,7 +1766,7 @@ describe("UpgradeStackTemplateScreen", () => {
       templateRevision({ id: "rev_next" }),
       templateRevision({ id: "rev_current" }),
       templateRevision({ id: "rev_elsewhere", source_template_id: "tmpl_src_2" }),
-      templateRevision({ id: "rev_pending", status: "pending" })
+      templateRevision({ id: "rev_pending", status: "pending_validation" })
     ]);
 
     renderScreen(queryClient);
