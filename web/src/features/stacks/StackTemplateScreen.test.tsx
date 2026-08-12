@@ -253,6 +253,7 @@ describe("StackTemplateScreen", () => {
     expect(screen.getByText("TEMPLATE_ONLY")).toBeTruthy();
     expect(screen.queryByText("STACK_ONLY")).toBeNull();
     expect(screen.getByText("Template credentials")).toBeTruthy();
+    expect(screen.getByText("Overrides the stack environment for this template only.")).toBeTruthy();
   });
 
   it("disables save while values match the installed config and enables it after an edit", () => {

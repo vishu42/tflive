@@ -150,6 +150,16 @@ export default function StackTemplateScreen() {
     </Link>
   );
 
+  const configPanelProps = {
+    variables,
+    variableValues,
+    onVariableValueChange: handleVariableValueChange,
+    canSave: canSaveConfig,
+    onSave: handleSaveStackTemplateConfig,
+    saveBusy: updateStackTemplateConfigMutation.isPending,
+    disabledReason: destroying ? "Destroy in progress" : undefined
+  };
+
   return (
     <section className="stack-template-screen" data-testid="stack-template-screen">
       {errorMessage && <div className="alert">{errorMessage}</div>}
@@ -214,29 +224,19 @@ export default function StackTemplateScreen() {
               capability="canOperate"
               fallback={
                 <StackTemplateConfigPanel
-                  variables={variables}
-                  variableValues={variableValues}
-                  onVariableValueChange={handleVariableValueChange}
+                  {...configPanelProps}
                   canSave={false}
-                  onSave={handleSaveStackTemplateConfig}
                   saveBusy={false}
                   disabledReason="Editing requires operator access"
                 />
               }
             >
-              <StackTemplateConfigPanel
-                variables={variables}
-                variableValues={variableValues}
-                onVariableValueChange={handleVariableValueChange}
-                canSave={canSaveConfig}
-                onSave={handleSaveStackTemplateConfig}
-                saveBusy={updateStackTemplateConfigMutation.isPending}
-                disabledReason={destroying ? "Destroy in progress" : undefined}
-              />
+              <StackTemplateConfigPanel {...configPanelProps} />
             </RequireCapability>
             <RequireCapability capability="canManageAccess">
               <CredentialsPanel
                 title="Template credentials"
+                subtitle="Overrides the stack environment for this template only."
                 credentials={templateCredentialsQuery.data ?? []}
                 loading={templateCredentialsQuery.isPending}
                 busy={createTemplateCredentialMutation.isPending || deleteTemplateCredentialMutation.isPending}
