@@ -36,7 +36,6 @@ export default function UpgradeStackTemplateScreen() {
 
   const stackQuery = useStackQuery(tenantID, stackId);
   const templateRevisionsQuery = useTemplateRevisionsQuery(tenantID);
-  const boundary = useQueryErrorBoundary(stackQuery.error ?? templateRevisionsQuery.error);
 
   const stackTemplate = findSelectedStackTemplate(stackQuery.data?.templates ?? [], stackTemplateId);
   const candidates = upgradeCandidateRevisions(templateRevisionsQuery.data ?? [], stackTemplate);
@@ -48,6 +47,16 @@ export default function UpgradeStackTemplateScreen() {
   );
   const targetVariablesQuery = useTemplateRevisionVariablesQuery(tenantID, targetRevision?.id ?? "");
   const partition = partitionUpgradeVariables(currentVariablesQuery.data ?? [], targetVariablesQuery.data ?? []);
+
+  // Every query feeding the diff belongs here. A failed variables fetch leaves
+  // data undefined, which the partition above reads as "that revision declares
+  // no variables" — indistinguishable from a genuinely empty revision, and so
+  // rendered as a confident (and wrong) diff. The loading guards below cannot
+  // catch it either: a failed query is "error", not "pending", and isFetching
+  // is false once retries are spent. Only treating it as an error does.
+  const boundary = useQueryErrorBoundary(
+    stackQuery.error ?? templateRevisionsQuery.error ?? currentVariablesQuery.error ?? targetVariablesQuery.error
+  );
 
   // useTemplateRevisionVariablesQuery sets placeholderData: keepPreviousData,
   // so switching the target dropdown flips targetVariablesQuery.status to
@@ -125,7 +134,12 @@ export default function UpgradeStackTemplateScreen() {
     );
   }
 
-  if (stackQuery.status === "error" || templateRevisionsQuery.status === "error") {
+  if (
+    stackQuery.status === "error" ||
+    templateRevisionsQuery.status === "error" ||
+    currentVariablesQuery.status === "error" ||
+    targetVariablesQuery.status === "error"
+  ) {
     if (boundary !== null) {
       return <>{boundary}</>;
     }
@@ -139,6 +153,8 @@ export default function UpgradeStackTemplateScreen() {
           onClick={() => {
             stackQuery.refetch();
             templateRevisionsQuery.refetch();
+            currentVariablesQuery.refetch();
+            targetVariablesQuery.refetch();
           }}
         >
           <RefreshCw size={16} />

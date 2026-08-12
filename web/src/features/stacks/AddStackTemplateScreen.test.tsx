@@ -216,6 +216,29 @@ describe("AddStackTemplateScreen", () => {
     expect(screen.getByTestId("add-stack-template-variables-loading")).toBeTruthy();
   });
 
+  it("shows an error instead of claiming the template has no variables when they fail to load", async () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [templateRevision()]);
+    // A permanently failed variables fetch leaves data undefined, which renders
+    // as the empty message — telling the user this template declares no
+    // variables when in truth we could not find out. Install must not be
+    // offered against a config we cannot build.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "unauthorized", message: "unauthorized" }), {
+        status: 401,
+        headers: { "content-type": "application/json" }
+      })
+    );
+
+    renderScreen(queryClient);
+
+    fireEvent.click(screen.getByTestId("add-template-choice-rev_1"));
+
+    await waitFor(() => expect(screen.getByTestId("add-stack-template-variables-error")).toBeTruthy());
+    expect(screen.queryByText("This template declares no variables")).toBeNull();
+    expect((screen.getByRole("button", { name: /Install/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("points at template registration when the tenant has none", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), []);

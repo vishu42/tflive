@@ -314,6 +314,47 @@ describe("UpgradeStackTemplateScreen", () => {
     expect(screen.queryByRole("button", { name: /Change revision/ })).toBeNull();
   });
 
+  it("shows an error instead of a false diff when the target variables fail to load", async () => {
+    const queryClient = testQueryClient();
+    seedUpgradeable(queryClient);
+    // A permanently failed variables fetch leaves data undefined, which the
+    // partition reads as "the target declares no variables" — indistinguishable
+    // from a real empty revision, and so rendered as every current variable
+    // being dropped. The loading guards cannot catch it: a failed query is
+    // "error", not "pending", and isFetching is false once retries are spent.
+    queryClient.removeQueries({ queryKey: queryKeys.templateRevisionVariables("tenant_123", "rev_next") });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "unauthorized", message: "unauthorized" }), {
+        status: 401,
+        headers: { "content-type": "application/json" }
+      })
+    );
+
+    renderScreen(queryClient);
+
+    await waitFor(() => expect(screen.getByTestId("upgrade-load-error")).toBeTruthy());
+    expect(screen.queryByText(/is no longer used and will be dropped/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Change revision/ })).toBeNull();
+  });
+
+  it("shows an error when the installed template's variables fail to load", async () => {
+    const queryClient = testQueryClient();
+    seedUpgradeable(queryClient);
+    queryClient.removeQueries({ queryKey: queryKeys.templateRevisionVariables("tenant_123", "rev_current") });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "unauthorized", message: "unauthorized" }), {
+        status: 401,
+        headers: { "content-type": "application/json" }
+      })
+    );
+
+    renderScreen(queryClient);
+
+    await waitFor(() => expect(screen.getByTestId("upgrade-load-error")).toBeTruthy());
+    expect(screen.queryByText(/is new in this revision/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Change revision/ })).toBeNull();
+  });
+
   it("surfaces a failed upgrade without leaving the screen", async () => {
     const queryClient = testQueryClient();
     seedUpgradeable(queryClient);

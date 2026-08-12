@@ -32,6 +32,7 @@ export default function AddStackTemplateScreen() {
   // chosen one, so isPending alone misses the revision-switch case — only
   // isFetching covers both "never fetched" and "refetching for a new key".
   const variablesLoading = chosenRevision !== null && variablesQuery.isFetching;
+  const variablesFailed = chosenRevision !== null && variablesQuery.status === "error";
 
   const addTemplateToStackMutation = useAddTemplateToStackMutation(tenantID, stackId);
 
@@ -42,7 +43,10 @@ export default function AddStackTemplateScreen() {
   }
 
   async function handleInstall() {
-    if (!chosenRevision) {
+    // variablesFailed guards the request itself, not just the button: without
+    // a loaded variable list, configFromVariableValues would build an empty
+    // config and post it as if the template genuinely needed nothing.
+    if (!chosenRevision || variablesLoading || variablesFailed) {
       return;
     }
     setErrorMessage("");
@@ -150,6 +154,19 @@ export default function AddStackTemplateScreen() {
             <p className="muted" data-testid="add-stack-template-variables-loading">
               <Loader2 size={16} className="spin" /> Loading variables…
             </p>
+          ) : variablesFailed ? (
+            // Distinct from the empty message on purpose: an unresolved fetch
+            // must never read as "this template declares no variables", which
+            // is a claim we cannot make when we could not load them. Kept
+            // inline rather than replacing the screen, so the picker above
+            // stays usable and another revision can be chosen.
+            <p className="muted" data-testid="add-stack-template-variables-error">
+              Could not load this template&rsquo;s variables.{" "}
+              <button className="secondary-button" type="button" onClick={() => variablesQuery.refetch()}>
+                <RefreshCw size={16} />
+                Retry
+              </button>
+            </p>
           ) : (
             <VariableFields
               variables={variables}
@@ -162,7 +179,7 @@ export default function AddStackTemplateScreen() {
             <button
               className="primary-button"
               type="button"
-              disabled={variablesLoading || addTemplateToStackMutation.isPending}
+              disabled={variablesLoading || variablesFailed || addTemplateToStackMutation.isPending}
               onClick={handleInstall}
             >
               {addTemplateToStackMutation.isPending ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
