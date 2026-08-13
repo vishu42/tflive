@@ -43,6 +43,9 @@ function stackTemplate(overrides: Partial<StackTemplate> = {}): StackTemplate {
     config: { region: "us-east-1" },
     last_applied_run_id: "run_9",
     last_applied_ref: "main",
+    last_planned_run_id: "",
+    plan_state: "none",
+    live_state: "never",
     created_by: "user_123",
     lifecycle: "active",
     ...overrides

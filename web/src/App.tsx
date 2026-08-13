@@ -32,6 +32,7 @@ import {
   configFromVariableValues,
   findSelectedStack,
   findSelectedStackTemplate,
+  hasFreshPlan,
   nextSelectedStackID,
   nextSelectedStackTemplateID,
   variableValuesFromConfig
@@ -99,7 +100,7 @@ export default function App() {
   const canSaveConfig = canSaveStackTemplateConfig(installedTemplate, selectedTemplateRevision, variables, variableValues);
   const canUpgrade = canUpgradeStackTemplate(installedTemplate, selectedTemplateRevision);
   const canPlan = Boolean(installedTemplate && !planRun);
-  const canApply = Boolean(installedTemplate && planRun?.status === "completed" && !applyRun);
+  const canApply = Boolean(hasFreshPlan(installedTemplate) && !applyRun);
   const canApprove = applyRun?.status === "waiting_approval";
   const canCancel = Boolean(currentRun && !isTerminalRunStatus(currentRun.status));
 
@@ -175,6 +176,17 @@ export default function App() {
     }
     queryClient.invalidateQueries({ queryKey: queryKeys.stack(tenantID, selectedStackID) });
   }, [applyRunQuery.data?.status, applyRunID, selectedStackID, queryClient]);
+
+  // A finished plan changes plan_state on the template, which is what enables
+  // Apply. Without this the button would stay disabled until something else
+  // happened to refetch the stack.
+  useEffect(() => {
+    const status = planRunQuery.data?.status;
+    if (!planRunID || !selectedStackID || !status || !isTerminalRunStatus(status)) {
+      return;
+    }
+    queryClient.invalidateQueries({ queryKey: queryKeys.stack(tenantID, selectedStackID) });
+  }, [planRunQuery.data?.status, planRunID, selectedStackID, queryClient]);
 
   useEffect(() => {
     const nextLogs = logsQuery.data;

@@ -764,8 +764,15 @@ type stackTemplateResponse struct {
 	LastAppliedRunID              string         `json:"last_applied_run_id"`
 	LastAppliedRef                string         `json:"last_applied_ref"`
 	LastAppliedAt                 string         `json:"last_applied_at,omitempty"`
-	CreatedBy                     string         `json:"created_by"`
-	Lifecycle                     string         `json:"lifecycle"`
+	LastPlannedRunID              string         `json:"last_planned_run_id"`
+	LastPlannedAt                 string         `json:"last_planned_at,omitempty"`
+	// PlanState and LiveState are the two derived comparisons. The snapshot
+	// configs they are derived from are deliberately not returned: the client
+	// re-deriving the comparison is the mistake this replaced.
+	PlanState string `json:"plan_state"`
+	LiveState string `json:"live_state"`
+	CreatedBy string `json:"created_by"`
+	Lifecycle string `json:"lifecycle"`
 }
 
 type errorResponse struct {
@@ -824,10 +831,7 @@ func newStackResponse(stack traits.Stack, capabilities app.StackCapabilities) st
 
 func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateResponse {
 	var config map[string]any
-	configJSON := stackTemplate.DesiredConfigJSON
-	if len(configJSON) == 0 {
-		configJSON = stackTemplate.ConfigJSON
-	}
+	configJSON := stackTemplate.DesiredConfig()
 	if len(configJSON) > 0 {
 		_ = json.Unmarshal(configJSON, &config)
 	}
@@ -848,11 +852,17 @@ func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateR
 		Config:                        config,
 		LastAppliedRunID:              string(stackTemplate.LastAppliedRunID),
 		LastAppliedRef:                stackTemplate.LastAppliedRef,
+		LastPlannedRunID:              string(stackTemplate.LastPlannedRunID),
+		PlanState:                     string(stackTemplate.PlanState()),
+		LiveState:                     string(stackTemplate.LiveState()),
 		CreatedBy:                     string(stackTemplate.CreatedBy),
 		Lifecycle:                     string(stackTemplate.Lifecycle),
 	}
 	if !stackTemplate.LastAppliedAt.IsZero() {
 		response.LastAppliedAt = stackTemplate.LastAppliedAt.Format(time.RFC3339Nano)
+	}
+	if !stackTemplate.LastPlannedAt.IsZero() {
+		response.LastPlannedAt = stackTemplate.LastPlannedAt.Format(time.RFC3339Nano)
 	}
 	return response
 }
@@ -929,6 +939,9 @@ func writeAppError(response http.ResponseWriter, err error) {
 		writeError(response, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, app.ErrDirectoryUnavailable):
 		writeError(response, http.StatusServiceUnavailable, "directory_unavailable", "directory unavailable")
+	// Its own code, because the client can act on this one: re-plan, then apply.
+	case errors.Is(err, app.ErrStackTemplatePlanStale):
+		writeError(response, http.StatusConflict, "plan_stale", err.Error())
 	case errors.Is(err, app.ErrStackTemplateNotRunnable),
 		errors.Is(err, app.ErrRunNotApprovable),
 		errors.Is(err, app.ErrRunNotCancelable),

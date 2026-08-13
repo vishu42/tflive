@@ -39,6 +39,9 @@ function stackTemplate(overrides: Partial<StackTemplate> = {}): StackTemplate {
     config: {},
     last_applied_run_id: "",
     last_applied_ref: "",
+    last_planned_run_id: "",
+    plan_state: "none",
+    live_state: "never",
     created_by: "user_123",
     lifecycle: "active",
     ...overrides

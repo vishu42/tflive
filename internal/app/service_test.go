@@ -565,6 +565,10 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 			SelectedRef:               "main",
 			WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
 			Lifecycle:                 traits.StackTemplateActive,
+			// An apply needs a plan that still describes desired state.
+			LastPlannedRunID:              traits.TemplateRunID("run_plan_1"),
+			LastPlannedTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
+			LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 		},
 	}
 	templates := &recordingTemplateRepository{
@@ -875,6 +879,119 @@ func TestStartTemplateRunRejectsInactiveStackTemplate(t *testing.T) {
 		t.Fatalf("created run ID = %q, want no persisted run", runs.created.ID)
 	}
 
+}
+
+// The bug this closes: saving config leaves the completed plan as the latest
+// run, so the old "is the latest run a completed plan?" check stayed true and
+// the apply then snapshotted the edited config instead of the reviewed one.
+func TestStartTemplateRunRejectsApplyWhosePlanNoLongerMatchesDesired(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		stackTemplate traits.StackTemplate
+	}{
+		{
+			name: "config saved after the plan",
+			stackTemplate: traits.StackTemplate{
+				LastPlannedRunID:              traits.TemplateRunID("run_plan_1"),
+				LastPlannedTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+				LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+			},
+		},
+		{
+			name: "revision changed after the plan",
+			stackTemplate: traits.StackTemplate{
+				LastPlannedRunID:              traits.TemplateRunID("run_plan_1"),
+				LastPlannedTemplateRevisionID: traits.TemplateRevisionID("template_122"),
+				LastPlannedConfigJSON:         json.RawMessage(`{"region":"eu-west-1"}`),
+			},
+		},
+		{
+			name:          "never planned at all",
+			stackTemplate: traits.StackTemplate{},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			stackTemplate := test.stackTemplate
+			stackTemplate.ID = traits.StackTemplateID("stack_template_123")
+			stackTemplate.DesiredTemplateRevisionID = traits.TemplateRevisionID("template_123")
+			stackTemplate.DesiredConfigJSON = json.RawMessage(`{"region":"eu-west-1"}`)
+			stackTemplate.SelectedRef = "main"
+			stackTemplate.WorkspaceName = "mtp_acme_prod_vpc_a13f9c"
+			stackTemplate.Lifecycle = traits.StackTemplateActive
+
+			runs := &recordingTemplateRunRepository{}
+			service := NewService(Service{
+				Authorizer:     &permissionAuthorizer{allowed: true},
+				StackTemplates: &recordingStackTemplateRepository{stackTemplate: stackTemplate},
+				TemplateRuns:   runs,
+				TemplateRevisionMetadata: &recordingTemplateRepository{
+					template: traits.TemplateRevision{ID: traits.TemplateRevisionID("template_123"), Status: traits.TemplateRevisionActive},
+				},
+				RunIDs: fixedTemplateRunIDGenerator{runID: traits.TemplateRunID("run_123")},
+				Clock:  fixedClock{now: time.Now()},
+			})
+
+			_, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
+				TenantID:        traits.TenantID("tenant_123"),
+				StackTemplateID: traits.StackTemplateID("stack_template_123"),
+				Operation:       traits.OperationApply,
+			})
+			if !errors.Is(err, ErrStackTemplatePlanStale) {
+				t.Fatalf("error = %v, want ErrStackTemplatePlanStale", err)
+			}
+			if runs.created.ID != "" {
+				t.Fatalf("created run ID = %q, want no persisted run", runs.created.ID)
+			}
+		})
+	}
+}
+
+// The gate is on apply alone — re-planning is how a stale plan gets fixed, so
+// gating plan would leave the template stuck.
+func TestStartTemplateRunAllowsPlanWhenThePlanIsStale(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{}
+	work := &recordingUnitOfWork{templateRuns: runs}
+	service := NewService(Service{
+		Work:         work,
+		Authorizer:   &permissionAuthorizer{allowed: true},
+		TemplateRuns: runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{
+			ID:                            traits.StackTemplateID("stack_template_123"),
+			DesiredTemplateRevisionID:     traits.TemplateRevisionID("template_123"),
+			DesiredConfigJSON:             json.RawMessage(`{"region":"eu-west-1"}`),
+			SelectedRef:                   "main",
+			WorkspaceName:                 "mtp_acme_prod_vpc_a13f9c",
+			Lifecycle:                     traits.StackTemplateActive,
+			LastPlannedRunID:              traits.TemplateRunID("run_plan_1"),
+			LastPlannedTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+			LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+		}},
+		TemplateRevisionMetadata: &recordingTemplateRepository{
+			template: traits.TemplateRevision{ID: traits.TemplateRevisionID("template_123"), Status: traits.TemplateRevisionActive},
+		},
+		RunIDs: fixedTemplateRunIDGenerator{runID: traits.TemplateRunID("run_123")},
+		Clock:  fixedClock{now: time.Now()},
+	})
+
+	run, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+	})
+	if err != nil {
+		t.Fatalf("StartTemplateRun returned error: %v", err)
+	}
+	if run.ID != traits.TemplateRunID("run_123") {
+		t.Fatalf("run.ID = %q, want run_123", run.ID)
+	}
 }
 
 func TestStartTemplateRunRejectsMissingDesiredRevision(t *testing.T) {
@@ -2435,6 +2552,7 @@ func TestStartTemplateRunPairsRunWithStartIntentInTransaction(t *testing.T) {
 		TemplateRuns: runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{
 			ID: "stack_template_123", TenantID: "tenant_123", SourceTemplateID: "source_123", DesiredTemplateRevisionID: "revision_123", DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`), SelectedRef: "main", WorkspaceName: "workspace", Lifecycle: traits.StackTemplateActive,
+			LastPlannedRunID: "run_plan_1", LastPlannedTemplateRevisionID: "revision_123", LastPlannedConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
 		}},
 		TemplateRevisionMetadata: &recordingTemplateRepository{template: traits.TemplateRevision{ID: "revision_123", TenantID: "tenant_123", SourceTemplateID: "source_123", RepoOwner: "acme", RepoName: "infra", ResolvedCommitSHA: "sha_123", RootPath: "modules/vpc"}},
 		RunIDs:                   fixedTemplateRunIDGenerator{runID: "run_123"},

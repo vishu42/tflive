@@ -113,9 +113,20 @@ export interface StackTemplate {
   last_applied_run_id: string;
   last_applied_ref: string;
   last_applied_at?: string;
+  last_planned_run_id: string;
+  last_planned_at?: string;
+  plan_state: PlanState;
+  live_state: LiveState;
   created_by: string;
   lifecycle: string;
 }
+
+// Both states are computed by the server from snapshots the client never sees.
+// "matches" on plan_state is the only condition under which an apply runs what
+// was reviewed; anything else means the plan describes something other than
+// desired state.
+export type PlanState = "none" | "stale" | "matches";
+export type LiveState = "never" | "differs" | "matches";
 
 export interface StackView {
   stack: Stack;

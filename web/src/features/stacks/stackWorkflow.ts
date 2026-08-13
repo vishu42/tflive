@@ -141,6 +141,24 @@ export function isDestroyingStackTemplate(stackTemplate: StackTemplate | null): 
   return stackTemplate?.lifecycle === "destroying";
 }
 
+// hasFreshPlan asks the server's question — "is the completed plan still what
+// would run?" — instead of the old client-side one, "is the latest run a
+// completed plan?". Those differ whenever config was saved or the revision
+// changed after planning, and the server rejects an apply in exactly the cases
+// this returns false for.
+export function hasFreshPlan(stackTemplate: StackTemplate | null): boolean {
+  return stackTemplate?.plan_state === "matches";
+}
+
+// planStaleReason explains a disabled Apply. A gate the user cannot see the
+// reason for reads as a broken button.
+export function planStaleReason(stackTemplate: StackTemplate | null): string {
+  if (stackTemplate?.plan_state !== "stale") {
+    return "";
+  }
+  return "Config or revision changed since this plan — re-plan before applying";
+}
+
 function areStringRecordEqual(left: Record<string, string>, right: Record<string, string>): boolean {
   const leftKeys = Object.keys(left);
   const rightKeys = Object.keys(right);
