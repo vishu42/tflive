@@ -313,8 +313,6 @@ type StackTemplate struct {
 	DesiredTemplateRevisionID TemplateRevisionID `json:"desired_template_revision_id"`
 	// LastAppliedTemplateRevisionID is the template revision from the last successful apply.
 	LastAppliedTemplateRevisionID TemplateRevisionID `json:"last_applied_template_revision_id"`
-	// SelectedRef records the source ref selected when the component was installed.
-	SelectedRef string `json:"selected_ref"`
 	// WorkspaceName is the Terraform workspace used for this component.
 	WorkspaceName string `json:"workspace_name"`
 	// ConfigJSON is the install-time config and legacy fallback for desired config.
@@ -327,8 +325,6 @@ type StackTemplate struct {
 	// Nil means no apply has been recorded with one; an empty object is a
 	// legitimate value, so absence cannot be spelled '{}'.
 	LastAppliedConfigJSON json.RawMessage `json:"last_applied_config_json,omitempty"`
-	// LastAppliedRef is the source ref recorded by the last successful apply.
-	LastAppliedRef string `json:"last_applied_ref"`
 	// LastAppliedAt is when the last successful apply completed.
 	LastAppliedAt time.Time `json:"last_applied_at,omitempty"`
 	// LastPlannedRunID is the latest plan run that completed for this component.
@@ -347,6 +343,11 @@ type StackTemplate struct {
 	// DisplayName is a human-readable label derived from template metadata when resolving a view.
 	// It is not persisted and may be empty for templates created outside the view path.
 	DisplayName string `json:"-"`
+	// SourceRef is the desired revision's ref, resolved when a view is built.
+	// It is not persisted: a ref belongs to the revision, and a copy kept here
+	// would go stale the moment the desired revision changed. Like DisplayName
+	// it may be empty for templates built outside the view path.
+	SourceRef string `json:"-"`
 }
 
 // PlanState answers "will the thing that was reviewed be the thing that runs?".

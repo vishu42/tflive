@@ -330,7 +330,6 @@ type AddTemplateToStackCommand struct {
 	StackID            traits.StackID
 	TemplateRevisionID traits.TemplateRevisionID
 	ComponentKey       string
-	SelectedRef        string
 	WorkspaceName      string
 	ConfigJSON         json.RawMessage
 }
@@ -667,7 +666,6 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 		ComponentKey:              componentKey(command.ComponentKey, id),
 		SourceTemplateID:          templateRevision.SourceTemplateID,
 		DesiredTemplateRevisionID: command.TemplateRevisionID,
-		SelectedRef:               strings.TrimSpace(command.SelectedRef),
 		WorkspaceName:             workspaceName(stack.Slug, id),
 		ConfigJSON:                configJSON,
 		DesiredConfigJSON:         configJSON,
@@ -706,8 +704,8 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	if stackTemplate.Lifecycle != traits.StackTemplateActive {
 		return traits.TemplateRun{}, fmt.Errorf("%w: lifecycle is %q", ErrStackTemplateNotRunnable, stackTemplate.Lifecycle)
 	}
-	// TODO: Reject active StackTemplate records with missing SelectedRef or WorkspaceName,
-	// or enforce those invariants with Postgres CHECK constraints.
+	// TODO: Reject active StackTemplate records with a missing WorkspaceName,
+	// or enforce that invariant with a Postgres CHECK constraint.
 	desiredTemplateRevisionID := stackTemplate.DesiredTemplateRevisionID
 	if desiredTemplateRevisionID == "" {
 		return traits.TemplateRun{}, fmt.Errorf("%w: desired template revision is required", ErrStackTemplateNotRunnable)
@@ -743,13 +741,16 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 		TemplateRevisionID: desiredTemplateRevisionID,
 		SourceTemplateID:   sourceTemplateID,
 		Operation:          command.Operation,
-		SelectedRef:        stackTemplate.SelectedRef,
-		ResolvedCommitSHA:  templateRevision.ResolvedCommitSHA,
-		WorkspaceName:      stackTemplate.WorkspaceName,
-		ConfigJSON:         desiredConfigJSON,
-		Status:             traits.TemplateRunQueued,
-		TriggerActor:       actor,
-		StartedAt:          service.Clock.Now(),
+		// The ref comes from the revision being run, not from the component:
+		// the component's install-time ref does not change when the desired
+		// revision does, so it would misreport what this run is against.
+		SelectedRef:       templateRevision.SourceRef,
+		ResolvedCommitSHA: templateRevision.ResolvedCommitSHA,
+		WorkspaceName:     stackTemplate.WorkspaceName,
+		ConfigJSON:        desiredConfigJSON,
+		Status:            traits.TemplateRunQueued,
+		TriggerActor:      actor,
+		StartedAt:         service.Clock.Now(),
 	}
 
 	input := traits.TemplateRunWorkflowInput{
@@ -1101,6 +1102,7 @@ func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (
 				continue
 			}
 			view.Templates[i].DisplayName = templateDisplayName(rev.RepoName, rev.RootPath)
+			view.Templates[i].SourceRef = rev.SourceRef
 		}
 	}
 
@@ -1730,8 +1732,6 @@ func validateAddTemplateToStackCommand(command AddTemplateToStackCommand) error 
 		return fmt.Errorf("%w: stack id is required", ErrInvalidCommand)
 	case command.TemplateRevisionID == "":
 		return fmt.Errorf("%w: template revision id is required", ErrInvalidCommand)
-	case strings.TrimSpace(command.SelectedRef) == "":
-		return fmt.Errorf("%w: selected ref is required", ErrInvalidCommand)
 	default:
 		return nil
 	}

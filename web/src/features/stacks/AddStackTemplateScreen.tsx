@@ -53,7 +53,6 @@ export default function AddStackTemplateScreen() {
     try {
       const installed = await addTemplateToStackMutation.mutateAsync({
         template_revision_id: chosenRevision.id,
-        selected_ref: chosenRevision.source_ref,
         config: configFromVariableValues(variables, values)
       });
       navigate(`/stacks/${stackId}/template?selected=${installed.id}`);

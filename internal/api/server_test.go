@@ -211,7 +211,6 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 		ID:                        traits.StackTemplateID("stack_template_123"),
 		StackID:                   traits.StackID("stack_123"),
 		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
-		SelectedRef:               "main",
 		WorkspaceName:             "smoke-workspace",
 		Lifecycle:                 traits.StackTemplateActive,
 	}
@@ -267,7 +266,6 @@ func TestStartTemplateRunMapsStalePlanToConflictWithItsOwnCode(t *testing.T) {
 		StackID:                   traits.StackID("stack_123"),
 		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"eu-west-1"}`),
-		SelectedRef:               "main",
 		WorkspaceName:             "smoke-workspace",
 		Lifecycle:                 traits.StackTemplateActive,
 		// Planned against the config as it was before the last save.
@@ -703,7 +701,6 @@ func TestGetStackReturnsStackView(t *testing.T) {
 				TenantID:                  traits.TenantID("tenant_123"),
 				StackID:                   traits.StackID("stack_123"),
 				DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
-				SelectedRef:               "main",
 				WorkspaceName:             "meg_acme_prod_late_123",
 				ConfigJSON:                json.RawMessage(`{"region":"us-east-1"}`),
 				Lifecycle:                 traits.StackTemplateActive,
@@ -751,7 +748,7 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stacks/stack_123/templates",
-		strings.NewReader(`{"template_revision_id":"template_123","selected_ref":"main","config":{"region":"us-east-1"}}`),
+		strings.NewReader(`{"template_revision_id":"template_123","config":{"region":"us-east-1"}}`),
 	)
 
 	server.ServeHTTP(response, request)
@@ -1786,7 +1783,7 @@ func TestStackRoleRoutesUseInheritedPermissions(t *testing.T) {
 	}{
 		{name: "viewer lists stacks", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks", status: http.StatusOK, permission: authz.PermissionView},
 		{name: "viewer reads stack", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123", status: http.StatusOK, permission: authz.PermissionView},
-		{name: "operator installs template", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","selected_ref":"main","config":{}}`, status: http.StatusCreated, permission: authz.PermissionOperate},
+		{name: "operator installs template", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","config":{}}`, status: http.StatusCreated, permission: authz.PermissionOperate},
 		{name: "owner operates config", role: authz.RoleOwner, method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusOK, permission: authz.PermissionOperate},
 		{name: "operator upgrades template", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusOK, permission: authz.PermissionOperate},
 		{name: "operator starts run", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusCreated, permission: authz.PermissionOperate},
@@ -1843,7 +1840,7 @@ func TestStackRoleRoutesDenyInsufficientRoles(t *testing.T) {
 	}{
 		{name: "unassigned list is empty", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks", status: http.StatusOK, permission: authz.PermissionView},
 		{name: "unassigned cannot read stack", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123", status: http.StatusNotFound, permission: authz.PermissionView},
-		{name: "viewer cannot install template", role: authz.RoleViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","selected_ref":"main","config":{}}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
+		{name: "viewer cannot install template", role: authz.RoleViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","config":{}}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
 		{name: "approver cannot update config", role: authz.RoleApprover, method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
 		{name: "viewer cannot upgrade template", role: authz.RoleViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
 		{name: "approver cannot start run", role: authz.RoleApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
@@ -2020,7 +2017,6 @@ func newPermissionMatrixDependencies() *apiTestDependencies {
 		TenantID:                  "tenant_123",
 		StackID:                   "stack_123",
 		DesiredTemplateRevisionID: "revision_123",
-		SelectedRef:               "main",
 		WorkspaceName:             "acme-vpc",
 		Lifecycle:                 traits.StackTemplateActive,
 	}
@@ -2040,7 +2036,7 @@ func TestDeniedStackMutationReturnsForbiddenWithoutSideEffects(t *testing.T) {
 	deps.authorizer.denied = true
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
-	request := ordinaryAuthenticatedRequest(http.MethodPost, "/v1/tenants/tenant_123/stacks/stack_123/templates", strings.NewReader(`{"template_revision_id":"revision_123","selected_ref":"main","config":{}}`))
+	request := ordinaryAuthenticatedRequest(http.MethodPost, "/v1/tenants/tenant_123/stacks/stack_123/templates", strings.NewReader(`{"template_revision_id":"revision_123","config":{}}`))
 
 	server.ServeHTTP(response, request)
 
@@ -2121,7 +2117,7 @@ func TestPlatformAdminCannotBypassMissingAuthorizer(t *testing.T) {
 		{name: "stack creation", method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks", body: `{"name":"Acme"}`},
 		{name: "stack list", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks"},
 		{name: "stack detail", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123"},
-		{name: "stack mutation", method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","selected_ref":"main","config":{}}`},
+		{name: "stack mutation", method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","config":{}}`},
 		{name: "config mutation", method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`},
 		{name: "upgrade mutation", method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`},
 		{name: "start run", method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`},

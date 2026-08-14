@@ -106,12 +106,13 @@ export interface StackTemplate {
   source_template_id: string;
   desired_template_revision_id: string;
   last_applied_template_revision_id: string;
-  selected_ref: string;
+  // The desired revision's ref, resolved by the server per request. A label,
+  // not component state — the component does not own a ref.
+  source_ref: string;
   workspace_name: string;
   display_name: string;
   config: Record<string, unknown>;
   last_applied_run_id: string;
-  last_applied_ref: string;
   last_applied_at?: string;
   last_planned_run_id: string;
   last_planned_at?: string;

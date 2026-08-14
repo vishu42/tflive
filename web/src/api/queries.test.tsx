@@ -255,7 +255,7 @@ describe("mutation hooks", () => {
     });
 
     await act(async () => {
-      await result.current.mutateAsync({ template_revision_id: "rev_1", selected_ref: "main", config: {} });
+      await result.current.mutateAsync({ template_revision_id: "rev_1", config: {} });
     });
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.stack("tenant_123", "stack_1") });
