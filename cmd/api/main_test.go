@@ -251,21 +251,50 @@ func TestRunWrapsWireServiceFailure(t *testing.T) {
 	}
 }
 
+// runWithDependencies serves until its context is cancelled, so this test has
+// to be the thing that stops it. Passing context.Background() meant success had
+// no exit: the only ways out were an early error, or the go test deadline ten
+// minutes later. Which one you got depended on whether something already held
+// the configured port — a fast "address already in use" when the local stack
+// was up, a ten-minute hang when it wasn't.
+//
+// Not parallel, because it redirects the global logger. Bound to port 0 so the
+// result no longer depends on what else is running on the machine.
 func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
-	t.Parallel()
-
 	dsn := os.Getenv("tflive_POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("tflive_POSTGRES_TEST_DSN is not set")
 	}
 
-	deps := defaultAPIDependencies()
+	logs := newStartupLogBuffer()
+	previousOutput := log.Writer()
+	log.SetOutput(logs)
+	defer log.SetOutput(previousOutput)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	values := apiTestValues()
 	values["DATABASE_URL"] = dsn
-	err := runWithDependencies(context.Background(), apiTestGetenv(values), deps)
-	if err != nil {
-		t.Fatalf("runWithDependencies returned error: %v", err)
+	values["HTTP_ADDRESS"] = "127.0.0.1:0"
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runWithDependencies(ctx, apiTestGetenv(values), defaultAPIDependencies())
+	}()
+
+	// Reaching the listening log means the migration ran and the service wired
+	// up, which is everything this test is about.
+	select {
+	case <-logs.started:
+		cancel()
+		if err := <-errCh; err != nil {
+			t.Fatalf("runWithDependencies returned error: %v", err)
+		}
+	case err := <-errCh:
+		t.Fatalf("runWithDependencies returned before serving: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatalf("timed out waiting for the api to start; logs: %s", logs.String())
 	}
 }
 
