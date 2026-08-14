@@ -753,16 +753,17 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	}
 
 	input := traits.TemplateRunWorkflowInput{
-		RunID:           run.ID,
-		TenantID:        run.TenantID,
-		StackTemplateID: run.StackTemplateID,
-		Operation:       run.Operation,
-		SelectedRef:     run.SelectedRef,
-		WorkspaceName:   run.WorkspaceName,
-		RepoOwner:       templateRevision.RepoOwner,
-		RepoName:        templateRevision.RepoName,
-		RootPath:        templateRevision.RootPath,
-		ConfigJSON:      run.ConfigJSON,
+		RunID:             run.ID,
+		TenantID:          run.TenantID,
+		StackTemplateID:   run.StackTemplateID,
+		Operation:         run.Operation,
+		SelectedRef:       run.SelectedRef,
+		ResolvedCommitSHA: run.ResolvedCommitSHA,
+		WorkspaceName:     run.WorkspaceName,
+		RepoOwner:         templateRevision.RepoOwner,
+		RepoName:          templateRevision.RepoName,
+		RootPath:          templateRevision.RootPath,
+		ConfigJSON:        run.ConfigJSON,
 	}
 	payload, err := json.Marshal(StartTemplateRunPayload(input))
 	if err != nil {

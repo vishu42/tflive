@@ -554,12 +554,18 @@ type TemplateRunWorkflowInput struct {
 	TenantID        TenantID
 	StackTemplateID StackTemplateID
 	Operation       OperationType
-	SelectedRef     string
-	WorkspaceName   string
-	RepoOwner       string
-	RepoName        string
-	RootPath        string
-	ConfigJSON      json.RawMessage
+	// SelectedRef is the ref the component was installed from. It is carried
+	// for provenance and log context only — what the run executes is
+	// ResolvedCommitSHA, because a ref can move between planning and applying.
+	SelectedRef string
+	// ResolvedCommitSHA is the commit the desired revision resolved to, and the
+	// exact source a run checks out.
+	ResolvedCommitSHA string
+	WorkspaceName     string
+	RepoOwner         string
+	RepoName          string
+	RootPath          string
+	ConfigJSON        json.RawMessage
 }
 
 // TemplateRunStatusActivityInput asks the worker to persist one run status transition.
@@ -590,8 +596,13 @@ type FetchSourceActivityInput struct {
 	WorkspacePath string
 	RepoOwner     string
 	RepoName      string
-	SourceRef     string
-	RootPath      string
+	// SourceRef is the ref the component was installed from. It is only used
+	// when ResolvedCommitSHA is absent, which is true solely for runs queued
+	// before the commit was threaded through.
+	SourceRef string
+	// ResolvedCommitSHA is the exact commit to check out.
+	ResolvedCommitSHA string
+	RootPath          string
 }
 
 // FetchSourceActivityOutput identifies the Terraform module directory within the cloned source.

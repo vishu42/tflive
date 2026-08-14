@@ -31,6 +31,62 @@ func TestLocalGitRunnerClonesRef(t *testing.T) {
 	}
 }
 
+// A run must materialise one exact commit. `git clone --branch` cannot do it —
+// that flag takes a branch or tag name, not a SHA — so the commit is fetched
+// directly, and shallowly.
+func TestLocalGitRunnerChecksOutExactCommit(t *testing.T) {
+	t.Parallel()
+
+	executor := &recordingCommandExecutor{}
+	runner := NewLocalGitRunnerWithExecutor(executor)
+
+	err := runner.CheckoutCommit(context.Background(), "https://github.com/acme/infra-templates.git", "a1b2c3d", "/tmp/repo")
+	if err != nil {
+		t.Fatalf("CheckoutCommit returned error: %v", err)
+	}
+
+	want := []recordedCommand{
+		{name: "git", args: []string{"init", "--quiet", "/tmp/repo"}},
+		{name: "git", args: []string{"-C", "/tmp/repo", "remote", "add", "origin", "https://github.com/acme/infra-templates.git"}},
+		{name: "git", args: []string{"-C", "/tmp/repo", "fetch", "--depth", "1", "origin", "a1b2c3d"}},
+		{name: "git", args: []string{"-C", "/tmp/repo", "checkout", "--quiet", "FETCH_HEAD"}},
+	}
+	if !reflect.DeepEqual(executor.commands, want) {
+		t.Fatalf("commands = %#v, want %#v", executor.commands, want)
+	}
+}
+
+func TestLocalGitRunnerReportsWhichCheckoutStepFailed(t *testing.T) {
+	t.Parallel()
+
+	commandErr := errors.New("exit status 128")
+	executor := &recordingCommandExecutor{
+		stdout: "fatal: could not read Username\n",
+		// init and remote add succeed; the fetch is what fails.
+		errs: []error{nil, nil, commandErr},
+	}
+	runner := NewLocalGitRunnerWithExecutor(executor)
+
+	err := runner.CheckoutCommit(context.Background(), "https://github.com/acme/infra-templates.git", "a1b2c3d", "/tmp/repo")
+	if !errors.Is(err, commandErr) {
+		t.Fatalf("error = %v, want commandErr", err)
+	}
+	var cmdErr *GitCommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("error = %v, want *GitCommandError", err)
+	}
+	if cmdErr.Command != GitCommandFetch {
+		t.Fatalf("cmdErr.Command = %q, want %q", cmdErr.Command, GitCommandFetch)
+	}
+	// It stops at the failing step rather than running checkout on an empty repo.
+	if len(executor.commands) != 3 {
+		t.Fatalf("commands = %d, want 3", len(executor.commands))
+	}
+	if !strings.Contains(cmdErr.Output, "could not read Username") {
+		t.Fatalf("cmdErr.Output = %q, want command output", cmdErr.Output)
+	}
+}
+
 func TestLocalGitRunnerResolvesHead(t *testing.T) {
 	t.Parallel()
 

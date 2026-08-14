@@ -2576,6 +2576,12 @@ func TestStartTemplateRunPairsRunWithStartIntentInTransaction(t *testing.T) {
 	if payload.RunID != run.ID || payload.TenantID != run.TenantID || payload.StackTemplateID != run.StackTemplateID || payload.Operation != run.Operation || payload.SelectedRef != run.SelectedRef || payload.WorkspaceName != run.WorkspaceName || payload.RepoOwner != "acme" || payload.RepoName != "infra" || payload.RootPath != "modules/vpc" || string(payload.ConfigJSON) != `{"region":"us-east-1"}` {
 		t.Fatalf("start payload = %#v", payload)
 	}
+	// The worker checks out this commit. Without it in the payload the run would
+	// fall back to the installed ref, which is a moving target and is never
+	// updated when the desired revision changes.
+	if payload.ResolvedCommitSHA != "sha_123" {
+		t.Fatalf("payload.ResolvedCommitSHA = %q, want sha_123", payload.ResolvedCommitSHA)
+	}
 }
 
 func TestApproveRunPairsApprovalAuditAndSignalIntentInTransaction(t *testing.T) {

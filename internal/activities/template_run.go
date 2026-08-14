@@ -153,7 +153,21 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 	if git == nil {
 		git = runner.NewLocalGitRunner()
 	}
-	if err := git.Clone(ctx, publicGitHubRepoURL(input.RepoOwner, input.RepoName), input.SourceRef, sourcePath); err != nil {
+	repoURL := publicGitHubRepoURL(input.RepoOwner, input.RepoName)
+	// The commit is what the revision means, so it is what runs. Checking out a
+	// ref would let the source move between a plan and the apply that was
+	// approved against it, and would ignore the revision entirely once an
+	// upgrade pointed the component somewhere the installed ref never reached.
+	//
+	// The ref remains the fallback only for runs queued before the commit was
+	// threaded through; those payloads have no commit to check out. Once such a
+	// queue has drained the branch is dead, and with it the last path by which a
+	// run resolves its own source.
+	if commitSHA := strings.TrimSpace(input.ResolvedCommitSHA); commitSHA != "" {
+		if err := git.CheckoutCommit(ctx, repoURL, commitSHA, sourcePath); err != nil {
+			return traits.FetchSourceActivityOutput{}, fmt.Errorf("checkout source commit %s: %w", commitSHA, err)
+		}
+	} else if err := git.Clone(ctx, repoURL, input.SourceRef, sourcePath); err != nil {
 		return traits.FetchSourceActivityOutput{}, fmt.Errorf("clone source: %w", err)
 	}
 
