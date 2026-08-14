@@ -492,7 +492,6 @@ func (server *Server) handleAddTemplateToStack(response http.ResponseWriter, req
 		StackID:            traits.StackID(request.PathValue("stack_id")),
 		TemplateRevisionID: traits.TemplateRevisionID(body.TemplateRevisionID),
 		ComponentKey:       body.ComponentKey,
-		SelectedRef:        body.SelectedRef,
 		ConfigJSON:         configJSON,
 	})
 	if err != nil {
@@ -500,7 +499,7 @@ func (server *Server) handleAddTemplateToStack(response http.ResponseWriter, req
 		return
 	}
 
-	writeJSON(response, http.StatusCreated, newStackTemplateResponse(stackTemplate))
+	writeJSON(response, http.StatusCreated, newStackTemplateResponse(app.StackTemplateView{StackTemplate: stackTemplate}))
 }
 
 func (server *Server) handleUpdateStackTemplateConfig(response http.ResponseWriter, request *http.Request) {
@@ -524,7 +523,7 @@ func (server *Server) handleUpdateStackTemplateConfig(response http.ResponseWrit
 		return
 	}
 
-	writeJSON(response, http.StatusOK, newStackTemplateResponse(stackTemplate))
+	writeJSON(response, http.StatusOK, newStackTemplateResponse(app.StackTemplateView{StackTemplate: stackTemplate}))
 }
 
 func (server *Server) handleUpgradeStackTemplate(response http.ResponseWriter, request *http.Request) {
@@ -553,7 +552,7 @@ func (server *Server) handleUpgradeStackTemplate(response http.ResponseWriter, r
 		return
 	}
 
-	writeJSON(response, http.StatusOK, newStackTemplateResponse(stackTemplate))
+	writeJSON(response, http.StatusOK, newStackTemplateResponse(app.StackTemplateView{StackTemplate: stackTemplate}))
 }
 
 func (server *Server) handleStartTemplateRun(response http.ResponseWriter, request *http.Request) {
@@ -696,7 +695,6 @@ type createStackRequest struct {
 type addTemplateToStackRequest struct {
 	TemplateRevisionID string         `json:"template_revision_id"`
 	ComponentKey       string         `json:"component_key"`
-	SelectedRef        string         `json:"selected_ref"`
 	Config             map[string]any `json:"config"`
 }
 
@@ -751,21 +749,22 @@ type stackCapabilitiesResponse struct {
 }
 
 type stackTemplateResponse struct {
-	ID                            string         `json:"id"`
-	StackID                       string         `json:"stack_id"`
-	ComponentKey                  string         `json:"component_key"`
-	SourceTemplateID              string         `json:"source_template_id"`
-	DesiredTemplateRevisionID     string         `json:"desired_template_revision_id"`
-	LastAppliedTemplateRevisionID string         `json:"last_applied_template_revision_id"`
-	SelectedRef                   string         `json:"selected_ref"`
-	WorkspaceName                 string         `json:"workspace_name"`
-	DisplayName                   string         `json:"display_name"`
-	Config                        map[string]any `json:"config"`
-	LastAppliedRunID              string         `json:"last_applied_run_id"`
-	LastAppliedRef                string         `json:"last_applied_ref"`
-	LastAppliedAt                 string         `json:"last_applied_at,omitempty"`
-	LastPlannedRunID              string         `json:"last_planned_run_id"`
-	LastPlannedAt                 string         `json:"last_planned_at,omitempty"`
+	ID                            string `json:"id"`
+	StackID                       string `json:"stack_id"`
+	ComponentKey                  string `json:"component_key"`
+	SourceTemplateID              string `json:"source_template_id"`
+	DesiredTemplateRevisionID     string `json:"desired_template_revision_id"`
+	LastAppliedTemplateRevisionID string `json:"last_applied_template_revision_id"`
+	// SourceRef is the desired revision's ref, resolved per request. It is a
+	// label, not component state — the component does not own a ref.
+	SourceRef        string         `json:"source_ref"`
+	WorkspaceName    string         `json:"workspace_name"`
+	DisplayName      string         `json:"display_name"`
+	Config           map[string]any `json:"config"`
+	LastAppliedRunID string         `json:"last_applied_run_id"`
+	LastAppliedAt    string         `json:"last_applied_at,omitempty"`
+	LastPlannedRunID string         `json:"last_planned_run_id"`
+	LastPlannedAt    string         `json:"last_planned_at,omitempty"`
 	// PlanState and LiveState are the two derived comparisons. The snapshot
 	// configs they are derived from are deliberately not returned: the client
 	// re-deriving the comparison is the mistake this replaced.
@@ -829,7 +828,11 @@ func newStackResponse(stack traits.Stack, capabilities app.StackCapabilities) st
 	}
 }
 
-func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateResponse {
+// newStackTemplateResponse takes the view rather than the record because two of
+// the fields it returns — display_name and source_ref — are resolved per read
+// from the desired revision and are not component state.
+func newStackTemplateResponse(view app.StackTemplateView) stackTemplateResponse {
+	stackTemplate := view.StackTemplate
 	var config map[string]any
 	configJSON := stackTemplate.DesiredConfig()
 	if len(configJSON) > 0 {
@@ -846,12 +849,11 @@ func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateR
 		SourceTemplateID:              string(stackTemplate.SourceTemplateID),
 		DesiredTemplateRevisionID:     string(stackTemplate.DesiredTemplateRevisionID),
 		LastAppliedTemplateRevisionID: string(stackTemplate.LastAppliedTemplateRevisionID),
-		SelectedRef:                   stackTemplate.SelectedRef,
+		SourceRef:                     view.SourceRef,
 		WorkspaceName:                 stackTemplate.WorkspaceName,
-		DisplayName:                   stackTemplate.DisplayName,
+		DisplayName:                   view.DisplayName,
 		Config:                        config,
 		LastAppliedRunID:              string(stackTemplate.LastAppliedRunID),
-		LastAppliedRef:                stackTemplate.LastAppliedRef,
 		LastPlannedRunID:              string(stackTemplate.LastPlannedRunID),
 		PlanState:                     string(stackTemplate.PlanState()),
 		LiveState:                     string(stackTemplate.LiveState()),

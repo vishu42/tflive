@@ -61,7 +61,7 @@ describe("stack workflow helpers", () => {
   it("formats stack template rows from display_name, ref, and lifecycle", () => {
     const withDisplayName = stackTemplate({
       display_name: "infra-templates/modules/vpc",
-      selected_ref: "release-2026-07",
+      source_ref: "release-2026-07",
       lifecycle: "active"
     });
 
@@ -71,7 +71,7 @@ describe("stack workflow helpers", () => {
   it("falls back to workspace_name when display_name is empty", () => {
     const withoutDisplayName = stackTemplate({
       workspace_name: "meg_prod_a4de3e48",
-      selected_ref: "main",
+      source_ref: "main",
       lifecycle: "active"
     });
 
@@ -298,12 +298,11 @@ function stackTemplate(overrides: Partial<StackTemplate>): StackTemplate {
     source_template_id: "source_template_123",
     desired_template_revision_id: "template_123",
     last_applied_template_revision_id: "",
-    selected_ref: "main",
+    source_ref: "main",
     workspace_name: "prod-workspace",
     display_name: "",
     config: {},
     last_applied_run_id: "",
-    last_applied_ref: "",
     last_planned_run_id: "",
     plan_state: "none",
     live_state: "never",

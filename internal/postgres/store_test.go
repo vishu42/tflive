@@ -1048,9 +1048,8 @@ func TestCreateStackTemplateAndGetStackWithTemplates(t *testing.T) {
 		TenantID:                  traits.TenantID("tenant_123"),
 		StackID:                   traits.StackID("stack_123"),
 		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
-		SelectedRef:               "main",
 		WorkspaceName:             "meg_acme_prod_late_123",
-		ConfigJSON:                json.RawMessage(`{"region":"us-east-1"}`),
+		InstalledConfigJSON:       json.RawMessage(`{"region":"us-east-1"}`),
 		CreatedBy:                 traits.UserID("installer_123"),
 		Lifecycle:                 traits.StackTemplateActive,
 	}
@@ -1074,8 +1073,8 @@ func TestCreateStackTemplateAndGetStackWithTemplates(t *testing.T) {
 	if view.Templates[0].CreatedBy != traits.UserID("installer_123") {
 		t.Fatalf("template created by = %q, want installer_123", view.Templates[0].CreatedBy)
 	}
-	if string(view.Templates[0].ConfigJSON) != `{"region": "us-east-1"}` {
-		t.Fatalf("template config = %s", view.Templates[0].ConfigJSON)
+	if string(view.Templates[0].InstalledConfigJSON) != `{"region": "us-east-1"}` {
+		t.Fatalf("template config = %s", view.Templates[0].InstalledConfigJSON)
 	}
 }
 
@@ -1124,9 +1123,8 @@ func TestCreateStackTemplateAllowsRepeatedSourceWithDistinctComponentKeys(t *tes
 		SourceTemplateID:          sourceTemplateID,
 		DesiredTemplateRevisionID: template.ID,
 		ComponentKey:              "primary-vpc",
-		SelectedRef:               "main",
 		WorkspaceName:             "meg_acme_primary",
-		ConfigJSON:                json.RawMessage(`{"region":"us-east-1"}`),
+		InstalledConfigJSON:       json.RawMessage(`{"region":"us-east-1"}`),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 		CreatedBy:                 traits.UserID("user_123"),
 		Lifecycle:                 traits.StackTemplateActive,
@@ -1200,9 +1198,8 @@ func TestCreateStackTemplateRejectsDuplicateActiveComponentKey(t *testing.T) {
 		SourceTemplateID:          sourceTemplateID,
 		DesiredTemplateRevisionID: template.ID,
 		ComponentKey:              "primary-vpc",
-		SelectedRef:               "main",
 		WorkspaceName:             "meg_acme_primary",
-		ConfigJSON:                json.RawMessage(`{}`),
+		InstalledConfigJSON:       json.RawMessage(`{}`),
 		DesiredConfigJSON:         json.RawMessage(`{}`),
 		CreatedBy:                 traits.UserID("user_123"),
 		Lifecycle:                 traits.StackTemplateActive,
@@ -1243,9 +1240,8 @@ func TestUpdateStackTemplateConfigPersistsDesiredConfig(t *testing.T) {
 		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
 		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
 		ComponentKey:              "primary-vpc",
-		SelectedRef:               "main",
 		WorkspaceName:             "meg_acme_primary",
-		ConfigJSON:                json.RawMessage(`{"region":"us-east-1"}`),
+		InstalledConfigJSON:       json.RawMessage(`{"region":"us-east-1"}`),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 		CreatedBy:                 traits.UserID("user_123"),
 		Lifecycle:                 traits.StackTemplateActive,
@@ -1261,8 +1257,8 @@ func TestUpdateStackTemplateConfigPersistsDesiredConfig(t *testing.T) {
 	if !sameJSON(t, updated.DesiredConfigJSON, []byte(`{"region":"us-west-2"}`)) {
 		t.Fatalf("updated desired config = %s", updated.DesiredConfigJSON)
 	}
-	if !sameJSON(t, updated.ConfigJSON, []byte(`{"region":"us-east-1"}`)) {
-		t.Fatalf("legacy config changed = %s", updated.ConfigJSON)
+	if !sameJSON(t, updated.InstalledConfigJSON, []byte(`{"region":"us-east-1"}`)) {
+		t.Fatalf("legacy config changed = %s", updated.InstalledConfigJSON)
 	}
 }
 
@@ -1291,9 +1287,8 @@ func TestUpdateStackTemplateDesiredRevisionPersistsRevisionAndConfig(t *testing.
 		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
 		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
 		ComponentKey:              "primary-vpc",
-		SelectedRef:               "main",
 		WorkspaceName:             "meg_acme_primary",
-		ConfigJSON:                json.RawMessage(`{"region":"us-east-1"}`),
+		InstalledConfigJSON:       json.RawMessage(`{"region":"us-east-1"}`),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 		CreatedBy:                 traits.UserID("user_123"),
 		Lifecycle:                 traits.StackTemplateActive,
@@ -1333,15 +1328,13 @@ func TestGetStackTemplateReturnsTenantScopedRecord(t *testing.T) {
 			component_key,
 			source_template_id,
 			desired_template_revision_id,
-			selected_ref,
 			workspace_name,
-			config_json,
+			installed_config_json,
 			desired_config_json,
 			last_applied_run_id,
-			last_applied_ref,
 			last_applied_at,
 			lifecycle
-		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14)
+		) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12)
 	`,
 		"stack_template_123",
 		"tenant_123",
@@ -1349,12 +1342,10 @@ func TestGetStackTemplateReturnsTenantScopedRecord(t *testing.T) {
 		"primary-vpc",
 		"source_template_vpc",
 		"template_123",
-		"main",
 		"mtp_acme_prod_vpc_a13f9c",
 		`{"region":"us-east-1"}`,
 		`{"region":"us-east-1"}`,
 		"run_123",
-		"main",
 		lastAppliedAt,
 		"active",
 	)
@@ -1376,20 +1367,14 @@ func TestGetStackTemplateReturnsTenantScopedRecord(t *testing.T) {
 	if stackTemplate.DesiredTemplateRevisionID != traits.TemplateRevisionID("template_123") {
 		t.Fatalf("DesiredTemplateRevisionID = %q, want template_123", stackTemplate.DesiredTemplateRevisionID)
 	}
-	if stackTemplate.SelectedRef != "main" {
-		t.Fatalf("SelectedRef = %q, want main", stackTemplate.SelectedRef)
-	}
 	if stackTemplate.WorkspaceName != "mtp_acme_prod_vpc_a13f9c" {
 		t.Fatalf("WorkspaceName = %q, want mtp_acme_prod_vpc_a13f9c", stackTemplate.WorkspaceName)
 	}
-	if string(stackTemplate.ConfigJSON) != `{"region": "us-east-1"}` {
-		t.Fatalf("ConfigJSON = %s, want region config", stackTemplate.ConfigJSON)
+	if string(stackTemplate.InstalledConfigJSON) != `{"region": "us-east-1"}` {
+		t.Fatalf("InstalledConfigJSON = %s, want region config", stackTemplate.InstalledConfigJSON)
 	}
 	if stackTemplate.LastAppliedRunID != traits.TemplateRunID("run_123") {
 		t.Fatalf("LastAppliedRunID = %q, want run_123", stackTemplate.LastAppliedRunID)
-	}
-	if stackTemplate.LastAppliedRef != "main" {
-		t.Fatalf("LastAppliedRef = %q, want main", stackTemplate.LastAppliedRef)
 	}
 	if !stackTemplate.LastAppliedAt.Equal(lastAppliedAt) {
 		t.Fatalf("LastAppliedAt = %v, want %v", stackTemplate.LastAppliedAt, lastAppliedAt)
@@ -1412,16 +1397,14 @@ func TestGetStackTemplateReturnsNotFoundForOtherTenant(t *testing.T) {
 			tenant_id,
 			stack_id,
 			desired_template_revision_id,
-			selected_ref,
 			workspace_name,
 			lifecycle
-		) values ($1, $2, $3, $4, $5, $6, $7)
+		) values ($1, $2, $3, $4, $5, $6)
 	`,
 		"stack_template_123",
 		"tenant_123",
 		"stack_123",
 		"template_rev_1",
-		"main",
 		"mtp_acme_prod_vpc_a13f9c",
 		"active",
 	)
@@ -2317,9 +2300,8 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 		StackID:                   traits.StackID("stack_123"),
 		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
 		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
-		SelectedRef:               "main",
 		WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
-		ConfigJSON:                json.RawMessage(`{"region":"us-east-1"}`),
+		InstalledConfigJSON:       json.RawMessage(`{"region":"us-east-1"}`),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 		CreatedBy:                 traits.UserID("installer_123"),
 		Lifecycle:                 traits.StackTemplateActive,
@@ -2353,17 +2335,15 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 
 	var lastAppliedRunID traits.TemplateRunID
 	var lastAppliedTemplateRevisionID traits.TemplateRevisionID
-	var lastAppliedRef string
 	var lastAppliedAt time.Time
 	if err := pool.QueryRow(ctx, `
-		select last_applied_run_id, last_applied_template_revision_id, last_applied_ref, last_applied_at
+		select last_applied_run_id, last_applied_template_revision_id, last_applied_at
 		from stack_templates
 		where tenant_id = $1
 			and id = $2
 	`, "tenant_123", "stack_template_123").Scan(
 		&lastAppliedRunID,
 		&lastAppliedTemplateRevisionID,
-		&lastAppliedRef,
 		&lastAppliedAt,
 	); err != nil {
 		t.Fatalf("read stack template last applied fields: %v", err)
@@ -2371,11 +2351,10 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 	if lastAppliedRunID != traits.TemplateRunID("run_123") {
 		t.Fatalf("LastAppliedRunID = %q, want run_123", lastAppliedRunID)
 	}
+	// The applied revision is the durable fact. The run's ref is kept on the run
+	// itself; copying it onto the component gave it a ref it does not own.
 	if lastAppliedTemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
 		t.Fatalf("LastAppliedTemplateRevisionID = %q, want template_rev_2", lastAppliedTemplateRevisionID)
-	}
-	if lastAppliedRef != "release-2026-07-08" {
-		t.Fatalf("LastAppliedRef = %q, want release-2026-07-08", lastAppliedRef)
 	}
 	if lastAppliedAt.IsZero() {
 		t.Fatal("LastAppliedAt was not set")
@@ -2600,8 +2579,10 @@ func TestPlannedStateMigrationBackfillsFromExistingRuns(t *testing.T) {
 		t.Fatalf("seed pre-migration rows: %v", err)
 	}
 
-	if err := applyMigration(ctx, pool, "0015_stack_template_planned_state", "migrations/0015_stack_template_planned_state.sql"); err != nil {
-		t.Fatalf("apply migration 0015: %v", err)
+	// Migrate to head rather than to 0015 alone: the assertions are about the
+	// 0015 backfill, but the store reads the current schema.
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate to head: %v", err)
 	}
 
 	store := NewStore(pool)
@@ -2649,8 +2630,10 @@ func TestPlannedStateMigrationLeavesUnplannedTemplatesAbsent(t *testing.T) {
 		t.Fatalf("seed pre-migration rows: %v", err)
 	}
 
-	if err := applyMigration(ctx, pool, "0015_stack_template_planned_state", "migrations/0015_stack_template_planned_state.sql"); err != nil {
-		t.Fatalf("apply migration 0015: %v", err)
+	// Migrate to head rather than to 0015 alone: the assertions are about the
+	// 0015 backfill, but the store reads the current schema.
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate to head: %v", err)
 	}
 
 	stackTemplate, err := NewStore(pool).GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_456"))
@@ -2664,6 +2647,95 @@ func TestPlannedStateMigrationLeavesUnplannedTemplatesAbsent(t *testing.T) {
 	}
 	if stackTemplate.PlanState() != traits.PlanNone || stackTemplate.LiveState() != traits.LiveNever {
 		t.Fatalf("states = %q / %q, want none / never", stackTemplate.PlanState(), stackTemplate.LiveState())
+	}
+}
+
+// The ref columns are gone from the component. A ref belongs to the revision,
+// which is immutable per commit, so it cannot go stale there; on the component
+// it was a copy that nothing updated when the desired revision changed.
+func TestStackTemplatesNoLongerCarryRefColumns(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+
+	for _, column := range []string{"selected_ref", "last_applied_ref"} {
+		var exists bool
+		if err := pool.QueryRow(ctx, `
+			select exists (
+				select 1
+				from information_schema.columns
+				where table_schema = current_schema()
+					and table_name = 'stack_templates'
+					and column_name = $1
+			)
+		`, column).Scan(&exists); err != nil {
+			t.Fatalf("check stack_templates.%s: %v", column, err)
+		}
+		if exists {
+			t.Fatalf("stack_templates.%s still exists", column)
+		}
+	}
+
+	// The run keeps its own ref: there it is provenance of what was started,
+	// frozen at start, not a claim about the present.
+	var runRefExists bool
+	if err := pool.QueryRow(ctx, `
+		select exists (
+			select 1
+			from information_schema.columns
+			where table_schema = current_schema()
+				and table_name = 'template_runs'
+				and column_name = 'selected_ref'
+		)
+	`).Scan(&runRefExists); err != nil {
+		t.Fatalf("check template_runs.selected_ref: %v", err)
+	}
+	if !runRefExists {
+		t.Fatal("template_runs.selected_ref was dropped; runs must keep their own ref")
+	}
+}
+
+// config_json meant two things: the config captured at install, and a fallback
+// for desired state. The fallback was unreachable for persisted rows, so the
+// column is named for the one meaning it has left.
+func TestStackTemplateInstallConfigIsNamedForWhatItHolds(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+
+	columns := map[string]bool{}
+	rows, err := pool.Query(ctx, `
+		select column_name
+		from information_schema.columns
+		where table_schema = current_schema()
+			and table_name = 'stack_templates'
+	`)
+	if err != nil {
+		t.Fatalf("read stack_templates columns: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan column name: %v", err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate columns: %v", err)
+	}
+
+	if !columns["installed_config_json"] {
+		t.Fatal("stack_templates.installed_config_json is missing")
+	}
+	if columns["config_json"] {
+		t.Fatal("stack_templates.config_json still exists; the rename did not apply")
+	}
+	// Desired state keeps its own column, and it is what runs read.
+	if !columns["desired_config_json"] {
+		t.Fatal("stack_templates.desired_config_json is missing")
 	}
 }
 
@@ -2700,9 +2772,8 @@ func seedStackWithTemplate(t *testing.T, ctx context.Context, store *Store) {
 		StackID:                   traits.StackID("stack_123"),
 		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
 		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
-		SelectedRef:               "main",
 		WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
-		ConfigJSON:                json.RawMessage(`{"region":"us-east-1"}`),
+		InstalledConfigJSON:       json.RawMessage(`{"region":"us-east-1"}`),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 		CreatedBy:                 traits.UserID("installer_123"),
 		Lifecycle:                 traits.StackTemplateActive,

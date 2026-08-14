@@ -140,7 +140,6 @@ func TestStackTemplateWorkspaceStable(t *testing.T) {
 		ID:                        StackTemplateID("stack_template_123"),
 		StackID:                   StackID("stack_123"),
 		DesiredTemplateRevisionID: TemplateRevisionID("template_rev_123"),
-		SelectedRef:               "main",
 		WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
 		Lifecycle:                 StackTemplateActive,
 	}

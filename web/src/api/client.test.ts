@@ -108,7 +108,6 @@ describe("api client", () => {
 
     await addTemplateToStack("tenant_123", "stack_123", {
       template_revision_id: "template_123",
-      selected_ref: "main",
       config: { region: "us-east-1" }
     });
 
@@ -118,7 +117,6 @@ describe("api client", () => {
         method: "POST",
         body: JSON.stringify({
           template_revision_id: "template_123",
-          selected_ref: "main",
           config: { region: "us-east-1" }
         })
       })
@@ -223,7 +221,7 @@ describe("api client", () => {
 
     await registerTemplate("tenant_123", { repo_owner: "a", repo_name: "b", source_ref: "main", root_path: "." });
     await createStack("tenant_123", { name: "s", slug: "", tags: {}, default_credential_ids: [] });
-    await addTemplateToStack("tenant_123", "stack_1", { template_revision_id: "rev_1", selected_ref: "main", config: {} });
+    await addTemplateToStack("tenant_123", "stack_1", { template_revision_id: "rev_1", config: {} });
     await updateStackTemplateConfig("tenant_123", "st_1", { config: {} });
     await upgradeStackTemplate("tenant_123", "st_1", { target_template_revision_id: "rev_2" });
     await startTemplateRun("tenant_123", "st_1", { operation: "plan" });

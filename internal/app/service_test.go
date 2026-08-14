@@ -274,26 +274,26 @@ func TestGetStackResolvesTemplateDisplayName(t *testing.T) {
 				Name:     "Acme Prod",
 				Slug:     "acme-prod",
 			},
-			Templates: []traits.StackTemplate{
-				{
+			Templates: []StackTemplateView{
+				{StackTemplate: traits.StackTemplate{
 					ID:                        traits.StackTemplateID("stack_template_1"),
 					DesiredTemplateRevisionID: traits.TemplateRevisionID("rev_1"),
-				},
-				{
+				}},
+				{StackTemplate: traits.StackTemplate{
 					ID:                        traits.StackTemplateID("stack_template_2"),
 					DesiredTemplateRevisionID: traits.TemplateRevisionID("rev_2"),
-				},
-				{
+				}},
+				{StackTemplate: traits.StackTemplate{
 					ID:                        traits.StackTemplateID("stack_template_3"),
 					DesiredTemplateRevisionID: traits.TemplateRevisionID("rev_missing"),
-				},
+				}},
 			},
 		},
 	}
 	revisions := &recordingTemplateRepository{
 		templates: []traits.TemplateRevision{
-			{ID: traits.TemplateRevisionID("rev_1"), RepoName: "infra-templates", RootPath: "modules/vpc"},
-			{ID: traits.TemplateRevisionID("rev_2"), RepoName: "my-repo", RootPath: "."},
+			{ID: traits.TemplateRevisionID("rev_1"), RepoName: "infra-templates", RootPath: "modules/vpc", SourceRef: "v2.0.0"},
+			{ID: traits.TemplateRevisionID("rev_2"), RepoName: "my-repo", RootPath: ".", SourceRef: "main"},
 		},
 	}
 	service := NewService(Service{Stacks: stacks, TemplateRevisions: revisions, Authorizer: &permissionAuthorizer{allowed: true}})
@@ -312,6 +312,18 @@ func TestGetStackResolvesTemplateDisplayName(t *testing.T) {
 	}
 	if got := view.Templates[0].DisplayName; got != "infra-templates/modules/vpc" {
 		t.Errorf("template[0].DisplayName = %q, want infra-templates/modules/vpc", got)
+	}
+	// The ref is resolved from the desired revision on every read rather than
+	// stored on the component, so it cannot drift from the revision in use.
+	if got := view.Templates[0].SourceRef; got != "v2.0.0" {
+		t.Errorf("template[0].SourceRef = %q, want v2.0.0", got)
+	}
+	if got := view.Templates[1].SourceRef; got != "main" {
+		t.Errorf("template[1].SourceRef = %q, want main", got)
+	}
+	// An unresolvable revision leaves it empty rather than guessing.
+	if got := view.Templates[2].SourceRef; got != "" {
+		t.Errorf("template[2].SourceRef = %q, want empty", got)
 	}
 	if got := view.Templates[1].DisplayName; got != "my-repo" {
 		t.Errorf("template[1].DisplayName = %q, want my-repo", got)
@@ -410,7 +422,6 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 		StackID:            traits.StackID("stack_123"),
 		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
 		ComponentKey:       "primary-vpc",
-		SelectedRef:        "main",
 		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 	})
 	if err != nil {
@@ -447,8 +458,8 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	if installer.created.CreatedBy != traits.UserID(keycloakSubject) {
 		t.Fatalf("persisted created by = %q, want %q", installer.created.CreatedBy, keycloakSubject)
 	}
-	if string(installer.created.ConfigJSON) != `{"region":"us-east-1"}` {
-		t.Fatalf("config json = %s", installer.created.ConfigJSON)
+	if string(installer.created.InstalledConfigJSON) != `{"region":"us-east-1"}` {
+		t.Fatalf("config json = %s", installer.created.InstalledConfigJSON)
 	}
 	if installer.created.SourceTemplateID != traits.SourceTemplateID("source_template_vpc") {
 		t.Fatalf("persisted source template ID = %q, want source_template_vpc", installer.created.SourceTemplateID)
@@ -483,7 +494,6 @@ func TestAddTemplateToStackRejectsMissingRequiredVariable(t *testing.T) {
 		TenantID:           traits.TenantID("tenant_123"),
 		StackID:            traits.StackID("stack_123"),
 		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
-		SelectedRef:        "main",
 		ConfigJSON:         json.RawMessage(`{}`),
 	})
 	if !errors.Is(err, ErrStackTemplateConfigInvalid) {
@@ -513,7 +523,6 @@ func TestAddTemplateToStackRejectsUnknownVariable(t *testing.T) {
 		TenantID:           traits.TenantID("tenant_123"),
 		StackID:            traits.StackID("stack_123"),
 		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
-		SelectedRef:        "main",
 		ConfigJSON:         json.RawMessage(`{"region":"us-east-1","extra":"nope"}`),
 	})
 	if !errors.Is(err, ErrStackTemplateConfigInvalid) {
@@ -541,7 +550,6 @@ func TestAddTemplateToStackRejectsInactiveTemplate(t *testing.T) {
 		TenantID:           traits.TenantID("tenant_123"),
 		StackID:            traits.StackID("stack_123"),
 		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
-		SelectedRef:        "main",
 		ConfigJSON:         json.RawMessage(`{}`),
 	})
 	if !errors.Is(err, ErrTemplateNotInstallable) {
@@ -562,7 +570,6 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 			SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
 			DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
 			DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-			SelectedRef:               "main",
 			WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
 			Lifecycle:                 traits.StackTemplateActive,
 			// An apply needs a plan that still describes desired state.
@@ -573,11 +580,13 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 	}
 	templates := &recordingTemplateRepository{
 		template: traits.TemplateRevision{
-			ID:                traits.TemplateRevisionID("template_rev_2"),
-			TenantID:          traits.TenantID("tenant_123"),
-			SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
-			RepoOwner:         "acme",
-			RepoName:          "infra-templates",
+			ID:               traits.TemplateRevisionID("template_rev_2"),
+			TenantID:         traits.TenantID("tenant_123"),
+			SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
+			RepoOwner:        "acme",
+			RepoName:         "infra-templates",
+			// The run's ref comes from here now, not from the component.
+			SourceRef:         "main",
 			ResolvedCommitSHA: "sha-2",
 			RootPath:          "modules/vpc",
 			Status:            traits.TemplateRevisionActive,
@@ -852,7 +861,6 @@ func TestStartTemplateRunRejectsInactiveStackTemplate(t *testing.T) {
 	stackTemplates := &recordingStackTemplateRepository{
 		stackTemplate: traits.StackTemplate{
 			ID:            traits.StackTemplateID("stack_template_123"),
-			SelectedRef:   "main",
 			WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 			Lifecycle:     traits.StackTemplateDestroyed,
 		},
@@ -921,7 +929,6 @@ func TestStartTemplateRunRejectsApplyWhosePlanNoLongerMatchesDesired(t *testing.
 			stackTemplate.ID = traits.StackTemplateID("stack_template_123")
 			stackTemplate.DesiredTemplateRevisionID = traits.TemplateRevisionID("template_123")
 			stackTemplate.DesiredConfigJSON = json.RawMessage(`{"region":"eu-west-1"}`)
-			stackTemplate.SelectedRef = "main"
 			stackTemplate.WorkspaceName = "mtp_acme_prod_vpc_a13f9c"
 			stackTemplate.Lifecycle = traits.StackTemplateActive
 
@@ -952,6 +959,55 @@ func TestStartTemplateRunRejectsApplyWhosePlanNoLongerMatchesDesired(t *testing.
 	}
 }
 
+// The component does not own a ref. It used to keep the one chosen at install
+// and stamp it onto every run, which stayed stale after a revision change: a
+// component installed from main and moved to a v2.0.0 revision kept reporting
+// main. The run takes the ref from the revision it is actually running.
+func TestStartTemplateRunStampsTheRefOfTheRevisionBeingRun(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{}
+	work := &recordingUnitOfWork{templateRuns: runs}
+	service := NewService(Service{
+		Work:         work,
+		Authorizer:   &permissionAuthorizer{allowed: true},
+		TemplateRuns: runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{
+			ID:                        traits.StackTemplateID("stack_template_123"),
+			DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+			WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
+			Lifecycle:                 traits.StackTemplateActive,
+		}},
+		TemplateRevisionMetadata: &recordingTemplateRepository{
+			template: traits.TemplateRevision{
+				ID:                traits.TemplateRevisionID("template_123"),
+				Status:            traits.TemplateRevisionActive,
+				SourceRef:         "v2.0.0",
+				ResolvedCommitSHA: "sha_v2",
+			},
+		},
+		RunIDs: fixedTemplateRunIDGenerator{runID: traits.TemplateRunID("run_123")},
+		Clock:  fixedClock{now: time.Now()},
+	})
+
+	run, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+	})
+	if err != nil {
+		t.Fatalf("StartTemplateRun returned error: %v", err)
+	}
+	if run.SelectedRef != "v2.0.0" {
+		t.Fatalf("run.SelectedRef = %q, want v2.0.0", run.SelectedRef)
+	}
+	// The ref and the commit describe the same revision, which is the property
+	// that was impossible to guarantee while the component carried its own ref.
+	if run.ResolvedCommitSHA != "sha_v2" {
+		t.Fatalf("run.ResolvedCommitSHA = %q, want sha_v2", run.ResolvedCommitSHA)
+	}
+}
+
 // The gate is on apply alone — re-planning is how a stale plan gets fixed, so
 // gating plan would leave the template stuck.
 func TestStartTemplateRunAllowsPlanWhenThePlanIsStale(t *testing.T) {
@@ -967,7 +1023,6 @@ func TestStartTemplateRunAllowsPlanWhenThePlanIsStale(t *testing.T) {
 			ID:                            traits.StackTemplateID("stack_template_123"),
 			DesiredTemplateRevisionID:     traits.TemplateRevisionID("template_123"),
 			DesiredConfigJSON:             json.RawMessage(`{"region":"eu-west-1"}`),
-			SelectedRef:                   "main",
 			WorkspaceName:                 "mtp_acme_prod_vpc_a13f9c",
 			Lifecycle:                     traits.StackTemplateActive,
 			LastPlannedRunID:              traits.TemplateRunID("run_plan_1"),
@@ -1000,7 +1055,6 @@ func TestStartTemplateRunRejectsMissingDesiredRevision(t *testing.T) {
 	stackTemplates := &recordingStackTemplateRepository{
 		stackTemplate: traits.StackTemplate{
 			ID:            traits.StackTemplateID("stack_template_123"),
-			SelectedRef:   "main",
 			WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 			Lifecycle:     traits.StackTemplateActive,
 		},
@@ -1040,7 +1094,6 @@ func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
 		stackTemplate: traits.StackTemplate{
 			ID:                        traits.StackTemplateID("stack_template_123"),
 			DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
-			SelectedRef:               "main",
 			WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
 			Lifecycle:                 traits.StackTemplateActive,
 		},
@@ -2019,7 +2072,6 @@ func TestAddTemplateToStackAuditsAuthorizationDenial(t *testing.T) {
 		TenantID:           traits.TenantID("tenant_123"),
 		StackID:            traits.StackID("stack_123"),
 		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
-		SelectedRef:        "main",
 		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 	})
 	if !errors.Is(err, ErrForbidden) {
@@ -2551,10 +2603,10 @@ func TestStartTemplateRunPairsRunWithStartIntentInTransaction(t *testing.T) {
 		Authorizer:   &permissionAuthorizer{allowed: true},
 		TemplateRuns: runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{
-			ID: "stack_template_123", TenantID: "tenant_123", SourceTemplateID: "source_123", DesiredTemplateRevisionID: "revision_123", DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`), SelectedRef: "main", WorkspaceName: "workspace", Lifecycle: traits.StackTemplateActive,
+			ID: "stack_template_123", TenantID: "tenant_123", SourceTemplateID: "source_123", DesiredTemplateRevisionID: "revision_123", DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`), WorkspaceName: "workspace", Lifecycle: traits.StackTemplateActive,
 			LastPlannedRunID: "run_plan_1", LastPlannedTemplateRevisionID: "revision_123", LastPlannedConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
 		}},
-		TemplateRevisionMetadata: &recordingTemplateRepository{template: traits.TemplateRevision{ID: "revision_123", TenantID: "tenant_123", SourceTemplateID: "source_123", RepoOwner: "acme", RepoName: "infra", ResolvedCommitSHA: "sha_123", RootPath: "modules/vpc"}},
+		TemplateRevisionMetadata: &recordingTemplateRepository{template: traits.TemplateRevision{ID: "revision_123", TenantID: "tenant_123", SourceTemplateID: "source_123", RepoOwner: "acme", RepoName: "infra", SourceRef: "main", ResolvedCommitSHA: "sha_123", RootPath: "modules/vpc"}},
 		RunIDs:                   fixedTemplateRunIDGenerator{runID: "run_123"},
 		Clock:                    fixedClock{now: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)},
 	})

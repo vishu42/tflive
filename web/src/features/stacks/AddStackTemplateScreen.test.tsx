@@ -151,9 +151,10 @@ describe("AddStackTemplateScreen", () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/v1/tenants/tenant_123/stacks/stack_1/templates");
     expect(init.method).toBe("POST");
+    // No ref is sent: the revision already determines it, and a client-supplied
+    // ref could disagree with the revision being installed.
     expect(JSON.parse(init.body as string)).toEqual({
       template_revision_id: "rev_1",
-      selected_ref: "main",
       config: { region: "eu-west-1" }
     });
   });

@@ -242,7 +242,6 @@ export default function App() {
       const config = configFromVariableValues(variables, variableValues);
       const next = await addTemplateToStackMutation.mutateAsync({
         template_revision_id: selectedTemplateRevision.id,
-        selected_ref: selectedTemplateRevision.source_ref,
         config
       });
       setSelectedStackTemplateID(next.id);
