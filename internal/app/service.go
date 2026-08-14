@@ -320,8 +320,21 @@ type CreateStackCommand struct {
 // StackView returns one stack with its installed templates.
 type StackView struct {
 	Stack        traits.Stack
-	Templates    []traits.StackTemplate
+	Templates    []StackTemplateView
 	Capabilities StackCapabilities
+}
+
+// StackTemplateView is one installed component plus the labels a read resolves
+// for it. Those labels are not component state: they are properties of the
+// desired revision, looked up per read so they cannot drift from the revision
+// in use. They live here rather than on traits.StackTemplate so the persisted
+// record has no fields that are only ever populated on one path.
+type StackTemplateView struct {
+	traits.StackTemplate
+	// DisplayName is a human-readable label derived from template metadata.
+	DisplayName string
+	// SourceRef is the desired revision's ref.
+	SourceRef string
 }
 
 // AddTemplateToStackCommand asks the app to install one template into a stack.
@@ -667,7 +680,7 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 		SourceTemplateID:          templateRevision.SourceTemplateID,
 		DesiredTemplateRevisionID: command.TemplateRevisionID,
 		WorkspaceName:             workspaceName(stack.Slug, id),
-		ConfigJSON:                configJSON,
+		InstalledConfigJSON:       configJSON,
 		DesiredConfigJSON:         configJSON,
 		CreatedBy:                 actor,
 		Lifecycle:                 traits.StackTemplateActive,
@@ -1021,7 +1034,7 @@ func (service *Service) UpgradeStackTemplate(ctx context.Context, command Upgrad
 	}
 	configJSON := command.ConfigJSON
 	if len(configJSON) == 0 {
-		configJSON, err = carryForwardConfig(stackTemplate.DesiredConfigJSON, stackTemplate.ConfigJSON, variables)
+		configJSON, err = carryForwardConfig(stackTemplate.DesiredConfig(), variables)
 		if err != nil {
 			return traits.StackTemplate{}, err
 		}
@@ -1084,7 +1097,7 @@ func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (
 		return StackView{}, fmt.Errorf("get stack: %w", err)
 	}
 	if view.Templates == nil {
-		view.Templates = []traits.StackTemplate{}
+		view.Templates = []StackTemplateView{}
 	}
 
 	if len(view.Templates) > 0 {
@@ -1924,11 +1937,13 @@ func validateTemplateConfig(raw json.RawMessage, variables []traits.TemplateVari
 	return normalized, nil
 }
 
-func carryForwardConfig(desiredConfigJSON json.RawMessage, legacyConfigJSON json.RawMessage, variables []traits.TemplateVariable) (json.RawMessage, error) {
+// carryForwardConfig keeps the values of variables the target revision still
+// declares. It reads desired config only: the install-time config used to be a
+// fallback here, but desired_config_json cannot be empty on a persisted row, so
+// that branch was unreachable and only made it look as though install-time
+// config were a second source of desired state.
+func carryForwardConfig(desiredConfigJSON json.RawMessage, variables []traits.TemplateVariable) (json.RawMessage, error) {
 	raw := desiredConfigJSON
-	if len(raw) == 0 {
-		raw = legacyConfigJSON
-	}
 	if len(raw) == 0 {
 		raw = json.RawMessage(`{}`)
 	}

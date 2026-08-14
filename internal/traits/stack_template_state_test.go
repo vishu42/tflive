@@ -124,15 +124,17 @@ func TestStackTemplatePlanAndLiveState(t *testing.T) {
 			wantLive: LiveNever,
 		},
 		{
-			name: "desired falls back to the install-time config",
+			// The install-time config is history, not a second source of desired
+			// state. A plan matching it but not desired is stale.
+			name: "the install-time config is not consulted",
 			stackTemplate: StackTemplate{
 				DesiredTemplateRevisionID:     TemplateRevisionID("rev_2"),
-				ConfigJSON:                    json.RawMessage(`{"region":"us-east-1"}`),
+				InstalledConfigJSON:           json.RawMessage(`{"region":"us-east-1"}`),
 				LastPlannedRunID:              TemplateRunID("run_plan_1"),
 				LastPlannedTemplateRevisionID: TemplateRevisionID("rev_2"),
 				LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 			},
-			wantPlan: PlanMatches,
+			wantPlan: PlanStale,
 			wantLive: LiveNever,
 		},
 	}
@@ -151,19 +153,22 @@ func TestStackTemplatePlanAndLiveState(t *testing.T) {
 	}
 }
 
-func TestStackTemplateDesiredConfigPrefersDesiredOverInstallTime(t *testing.T) {
+func TestStackTemplateDesiredConfigIgnoresTheInstallTimeConfig(t *testing.T) {
 	t.Parallel()
 
 	stackTemplate := StackTemplate{
-		ConfigJSON:        json.RawMessage(`{"region":"us-east-1"}`),
-		DesiredConfigJSON: json.RawMessage(`{"region":"eu-west-1"}`),
+		InstalledConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
+		DesiredConfigJSON:   json.RawMessage(`{"region":"eu-west-1"}`),
 	}
 	if got := string(stackTemplate.DesiredConfig()); got != `{"region":"eu-west-1"}` {
 		t.Fatalf("DesiredConfig() = %s, want the desired config", got)
 	}
 
+	// An empty desired config means the config is empty, not absent. The column
+	// is not null, so a persisted row can never say otherwise, and treating the
+	// install-time config as a fallback would resurrect the ambiguity.
 	stackTemplate.DesiredConfigJSON = nil
-	if got := string(stackTemplate.DesiredConfig()); got != `{"region":"us-east-1"}` {
-		t.Fatalf("DesiredConfig() = %s, want the install-time config", got)
+	if got := string(stackTemplate.DesiredConfig()); got != `{}` {
+		t.Fatalf("DesiredConfig() = %s, want an empty object", got)
 	}
 }

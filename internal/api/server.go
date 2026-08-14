@@ -499,7 +499,7 @@ func (server *Server) handleAddTemplateToStack(response http.ResponseWriter, req
 		return
 	}
 
-	writeJSON(response, http.StatusCreated, newStackTemplateResponse(stackTemplate))
+	writeJSON(response, http.StatusCreated, newStackTemplateResponse(app.StackTemplateView{StackTemplate: stackTemplate}))
 }
 
 func (server *Server) handleUpdateStackTemplateConfig(response http.ResponseWriter, request *http.Request) {
@@ -523,7 +523,7 @@ func (server *Server) handleUpdateStackTemplateConfig(response http.ResponseWrit
 		return
 	}
 
-	writeJSON(response, http.StatusOK, newStackTemplateResponse(stackTemplate))
+	writeJSON(response, http.StatusOK, newStackTemplateResponse(app.StackTemplateView{StackTemplate: stackTemplate}))
 }
 
 func (server *Server) handleUpgradeStackTemplate(response http.ResponseWriter, request *http.Request) {
@@ -552,7 +552,7 @@ func (server *Server) handleUpgradeStackTemplate(response http.ResponseWriter, r
 		return
 	}
 
-	writeJSON(response, http.StatusOK, newStackTemplateResponse(stackTemplate))
+	writeJSON(response, http.StatusOK, newStackTemplateResponse(app.StackTemplateView{StackTemplate: stackTemplate}))
 }
 
 func (server *Server) handleStartTemplateRun(response http.ResponseWriter, request *http.Request) {
@@ -828,7 +828,11 @@ func newStackResponse(stack traits.Stack, capabilities app.StackCapabilities) st
 	}
 }
 
-func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateResponse {
+// newStackTemplateResponse takes the view rather than the record because two of
+// the fields it returns — display_name and source_ref — are resolved per read
+// from the desired revision and are not component state.
+func newStackTemplateResponse(view app.StackTemplateView) stackTemplateResponse {
+	stackTemplate := view.StackTemplate
 	var config map[string]any
 	configJSON := stackTemplate.DesiredConfig()
 	if len(configJSON) > 0 {
@@ -845,9 +849,9 @@ func newStackTemplateResponse(stackTemplate traits.StackTemplate) stackTemplateR
 		SourceTemplateID:              string(stackTemplate.SourceTemplateID),
 		DesiredTemplateRevisionID:     string(stackTemplate.DesiredTemplateRevisionID),
 		LastAppliedTemplateRevisionID: string(stackTemplate.LastAppliedTemplateRevisionID),
-		SourceRef:                     stackTemplate.SourceRef,
+		SourceRef:                     view.SourceRef,
 		WorkspaceName:                 stackTemplate.WorkspaceName,
-		DisplayName:                   stackTemplate.DisplayName,
+		DisplayName:                   view.DisplayName,
 		Config:                        config,
 		LastAppliedRunID:              string(stackTemplate.LastAppliedRunID),
 		LastPlannedRunID:              string(stackTemplate.LastPlannedRunID),

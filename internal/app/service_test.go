@@ -274,19 +274,19 @@ func TestGetStackResolvesTemplateDisplayName(t *testing.T) {
 				Name:     "Acme Prod",
 				Slug:     "acme-prod",
 			},
-			Templates: []traits.StackTemplate{
-				{
+			Templates: []StackTemplateView{
+				{StackTemplate: traits.StackTemplate{
 					ID:                        traits.StackTemplateID("stack_template_1"),
 					DesiredTemplateRevisionID: traits.TemplateRevisionID("rev_1"),
-				},
-				{
+				}},
+				{StackTemplate: traits.StackTemplate{
 					ID:                        traits.StackTemplateID("stack_template_2"),
 					DesiredTemplateRevisionID: traits.TemplateRevisionID("rev_2"),
-				},
-				{
+				}},
+				{StackTemplate: traits.StackTemplate{
 					ID:                        traits.StackTemplateID("stack_template_3"),
 					DesiredTemplateRevisionID: traits.TemplateRevisionID("rev_missing"),
-				},
+				}},
 			},
 		},
 	}
@@ -458,8 +458,8 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	if installer.created.CreatedBy != traits.UserID(keycloakSubject) {
 		t.Fatalf("persisted created by = %q, want %q", installer.created.CreatedBy, keycloakSubject)
 	}
-	if string(installer.created.ConfigJSON) != `{"region":"us-east-1"}` {
-		t.Fatalf("config json = %s", installer.created.ConfigJSON)
+	if string(installer.created.InstalledConfigJSON) != `{"region":"us-east-1"}` {
+		t.Fatalf("config json = %s", installer.created.InstalledConfigJSON)
 	}
 	if installer.created.SourceTemplateID != traits.SourceTemplateID("source_template_vpc") {
 		t.Fatalf("persisted source template ID = %q, want source_template_vpc", installer.created.SourceTemplateID)

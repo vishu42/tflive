@@ -624,7 +624,7 @@ func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.T
 			desired_template_revision_id,
 			last_applied_template_revision_id,
 			workspace_name,
-			config_json,
+			installed_config_json,
 			desired_config_json,
 			last_applied_run_id,
 			last_applied_config_json,
@@ -646,13 +646,15 @@ func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.T
 	}
 	defer rows.Close()
 
-	var templates []traits.StackTemplate
+	// The repository returns views with their label fields unset; resolving
+	// those needs revision metadata, which is the service's job, not storage's.
+	var templates []app.StackTemplateView
 	for rows.Next() {
 		stackTemplate, err := scanStackTemplate(rows)
 		if err != nil {
 			return app.StackView{}, err
 		}
-		templates = append(templates, stackTemplate)
+		templates = append(templates, app.StackTemplateView{StackTemplate: stackTemplate})
 	}
 	if err := rows.Err(); err != nil {
 		return app.StackView{}, fmt.Errorf("iterate stack templates: %w", err)
@@ -662,7 +664,7 @@ func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.T
 }
 
 func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate traits.StackTemplate) error {
-	configJSON := stackTemplate.ConfigJSON
+	configJSON := stackTemplate.InstalledConfigJSON
 	if len(configJSON) == 0 {
 		configJSON = json.RawMessage(`{}`)
 	}
@@ -686,7 +688,7 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 			desired_template_revision_id,
 			last_applied_template_revision_id,
 			workspace_name,
-			config_json,
+			installed_config_json,
 			desired_config_json,
 			last_applied_run_id,
 			last_applied_config_json,
@@ -779,7 +781,7 @@ func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.Tenant
 			desired_template_revision_id,
 			last_applied_template_revision_id,
 			workspace_name,
-			config_json,
+			installed_config_json,
 			desired_config_json,
 			last_applied_run_id,
 			last_applied_config_json,
@@ -819,7 +821,7 @@ func (store *Store) UpdateStackTemplateConfig(ctx context.Context, tenantID trai
 			desired_template_revision_id,
 			last_applied_template_revision_id,
 			workspace_name,
-			config_json,
+			installed_config_json,
 			desired_config_json,
 			last_applied_run_id,
 			last_applied_config_json,
@@ -858,7 +860,7 @@ func (store *Store) UpdateStackTemplateDesiredRevision(ctx context.Context, tena
 			desired_template_revision_id,
 			last_applied_template_revision_id,
 			workspace_name,
-			config_json,
+			installed_config_json,
 			desired_config_json,
 			last_applied_run_id,
 			last_applied_config_json,
@@ -1628,7 +1630,7 @@ func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, erro
 	); err != nil {
 		return traits.StackTemplate{}, fmt.Errorf("scan stack template: %w", err)
 	}
-	stackTemplate.ConfigJSON = configJSON
+	stackTemplate.InstalledConfigJSON = configJSON
 	stackTemplate.DesiredConfigJSON = desiredConfigJSON
 	// A nil scan target stays nil rather than becoming an empty RawMessage, so
 	// the state comparisons can tell "never recorded" from "recorded as '{}'".

@@ -695,16 +695,21 @@ func TestGetStackReturnsStackView(t *testing.T) {
 			Slug:     "acme-prod",
 			Tags:     map[string]string{"env": "prod"},
 		},
-		Templates: []traits.StackTemplate{
-			{
+		Templates: []app.StackTemplateView{
+			{StackTemplate: traits.StackTemplate{
 				ID:                        traits.StackTemplateID("stack_template_123"),
 				TenantID:                  traits.TenantID("tenant_123"),
 				StackID:                   traits.StackID("stack_123"),
 				DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
 				WorkspaceName:             "meg_acme_prod_late_123",
-				ConfigJSON:                json.RawMessage(`{"region":"us-east-1"}`),
-				Lifecycle:                 traits.StackTemplateActive,
-			},
+				// A persisted row always has a desired config: the column is
+				// not null and CreateStackTemplate seeds it from the install
+				// config. Setting only the install config modelled a row that
+				// cannot exist, which the removed fallback used to paper over.
+				InstalledConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
+				DesiredConfigJSON:   json.RawMessage(`{"region":"us-east-1"}`),
+				Lifecycle:           traits.StackTemplateActive,
+			}},
 		},
 	}
 	server := NewServer(deps.service(), configuredTenantID)
