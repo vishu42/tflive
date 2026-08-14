@@ -3043,8 +3043,10 @@ func TestMeReturnsIdentityWithGlobalCapabilities(t *testing.T) {
 
 			server.ServeHTTP(response, request)
 
-			if response.Code != http.StatusNoContent {
-				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNoContent, response.Body.String())
+			// 200 with the identity, not 204: every assertion below reads the
+			// body, and the web client calls this endpoint expecting one.
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 			}
 
 			var body struct {
