@@ -2,6 +2,7 @@ package activities
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -311,6 +312,13 @@ func (runner *recordingGitRunner) Clone(ctx context.Context, repoURL string, ref
 		return runner.populate(dest)
 	}
 	return nil
+}
+
+// CheckoutCommit exists to satisfy runner.GitRunner and fails loudly: template
+// sync is the path that resolves a ref to a commit in the first place, so it
+// has no commit to check out and must clone the ref.
+func (runner *recordingGitRunner) CheckoutCommit(context.Context, string, string, string) error {
+	return errors.New("template sync must clone a ref, not check out a commit")
 }
 
 func (runner *recordingGitRunner) ResolveHead(context.Context, string) (string, error) {

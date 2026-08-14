@@ -10,6 +10,8 @@ import CallbackPage from "../auth/CallbackPage";
 import StacksListScreen from "../features/stacks/StacksListScreen";
 import StackDetailShell from "../features/stacks/StackDetailShell";
 import StackTemplateScreen from "../features/stacks/StackTemplateScreen";
+import AddStackTemplateScreen from "../features/stacks/AddStackTemplateScreen";
+import UpgradeStackTemplateScreen from "../features/stacks/UpgradeStackTemplateScreen";
 import EnvironmentScreen from "../features/stacks/EnvironmentScreen";
 import TemplateRegistryScreen from "../features/templates/TemplateRegistryScreen";
 import TemplateRegistrationScreen from "../features/templates/TemplateRegistrationScreen";
@@ -67,6 +69,16 @@ export const routeConfig: RouteObject[] = [
                 children: [
                   { index: true, element: <RoutePlaceholder title="Stack overview" /> },
                   { path: "template", element: <StackTemplateScreen /> },
+                  {
+                    path: "template/new",
+                    element: <RequireCapability capability="canOperate" mode="route" />,
+                    children: [{ index: true, element: <AddStackTemplateScreen /> }]
+                  },
+                  {
+                    path: "template/:stackTemplateId/upgrade",
+                    element: <RequireCapability capability="canOperate" mode="route" />,
+                    children: [{ index: true, element: <UpgradeStackTemplateScreen /> }]
+                  },
                   {
                     path: "environment",
                     element: <RequireCapability capability="canManageAccess" mode="route" />,

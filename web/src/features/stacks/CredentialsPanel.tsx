@@ -4,6 +4,10 @@ import type { CredentialMetadata } from "../../api/types";
 
 interface CredentialsPanelProps {
   title: string;
+  // Distinguishes this panel's scope from a near-identically-named one
+  // elsewhere (e.g. the stack-scoped Environment tab). Optional so existing
+  // call sites that have no such ambiguity to resolve need no change.
+  subtitle?: string;
   credentials: CredentialMetadata[];
   loading: boolean;
   busy: boolean;
@@ -12,7 +16,7 @@ interface CredentialsPanelProps {
 }
 
 /** Renders write-only credential management for either a Stack or StackTemplate scope. */
-export default function CredentialsPanel({ title, credentials, loading, busy, onCreate, onDelete }: CredentialsPanelProps) {
+export default function CredentialsPanel({ title, subtitle, credentials, loading, busy, onCreate, onDelete }: CredentialsPanelProps) {
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
@@ -36,6 +40,7 @@ export default function CredentialsPanel({ title, credentials, loading, busy, on
   return (
     <section className="panel credentials-panel">
       <h2>{title}</h2>
+      {subtitle && <p className="muted">{subtitle}</p>}
       <p className="muted">Values are write-only and injected only when Terraform runs. Use TF_VAR_NAME for Terraform variables; provider credentials keep their provider-specific names.</p>
       <div className="credentials-list">
         {loading ? <p className="muted"><Loader2 size={15} className="spin" /> Loading credentials…</p> : credentials.length === 0 ? <p className="muted">No credentials configured</p> : credentials.map((credential) => (

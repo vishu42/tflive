@@ -175,13 +175,14 @@ func (run *templateRunWorkflow) prepareLocalWorkspace() error {
 
 func (run *templateRunWorkflow) fetchSource() error {
 	input := traits.FetchSourceActivityInput{
-		RunID:         run.input.RunID,
-		TenantID:      run.input.TenantID,
-		WorkspacePath: run.workspacePath,
-		RepoOwner:     run.input.RepoOwner,
-		RepoName:      run.input.RepoName,
-		SourceRef:     run.input.SelectedRef,
-		RootPath:      run.input.RootPath,
+		RunID:             run.input.RunID,
+		TenantID:          run.input.TenantID,
+		WorkspacePath:     run.workspacePath,
+		RepoOwner:         run.input.RepoOwner,
+		RepoName:          run.input.RepoName,
+		SourceRef:         run.input.SelectedRef,
+		ResolvedCommitSHA: run.input.ResolvedCommitSHA,
+		RootPath:          run.input.RootPath,
 	}
 	var output traits.FetchSourceActivityOutput
 	if err := workflow.ExecuteActivity(

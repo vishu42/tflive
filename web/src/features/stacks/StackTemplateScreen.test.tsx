@@ -43,6 +43,9 @@ function stackTemplate(overrides: Partial<StackTemplate> = {}): StackTemplate {
     config: { region: "us-east-1" },
     last_applied_run_id: "run_9",
     last_applied_ref: "main",
+    last_planned_run_id: "",
+    plan_state: "none",
+    live_state: "never",
     created_by: "user_123",
     lifecycle: "active",
     ...overrides
@@ -108,11 +111,11 @@ function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue 
   };
 }
 
-function renderScreen(queryClient: QueryClient, auth?: AuthContextValue) {
+function renderScreen(queryClient: QueryClient, auth?: AuthContextValue, initialEntry = "/stacks/stack_1/template") {
   return render(
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider value={auth ?? authValue()}>
-        <MemoryRouter initialEntries={["/stacks/stack_1/template"]}>
+        <MemoryRouter initialEntries={[initialEntry]}>
           <Routes>
             <Route path="/stacks/:stackId/template" element={<StackTemplateScreen />} />
           </Routes>
@@ -133,7 +136,7 @@ describe("StackTemplateScreen", () => {
     vi.unstubAllEnvs();
   });
 
-  it("shows a loading state while the template revisions query is pending", () => {
+  it("shows a loading state while the installed template's variables are pending", () => {
     vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), stackView(allAllowed, [stackTemplate()]));
@@ -143,22 +146,126 @@ describe("StackTemplateScreen", () => {
     expect(screen.getByTestId("stack-template-loading")).toBeTruthy();
   });
 
-  it("renders the installed template details and variables prefilled from its config", () => {
+  it("renders variables prefilled from the installed template's config", () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient);
 
     renderScreen(queryClient);
 
-    const details = screen.getByTestId("stack-template-screen");
-    expect(details.textContent).toContain("tmpl_src_1");
-    expect(details.textContent).toContain("rev_1");
-    expect(details.textContent).toContain("rev_0");
-    expect(details.textContent).toContain("ws-payments");
     const input = screen.getByLabelText(/region/) as HTMLInputElement;
     expect(input.value).toBe("us-east-1");
   });
 
-  it("keeps Stack credentials out of the Template screen", () => {
+  it("shows no raw identifiers anywhere in the configuration column", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    const config = screen.getByTestId("stack-template-config");
+    expect(config.textContent).not.toContain("tmpl_src_1");
+    expect(config.textContent).not.toContain("rev_1");
+    expect(config.textContent).not.toContain("rev_0");
+    expect(config.textContent).not.toContain("run_9");
+    expect(screen.queryByText("Installed template")).toBeNull();
+  });
+
+  it("no longer offers installing or selecting a revision from this screen", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    expect(screen.queryByTestId("stack-template-revision-select")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Install template/ })).toBeNull();
+  });
+
+  it("links to the add template screen", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    expect(screen.getByTestId("add-stack-template-link").getAttribute("href")).toBe("/stacks/stack_1/template/new");
+  });
+
+  it("keeps a visible gap between the template list header and its choices", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    const listContent = screen.getByTestId("stack-template-list-content");
+    const header = screen.getByTestId("stack-template-panel-header");
+    const items = screen.getByTestId("stack-template-items");
+
+    expect(listContent.contains(header)).toBe(true);
+    expect(listContent.contains(items)).toBe(true);
+    expect(listContent.className).toContain("stack-template-list-content");
+  });
+
+  it("offers a revision-selection link for an installed template", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    expect(screen.getByTestId("stack-template-revision-action")).toBeTruthy();
+    expect(screen.getByTestId("change-stack-template-revision-link").getAttribute("href")).toBe(
+      "/stacks/stack_1/template/st_1/upgrade"
+    );
+  });
+
+  it("keeps the revision action visually secondary to the configuration panel", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    const revisionAction = screen.getByTestId("stack-template-revision-action");
+    expect(revisionAction.className).toContain("stack-template-revision-action");
+    expect(revisionAction.className).not.toContain("panel");
+  });
+
+  it("keeps revision selection available when the only revision is installed", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [templateRevision()]);
+
+    renderScreen(queryClient);
+
+    expect(screen.getByTestId("stack-template-revision-action")).toBeTruthy();
+    expect(screen.getByTestId("change-stack-template-revision-link")).toBeTruthy();
+  });
+
+  it("does not wait for the tenant revision list before showing revision selection", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+    queryClient.removeQueries({ queryKey: queryKeys.templateRevisions("tenant_123") });
+
+    renderScreen(queryClient);
+
+    expect(screen.getByTestId("stack-template-revision-action")).toBeTruthy();
+    expect(screen.getByTestId("change-stack-template-revision-link")).toBeTruthy();
+  });
+
+  it("renders the template selected by the URL rather than the first installed one", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+    queryClient.setQueryData(
+      queryKeys.stack("tenant_123", "stack_1"),
+      stackView(allAllowed, [
+        stackTemplate(),
+        stackTemplate({ id: "st_2", desired_template_revision_id: "rev_2", config: { region: "ap-south-1" } })
+      ])
+    );
+
+    renderScreen(queryClient, undefined, "/stacks/stack_1/template?selected=st_2");
+
+    expect((screen.getByLabelText(/region/) as HTMLInputElement).value).toBe("ap-south-1");
+  });
+
+  it("keeps Stack credentials out of the Template screen and titles the panel by scope", () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient);
     queryClient.setQueryData(queryKeys.stackCredentials("tenant_123", "stack_1"), [
@@ -172,7 +279,20 @@ describe("StackTemplateScreen", () => {
 
     expect(screen.getByText("TEMPLATE_ONLY")).toBeTruthy();
     expect(screen.queryByText("STACK_ONLY")).toBeNull();
-    expect(screen.queryByText("Stack credentials")).toBeNull();
+    expect(screen.getByText("Template credentials")).toBeTruthy();
+    expect(screen.getByText("Overrides the stack environment for this template only.")).toBeTruthy();
+  });
+
+  it("keeps the revision action, variables, and credentials panels in the right column", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    const rightColumn = screen.getByTestId("stack-template-right-column");
+    expect(rightColumn.contains(screen.getByTestId("stack-template-revision-action"))).toBe(true);
+    expect(rightColumn.contains(screen.getByTestId("stack-template-config"))).toBe(true);
+    expect(rightColumn.contains(screen.getByText("Template credentials"))).toBe(true);
   });
 
   it("disables save while values match the installed config and enables it after an edit", () => {
@@ -186,40 +306,66 @@ describe("StackTemplateScreen", () => {
     expect(actionButton(/Save config/).disabled).toBe(false);
   });
 
-  it("enables upgrade after selecting a different active revision", () => {
-    const queryClient = testQueryClient();
-    seedDefaultData(queryClient);
-
-    renderScreen(queryClient);
-
-    expect(actionButton(/Upgrade/).disabled).toBe(true);
-    fireEvent.change(screen.getByTestId("stack-template-revision-select"), { target: { value: "rev_2" } });
-    expect(actionButton(/Upgrade/).disabled).toBe(false);
-  });
-
-  it("renders every action disabled with a reason when canOperate is denied", async () => {
+  it("locks configuration and hides operator links when canOperate is denied", async () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient, { ...allAllowed, canOperate: false });
 
     renderScreen(queryClient);
 
     await waitFor(() => expect(screen.getByTestId("variables-disabled-reason")).toBeTruthy());
-    expect(actionButton(/Install template/).disabled).toBe(true);
     expect(actionButton(/Save config/).disabled).toBe(true);
-    expect(actionButton(/Upgrade/).disabled).toBe(true);
     expect((screen.getByLabelText(/region/) as HTMLInputElement).disabled).toBe(true);
+    expect(screen.queryByTestId("add-stack-template-link")).toBeNull();
+    expect(screen.queryByTestId("change-stack-template-revision-link")).toBeNull();
   });
 
-  it("offers install for the selected active revision when no template is installed yet", () => {
+  it("prompts to add a template when the stack has none installed", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), stackView(allAllowed, []));
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [templateRevision()]);
-    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_1"), [variable()]);
 
     renderScreen(queryClient);
 
     expect(screen.getByTestId("stack-template-empty")).toBeTruthy();
-    expect(actionButton(/Install template/).disabled).toBe(false);
+    expect(screen.getByTestId("add-stack-template-link")).toBeTruthy();
+    expect(screen.queryByTestId("stack-template-config")).toBeNull();
+  });
+
+  it("does not need the revisions query to render the installed template", async () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+    queryClient.removeQueries({ queryKey: queryKeys.templateRevisions("tenant_123") });
+
+    renderScreen(queryClient);
+
+    await waitFor(() => expect(screen.getByTestId("stack-template-config")).toBeTruthy());
+    expect(screen.getByTestId("change-stack-template-revision-link")).toBeTruthy();
+  });
+
+  it("shows Destroying badge when lifecycle is destroying", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient, allAllowed);
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"),
+      stackView(allAllowed, [stackTemplate({ lifecycle: "destroying" })]));
+
+    renderScreen(queryClient);
+
+    expect(screen.getByText("Destroying…")).toBeTruthy();
+  });
+
+  it("disables revision selection while the installed template is destroying", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient, allAllowed);
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"),
+      stackView(allAllowed, [stackTemplate({ lifecycle: "destroying" })]));
+
+    renderScreen(queryClient);
+
+    expect(screen.getByTestId("stack-template-revision-action")).toBeTruthy();
+    const changeRevisionControl = screen.getByTestId("change-stack-template-revision-link") as HTMLButtonElement;
+    expect(changeRevisionControl.tagName).toBe("BUTTON");
+    expect(changeRevisionControl.disabled).toBe(true);
+    expect(screen.getByTestId("upgrade-disabled-reason").textContent).toBe("Destroy in progress");
   });
 
   it("renders the shared boundary screen for a handled API error status", async () => {
@@ -265,17 +411,6 @@ describe("StackTemplateScreen", () => {
     renderScreen(queryClient);
 
     await waitFor(() => expect(screen.getByTestId("route-access-denied")).toBeTruthy());
-  });
-
-  it("shows Destroying badge when lifecycle is destroying", () => {
-    const queryClient = testQueryClient();
-    seedDefaultData(queryClient, allAllowed);
-    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"),
-      stackView(allAllowed, [stackTemplate({ lifecycle: "destroying" })]));
-
-    renderScreen(queryClient);
-
-    expect(screen.getByText("Destroying…")).toBeTruthy();
   });
 
   it("renders NotFound when the API returns 404", async () => {

@@ -29,6 +29,7 @@ var (
 	ErrStackTemplateConfigInvalid         = errors.New("stack template config is invalid")
 	ErrStackTemplateUpgradeInvalid        = errors.New("stack template upgrade is invalid")
 	ErrStackTemplateNotRunnable           = errors.New("stack template is not runnable")
+	ErrStackTemplatePlanStale             = errors.New("stack template plan does not match desired state")
 	ErrRunNotApprovable                   = errors.New("run is not approvable")
 	ErrRunNotCancelable                   = errors.New("run is not cancelable")
 	ErrSelfApprovalForbidden              = errors.New("self-approval forbidden")
@@ -711,9 +712,19 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	if desiredTemplateRevisionID == "" {
 		return traits.TemplateRun{}, fmt.Errorf("%w: desired template revision is required", ErrStackTemplateNotRunnable)
 	}
-	desiredConfigJSON := stackTemplate.DesiredConfigJSON
-	if len(desiredConfigJSON) == 0 {
-		desiredConfigJSON = stackTemplate.ConfigJSON
+	desiredConfigJSON := stackTemplate.DesiredConfig()
+
+	// Reviewing a plan is the approval gate, so an apply may only run what that
+	// plan described. Saving config and changing revision both move desired
+	// without touching runs, which leaves a completed plan in place describing
+	// something else; the run below would then snapshot current desired rather
+	// than the reviewed snapshot. Requiring a matching plan also makes
+	// plan-before-apply a rule instead of a web-client convention — the API
+	// accepted an apply that had never been planned at all.
+	if command.Operation == traits.OperationApply {
+		if planState := stackTemplate.PlanState(); planState != traits.PlanMatches {
+			return traits.TemplateRun{}, fmt.Errorf("%w: plan state is %q", ErrStackTemplatePlanStale, planState)
+		}
 	}
 
 	templateRevision, err := service.TemplateRevisionMetadata.GetTemplateRevision(ctx, command.TenantID, desiredTemplateRevisionID)
@@ -742,16 +753,17 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	}
 
 	input := traits.TemplateRunWorkflowInput{
-		RunID:           run.ID,
-		TenantID:        run.TenantID,
-		StackTemplateID: run.StackTemplateID,
-		Operation:       run.Operation,
-		SelectedRef:     run.SelectedRef,
-		WorkspaceName:   run.WorkspaceName,
-		RepoOwner:       templateRevision.RepoOwner,
-		RepoName:        templateRevision.RepoName,
-		RootPath:        templateRevision.RootPath,
-		ConfigJSON:      run.ConfigJSON,
+		RunID:             run.ID,
+		TenantID:          run.TenantID,
+		StackTemplateID:   run.StackTemplateID,
+		Operation:         run.Operation,
+		SelectedRef:       run.SelectedRef,
+		ResolvedCommitSHA: run.ResolvedCommitSHA,
+		WorkspaceName:     run.WorkspaceName,
+		RepoOwner:         templateRevision.RepoOwner,
+		RepoName:          templateRevision.RepoName,
+		RootPath:          templateRevision.RootPath,
+		ConfigJSON:        run.ConfigJSON,
 	}
 	payload, err := json.Marshal(StartTemplateRunPayload(input))
 	if err != nil {

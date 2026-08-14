@@ -1,69 +1,54 @@
 import { useState } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
-import { useParams } from "react-router-dom";
+import { Loader2, Plus, RefreshCw } from "lucide-react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
-  useAddTemplateToStackMutation,
   useCreateStackTemplateCredentialMutation,
   useDeleteStackTemplateCredentialMutation,
   useStackQuery,
   useStackTemplateCredentialsQuery,
   useTemplateRevisionVariablesQuery,
-  useTemplateRevisionsQuery,
-  useUpdateStackTemplateConfigMutation,
-  useUpgradeStackTemplateMutation
+  useUpdateStackTemplateConfigMutation
 } from "../../api/queries";
 import { tenantID } from "../../config";
 import RequireCapability from "../../auth/RequireCapability";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
-import InstalledTemplatePanel from "./InstalledTemplatePanel";
-import VariablesPanel from "./VariablesPanel";
+import StackTemplateConfigPanel from "./StackTemplateConfigPanel";
 import CredentialsPanel from "./CredentialsPanel";
 import {
-  canSaveStackTemplateConfig,
-  canUpgradeStackTemplate,
+  canSaveInstalledTemplateConfig,
   configFromVariableValues,
   findSelectedStackTemplate,
   isDestroyingStackTemplate,
   stackTemplateLabel,
   variableValuesFromConfig
 } from "./stackWorkflow";
-import { findSelectedTemplateRevision, templateRevisionLabel } from "../templates/templateWorkflow";
 
-// /stacks/:stackId/template — installed template + variables, migrated from
-// the legacy console in App.tsx. Selection is derived rather than synced via
-// effects: the installed template defaults to the stack's first entry and the
-// target revision defaults to that template's desired revision, so the screen
-// renders complete on first pass (including under SSR in tests). Edit and
-// upgrade actions are gated by canOperate; the denied state re-renders the
-// panel locked with an explanation instead of hiding it.
+// /stacks/:stackId/template — configures the installed template. Installing
+// lives at template/new and choosing another revision lives at
+// template/:stackTemplateId/upgrade, so this screen has no revision selector
+// and its configuration form has exactly one action.
+//
+// Selection is URL state (?selected=<stackTemplateID>) rather than component
+// state, so the add and upgrade screens can hand back the template they just
+// acted on and a selected row survives a reload.
 export default function StackTemplateScreen() {
   const { stackId = "" } = useParams<{ stackId: string }>();
-  const [chosenStackTemplateID, setChosenStackTemplateID] = useState("");
-  const [chosenRevisionID, setChosenRevisionID] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
   const [editedValues, setEditedValues] = useState<Record<string, string>>({});
   const [errorMessage, setErrorMessage] = useState("");
 
   const stackQuery = useStackQuery(tenantID, stackId);
-  const templateRevisionsQuery = useTemplateRevisionsQuery(tenantID);
-  const boundary = useQueryErrorBoundary(stackQuery.error ?? templateRevisionsQuery.error);
-
-  const stack = stackQuery.data?.stack ?? null;
   const stackTemplates = stackQuery.data?.templates ?? [];
-  const templateRevisions = templateRevisionsQuery.data ?? [];
-
   const installedTemplate =
-    findSelectedStackTemplate(stackTemplates, chosenStackTemplateID) ?? stackTemplates[0] ?? null;
-  const selectedTemplateRevision =
-    findSelectedTemplateRevision(templateRevisions, chosenRevisionID) ??
-    findSelectedTemplateRevision(templateRevisions, installedTemplate?.desired_template_revision_id ?? "") ??
-    templateRevisions[0] ??
-    null;
+    findSelectedStackTemplate(stackTemplates, searchParams.get("selected") ?? "") ?? stackTemplates[0] ?? null;
 
   const variablesQuery = useTemplateRevisionVariablesQuery(
     tenantID,
-    selectedTemplateRevision?.status === "active" ? selectedTemplateRevision.id : ""
+    installedTemplate?.desired_template_revision_id ?? ""
   );
   const variables = variablesQuery.data ?? [];
+
+  const boundary = useQueryErrorBoundary(stackQuery.error ?? variablesQuery.error);
 
   // Displayed values are the installed config overlaid with unsaved edits.
   const baseValues = installedTemplate ? variableValuesFromConfig(installedTemplate.config, variables) : {};
@@ -73,24 +58,18 @@ export default function StackTemplateScreen() {
   }
 
   const destroying = isDestroyingStackTemplate(installedTemplate);
-
-  const addTemplateToStackMutation = useAddTemplateToStackMutation(tenantID, stackId);
   const updateStackTemplateConfigMutation = useUpdateStackTemplateConfigMutation(tenantID, stackId);
-  const upgradeStackTemplateMutation = useUpgradeStackTemplateMutation(tenantID, stackId);
   const templateCredentialsQuery = useStackTemplateCredentialsQuery(tenantID, installedTemplate?.id ?? "");
   const createTemplateCredentialMutation = useCreateStackTemplateCredentialMutation(tenantID, installedTemplate?.id ?? "");
   const deleteTemplateCredentialMutation = useDeleteStackTemplateCredentialMutation(tenantID, installedTemplate?.id ?? "");
 
-  const canInstall = Boolean(selectedTemplateRevision?.status === "active" && stack);
-  const canSaveConfig = canSaveStackTemplateConfig(installedTemplate, selectedTemplateRevision, variables, variableValues);
-  const canUpgrade = canUpgradeStackTemplate(installedTemplate, selectedTemplateRevision);
+  const canSaveConfig = canSaveInstalledTemplateConfig(installedTemplate, variables, variableValues);
 
   function handleSelectStackTemplate(stackTemplateID: string) {
     if (stackTemplateID === installedTemplate?.id) {
       return;
     }
-    setChosenStackTemplateID(stackTemplateID);
-    setChosenRevisionID("");
+    setSearchParams({ selected: stackTemplateID }, { replace: true });
     setEditedValues({});
   }
 
@@ -98,62 +77,31 @@ export default function StackTemplateScreen() {
     setEditedValues((current) => ({ ...current, [name]: value }));
   }
 
-  async function handleInstallTemplate() {
-    if (!stack || !selectedTemplateRevision) {
-      return;
-    }
-    await runAction(async () => {
-      const next = await addTemplateToStackMutation.mutateAsync({
-        template_revision_id: selectedTemplateRevision.id,
-        selected_ref: selectedTemplateRevision.source_ref,
-        config: configFromVariableValues(variables, variableValues)
-      });
-      setChosenStackTemplateID(next.id);
-      setEditedValues({});
-    });
-  }
-
   async function handleSaveStackTemplateConfig() {
     if (!installedTemplate || !canSaveConfig) {
       return;
     }
-    await runAction(async () => {
-      const next = await updateStackTemplateConfigMutation.mutateAsync({
+    setErrorMessage("");
+    try {
+      await updateStackTemplateConfigMutation.mutateAsync({
         stackTemplateID: installedTemplate.id,
         body: { config: configFromVariableValues(variables, variableValues) }
       });
-      setChosenStackTemplateID(next.id);
       setEditedValues({});
-    });
-  }
-
-  async function handleUpgradeStackTemplate() {
-    if (!installedTemplate || !selectedTemplateRevision || !canUpgrade) {
-      return;
-    }
-    await runAction(async () => {
-      const next = await upgradeStackTemplateMutation.mutateAsync({
-        stackTemplateID: installedTemplate.id,
-        body: {
-          target_template_revision_id: selectedTemplateRevision.id,
-          config: configFromVariableValues(variables, variableValues)
-        }
-      });
-      setChosenStackTemplateID(next.id);
-      setEditedValues({});
-    });
-  }
-
-  async function runAction(action: () => Promise<void>) {
-    setErrorMessage("");
-    try {
-      await action();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Request failed");
     }
   }
 
-  if (stackQuery.status === "pending" || templateRevisionsQuery.status === "pending") {
+  /** Persists a credential that overrides the Stack value for this template only. */
+  async function createTemplateCredential(name: string, value: string) {
+    await createTemplateCredentialMutation.mutateAsync({ name, value });
+  }
+
+  // The variables query is disabled without an installed template, so it
+  // never leaves "pending" — only wait on it once something is installed.
+  const waitingOnVariables = installedTemplate !== null && variablesQuery.status === "pending";
+  if (stackQuery.status === "pending" || waitingOnVariables) {
     return (
       <section className="stack-template-screen" data-testid="stack-template-loading">
         <p className="muted">
@@ -163,7 +111,7 @@ export default function StackTemplateScreen() {
     );
   }
 
-  if (stackQuery.status === "error" || templateRevisionsQuery.status === "error") {
+  if (stackQuery.status === "error" || variablesQuery.status === "error") {
     if (boundary !== null) {
       return <>{boundary}</>;
     }
@@ -176,7 +124,7 @@ export default function StackTemplateScreen() {
           data-testid="stack-template-retry"
           onClick={() => {
             stackQuery.refetch();
-            templateRevisionsQuery.refetch();
+            variablesQuery.refetch();
           }}
         >
           <RefreshCw size={16} />
@@ -186,91 +134,116 @@ export default function StackTemplateScreen() {
     );
   }
 
-  const variablesPanelProps = {
+  const addTemplateLink = (
+    <Link className="primary-button" to={`/stacks/${stackId}/template/new`} data-testid="add-stack-template-link">
+      <Plus size={16} />
+      Add template
+    </Link>
+  );
+
+  const configPanelProps = {
     variables,
     variableValues,
     onVariableValueChange: handleVariableValueChange,
-    canInstall,
-    onInstall: handleInstallTemplate,
-    installBusy: addTemplateToStackMutation.isPending,
-    canSaveConfig,
-    onSaveConfig: handleSaveStackTemplateConfig,
-    configBusy: updateStackTemplateConfigMutation.isPending,
-    canUpgrade,
-    onUpgrade: handleUpgradeStackTemplate,
-    upgradeBusy: upgradeStackTemplateMutation.isPending,
-    installedTemplateStatus: installedTemplate?.workspace_name ?? "not installed",
+    canSave: canSaveConfig,
+    onSave: handleSaveStackTemplateConfig,
+    saveBusy: updateStackTemplateConfigMutation.isPending,
     disabledReason: destroying ? "Destroy in progress" : undefined
   };
-
-  /** Persists a credential that overrides the Stack value for this template only. */
-  async function createTemplateCredential(name: string, value: string) {
-    await createTemplateCredentialMutation.mutateAsync({ name, value });
-  }
 
   return (
     <section className="stack-template-screen" data-testid="stack-template-screen">
       {errorMessage && <div className="alert">{errorMessage}</div>}
       <div className="workflow-grid">
         <section className="panel">
-          <h2>Stack templates</h2>
-          {stackTemplates.length === 0 ? (
-            <p className="muted" data-testid="stack-template-empty">
-              No stack templates installed
-            </p>
-          ) : (
-            <div className="stack-template-items">
-              {stackTemplates.map((item) => (
-                <button
-                  className={item.id === installedTemplate?.id ? "active" : ""}
-                  key={item.id}
-                  onClick={() => handleSelectStackTemplate(item.id)}
-                  type="button"
-                >
-                  <span>{stackTemplateLabel(item)}</span>
-                  {item.lifecycle === "destroying" && (
-                    <small className="lifecycle-badge destroying">Destroying…</small>
-                  )}
-                  <small>{item.desired_template_revision_id}</small>
-                </button>
-              ))}
-            </div>
-          )}
-          <label className="selector-label">
-            Template revision
-            <select
-              data-testid="stack-template-revision-select"
-              value={selectedTemplateRevision?.id ?? ""}
-              onChange={(event) => setChosenRevisionID(event.target.value)}
-            >
-              <option value="">Select revision</option>
-              {templateRevisions.map((templateRevision) => (
-                <option key={templateRevision.id} value={templateRevision.id}>
-                  {templateRevisionLabel(templateRevision)}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="stack-template-list-content" data-testid="stack-template-list-content">
+            <header className="panel-header" data-testid="stack-template-panel-header">
+              <h2>Stack templates</h2>
+              <RequireCapability capability="canOperate">{addTemplateLink}</RequireCapability>
+            </header>
+            {stackTemplates.length === 0 ? (
+              <p className="muted" data-testid="stack-template-empty">
+                No stack templates installed
+              </p>
+            ) : (
+              <div className="stack-template-items" data-testid="stack-template-items">
+                {stackTemplates.map((item) => (
+                  <button
+                    className={item.id === installedTemplate?.id ? "active" : ""}
+                    key={item.id}
+                    onClick={() => handleSelectStackTemplate(item.id)}
+                    type="button"
+                  >
+                    <span>{stackTemplateLabel(item)}</span>
+                    {item.lifecycle === "destroying" && (
+                      <small className="lifecycle-badge destroying">Destroying…</small>
+                    )}
+                    <small>{item.desired_template_revision_id}</small>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </section>
-        <InstalledTemplatePanel installedTemplate={installedTemplate} />
-        <RequireCapability capability="canManageAccess">
-          {installedTemplate && (
-            <CredentialsPanel
-              title="Environment"
-              credentials={templateCredentialsQuery.data ?? []}
-              loading={templateCredentialsQuery.isPending}
-              busy={createTemplateCredentialMutation.isPending || deleteTemplateCredentialMutation.isPending}
-              onCreate={createTemplateCredential}
-              onDelete={(id) => deleteTemplateCredentialMutation.mutateAsync(id)}
-            />
-          )}
-        </RequireCapability>
-        <RequireCapability
-          capability="canOperate"
-          fallback={<VariablesPanel {...variablesPanelProps} disabledReason="Editing and upgrading require operator access" />}
-        >
-          <VariablesPanel {...variablesPanelProps} />
-        </RequireCapability>
+        {installedTemplate && (
+          <div className="stack-template-right-column" data-testid="stack-template-right-column">
+            <section className="stack-template-revision-action" data-testid="stack-template-revision-action">
+              <p className="muted">
+                <RefreshCw size={16} />
+                Choose a template revision
+              </p>
+              <RequireCapability capability="canOperate">
+                {destroying ? (
+                  <>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      disabled
+                      data-testid="change-stack-template-revision-link"
+                    >
+                      Change revision
+                    </button>
+                    <p className="muted" data-testid="upgrade-disabled-reason">
+                      Destroy in progress
+                    </p>
+                  </>
+                ) : (
+                  <Link
+                    className="secondary-button"
+                    to={`/stacks/${stackId}/template/${installedTemplate.id}/upgrade`}
+                    data-testid="change-stack-template-revision-link"
+                  >
+                    Change revision
+                  </Link>
+                )}
+              </RequireCapability>
+            </section>
+            <RequireCapability
+              capability="canOperate"
+              fallback={
+                <StackTemplateConfigPanel
+                  {...configPanelProps}
+                  canSave={false}
+                  saveBusy={false}
+                  disabledReason="Editing requires operator access"
+                />
+              }
+            >
+              <StackTemplateConfigPanel {...configPanelProps} />
+            </RequireCapability>
+            <RequireCapability capability="canManageAccess">
+              <CredentialsPanel
+                title="Template credentials"
+                subtitle="Overrides the stack environment for this template only."
+                credentials={templateCredentialsQuery.data ?? []}
+                loading={templateCredentialsQuery.isPending}
+                busy={createTemplateCredentialMutation.isPending || deleteTemplateCredentialMutation.isPending}
+                onCreate={createTemplateCredential}
+                onDelete={(id) => deleteTemplateCredentialMutation.mutateAsync(id)}
+              />
+            </RequireCapability>
+          </div>
+        )}
       </div>
     </section>
   );

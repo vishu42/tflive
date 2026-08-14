@@ -258,6 +258,102 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 	}
 }
 
+func TestStartTemplateRunMapsStalePlanToConflictWithItsOwnCode(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stackTemplates.stackTemplate = traits.StackTemplate{
+		ID:                        traits.StackTemplateID("stack_template_123"),
+		StackID:                   traits.StackID("stack_123"),
+		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+		DesiredConfigJSON:         json.RawMessage(`{"region":"eu-west-1"}`),
+		SelectedRef:               "main",
+		WorkspaceName:             "smoke-workspace",
+		Lifecycle:                 traits.StackTemplateActive,
+		// Planned against the config as it was before the last save.
+		LastPlannedRunID:              traits.TemplateRunID("run_plan_1"),
+		LastPlannedTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+		LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+	}
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/stack-templates/stack_template_123/runs",
+		strings.NewReader(`{"operation":"apply"}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusConflict, response.Body.String())
+	}
+	var body errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	// Distinct from the generic "conflict" so the client can tell the user to
+	// re-plan rather than showing a generic failure.
+	if body.Error != "plan_stale" {
+		t.Fatalf("error code = %q, want plan_stale", body.Error)
+	}
+	if deps.templateRuns.created.ID != "" {
+		t.Fatalf("created run = %#v, want no persisted run", deps.templateRuns.created)
+	}
+}
+
+func TestStackTemplateResponseCarriesDerivedStatesNotRawConfigs(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stackTemplates.stackTemplate = traits.StackTemplate{
+		ID:                            traits.StackTemplateID("stack_template_123"),
+		TenantID:                      traits.TenantID("tenant_123"),
+		DesiredTemplateRevisionID:     traits.TemplateRevisionID("template_rev_1"),
+		Lifecycle:                     traits.StackTemplateActive,
+		LastPlannedRunID:              traits.TemplateRunID("run_plan_1"),
+		LastPlannedTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
+		LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-west-2"}`),
+		LastAppliedRunID:              traits.TemplateRunID("run_apply_1"),
+		LastAppliedTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
+		LastAppliedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+	}
+	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(
+		http.MethodPatch,
+		"/v1/tenants/tenant_123/stack-templates/stack_template_123/config",
+		strings.NewReader(`{"config":{"region":"us-west-2"}}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["plan_state"] != "matches" {
+		t.Fatalf("plan_state = %#v, want matches", body["plan_state"])
+	}
+	if body["live_state"] != "differs" {
+		t.Fatalf("live_state = %#v, want differs", body["live_state"])
+	}
+	if body["last_planned_run_id"] != "run_plan_1" {
+		t.Fatalf("last_planned_run_id = %#v", body["last_planned_run_id"])
+	}
+	// The snapshot configs stay server-side; returning them invites the client
+	// to redo the comparison, which is the mistake these states replace.
+	for _, key := range []string{"last_planned_config_json", "last_applied_config_json"} {
+		if _, present := body[key]; present {
+			t.Fatalf("response exposes %s", key)
+		}
+	}
+}
+
 func TestStartTemplateRunRejectsInvalidJSON(t *testing.T) {
 	t.Parallel()
 

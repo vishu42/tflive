@@ -3,6 +3,7 @@ package traits
 
 import (
 	"encoding/json"
+	"reflect"
 	"time"
 )
 
@@ -322,10 +323,23 @@ type StackTemplate struct {
 	DesiredConfigJSON json.RawMessage `json:"desired_config_json"`
 	// LastAppliedRunID is the run that last applied this component successfully.
 	LastAppliedRunID TemplateRunID `json:"last_applied_run_id"`
+	// LastAppliedConfigJSON is the config the last successful apply ran with.
+	// Nil means no apply has been recorded with one; an empty object is a
+	// legitimate value, so absence cannot be spelled '{}'.
+	LastAppliedConfigJSON json.RawMessage `json:"last_applied_config_json,omitempty"`
 	// LastAppliedRef is the source ref recorded by the last successful apply.
 	LastAppliedRef string `json:"last_applied_ref"`
 	// LastAppliedAt is when the last successful apply completed.
 	LastAppliedAt time.Time `json:"last_applied_at,omitempty"`
+	// LastPlannedRunID is the latest plan run that completed for this component.
+	LastPlannedRunID TemplateRunID `json:"last_planned_run_id"`
+	// LastPlannedTemplateRevisionID is the revision that plan ran against.
+	LastPlannedTemplateRevisionID TemplateRevisionID `json:"last_planned_template_revision_id"`
+	// LastPlannedConfigJSON is the config that plan ran with. Nil like
+	// LastAppliedConfigJSON, and for the same reason.
+	LastPlannedConfigJSON json.RawMessage `json:"last_planned_config_json,omitempty"`
+	// LastPlannedAt is when that plan completed.
+	LastPlannedAt time.Time `json:"last_planned_at,omitempty"`
 	// CreatedBy is the user that installed this component.
 	CreatedBy UserID `json:"created_by"`
 	// Lifecycle determines whether this component can run or is being removed.
@@ -333,6 +347,116 @@ type StackTemplate struct {
 	// DisplayName is a human-readable label derived from template metadata when resolving a view.
 	// It is not persisted and may be empty for templates created outside the view path.
 	DisplayName string `json:"-"`
+}
+
+// PlanState answers "will the thing that was reviewed be the thing that runs?".
+// It is the safety gate on apply: only PlanMatches means the completed plan
+// still describes desired state.
+type PlanState string
+
+const (
+	// PlanNone means no plan has completed for this component.
+	PlanNone PlanState = "none"
+	// PlanStale means a plan completed but desired has moved since.
+	PlanStale PlanState = "stale"
+	// PlanMatches means the completed plan is exactly what would run now.
+	PlanMatches PlanState = "matches"
+)
+
+// LiveState answers "is anything pending?" by comparing desired against what
+// the last apply put live. It gates no action on its own; it is what lets the
+// UI distinguish an unapplied edit from a steady state.
+type LiveState string
+
+const (
+	// LiveNever means nothing has been applied yet.
+	LiveNever LiveState = "never"
+	// LiveDiffers means desired has moved away from what is live.
+	LiveDiffers LiveState = "differs"
+	// LiveMatches means the last apply's intent equals desired. It does not
+	// claim reality matches desired — that is drift, and needs a refresh.
+	LiveMatches LiveState = "matches"
+)
+
+// DesiredConfig is the config a run started now would snapshot: the desired
+// config, falling back to the install-time config for rows written before
+// desired_config_json existed. Comparisons have to use this rather than
+// DesiredConfigJSON directly, or they compare against something other than what
+// would actually run.
+func (stackTemplate StackTemplate) DesiredConfig() json.RawMessage {
+	if len(stackTemplate.DesiredConfigJSON) > 0 {
+		return stackTemplate.DesiredConfigJSON
+	}
+	return stackTemplate.ConfigJSON
+}
+
+// PlanState reports whether the latest completed plan still describes desired
+// state. A recorded plan whose config is missing reports PlanStale: the point of
+// the gate is to refuse an apply nobody can vouch for, so anything unverifiable
+// fails closed.
+func (stackTemplate StackTemplate) PlanState() PlanState {
+	if stackTemplate.LastPlannedRunID == "" {
+		return PlanNone
+	}
+	if snapshotMatchesDesired(stackTemplate.LastPlannedTemplateRevisionID, stackTemplate.LastPlannedConfigJSON, stackTemplate) {
+		return PlanMatches
+	}
+	return PlanStale
+}
+
+// LiveState reports whether desired state has been applied. It fails closed the
+// same way PlanState does — an unverifiable apply reads as pending work rather
+// than as a steady state.
+func (stackTemplate StackTemplate) LiveState() LiveState {
+	if stackTemplate.LastAppliedRunID == "" {
+		return LiveNever
+	}
+	if snapshotMatchesDesired(stackTemplate.LastAppliedTemplateRevisionID, stackTemplate.LastAppliedConfigJSON, stackTemplate) {
+		return LiveMatches
+	}
+	return LiveDiffers
+}
+
+// snapshotMatchesDesired compares a recorded (revision, config) pair against
+// desired. Both halves matter: a revision-only change leaves the config
+// identical on both sides, and on an all-optional template both sides are '{}',
+// so a config-only check would pass while the module version changed underneath.
+func snapshotMatchesDesired(revisionID TemplateRevisionID, configJSON json.RawMessage, stackTemplate StackTemplate) bool {
+	if revisionID != stackTemplate.DesiredTemplateRevisionID {
+		return false
+	}
+	if configJSON == nil {
+		return false
+	}
+	return sameJSONConfig(configJSON, stackTemplate.DesiredConfig())
+}
+
+// sameJSONConfig compares two configs by parsed structure. Comparing the bytes
+// would be wrong: these are jsonb columns, and Postgres orders object keys by
+// length then bytewise where Go sorts them alphabetically, so two identical
+// configs can differ byte-for-byte and the user would be told to re-plan forever.
+// Unmarshalling into any yields map[string]any/[]any/float64/string/bool/nil,
+// and reflect.DeepEqual on maps ignores key order. Unparseable input reports
+// false so callers fail closed.
+func sameJSONConfig(left json.RawMessage, right json.RawMessage) bool {
+	var leftValue, rightValue any
+	if err := json.Unmarshal(defaultConfigJSON(left), &leftValue); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(defaultConfigJSON(right), &rightValue); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(leftValue, rightValue)
+}
+
+// defaultConfigJSON treats an empty desired config as the empty object it is
+// persisted as, so a template installed with no config compares equal to a run
+// that snapshotted '{}'.
+func defaultConfigJSON(configJSON json.RawMessage) json.RawMessage {
+	if len(configJSON) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	return configJSON
 }
 
 // TemplateRun is one Terraform operation against a StackTemplate.
@@ -430,12 +554,18 @@ type TemplateRunWorkflowInput struct {
 	TenantID        TenantID
 	StackTemplateID StackTemplateID
 	Operation       OperationType
-	SelectedRef     string
-	WorkspaceName   string
-	RepoOwner       string
-	RepoName        string
-	RootPath        string
-	ConfigJSON      json.RawMessage
+	// SelectedRef is the ref the component was installed from. It is carried
+	// for provenance and log context only — what the run executes is
+	// ResolvedCommitSHA, because a ref can move between planning and applying.
+	SelectedRef string
+	// ResolvedCommitSHA is the commit the desired revision resolved to, and the
+	// exact source a run checks out.
+	ResolvedCommitSHA string
+	WorkspaceName     string
+	RepoOwner         string
+	RepoName          string
+	RootPath          string
+	ConfigJSON        json.RawMessage
 }
 
 // TemplateRunStatusActivityInput asks the worker to persist one run status transition.
@@ -466,8 +596,13 @@ type FetchSourceActivityInput struct {
 	WorkspacePath string
 	RepoOwner     string
 	RepoName      string
-	SourceRef     string
-	RootPath      string
+	// SourceRef is the ref the component was installed from. It is only used
+	// when ResolvedCommitSHA is absent, which is true solely for runs queued
+	// before the commit was threaded through.
+	SourceRef string
+	// ResolvedCommitSHA is the exact commit to check out.
+	ResolvedCommitSHA string
+	RootPath          string
 }
 
 // FetchSourceActivityOutput identifies the Terraform module directory within the cloned source.

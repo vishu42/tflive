@@ -24,6 +24,9 @@ function stackTemplate(overrides: Partial<StackTemplate> = {}): StackTemplate {
     config: {},
     last_applied_run_id: "",
     last_applied_ref: "",
+    last_planned_run_id: "",
+    plan_state: "none",
+    live_state: "never",
     created_by: "user_123",
     lifecycle: "active",
     ...overrides
@@ -88,8 +91,8 @@ function seedRuns(queryClient: QueryClient, runs: TemplateRun[]) {
   queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "stpl_1"), runs);
 }
 
-function renderRow(queryClient: QueryClient, overrides: Partial<StackTemplate> = {}) {
-  return render(
+function rowElement(queryClient: QueryClient, overrides: Partial<StackTemplate> = {}) {
+  return (
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider value={authValue()}>
         <MemoryRouter initialEntries={["/stacks/stack_1/runs"]}>
@@ -98,6 +101,10 @@ function renderRow(queryClient: QueryClient, overrides: Partial<StackTemplate> =
       </AuthContext.Provider>
     </QueryClientProvider>
   );
+}
+
+function renderRow(queryClient: QueryClient, overrides: Partial<StackTemplate> = {}) {
+  return render(rowElement(queryClient, overrides));
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -179,6 +186,30 @@ describe("RunsListRow", () => {
     expect(screen.getByTestId("runs-row-stpl_1-history-run_plan_1")).toBeTruthy();
   });
 
+  it("enables Apply when the server reports the plan still matches desired state", () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    seedRuns(queryClient, [run({ id: "run_plan_1", operation: "plan", status: "completed" })]);
+
+    renderRow(queryClient, { last_planned_run_id: "run_plan_1", plan_state: "matches" });
+
+    expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(false);
+    expect(screen.queryByTestId("runs-row-stpl_1-plan-stale")).toBeNull();
+  });
+
+  it("disables Apply and explains why when config changed after the plan completed", () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    // The completed plan is still the latest run — the old client-side check
+    // would have enabled Apply here and run something nobody reviewed.
+    seedRuns(queryClient, [run({ id: "run_plan_1", operation: "plan", status: "completed" })]);
+
+    renderRow(queryClient, { last_planned_run_id: "run_plan_1", plan_state: "stale" });
+
+    expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
+    expect(screen.getByTestId("runs-row-stpl_1-plan-stale").textContent).toContain("re-plan before applying");
+  });
+
   it("walks plan → apply → approve using persisted history, and immediately reflects each step without a page reload", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
@@ -206,7 +237,7 @@ describe("RunsListRow", () => {
       throw new Error(`unexpected fetch: ${url} ${method}`);
     });
 
-    renderRow(queryClient);
+    const view = renderRow(queryClient);
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith("/v1/tenants/tenant_123/stack-templates/stpl_1/runs", expect.objectContaining({ method: "GET" }))
     );
@@ -214,6 +245,11 @@ describe("RunsListRow", () => {
     fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
     await waitFor(() => expect(screen.getByTestId("runs-row-stpl_1-plan-link")).toBeTruthy());
     expect(screen.getByTestId("runs-row-stpl_1-plan-link").getAttribute("href")).toBe("/stacks/stack_1/runs/run_plan_1");
+
+    // A completed plan run in the history is no longer enough on its own: Apply
+    // waits for the server to report that the plan still matches desired state.
+    expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
+    view.rerender(rowElement(queryClient, { last_planned_run_id: "run_plan_1", plan_state: "matches" }));
     await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(false));
 
     fireEvent.click(screen.getByRole("button", { name: /Apply/ }));

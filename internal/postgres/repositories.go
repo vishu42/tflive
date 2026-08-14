@@ -628,8 +628,13 @@ func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.T
 			config_json,
 			desired_config_json,
 			last_applied_run_id,
+			last_applied_config_json,
 			last_applied_ref,
 			last_applied_at,
+			last_planned_run_id,
+			last_planned_template_revision_id,
+			last_planned_config_json,
+			last_planned_at,
 			created_by,
 			lifecycle
 		from stack_templates
@@ -687,12 +692,17 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 			config_json,
 			desired_config_json,
 			last_applied_run_id,
+			last_applied_config_json,
 			last_applied_ref,
 			last_applied_at,
+			last_planned_run_id,
+			last_planned_template_revision_id,
+			last_planned_config_json,
+			last_planned_at,
 			created_by,
 			lifecycle
 		)
-		select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16
+		select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13::jsonb, $14, $15, $16, $17, $18::jsonb, $19, $20, $21
 		where exists (
 			select 1
 			from stacks
@@ -712,8 +722,13 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 		configJSON,
 		desiredConfigJSON,
 		stackTemplate.LastAppliedRunID,
+		nullJSON(stackTemplate.LastAppliedConfigJSON),
 		stackTemplate.LastAppliedRef,
 		nullTime(stackTemplate.LastAppliedAt),
+		stackTemplate.LastPlannedRunID,
+		stackTemplate.LastPlannedTemplateRevisionID,
+		nullJSON(stackTemplate.LastPlannedConfigJSON),
+		nullTime(stackTemplate.LastPlannedAt),
 		stackTemplate.CreatedBy,
 		stackTemplate.Lifecycle,
 	)
@@ -774,8 +789,13 @@ func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.Tenant
 			config_json,
 			desired_config_json,
 			last_applied_run_id,
+			last_applied_config_json,
 			last_applied_ref,
 			last_applied_at,
+			last_planned_run_id,
+			last_planned_template_revision_id,
+			last_planned_config_json,
+			last_planned_at,
 			created_by,
 			lifecycle
 		from stack_templates
@@ -811,8 +831,13 @@ func (store *Store) UpdateStackTemplateConfig(ctx context.Context, tenantID trai
 			config_json,
 			desired_config_json,
 			last_applied_run_id,
+			last_applied_config_json,
 			last_applied_ref,
 			last_applied_at,
+			last_planned_run_id,
+			last_planned_template_revision_id,
+			last_planned_config_json,
+			last_planned_at,
 			created_by,
 			lifecycle
 	`, defaultJSON(configJSON), tenantID, id)
@@ -847,8 +872,13 @@ func (store *Store) UpdateStackTemplateDesiredRevision(ctx context.Context, tena
 			config_json,
 			desired_config_json,
 			last_applied_run_id,
+			last_applied_config_json,
 			last_applied_ref,
 			last_applied_at,
+			last_planned_run_id,
+			last_planned_template_revision_id,
+			last_planned_config_json,
+			last_planned_at,
 			created_by,
 			lifecycle
 	`, templateRevisionID, defaultJSON(configJSON), tenantID, id)
@@ -1323,7 +1353,7 @@ func appendAuditEvent(ctx context.Context, exec pgxExecutor, event traits.Securi
 }
 
 func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.TemplateRunStatusActivityInput) error {
-	if recordsStackTemplateLastApplied(input) || recordsStackTemplateDestroying(input) || recordsStackTemplateDestroyed(input) || recordsStackTemplateDestroyInterrupted(input) {
+	if recordsStackTemplateLastApplied(input) || recordsStackTemplateLastPlanned(input) || recordsStackTemplateDestroying(input) || recordsStackTemplateDestroyed(input) || recordsStackTemplateDestroyInterrupted(input) {
 		tx, err := store.pool.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("begin record template run status: %w", err)
@@ -1339,6 +1369,10 @@ func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.Te
 		switch {
 		case recordsStackTemplateLastApplied(input):
 			if err := recordStackTemplateLastApplied(ctx, tx, input); err != nil {
+				return err
+			}
+		case recordsStackTemplateLastPlanned(input):
+			if err := recordStackTemplateLastPlanned(ctx, tx, input); err != nil {
 				return err
 			}
 		case recordsStackTemplateDestroying(input):
@@ -1432,6 +1466,16 @@ func recordsStackTemplateLastApplied(input traits.TemplateRunStatusActivityInput
 	return input.Operation == traits.OperationApply && input.Status == traits.TemplateRunApplyFinished
 }
 
+// recordsStackTemplateLastPlanned mirrors recordsStackTemplateLastApplied for
+// the plan side. A plan run's terminal status is Completed rather than
+// PlanFinished — plan_finished is the phase status recorded around the
+// terraform command, and the run goes on to lock_released and completed — so
+// completed is what "there is a reviewable plan" means, and it is the same
+// signal the web client already keys apply off.
+func recordsStackTemplateLastPlanned(input traits.TemplateRunStatusActivityInput) bool {
+	return input.Operation == traits.OperationPlan && input.Status == traits.TemplateRunCompleted
+}
+
 func recordsStackTemplateDestroying(input traits.TemplateRunStatusActivityInput) bool {
 	return input.Operation == traits.OperationDestroy && input.Status == traits.TemplateRunDestroyStarted
 }
@@ -1451,6 +1495,7 @@ func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLas
 		set
 			last_applied_run_id = template_runs.id,
 			last_applied_template_revision_id = template_runs.template_revision_id,
+			last_applied_config_json = template_runs.config_json,
 			last_applied_ref = template_runs.selected_ref,
 			last_applied_at = now()
 		from template_runs
@@ -1470,6 +1515,43 @@ func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLas
 	)
 	if err != nil {
 		return fmt.Errorf("record stack template last applied: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+// recordStackTemplateLastPlanned denormalises the completed plan's snapshot
+// onto the template, the same way recordStackTemplateLastApplied does for
+// applies. Without it, answering "does the reviewed plan still describe desired
+// state?" means scanning every run the template ever had.
+func recordStackTemplateLastPlanned(ctx context.Context, writer stackTemplateLastAppliedWriter, input traits.TemplateRunStatusActivityInput) error {
+	commandTag, err := writer.Exec(ctx, `
+		update stack_templates
+		set
+			last_planned_run_id = template_runs.id,
+			last_planned_template_revision_id = template_runs.template_revision_id,
+			last_planned_config_json = template_runs.config_json,
+			last_planned_at = now()
+		from template_runs
+		where stack_templates.tenant_id = $1
+			and stack_templates.id = $2
+			and template_runs.tenant_id = stack_templates.tenant_id
+			and template_runs.id = $3
+			and template_runs.stack_template_id = stack_templates.id
+			and template_runs.operation = $4
+			and template_runs.status = $5
+	`,
+		input.TenantID,
+		input.StackTemplateID,
+		input.RunID,
+		input.Operation,
+		input.Status,
+	)
+	if err != nil {
+		return fmt.Errorf("record stack template last planned: %w", err)
 	}
 	if commandTag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -1531,7 +1613,10 @@ func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, erro
 	var stackTemplate traits.StackTemplate
 	var configJSON []byte
 	var desiredConfigJSON []byte
+	var lastAppliedConfigJSON []byte
+	var lastPlannedConfigJSON []byte
 	var lastAppliedAt sql.NullTime
+	var lastPlannedAt sql.NullTime
 
 	if err := scanner.Scan(
 		&stackTemplate.ID,
@@ -1546,8 +1631,13 @@ func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, erro
 		&configJSON,
 		&desiredConfigJSON,
 		&stackTemplate.LastAppliedRunID,
+		&lastAppliedConfigJSON,
 		&stackTemplate.LastAppliedRef,
 		&lastAppliedAt,
+		&stackTemplate.LastPlannedRunID,
+		&stackTemplate.LastPlannedTemplateRevisionID,
+		&lastPlannedConfigJSON,
+		&lastPlannedAt,
 		&stackTemplate.CreatedBy,
 		&stackTemplate.Lifecycle,
 	); err != nil {
@@ -1555,8 +1645,19 @@ func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, erro
 	}
 	stackTemplate.ConfigJSON = configJSON
 	stackTemplate.DesiredConfigJSON = desiredConfigJSON
+	// A nil scan target stays nil rather than becoming an empty RawMessage, so
+	// the state comparisons can tell "never recorded" from "recorded as '{}'".
+	if lastAppliedConfigJSON != nil {
+		stackTemplate.LastAppliedConfigJSON = lastAppliedConfigJSON
+	}
+	if lastPlannedConfigJSON != nil {
+		stackTemplate.LastPlannedConfigJSON = lastPlannedConfigJSON
+	}
 	if lastAppliedAt.Valid {
 		stackTemplate.LastAppliedAt = lastAppliedAt.Time
+	}
+	if lastPlannedAt.Valid {
+		stackTemplate.LastPlannedAt = lastPlannedAt.Time
 	}
 	return stackTemplate, nil
 }
@@ -1712,6 +1813,17 @@ func recordLatestTemplateRevision(ctx context.Context, tx pgx.Tx, templateRevisi
 func defaultJSON(input json.RawMessage) json.RawMessage {
 	if len(input) == 0 {
 		return json.RawMessage(`{}`)
+	}
+	return input
+}
+
+// nullJSON keeps an absent config absent. The snapshot config columns are
+// nullable precisely so "never recorded" stays distinguishable from "recorded
+// as the empty object", which is what an all-optional template's config is, so
+// empty must not be coerced to '{}' the way defaultJSON does.
+func nullJSON(input json.RawMessage) any {
+	if len(input) == 0 {
+		return nil
 	}
 	return input
 }

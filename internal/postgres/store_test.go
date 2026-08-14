@@ -2135,15 +2135,19 @@ func TestRecordTemplateRunStatusSetsCompletedAtForTerminalStatus(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
+	// A completed plan also denormalises its snapshot onto the stack template,
+	// so the template has to exist for the status write to land.
+	seedStackWithTemplate(t, ctx, store)
 	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
-		SelectedRef:     "main",
-		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunLockReleased,
-		TriggerActor:    traits.UserID("user_123"),
+		ID:                 traits.TemplateRunID("run_123"),
+		TenantID:           traits.TenantID("tenant_123"),
+		StackTemplateID:    traits.StackTemplateID("stack_template_123"),
+		TemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
+		Operation:          traits.OperationPlan,
+		SelectedRef:        "main",
+		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
+		Status:             traits.TemplateRunLockReleased,
+		TriggerActor:       traits.UserID("user_123"),
 	})
 
 	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
@@ -2407,6 +2411,262 @@ func TestRecordTemplateRunStatusReturnsNotFoundForOtherTenant(t *testing.T) {
 	}
 }
 
+func TestRecordTemplateRunStatusUpdatesStackTemplateLastPlannedForCompletedPlan(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedStackWithTemplate(t, ctx, store)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:                 traits.TemplateRunID("run_plan_1"),
+		TenantID:           traits.TenantID("tenant_123"),
+		StackTemplateID:    traits.StackTemplateID("stack_template_123"),
+		TemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
+		SourceTemplateID:   traits.SourceTemplateID("source_template_vpc"),
+		Operation:          traits.OperationPlan,
+		SelectedRef:        "main",
+		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
+		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+		Status:             traits.TemplateRunPlanFinished,
+		TriggerActor:       traits.UserID("user_123"),
+	})
+
+	if err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
+		RunID:           traits.TemplateRunID("run_plan_1"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationPlan,
+		Status:          traits.TemplateRunCompleted,
+	}); err != nil {
+		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+	}
+
+	stackTemplate, err := store.GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"))
+	if err != nil {
+		t.Fatalf("GetStackTemplate returned error: %v", err)
+	}
+	if stackTemplate.LastPlannedRunID != traits.TemplateRunID("run_plan_1") {
+		t.Fatalf("LastPlannedRunID = %q, want run_plan_1", stackTemplate.LastPlannedRunID)
+	}
+	if stackTemplate.LastPlannedTemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
+		t.Fatalf("LastPlannedTemplateRevisionID = %q, want template_rev_2", stackTemplate.LastPlannedTemplateRevisionID)
+	}
+	if stackTemplate.LastPlannedAt.IsZero() {
+		t.Fatal("LastPlannedAt was not set")
+	}
+	// The point of recording it: the plan snapshot equals desired, so an apply
+	// would run exactly what this plan showed. Note the config comes back with
+	// jsonb's own key spacing, which is why the comparison parses rather than
+	// comparing bytes.
+	if stackTemplate.PlanState() != traits.PlanMatches {
+		t.Fatalf("PlanState() = %q, want matches (planned config %s, desired %s)", stackTemplate.PlanState(), stackTemplate.LastPlannedConfigJSON, stackTemplate.DesiredConfig())
+	}
+	if stackTemplate.LiveState() != traits.LiveNever {
+		t.Fatalf("LiveState() = %q, want never", stackTemplate.LiveState())
+	}
+
+	// Saving config moves desired without touching runs; the recorded plan is
+	// what makes that visible instead of leaving apply enabled.
+	if _, err := store.UpdateStackTemplateConfig(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"), json.RawMessage(`{"region":"eu-west-1"}`)); err != nil {
+		t.Fatalf("UpdateStackTemplateConfig returned error: %v", err)
+	}
+	edited, err := store.GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"))
+	if err != nil {
+		t.Fatalf("GetStackTemplate returned error: %v", err)
+	}
+	if edited.PlanState() != traits.PlanStale {
+		t.Fatalf("PlanState() after config edit = %q, want stale", edited.PlanState())
+	}
+}
+
+func TestRecordTemplateRunStatusRecordsAppliedConfigAlongsideRevision(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedStackWithTemplate(t, ctx, store)
+	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+		ID:                 traits.TemplateRunID("run_apply_1"),
+		TenantID:           traits.TenantID("tenant_123"),
+		StackTemplateID:    traits.StackTemplateID("stack_template_123"),
+		TemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
+		SourceTemplateID:   traits.SourceTemplateID("source_template_vpc"),
+		Operation:          traits.OperationApply,
+		SelectedRef:        "main",
+		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
+		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+		Status:             traits.TemplateRunApplyStarted,
+		TriggerActor:       traits.UserID("user_123"),
+	})
+
+	if err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
+		RunID:           traits.TemplateRunID("run_apply_1"),
+		TenantID:        traits.TenantID("tenant_123"),
+		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+		Operation:       traits.OperationApply,
+		Status:          traits.TemplateRunApplyFinished,
+	}); err != nil {
+		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+	}
+
+	stackTemplate, err := store.GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"))
+	if err != nil {
+		t.Fatalf("GetStackTemplate returned error: %v", err)
+	}
+	if stackTemplate.LiveState() != traits.LiveMatches {
+		t.Fatalf("LiveState() = %q, want matches (applied config %s)", stackTemplate.LiveState(), stackTemplate.LastAppliedConfigJSON)
+	}
+}
+
+// The columns are nullable so that "never planned" stays distinct from
+// "planned with an empty config", which is what an all-optional template looks
+// like. A default of '{}' would erase that difference.
+func TestStackTemplateSnapshotConfigsStartAbsentRatherThanEmpty(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedStackWithTemplate(t, ctx, store)
+
+	var plannedConfig, appliedConfig *string
+	if err := pool.QueryRow(ctx, `
+		select last_planned_config_json, last_applied_config_json
+		from stack_templates
+		where tenant_id = $1
+			and id = $2
+	`, "tenant_123", "stack_template_123").Scan(&plannedConfig, &appliedConfig); err != nil {
+		t.Fatalf("read snapshot configs: %v", err)
+	}
+	if plannedConfig != nil || appliedConfig != nil {
+		t.Fatalf("snapshot configs = %v / %v, want both null", plannedConfig, appliedConfig)
+	}
+
+	stackTemplate, err := store.GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"))
+	if err != nil {
+		t.Fatalf("GetStackTemplate returned error: %v", err)
+	}
+	if stackTemplate.PlanState() != traits.PlanNone || stackTemplate.LiveState() != traits.LiveNever {
+		t.Fatalf("states = %q / %q, want none / never", stackTemplate.PlanState(), stackTemplate.LiveState())
+	}
+}
+
+// The backfill is what makes the new columns true for templates that already
+// exist. Without it every installed template would read as "never planned" and
+// apply would be blocked until someone re-planned.
+func TestPlannedStateMigrationBackfillsFromExistingRuns(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+	migrateThrough(t, ctx, pool, "0014_retire_workflow_outbox")
+
+	_, err := pool.Exec(ctx, `
+		insert into stack_templates (
+			id, tenant_id, stack_id, component_key, source_template_id,
+			desired_template_revision_id, last_applied_template_revision_id,
+			selected_ref, workspace_name, config_json, desired_config_json,
+			last_applied_run_id, last_applied_ref, lifecycle
+		) values (
+			'stack_template_123', 'tenant_123', 'stack_123', 'primary', 'source_vpc',
+			'template_rev_2', 'template_rev_2',
+			'main', 'workspace', '{"region":"us-east-1"}'::jsonb, '{"region":"us-east-1"}'::jsonb,
+			'run_apply_1', 'main', 'active'
+		);
+		insert into template_runs (
+			id, tenant_id, stack_template_id, template_revision_id, source_template_id,
+			operation, selected_ref, workspace_name, config_json, status, trigger_actor,
+			started_at, completed_at
+		) values
+			('run_apply_1', 'tenant_123', 'stack_template_123', 'template_rev_2', 'source_vpc',
+			 'apply', 'main', 'workspace', '{"region":"us-east-1"}'::jsonb, 'completed', 'user_123',
+			 now() - interval '2 hours', now() - interval '2 hours'),
+			-- Two completed plans: the backfill must take the newer one, ordered
+			-- the way ListTemplateRuns orders runs.
+			('run_plan_old', 'tenant_123', 'stack_template_123', 'template_rev_1', 'source_vpc',
+			 'plan', 'main', 'workspace', '{"region":"ap-south-1"}'::jsonb, 'completed', 'user_123',
+			 now() - interval '3 hours', now() - interval '3 hours'),
+			('run_plan_new', 'tenant_123', 'stack_template_123', 'template_rev_2', 'source_vpc',
+			 'plan', 'main', 'workspace', '{"region":"us-east-1"}'::jsonb, 'completed', 'user_123',
+			 now() - interval '1 hour', now() - interval '1 hour'),
+			-- A failed plan is not a reviewable one.
+			('run_plan_failed', 'tenant_123', 'stack_template_123', 'template_rev_2', 'source_vpc',
+			 'plan', 'main', 'workspace', '{"region":"nowhere"}'::jsonb, 'failed', 'user_123',
+			 now(), now());
+	`)
+	if err != nil {
+		t.Fatalf("seed pre-migration rows: %v", err)
+	}
+
+	if err := applyMigration(ctx, pool, "0015_stack_template_planned_state", "migrations/0015_stack_template_planned_state.sql"); err != nil {
+		t.Fatalf("apply migration 0015: %v", err)
+	}
+
+	store := NewStore(pool)
+	stackTemplate, err := store.GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"))
+	if err != nil {
+		t.Fatalf("GetStackTemplate returned error: %v", err)
+	}
+	if stackTemplate.LastPlannedRunID != traits.TemplateRunID("run_plan_new") {
+		t.Fatalf("LastPlannedRunID = %q, want run_plan_new", stackTemplate.LastPlannedRunID)
+	}
+	if stackTemplate.LastPlannedAt.IsZero() {
+		t.Fatal("LastPlannedAt was not backfilled")
+	}
+	// Both snapshots equal desired, so the template lands in steady state
+	// rather than being told to re-plan something it already applied.
+	if stackTemplate.PlanState() != traits.PlanMatches {
+		t.Fatalf("PlanState() = %q, want matches", stackTemplate.PlanState())
+	}
+	if stackTemplate.LiveState() != traits.LiveMatches {
+		t.Fatalf("LiveState() = %q, want matches", stackTemplate.LiveState())
+	}
+}
+
+// A template that never ran keeps both snapshots absent through the migration.
+func TestPlannedStateMigrationLeavesUnplannedTemplatesAbsent(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+	migrateThrough(t, ctx, pool, "0014_retire_workflow_outbox")
+
+	if _, err := pool.Exec(ctx, `
+		insert into stack_templates (
+			id, tenant_id, stack_id, component_key, source_template_id,
+			desired_template_revision_id, last_applied_template_revision_id,
+			selected_ref, workspace_name, config_json, desired_config_json,
+			last_applied_run_id, last_applied_ref, lifecycle
+		) values (
+			'stack_template_456', 'tenant_123', 'stack_123', 'primary', 'source_vpc',
+			'template_rev_2', '',
+			'main', 'workspace', '{}'::jsonb, '{}'::jsonb,
+			'', '', 'active'
+		)
+	`); err != nil {
+		t.Fatalf("seed pre-migration rows: %v", err)
+	}
+
+	if err := applyMigration(ctx, pool, "0015_stack_template_planned_state", "migrations/0015_stack_template_planned_state.sql"); err != nil {
+		t.Fatalf("apply migration 0015: %v", err)
+	}
+
+	stackTemplate, err := NewStore(pool).GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_456"))
+	if err != nil {
+		t.Fatalf("GetStackTemplate returned error: %v", err)
+	}
+	// An all-optional template's config is '{}' on both sides, so absence has
+	// to be carried by the run pointers rather than by the config being empty.
+	if stackTemplate.LastPlannedConfigJSON != nil || stackTemplate.LastAppliedConfigJSON != nil {
+		t.Fatalf("snapshot configs = %s / %s, want both absent", stackTemplate.LastPlannedConfigJSON, stackTemplate.LastAppliedConfigJSON)
+	}
+	if stackTemplate.PlanState() != traits.PlanNone || stackTemplate.LiveState() != traits.LiveNever {
+		t.Fatalf("states = %q / %q, want none / never", stackTemplate.PlanState(), stackTemplate.LiveState())
+	}
+}
+
 func openMigratedTestPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
 
@@ -2416,6 +2676,39 @@ func openMigratedTestPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	}
 
 	return pool
+}
+
+// seedStackWithTemplate creates the stack and one active stack template on it,
+// which is the minimum a run needs in order to record its snapshot back onto
+// the template.
+func seedStackWithTemplate(t *testing.T, ctx context.Context, store *Store) {
+	t.Helper()
+
+	if err := store.CreateStack(ctx, traits.Stack{
+		ID:        traits.StackID("stack_123"),
+		TenantID:  traits.TenantID("tenant_123"),
+		Name:      "Acme Prod",
+		Slug:      "acme-prod",
+		CreatedBy: traits.UserID("user_123"),
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("CreateStack returned error: %v", err)
+	}
+	if err := store.CreateStackTemplate(ctx, traits.StackTemplate{
+		ID:                        traits.StackTemplateID("stack_template_123"),
+		TenantID:                  traits.TenantID("tenant_123"),
+		StackID:                   traits.StackID("stack_123"),
+		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
+		SelectedRef:               "main",
+		WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
+		ConfigJSON:                json.RawMessage(`{"region":"us-east-1"}`),
+		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+		CreatedBy:                 traits.UserID("installer_123"),
+		Lifecycle:                 traits.StackTemplateActive,
+	}); err != nil {
+		t.Fatalf("CreateStackTemplate returned error: %v", err)
+	}
 }
 
 func seedTemplateRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run traits.TemplateRun) {

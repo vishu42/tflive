@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleStop, Loader2, Play, ShieldCheck, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -9,7 +9,7 @@ import type { Operation, StackTemplate, TemplateRun } from "../../api/types";
 import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
 import StatusRow from "../../shared/StatusRow";
-import { canDestroyStackTemplate, isDestroyingStackTemplate, stackTemplateLabel } from "../stacks/stackWorkflow";
+import { canDestroyStackTemplate, hasFreshPlan, isDestroyingStackTemplate, planStaleReason, stackTemplateLabel } from "../stacks/stackWorkflow";
 
 interface RunsListRowProps {
   stackId: string;
@@ -41,7 +41,20 @@ export default function RunsListRow({ stackId, stackTemplate }: RunsListRowProps
   const cancelRunMutation = useCancelRunMutation(tenantID);
 
   const canPlan = !activeRun;
-  const canApply = Boolean(!activeRun && latestRun?.operation === "plan" && latestRun.status === "completed");
+  const canApply = !activeRun && hasFreshPlan(stackTemplate);
+  const staleReason = planStaleReason(stackTemplate);
+
+  // plan_state and live_state live on the stack template, but the thing that
+  // changes them is a run finishing — and only the runs query polls. Without
+  // this the row would keep rendering the state the template had when the
+  // screen loaded: Apply disabled after a plan that has since completed.
+  const settledRun = latestRun && isTerminalRunStatus(latestRun.status) ? `${latestRun.id}:${latestRun.status}` : "";
+  useEffect(() => {
+    if (settledRun === "") {
+      return;
+    }
+    void queryClient.invalidateQueries({ queryKey: queryKeys.stack(tenantID, stackId) });
+  }, [settledRun, stackId, queryClient]);
   const canApprove = Boolean(latestRun?.status === "waiting_approval");
   const canCancel = Boolean(activeRun);
   const canDestroy = canDestroyStackTemplate(stackTemplate) && !activeRun;
@@ -133,6 +146,11 @@ export default function RunsListRow({ stackId, stackTemplate }: RunsListRowProps
         <ApproveButton canApprove={canApprove} onApprove={handleApprove} busy={approveRunMutation.isPending} />
       </RequireCapability>
       <StatusRow label="Plan" value={planRun?.status ?? "not started"} />
+      {staleReason && (
+        <p className="hint-text" data-testid={`runs-row-${stackTemplate.id}-plan-stale`}>
+          {staleReason}
+        </p>
+      )}
       {planRun && (
         <Link to={`/stacks/${stackId}/runs/${planRun.id}`} data-testid={`runs-row-${stackTemplate.id}-plan-link`}>
           View plan run
