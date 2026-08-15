@@ -33,6 +33,7 @@
 
 .app-wordmark {
   font-family: var(--font-display);
+  font-weight: 500;
   font-size: var(--text-xl);
   line-height: 1;
 }

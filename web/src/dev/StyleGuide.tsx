@@ -195,11 +195,11 @@ export default function StyleGuide() {
         <Section
           id="type"
           title="Typography"
-          note="Calistoga carries display headings, Inter carries body and UI, JetBrains Mono carries every technical signal — labels, IDs, timestamps, status and logs."
+          note="Archivo carries display headings, Inter carries body and UI, JetBrains Mono carries every technical signal — labels, IDs, timestamps, status and logs."
         >
           <Specimen label="Families" stack>
-            <p style={{ fontFamily: "var(--font-display)", fontSize: "var(--text-4xl)", margin: 0 }}>
-              Calistoga display
+            <p style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: "var(--text-4xl)", margin: 0 }}>
+              Archivo display
             </p>
             <p style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-lg)", margin: "var(--space-4) 0 0" }}>
               Inter body — the quick brown fox jumps over the lazy dog, 0123456789

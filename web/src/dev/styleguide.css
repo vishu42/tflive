@@ -38,6 +38,7 @@
 .sg__brand {
   margin-bottom: var(--space-6);
   font-family: var(--font-display);
+  font-weight: 500;
   font-size: var(--text-xl);
   line-height: var(--leading-tight);
 }

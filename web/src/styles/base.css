@@ -1,10 +1,17 @@
 /* ---- Self-hosted faces. Latin subset, vendored by scripts/vendor-fonts.sh ---- */
 @font-face {
-  font-family: Calistoga;
+  font-family: Archivo;
   font-style: normal;
-  font-weight: 400;
+  font-weight: 500;
   font-display: swap;
-  src: url("/fonts/calistoga-400.woff2") format("woff2");
+  src: url("/fonts/archivo-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: Archivo;
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/archivo-600.woff2") format("woff2");
 }
 @font-face {
   font-family: Inter;
@@ -90,10 +97,12 @@ body > * {
 }
 
 /* ---- Typography ---- */
+/* Archivo ships a weight range, so every display-face rule states its weight
+   explicitly — inheriting would land on 400 and lose the display contrast. */
 h1, h2 {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 400;
+  font-weight: 600;
   letter-spacing: var(--tracking-tighter);
   line-height: var(--leading-none);
 }

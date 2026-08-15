@@ -306,6 +306,7 @@ textarea {
 .stat-band__value {
   margin: 0;
   font-family: var(--font-display);
+  font-weight: 600;
   font-size: var(--text-3xl);
   line-height: var(--leading-none);
 }
