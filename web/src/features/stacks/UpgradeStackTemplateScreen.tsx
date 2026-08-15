@@ -9,7 +9,6 @@ import {
 } from "../../api/queries";
 import { tenantID } from "../../config";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
-import SectionLabel from "../../shared/SectionLabel";
 import { templateRevisionLabel } from "../templates/templateWorkflow";
 import {
   configFromVariableValues,
@@ -199,7 +198,6 @@ export default function UpgradeStackTemplateScreen() {
     <section className="upgrade-stack-template-screen" data-testid="upgrade-stack-template-screen">
       <header className="page-header">
         {backLink}
-        <SectionLabel>Change revision</SectionLabel>
         <h1>{stackTemplateLabel(stackTemplate)}</h1>
       </header>
 

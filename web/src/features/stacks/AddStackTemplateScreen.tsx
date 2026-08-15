@@ -4,7 +4,6 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useAddTemplateToStackMutation, useTemplateRevisionVariablesQuery, useTemplateRevisionsQuery } from "../../api/queries";
 import { tenantID } from "../../config";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
-import SectionLabel from "../../shared/SectionLabel";
 import { groupTemplateRevisionsByRepository, templateRevisionRefLabel } from "../templates/templateWorkflow";
 import { configFromVariableValues } from "./stackWorkflow";
 import VariableFields from "./VariableFields";
@@ -98,7 +97,6 @@ export default function AddStackTemplateScreen() {
           <ArrowLeft size={14} />
           Back to templates
         </Link>
-        <SectionLabel>Add template</SectionLabel>
         <h1>Add a template to this stack</h1>
       </header>
 

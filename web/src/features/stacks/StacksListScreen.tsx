@@ -5,7 +5,6 @@ import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
 import HeroGraphic from "../../shared/HeroGraphic";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
-import SectionLabel from "../../shared/SectionLabel";
 import { useInView } from "../../shared/useInView";
 
 // The list is authz-filtered by the backend (AUTH-013) — the screen renders
@@ -45,7 +44,6 @@ export default function StacksListScreen() {
     <section className="stacks-list-screen">
       <header className="stacks-list-header">
         <div className="page-header">
-          <SectionLabel pulse>Stacks</SectionLabel>
           <h1>Stacks</h1>
         </div>
         <RequireCapability capability="canCreateStack">
@@ -58,7 +56,6 @@ export default function StacksListScreen() {
       {stacks.length === 0 ? (
         <section className="showcase showcase--compact" data-testid="stacks-list-empty">
           <div className="showcase__body reveal" ref={emptyStateRef} data-visible={emptyStateVisible}>
-            <SectionLabel pulse>Get started</SectionLabel>
             <h2 className="showcase__title gradient-text">No stacks yet</h2>
             <p className="showcase__lede">No stacks visible to you yet.</p>
           </div>

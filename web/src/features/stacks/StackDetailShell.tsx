@@ -2,7 +2,6 @@ import { NavLink, Outlet, useParams } from "react-router-dom";
 import { useStackQuery } from "../../api/queries";
 import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
-import SectionLabel from "../../shared/SectionLabel";
 
 // Layout route for /stacks/:stackId. The parent RequireCapability canView
 // route guard has already resolved (and cached) the stack query before this
@@ -16,7 +15,6 @@ export default function StackDetailShell() {
     <section className="stack-detail-shell" data-testid="stack-detail-shell">
       <header className="stack-detail-header">
         <div className="page-header">
-          <SectionLabel>Stack</SectionLabel>
           <h1>{stack?.name ?? stackId}</h1>
           {stack && <small className="muted">{stack.slug}</small>}
         </div>

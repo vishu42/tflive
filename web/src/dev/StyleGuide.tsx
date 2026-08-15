@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import HeroGraphic from "../shared/HeroGraphic";
-import SectionLabel from "../shared/SectionLabel";
 import StatBand from "../shared/StatBand";
 import StatusRow from "../shared/StatusRow";
 import "./styleguide.css";
@@ -27,7 +26,6 @@ const SECTIONS: { id: string; title: string }[] = [
   { id: "buttons", title: "Buttons" },
   { id: "inputs", title: "Inputs" },
   { id: "panels", title: "Panels" },
-  { id: "labels", title: "Section labels" },
   { id: "status", title: "Status tones" },
   { id: "roles", title: "Role badges" },
   { id: "stats", title: "Stat band" },
@@ -153,8 +151,7 @@ export default function StyleGuide() {
 
       <main className="sg__main">
         <div className="sg__intro">
-          <SectionLabel pulse>Minimalist Modern</SectionLabel>
-          <h1 style={{ marginTop: "var(--space-4)" }}>Design system</h1>
+          <h1>Design system</h1>
           <p>
             Every example below renders the real component and reads its token values out of the
             cascade, so this page cannot drift from the implementation. It is registered only in
@@ -334,13 +331,6 @@ export default function StyleGuide() {
           </Specimen>
         </Section>
 
-        <Section id="labels" title="Section labels">
-          <Specimen label="SectionLabel" hint="real component">
-            <SectionLabel>Stacks</SectionLabel>
-            <SectionLabel pulse>Runs</SectionLabel>
-          </Specimen>
-        </Section>
-
         <Section
           id="status"
           title="Status tones"
@@ -426,7 +416,6 @@ Error: creating S3 Bucket: BucketAlreadyExists`}</pre>
           <Specimen label="showcase" stack>
             <section className="showcase" style={{ minHeight: 0 }}>
               <div className="showcase__body">
-                <SectionLabel>Status</SectionLabel>
                 <h1 className="showcase__title gradient-text">Authorization service unavailable</h1>
                 <p className="showcase__lede">
                   We could not reach the authorization service. Retry in a moment.
