@@ -164,9 +164,9 @@ been proven on well-covered code.
 | Batch | Scope | Rationale |
 |---|---|---|
 | 1 | `layout.tsx`, `primitives.css` layout layer, guard rules with full allowlist, `StyleGuide.tsx` entry | No feature markup changes; establishes the vocabulary and its documentation |
-| 2 | `shared/` — `StatBand`, `StatusRow`, `IdsPanel`, `HeroGraphic` | Most reused, best test coverage; the canary for whether `Fields`/`Rows` are expressive enough |
-| 3 | `app/` — `AppShell`, `NotFound`, `AccessDenied`, `ServiceUnavailable`, `RoutePlaceholder` | Application frame; small and visually distinctive |
-| 4 | `features/stacks/` (15 components) | Largest surface, including the `Split` screens |
+| 2 | Canary: `IdsPanel`, `AppShell` (`Fields`), `CredentialsPanel` (`Rows`) | Composed by which primitives it exercises, not by directory — these are the only call sites of the two riskiest primitives |
+| 3 | Rest of `shared/` and `app/` — `StatBand`, `StatusRow`, `HeroGraphic`, `NotFound`, `AccessDenied`, `ServiceUnavailable`, `RoutePlaceholder` | Well-covered and visually distinctive |
+| 4 | Rest of `features/stacks/` (14 components) | Largest surface, including the `Split` screens |
 | 5 | `features/runs/`, `features/templates/` | Remaining screens |
 | 6 | Delete allowlist, delete dead layout CSS, flip rules 2–3 to hard failures | End state |
 
@@ -194,9 +194,15 @@ escape hatch, stop and revise this spec rather than widening `Grid`.
 - **Breakpoint normalization changes rendered output.** Two collapse points move,
   by 8px and 20px. This is intended, and it is the only deliberate visual change
   in the migration.
-- **`Fields` and `Rows` each serve two call sites.** Two is thin evidence for a
-  primitive. Batch 2 is the checkpoint; if either fails to generalize, fold it
-  back rather than adding props.
+- **`Fields` and `Rows` rest on thin evidence.** `Fields` has three call sites
+  (`id-grid` ×2, `revision-grid`), `Rows` has exactly one (`CredentialsPanel`).
+  One call site is weak grounds for a primitive. Batch 2 is deliberately composed
+  to exercise both; if either fails to generalize there, fold it back rather than
+  adding props.
+- **The two canary components have no tests.** Neither `IdsPanel.tsx` nor
+  `CredentialsPanel.tsx` has a test file, so the batch that validates the riskiest
+  primitives has no safety net. Characterization tests for both are prerequisites
+  within batch 2, written against current rendered output before any migration.
 - **Test suite asserts on some class names.** Any test coupled to a layout class
   being retired needs rewriting against `data-testid` instead — a change to the
   test's assertion target, not a weakening of its coverage.
