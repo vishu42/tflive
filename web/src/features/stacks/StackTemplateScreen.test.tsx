@@ -98,6 +98,15 @@ function seedDefaultData(queryClient: QueryClient, capabilities: StackCapabiliti
   ]);
   queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_1"), [variable()]);
   queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_2"), [variable()]);
+  // The inline run sections query runs for whichever template is selected;
+  // seeding both keeps these tests off the network.
+  queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "st_1"), []);
+  queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "st_2"), []);
+}
+
+/** True when `first` appears before `second` in document order. */
+function precedes(first: HTMLElement, second: HTMLElement): boolean {
+  return Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 }
 
 function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
@@ -294,6 +303,71 @@ describe("StackTemplateScreen", () => {
     expect(rightColumn.contains(screen.getByText("Template credentials"))).toBe(true);
   });
 
+  it("renders the run actions, history, and danger zone inline for the selected template", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    const rightColumn = screen.getByTestId("stack-template-right-column");
+    expect(rightColumn.contains(screen.getByTestId("template-run-actions"))).toBe(true);
+    expect(rightColumn.contains(screen.getByTestId("template-run-history"))).toBe(true);
+    expect(rightColumn.contains(screen.getByTestId("template-destroy-panel"))).toBe(true);
+  });
+
+  it("puts the run actions above the configuration form so plan and apply need no scrolling", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    expect(precedes(screen.getByTestId("stack-template-revision-action"), screen.getByTestId("template-run-actions"))).toBe(true);
+    expect(precedes(screen.getByTestId("template-run-actions"), screen.getByTestId("stack-template-config"))).toBe(true);
+  });
+
+  it("puts run history and the danger zone last, with destroy at the very bottom", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+
+    renderScreen(queryClient);
+
+    expect(precedes(screen.getByTestId("stack-template-config"), screen.getByTestId("template-run-history"))).toBe(true);
+    expect(precedes(screen.getByTestId("template-run-history"), screen.getByTestId("template-destroy-panel"))).toBe(true);
+  });
+
+  it("reads run state for the template selected by the URL, not the first installed one", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+    queryClient.setQueryData(
+      queryKeys.stack("tenant_123", "stack_1"),
+      stackView(allAllowed, [stackTemplate(), stackTemplate({ id: "st_2", desired_template_revision_id: "rev_2" })])
+    );
+    queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "st_2"), [
+      {
+        id: "run_for_st_2",
+        tenant_id: "tenant_123",
+        stack_template_id: "st_2",
+        template_revision_id: "rev_2",
+        source_template_id: "tmpl_src_1",
+        operation: "plan" as const,
+        selected_ref: "main",
+        resolved_commit_sha: "abcdef1234567890",
+        workspace_name: "ws-payments",
+        config_json: {},
+        backend_type: "s3",
+        backend_config_hash: "hash",
+        status: "completed",
+        trigger_actor: "user_123",
+        started_at: "2026-07-20T00:00:00Z",
+        error_summary: ""
+      }
+    ]);
+
+    renderScreen(queryClient, undefined, "/stacks/stack_1/template?selected=st_2");
+
+    expect(screen.getByTestId("template-run-history-run_for_st_2")).toBeTruthy();
+  });
+
   it("disables save while values match the installed config and enables it after an edit", () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient);
@@ -328,6 +402,9 @@ describe("StackTemplateScreen", () => {
     expect(screen.getByTestId("stack-template-empty")).toBeTruthy();
     expect(screen.getByTestId("add-stack-template-link")).toBeTruthy();
     expect(screen.queryByTestId("stack-template-config")).toBeNull();
+    expect(screen.queryByTestId("template-run-actions")).toBeNull();
+    expect(screen.queryByTestId("template-run-history")).toBeNull();
+    expect(screen.queryByTestId("template-destroy-panel")).toBeNull();
   });
 
   it("does not need the revisions query to render the installed template", async () => {

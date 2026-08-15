@@ -15,7 +15,6 @@ import UpgradeStackTemplateScreen from "../features/stacks/UpgradeStackTemplateS
 import EnvironmentScreen from "../features/stacks/EnvironmentScreen";
 import TemplateRegistryScreen from "../features/templates/TemplateRegistryScreen";
 import TemplateRegistrationScreen from "../features/templates/TemplateRegistrationScreen";
-import RunsListScreen from "../features/runs/RunsListScreen";
 import RunDetailScreen from "../features/runs/RunDetailScreen";
 import StackAccessScreen from "../features/stacks/StackAccessScreen";
 import CreateStackScreen from "../features/stacks/CreateStackScreen";
@@ -84,7 +83,9 @@ export const routeConfig: RouteObject[] = [
                     element: <RequireCapability capability="canManageAccess" mode="route" />,
                     children: [{ index: true, element: <EnvironmentScreen /> }]
                   },
-                  { path: "runs", element: <RunsListScreen /> },
+                  // Runs render inline on the template screen (issue #130);
+                  // only the run detail route remains, reached by clicking a
+                  // run in that screen's history.
                   { path: "runs/:runId", element: <RunDetailScreen /> },
                   {
                     path: "access",

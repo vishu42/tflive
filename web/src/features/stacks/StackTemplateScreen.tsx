@@ -14,6 +14,9 @@ import RequireCapability from "../../auth/RequireCapability";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import StackTemplateConfigPanel from "./StackTemplateConfigPanel";
 import CredentialsPanel from "./CredentialsPanel";
+import TemplateRunActions from "../runs/TemplateRunActions";
+import TemplateRunHistory from "../runs/TemplateRunHistory";
+import TemplateDestroyPanel from "../runs/TemplateDestroyPanel";
 import {
   canSaveInstalledTemplateConfig,
   configFromVariableValues,
@@ -23,10 +26,16 @@ import {
   variableValuesFromConfig
 } from "./stackWorkflow";
 
-// /stacks/:stackId/template — configures the installed template. Installing
-// lives at template/new and choosing another revision lives at
+// /stacks/:stackId/template — configures and operates the installed template.
+// Installing lives at template/new and choosing another revision lives at
 // template/:stackTemplateId/upgrade, so this screen has no revision selector
 // and its configuration form has exactly one action.
+//
+// Runs are inline rather than on their own tab (issue #130). The right column
+// reads top-to-bottom as operate → configure → review → destroy: run actions
+// sit above the forms so plan/apply need no scrolling and the stale-plan
+// warning reads as a banner over the config it refers to, while history and
+// the irreversible destroy sit at the foot.
 //
 // Selection is URL state (?selected=<stackTemplateID>) rather than component
 // state, so the add and upgrade screens can hand back the template they just
@@ -218,6 +227,7 @@ export default function StackTemplateScreen() {
                 )}
               </RequireCapability>
             </section>
+            <TemplateRunActions stackId={stackId} stackTemplate={installedTemplate} />
             <RequireCapability
               capability="canOperate"
               fallback={
@@ -242,6 +252,8 @@ export default function StackTemplateScreen() {
                 onDelete={(id) => deleteTemplateCredentialMutation.mutateAsync(id)}
               />
             </RequireCapability>
+            <TemplateRunHistory stackId={stackId} stackTemplateId={installedTemplate.id} />
+            <TemplateDestroyPanel stackId={stackId} stackTemplate={installedTemplate} />
           </div>
         )}
       </div>

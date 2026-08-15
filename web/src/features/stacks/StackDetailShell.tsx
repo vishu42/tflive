@@ -26,7 +26,6 @@ export default function StackDetailShell() {
           Overview
         </NavLink>
         <NavLink to="template">Template</NavLink>
-        <NavLink to="runs">Runs</NavLink>
         <RequireCapability capability="canManageAccess">
           <NavLink to="environment">Environment</NavLink>
           <NavLink to="access">Access</NavLink>

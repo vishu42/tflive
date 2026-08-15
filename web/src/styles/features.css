@@ -981,6 +981,68 @@
   margin: 0;
 }
 
+/* ---- Inline runs on the stack template screen ---- */
+/* Runs render on the template screen instead of their own tab (issue #130).
+   The column reads operate → configure → review → destroy, so these rules
+   cover the actions header, the history log, and the danger zone. */
+.template-run-states {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3) var(--space-6);
+  margin-bottom: var(--space-5);
+}
+
+/* .status-row draws its own top rule to separate it from the row above. As
+   the first element of a column there is nothing above it, so the rule reads
+   as a stray divider under the heading. */
+.template-run-states > div > .status-row:first-child {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.template-run-controls {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* .button-row's trailing margin separates it from panel content below it;
+   here it is the last thing in the panel. */
+.template-run-controls .button-row,
+.danger-zone .button-row {
+  margin-bottom: 0;
+}
+
+.template-run-history ul {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.template-run-history li {
+  border-top: 1px solid var(--color-border);
+  font-size: var(--text-sm);
+  padding-top: var(--space-2);
+}
+
+.template-run-history li:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.danger-zone {
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger);
+}
+
+.danger-zone h2 {
+  color: var(--color-danger);
+}
+
 .template-choice {
   align-items: center;
   background: transparent;
