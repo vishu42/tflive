@@ -229,10 +229,6 @@ textarea {
   line-height: var(--leading-tight);
 }
 
-.page-header .section-label {
-  margin-bottom: var(--space-3);
-}
-
 @media (min-width: 768px) {
   .page-header h1 {
     font-size: var(--text-4xl);
@@ -283,33 +279,6 @@ textarea {
   color: var(--color-muted-fg);
 }
 
-/* ---- Section label ---- */
-.section-label {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-  border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-full);
-  padding: var(--space-2) var(--space-5);
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-}
-
-.section-label__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-full);
-  background: var(--color-accent);
-}
-
-.section-label__dot--pulse {
-  animation: pulse-dot 2s var(--ease-out) infinite;
-}
-
 /* ---- Stat band ---- */
 .stat-band {
   margin: var(--space-8) 0;
@@ -337,6 +306,7 @@ textarea {
 .stat-band__value {
   margin: 0;
   font-family: var(--font-display);
+  font-weight: 600;
   font-size: var(--text-3xl);
   line-height: var(--leading-none);
 }

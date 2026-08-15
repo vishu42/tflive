@@ -99,19 +99,9 @@ describe("routeConfig", () => {
       expect(markup, `expected a placeholder at ${path}`).toContain('data-testid="route-placeholder"');
     }
 
-    // Runs list and run detail are real screens now (not reserved
-    // placeholders) — the seeded stack view has no installed templates, and
-    // no run has been started, so each renders its own empty/loading state.
-    const runsRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/runs"] });
-    const runsMarkup = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <AuthContext.Provider value={authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } } })}>
-          <RouterProvider router={runsRouter} />
-        </AuthContext.Provider>
-      </QueryClientProvider>
-    );
-    expect(runsMarkup).toContain('data-testid="runs-list-empty"');
-
+    // Run detail is a real screen (not a reserved placeholder) — no run has
+    // been started, so it renders its own loading state. There is no runs list
+    // route to check: runs render inline on the template screen (issue #130).
     const runDetailRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/runs/run_1"] });
     const runDetailMarkup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>

@@ -4,7 +4,6 @@ import { useTemplateRevisionsQuery } from "../../api/queries";
 import { tenantID } from "../../config";
 import HeroGraphic from "../../shared/HeroGraphic";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
-import SectionLabel from "../../shared/SectionLabel";
 import { statusGlyph, statusTone } from "../../shared/statusTone";
 import { useInView } from "../../shared/useInView";
 import { groupTemplateRevisionsByRepository, templateRevisionRefLabel } from "./templateWorkflow";
@@ -58,7 +57,6 @@ export default function TemplateRegistryScreen() {
     <section className="template-registry-screen">
       <header className="templates-list-header">
         <div className="page-header">
-          <SectionLabel>Templates</SectionLabel>
           <h1>Templates</h1>
         </div>
         <Link className="primary-button" to="/templates/new" data-testid="register-template-link">
@@ -69,7 +67,6 @@ export default function TemplateRegistryScreen() {
       {templateRevisions.length === 0 ? (
         <section className="showcase showcase--compact" data-testid="templates-list-empty">
           <div className="showcase__body reveal" ref={emptyStateRef} data-visible={emptyStateVisible}>
-            <SectionLabel pulse>Get started</SectionLabel>
             <h2 className="showcase__title gradient-text">No templates yet</h2>
             <p className="showcase__lede">Register a Terraform module to make it available to your stacks.</p>
           </div>

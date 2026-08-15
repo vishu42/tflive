@@ -58,7 +58,7 @@ describe("StackDetailShell", () => {
     vi.resetModules();
   });
 
-  it("renders the stack name and all five tabs when every capability is granted", async () => {
+  it("renders the stack name and all four tabs when every capability is granted", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const markup = await renderStackRoute("/stacks/stack_1", allAllowed);
 
@@ -66,9 +66,26 @@ describe("StackDetailShell", () => {
     expect(markup).toContain("Payments");
     expect(markup).toContain('href="/stacks/stack_1"');
     expect(markup).toContain('href="/stacks/stack_1/template"');
-    expect(markup).toContain('href="/stacks/stack_1/runs"');
     expect(markup).toContain('href="/stacks/stack_1/access"');
     expect(markup).toContain('href="/stacks/stack_1/environment"');
+  });
+
+  // Runs moved inline onto the template screen (issue #130), so the tab and
+  // its list route are gone — only the run detail route survives.
+  it("offers no Runs tab", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const markup = await renderStackRoute("/stacks/stack_1", allAllowed);
+
+    expect(markup).not.toContain('href="/stacks/stack_1/runs"');
+    expect(markup).not.toContain(">Runs<");
+  });
+
+  it("no longer resolves the standalone runs list route", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const markup = await renderStackRoute("/stacks/stack_1/runs", allAllowed);
+
+    expect(markup).toContain('data-testid="route-not-found"');
+    expect(markup).not.toContain('data-testid="stack-detail-shell"');
   });
 
   it("omits the Access tab when canManageAccess is denied", async () => {
@@ -76,7 +93,7 @@ describe("StackDetailShell", () => {
     const markup = await renderStackRoute("/stacks/stack_1", { ...allAllowed, canManageAccess: false });
 
     expect(markup).toContain('data-testid="stack-detail-shell"');
-    expect(markup).toContain('href="/stacks/stack_1/runs"');
+    expect(markup).toContain('href="/stacks/stack_1/template"');
     expect(markup).not.toContain('href="/stacks/stack_1/access"');
     expect(markup).not.toContain('href="/stacks/stack_1/environment"');
   });
@@ -102,12 +119,6 @@ describe("StackDetailShell", () => {
     expect(templateMarkup).toContain('data-testid="stack-detail-shell"');
     expect(templateMarkup).toContain('data-testid="stack-template-empty"');
 
-    // Runs list is a real screen too; the seeded stack view has no installed
-    // templates, so it renders its empty state as the nested content.
-    const runsMarkup = await renderStackRoute("/stacks/stack_1/runs", allAllowed);
-    expect(runsMarkup).toContain('data-testid="stack-detail-shell"');
-    expect(runsMarkup).toContain('data-testid="runs-list-empty"');
-
     // Run detail's run query is unseeded here (no run has been started in
     // this test), so the shell renders its loading state as the nested content.
     const runDetailMarkup = await renderStackRoute("/stacks/stack_1/runs/run_1", allAllowed);
@@ -117,9 +128,9 @@ describe("StackDetailShell", () => {
 
   it("marks the tab matching the current route as current", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
-    const markup = await renderStackRoute("/stacks/stack_1/runs", allAllowed);
+    const markup = await renderStackRoute("/stacks/stack_1/template", allAllowed);
 
-    expect(markup).toMatch(/aria-current="page"[^>]*>Runs|href="\/stacks\/stack_1\/runs"[^>]*aria-current="page"/);
+    expect(markup).toMatch(/aria-current="page"[^>]*>Template|href="\/stacks\/stack_1\/template"[^>]*aria-current="page"/);
   });
 
   it("still renders NotFound (no shell chrome) when canView is denied", async () => {

@@ -8,7 +8,7 @@ import type { AuthContextValue } from "../../auth/AuthContext";
 import type { StackCapabilities } from "../../auth/types";
 import { queryKeys } from "../../api/queryKeys";
 import type { StackTemplate, TemplateRun } from "../../api/types";
-import RunsListRow from "./RunsListRow";
+import TemplateRunActions from "./TemplateRunActions";
 
 function stackTemplate(overrides: Partial<StackTemplate> = {}): StackTemplate {
   return {
@@ -90,20 +90,20 @@ function seedRuns(queryClient: QueryClient, runs: TemplateRun[]) {
   queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "stpl_1"), runs);
 }
 
-function rowElement(queryClient: QueryClient, overrides: Partial<StackTemplate> = {}) {
+function actionsElement(queryClient: QueryClient, overrides: Partial<StackTemplate> = {}) {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider value={authValue()}>
-        <MemoryRouter initialEntries={["/stacks/stack_1/runs"]}>
-          <RunsListRow stackId="stack_1" stackTemplate={stackTemplate(overrides)} />
+        <MemoryRouter initialEntries={["/stacks/stack_1/template"]}>
+          <TemplateRunActions stackId="stack_1" stackTemplate={stackTemplate(overrides)} />
         </MemoryRouter>
       </AuthContext.Provider>
     </QueryClientProvider>
   );
 }
 
-function renderRow(queryClient: QueryClient, overrides: Partial<StackTemplate> = {}) {
-  return render(rowElement(queryClient, overrides));
+function renderActions(queryClient: QueryClient, overrides: Partial<StackTemplate> = {}) {
+  return render(actionsElement(queryClient, overrides));
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -114,24 +114,60 @@ function isDisabled(element: HTMLElement): boolean {
   return (element as HTMLButtonElement).disabled;
 }
 
-describe("RunsListRow", () => {
+describe("TemplateRunActions", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
   });
 
-  it("shows the component label with Plan enabled and Apply/Approve disabled when no run has started", () => {
+  it("enables Plan and disables Apply/Approve/Cancel when no run has started", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
     seedRuns(queryClient, []);
 
-    renderRow(queryClient);
+    renderActions(queryClient);
 
-    expect(screen.getByText("acme-prod-primary @ main (active)")).toBeTruthy();
     expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(false);
     expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
     expect(isDisabled(screen.getByRole("button", { name: /Approve/ }))).toBe(true);
     expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(true);
+  });
+
+  it("keeps run operations disabled until run history has loaded", () => {
+    vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+
+    renderActions(queryClient);
+
+    expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(true);
+  });
+
+  it("blocks new operations when an older run is still active", () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    seedRuns(queryClient, [
+      run({ id: "newer_completed", operation: "plan", status: "completed", started_at: "2026-07-20T01:00:00Z" }),
+      run({ id: "older_active", operation: "apply", status: "queued", started_at: "2026-07-20T00:00:00Z" })
+    ]);
+
+    renderActions(queryClient);
+
+    expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(false);
+  });
+
+  it("omits the Destroy action, which lives in the danger zone", () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    seedRuns(queryClient, []);
+
+    renderActions(queryClient);
+
+    expect(screen.queryByRole("button", { name: /Destroy/ })).toBeNull();
   });
 
   it("treats a failed run as terminal and does not render a Terminate action", () => {
@@ -139,7 +175,7 @@ describe("RunsListRow", () => {
     seedCapabilities(queryClient, allAllowed);
     seedRuns(queryClient, [run({ status: "failed", error_summary: "activity failed" })]);
 
-    renderRow(queryClient);
+    renderActions(queryClient);
 
     expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(false);
     expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(true);
@@ -151,12 +187,12 @@ describe("RunsListRow", () => {
     seedCapabilities(queryClient, { ...allAllowed, canOperate: false });
     seedRuns(queryClient, []);
 
-    renderRow(queryClient);
+    renderActions(queryClient);
 
     expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(true);
     expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
     expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(true);
-    expect(screen.getByTestId("runs-row-actions-disabled-reason")).toBeTruthy();
+    expect(screen.getByTestId("template-run-actions-disabled-reason")).toBeTruthy();
   });
 
   it("disables Approve with a reason when canApprove is denied", () => {
@@ -164,13 +200,13 @@ describe("RunsListRow", () => {
     seedCapabilities(queryClient, { ...allAllowed, canApprove: false });
     seedRuns(queryClient, []);
 
-    renderRow(queryClient);
+    renderActions(queryClient);
 
     expect(isDisabled(screen.getByRole("button", { name: /Approve/ }))).toBe(true);
-    expect(screen.getByTestId("runs-row-approve-disabled-reason")).toBeTruthy();
+    expect(screen.getByTestId("template-run-approve-disabled-reason")).toBeTruthy();
   });
 
-  it("shows a run history entry and an enabled Approve button for a run started by a different user", () => {
+  it("enables Approve for a run awaiting approval that a different user started", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
     seedRuns(queryClient, [
@@ -178,11 +214,9 @@ describe("RunsListRow", () => {
       run({ id: "run_plan_1", operation: "plan", status: "completed", trigger_actor: "someone_else", started_at: "2026-07-20T00:00:00Z" })
     ]);
 
-    renderRow(queryClient);
+    renderActions(queryClient);
 
     expect(isDisabled(screen.getByRole("button", { name: /Approve/ }))).toBe(false);
-    expect(screen.getByTestId("runs-row-stpl_1-history-run_apply_1")).toBeTruthy();
-    expect(screen.getByTestId("runs-row-stpl_1-history-run_plan_1")).toBeTruthy();
   });
 
   it("enables Apply when the server reports the plan still matches desired state", () => {
@@ -190,10 +224,10 @@ describe("RunsListRow", () => {
     seedCapabilities(queryClient, allAllowed);
     seedRuns(queryClient, [run({ id: "run_plan_1", operation: "plan", status: "completed" })]);
 
-    renderRow(queryClient, { last_planned_run_id: "run_plan_1", plan_state: "matches" });
+    renderActions(queryClient, { last_planned_run_id: "run_plan_1", plan_state: "matches" });
 
     expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(false);
-    expect(screen.queryByTestId("runs-row-stpl_1-plan-stale")).toBeNull();
+    expect(screen.queryByTestId("template-run-plan-stale")).toBeNull();
   });
 
   it("disables Apply and explains why when config changed after the plan completed", () => {
@@ -203,10 +237,10 @@ describe("RunsListRow", () => {
     // would have enabled Apply here and run something nobody reviewed.
     seedRuns(queryClient, [run({ id: "run_plan_1", operation: "plan", status: "completed" })]);
 
-    renderRow(queryClient, { last_planned_run_id: "run_plan_1", plan_state: "stale" });
+    renderActions(queryClient, { last_planned_run_id: "run_plan_1", plan_state: "stale" });
 
     expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
-    expect(screen.getByTestId("runs-row-stpl_1-plan-stale").textContent).toContain("re-plan before applying");
+    expect(screen.getByTestId("template-run-plan-stale").textContent).toContain("re-plan before applying");
   });
 
   it("walks plan → apply → approve using persisted history, and immediately reflects each step without a page reload", async () => {
@@ -236,24 +270,24 @@ describe("RunsListRow", () => {
       throw new Error(`unexpected fetch: ${url} ${method}`);
     });
 
-    const view = renderRow(queryClient);
+    const view = renderActions(queryClient);
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith("/v1/tenants/tenant_123/stack-templates/stpl_1/runs", expect.objectContaining({ method: "GET" }))
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
-    await waitFor(() => expect(screen.getByTestId("runs-row-stpl_1-plan-link")).toBeTruthy());
-    expect(screen.getByTestId("runs-row-stpl_1-plan-link").getAttribute("href")).toBe("/stacks/stack_1/runs/run_plan_1");
+    await waitFor(() => expect(screen.getByTestId("template-run-plan-link")).toBeTruthy());
+    expect(screen.getByTestId("template-run-plan-link").getAttribute("href")).toBe("/stacks/stack_1/runs/run_plan_1");
 
     // A completed plan run in the history is no longer enough on its own: Apply
     // waits for the server to report that the plan still matches desired state.
     expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
-    view.rerender(rowElement(queryClient, { last_planned_run_id: "run_plan_1", plan_state: "matches" }));
+    view.rerender(actionsElement(queryClient, { last_planned_run_id: "run_plan_1", plan_state: "matches" }));
     await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(false));
 
     fireEvent.click(screen.getByRole("button", { name: /Apply/ }));
-    await waitFor(() => expect(screen.getByTestId("runs-row-stpl_1-apply-link")).toBeTruthy());
-    expect(screen.getByTestId("runs-row-stpl_1-apply-link").getAttribute("href")).toBe("/stacks/stack_1/runs/run_apply_1");
+    await waitFor(() => expect(screen.getByTestId("template-run-apply-link")).toBeTruthy());
+    expect(screen.getByTestId("template-run-apply-link").getAttribute("href")).toBe("/stacks/stack_1/runs/run_apply_1");
     await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Approve/ }))).toBe(false));
     expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(false);
 
@@ -265,71 +299,5 @@ describe("RunsListRow", () => {
       )
     );
     await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Approve/ }))).toBe(true));
-  });
-
-  it("shows destroy button for active templates and confirmation on click", () => {
-    const queryClient = testQueryClient();
-    seedCapabilities(queryClient, allAllowed);
-    seedRuns(queryClient, []);
-
-    renderRow(queryClient);
-
-    const destroyButton = screen.getByRole("button", { name: /Destroy/ }) as HTMLButtonElement;
-    expect(destroyButton.disabled).toBe(false);
-    fireEvent.click(destroyButton);
-    expect(screen.getByText(/This will permanently destroy all infrastructure/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Confirm destroy/ })).toBeTruthy();
-  });
-
-  it("disables destroy button when lifecycle is destroying", () => {
-    const queryClient = testQueryClient();
-    seedCapabilities(queryClient, allAllowed);
-    seedRuns(queryClient, []);
-
-    renderRow(queryClient, { lifecycle: "destroying" });
-
-    expect(isDisabled(screen.getByRole("button", { name: /Destroy/ }))).toBe(true);
-  });
-
-  it("disables destroy button when an active run exists", () => {
-    const queryClient = testQueryClient();
-    seedCapabilities(queryClient, allAllowed);
-    seedRuns(queryClient, [run({ operation: "plan", status: "queued" })]);
-
-    renderRow(queryClient);
-
-    expect(isDisabled(screen.getByRole("button", { name: /Destroy/ }))).toBe(true);
-  });
-
-  it("disables destroy with a reason when canOperate is denied", () => {
-    const queryClient = testQueryClient();
-    seedCapabilities(queryClient, { ...allAllowed, canOperate: false });
-    seedRuns(queryClient, []);
-
-    renderRow(queryClient);
-
-    expect(isDisabled(screen.getByRole("button", { name: /Destroy/ }))).toBe(true);
-    expect(screen.getByTestId("runs-row-actions-disabled-reason")).toBeTruthy();
-  });
-
-  it("executes destroy mutation on confirm", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse(run({ id: "destroy_1", operation: "destroy", status: "completed" }), 201)
-    );
-    const queryClient = testQueryClient();
-    seedCapabilities(queryClient, allAllowed);
-    seedRuns(queryClient, []);
-
-    renderRow(queryClient);
-
-    fireEvent.click(screen.getByRole("button", { name: /Destroy/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Confirm destroy/ }));
-
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/v1/tenants/tenant_123/stack-templates/stpl_1/runs",
-        expect.objectContaining({ method: "POST", body: JSON.stringify({ operation: "destroy" }) })
-      )
-    );
   });
 });
