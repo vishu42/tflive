@@ -65,8 +65,9 @@ export default function TemplateRegistrationScreen() {
   }
 
   return (
-    <section className="panel template-registration-screen">
-      <header>
+    <section className="template-registration-screen">
+      {/* Title above the card, not inside it — see CreateStackScreen. */}
+      <header className="page-header">
         <Link to="/templates" className="muted back-link" data-testid="template-registration-back">
           <ArrowLeft size={14} />
           Back to templates
@@ -74,37 +75,39 @@ export default function TemplateRegistrationScreen() {
         <h1>Register template</h1>
       </header>
 
-      {errorMessage && (
-        <div className="alert" data-testid="template-registration-error">
-          {errorMessage}
-        </div>
-      )}
+      <section className="panel">
+        {errorMessage && (
+          <div className="alert" data-testid="template-registration-error">
+            {errorMessage}
+          </div>
+        )}
 
-      <form className="form-grid" onSubmit={handleRegister}>
-        <label>
-          Owner
-          <input value={repoOwner} onChange={(event) => setRepoOwner(event.target.value)} />
-        </label>
-        <label>
-          Repository
-          <input value={repoName} onChange={(event) => setRepoName(event.target.value)} />
-        </label>
-        <label>
-          Ref
-          <input value={sourceRef} onChange={(event) => setSourceRef(event.target.value)} />
-        </label>
-        <label>
-          Root path
-          <input value={rootPath} onChange={(event) => setRootPath(event.target.value)} />
-        </label>
-        <button className="primary-button" disabled={busy} type="submit">
-          {busy ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
-          Register
-        </button>
-      </form>
+        <form className="form-grid" onSubmit={handleRegister}>
+          <label>
+            Owner
+            <input value={repoOwner} onChange={(event) => setRepoOwner(event.target.value)} />
+          </label>
+          <label>
+            Repository
+            <input value={repoName} onChange={(event) => setRepoName(event.target.value)} />
+          </label>
+          <label>
+            Ref
+            <input value={sourceRef} onChange={(event) => setSourceRef(event.target.value)} />
+          </label>
+          <label>
+            Root path
+            <input value={rootPath} onChange={(event) => setRootPath(event.target.value)} />
+          </label>
+          <button className="primary-button" disabled={busy} type="submit">
+            {busy ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
+            Register
+          </button>
+        </form>
 
-      <StatusRow label="Registration" value={registrationStatus ?? "not started"} />
-      {registration?.error_summary && <p className="error-text">{registration.error_summary}</p>}
+        <StatusRow label="Registration" value={registrationStatus ?? "not started"} />
+        {registration?.error_summary && <p className="error-text">{registration.error_summary}</p>}
+      </section>
     </section>
   );
 }

@@ -33,8 +33,11 @@ export default function CreateStackScreen() {
   }
 
   return (
-    <section className="panel">
-      <header>
+    <section>
+      {/* The title sits above the card, not inside it, matching every other
+          screen. Nested in the panel it put a 40px page heading directly on top
+          of a 14px field label. */}
+      <header className="page-header">
         <Link to="/stacks" className="muted back-link">
           <ArrowLeft size={14} />
           Back to stacks
@@ -42,33 +45,35 @@ export default function CreateStackScreen() {
         <h1>Create stack</h1>
       </header>
 
-      {errorMessage && (
-        <div className="alert" data-testid="create-stack-error">
-          {errorMessage}
-        </div>
-      )}
+      <section className="panel">
+        {errorMessage && (
+          <div className="alert" data-testid="create-stack-error">
+            {errorMessage}
+          </div>
+        )}
 
-      <form className="form-grid" onSubmit={handleSubmit}>
-        <label>
-          Name
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="e.g. Production"
-            autoFocus
-          />
-        </label>
-        <button className="primary-button" disabled={trimmed === "" || mutation.isPending} type="submit">
-          {mutation.isPending ? (
-            <>
-              <Loader2 size={16} className="spin" />
-              Creating…
-            </>
-          ) : (
-            "Create stack"
-          )}
-        </button>
-      </form>
+        <form className="form-grid" onSubmit={handleSubmit}>
+          <label>
+            Name
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="e.g. Production"
+              autoFocus
+            />
+          </label>
+          <button className="primary-button" disabled={trimmed === "" || mutation.isPending} type="submit">
+            {mutation.isPending ? (
+              <>
+                <Loader2 size={16} className="spin" />
+                Creating…
+              </>
+            ) : (
+              "Create stack"
+            )}
+          </button>
+        </form>
+      </section>
     </section>
   );
 }

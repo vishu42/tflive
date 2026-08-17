@@ -696,6 +696,18 @@
   gap: var(--space-5);
 }
 
+/* The submit button is the last child of these two-column forms, so without
+   this it lands in whatever column is next to a field and — being a grid item —
+   stretches to that row's height. With an odd number of labels it ends up
+   beside a field at label + gap + input tall (65px) and half the form wide.
+   Give it its own row and let it size to its own content. */
+.form-grid > .primary-button,
+.variable-grid > .primary-button {
+  grid-column: 1 / -1;
+  justify-self: start;
+  align-self: start;
+}
+
 .form-row {
   display: grid;
   gap: var(--space-4);
@@ -947,6 +959,8 @@
 
   /* Primary CTAs go full width on mobile, per the design system. */
   .form-actions .primary-button,
+  .form-grid > .primary-button,
+  .variable-grid > .primary-button,
   .stacks-list-header .primary-button,
   .templates-list-header .primary-button {
     width: 100%;
