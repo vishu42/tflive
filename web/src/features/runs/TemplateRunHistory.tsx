@@ -27,7 +27,7 @@ export default function TemplateRunHistory({ stackId, stackTemplateId }: Templat
           {runs.map((historyRun) => (
             <li key={historyRun.id}>
               <Link to={`/stacks/${stackId}/runs/${historyRun.id}`} data-testid={`template-run-history-${historyRun.id}`}>
-                {historyRun.operation} — {historyRun.status} — {historyRun.trigger_actor} — {historyRun.started_at}
+                {historyRun.operation} - {historyRun.status} - {historyRun.trigger_actor} - {historyRun.started_at}
               </Link>
             </li>
           ))}
