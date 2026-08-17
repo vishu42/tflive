@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -25,11 +26,11 @@ type SecurityConfig struct {
 	OIDC     OIDCConfig
 	OpenFGA  OpenFGAConfig
 
-	KeycloakAdminURL             *url.URL
-	KeycloakRealm                string
-	DirectoryReaderClientID      string
-	DirectoryReaderClientSecret  Secret
-	DirectoryReaderHTTPTimeout   time.Duration
+	KeycloakAdminURL            *url.URL
+	KeycloakRealm               string
+	DirectoryReaderClientID     string
+	DirectoryReaderClientSecret Secret
+	DirectoryReaderHTTPTimeout  time.Duration
 }
 
 type OIDCConfig struct {
@@ -191,24 +192,50 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 	}, nil
 }
 
+// resolveOpenFGAIdentifier reads an OpenFGA identifier from the environment,
+// falling back to the file named by "<name>_FILE". The file form lets a
+// provisioner hand identifiers to the API and worker through a shared volume
+// without a human transcribing them. A configured but unusable file is an
+// error rather than a fallthrough, so a broken handoff fails at startup
+// instead of surfacing later as an authorization failure.
+func resolveOpenFGAIdentifier(getenv func(string) string, name string) (string, error) {
+	if value := strings.TrimSpace(getenv(name)); value != "" {
+		if !safeOpaqueValue(value) {
+			return "", authConfigError("%s must not contain whitespace or control characters", name)
+		}
+		return value, nil
+	}
+
+	path := strings.TrimSpace(getenv(name + "_FILE"))
+	if path == "" {
+		return "", authConfigError("%s is required", name)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return "", authConfigError("%s_FILE could not be read", name)
+	}
+	value := strings.TrimSpace(string(contents))
+	if value == "" {
+		return "", authConfigError("%s_FILE is empty", name)
+	}
+	if !safeOpaqueValue(value) {
+		return "", authConfigError("%s must not contain whitespace or control characters", name)
+	}
+	return value, nil
+}
+
 func loadOpenFGAConfig(getenv func(string) string) (OpenFGAConfig, error) {
 	apiURL, err := parseConfigURL("OPENFGA_API_URL", getenv("OPENFGA_API_URL"))
 	if err != nil {
 		return OpenFGAConfig{}, err
 	}
-	storeID := strings.TrimSpace(getenv("OPENFGA_STORE_ID"))
-	if storeID == "" {
-		return OpenFGAConfig{}, authConfigError("OPENFGA_STORE_ID is required")
+	storeID, err := resolveOpenFGAIdentifier(getenv, "OPENFGA_STORE_ID")
+	if err != nil {
+		return OpenFGAConfig{}, err
 	}
-	if !safeOpaqueValue(storeID) {
-		return OpenFGAConfig{}, authConfigError("OPENFGA_STORE_ID must not contain whitespace or control characters")
-	}
-	modelID := strings.TrimSpace(getenv("OPENFGA_MODEL_ID"))
-	if modelID == "" {
-		return OpenFGAConfig{}, authConfigError("OPENFGA_MODEL_ID is required")
-	}
-	if !safeOpaqueValue(modelID) {
-		return OpenFGAConfig{}, authConfigError("OPENFGA_MODEL_ID must not contain whitespace or control characters")
+	modelID, err := resolveOpenFGAIdentifier(getenv, "OPENFGA_MODEL_ID")
+	if err != nil {
+		return OpenFGAConfig{}, err
 	}
 	token := newSecret(getenv("OPENFGA_API_TOKEN"))
 	if !token.Empty() && !safeOpaqueValue(token.Value()) {

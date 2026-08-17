@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -265,4 +267,98 @@ func validSecurityValues() map[string]string {
 
 func mapConfigEnv(values map[string]string) func(string) string {
 	return func(name string) string { return values[name] }
+}
+
+func TestLoadOpenFGAIdentifiersFromFiles(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "store_id")
+	modelPath := filepath.Join(dir, "model_id")
+	if err := os.WriteFile(storePath, []byte("store-from-file\n"), 0o644); err != nil {
+		t.Fatalf("write store file: %v", err)
+	}
+	if err := os.WriteFile(modelPath, []byte("  model-from-file  "), 0o644); err != nil {
+		t.Fatalf("write model file: %v", err)
+	}
+
+	values := validSecurityValues()
+	values["OPENFGA_STORE_ID"] = ""
+	values["OPENFGA_MODEL_ID"] = ""
+	values["OPENFGA_STORE_ID_FILE"] = storePath
+	values["OPENFGA_MODEL_ID_FILE"] = modelPath
+
+	cfg, err := loadSecurityConfig(mapConfigEnv(values))
+	if err != nil {
+		t.Fatalf("loadSecurityConfig() error = %v", err)
+	}
+	if cfg.OpenFGA.StoreID != "store-from-file" {
+		t.Fatalf("StoreID = %q, want %q", cfg.OpenFGA.StoreID, "store-from-file")
+	}
+	if cfg.OpenFGA.ModelID != "model-from-file" {
+		t.Fatalf("ModelID = %q, want %q", cfg.OpenFGA.ModelID, "model-from-file")
+	}
+}
+
+func TestLoadOpenFGADirectValueWinsOverFile(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "store_id")
+	if err := os.WriteFile(storePath, []byte("store-from-file"), 0o644); err != nil {
+		t.Fatalf("write store file: %v", err)
+	}
+
+	values := validSecurityValues()
+	values["OPENFGA_STORE_ID"] = "store-from-env"
+	values["OPENFGA_STORE_ID_FILE"] = storePath
+
+	cfg, err := loadSecurityConfig(mapConfigEnv(values))
+	if err != nil {
+		t.Fatalf("loadSecurityConfig() error = %v", err)
+	}
+	if cfg.OpenFGA.StoreID != "store-from-env" {
+		t.Fatalf("StoreID = %q, want the direct value to win", cfg.OpenFGA.StoreID)
+	}
+}
+
+func TestLoadOpenFGAIdentifierFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	emptyPath := filepath.Join(dir, "empty")
+	if err := os.WriteFile(emptyPath, []byte("   \n"), 0o644); err != nil {
+		t.Fatalf("write empty file: %v", err)
+	}
+	unsafePath := filepath.Join(dir, "unsafe")
+	if err := os.WriteFile(unsafePath, []byte("bad id"), 0o644); err != nil {
+		t.Fatalf("write unsafe file: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		file string
+		want string
+	}{
+		{name: "missing file", file: filepath.Join(dir, "absent"), want: "OPENFGA_STORE_ID_FILE could not be read"},
+		{name: "empty file", file: emptyPath, want: "OPENFGA_STORE_ID_FILE is empty"},
+		{name: "unsafe contents", file: unsafePath, want: "OPENFGA_STORE_ID must not contain whitespace or control characters"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values := validSecurityValues()
+			values["OPENFGA_STORE_ID"] = ""
+			values["OPENFGA_STORE_ID_FILE"] = test.file
+
+			_, err := loadSecurityConfig(mapConfigEnv(values))
+			if !errors.Is(err, ErrInvalidConfig) || err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want ErrInvalidConfig containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadOpenFGAIdentifierRequiredWhenNeitherSet(t *testing.T) {
+	values := validSecurityValues()
+	values["OPENFGA_STORE_ID"] = ""
+	values["OPENFGA_STORE_ID_FILE"] = ""
+
+	_, err := loadSecurityConfig(mapConfigEnv(values))
+	if !errors.Is(err, ErrInvalidConfig) || err == nil || !strings.Contains(err.Error(), "OPENFGA_STORE_ID is required") {
+		t.Fatalf("error = %v, want ErrInvalidConfig containing %q", err, "OPENFGA_STORE_ID is required")
+	}
 }
