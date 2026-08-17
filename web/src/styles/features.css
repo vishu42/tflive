@@ -20,9 +20,15 @@
   flex-wrap: wrap;
   gap: var(--space-3) var(--space-6);
   border-bottom: 1px solid var(--color-border);
-  padding: var(--space-4) var(--space-6);
+  /* Header height is emergent from this padding plus the nav link's line box —
+     no --control-height reaches it — so density has to be set here directly.
+     12px + 37px + 12px = 61px. */
+  padding: var(--space-3) var(--space-6);
+  /* Geist's header carries no shadow and no border, measured while scrolled.
+     The hairline stays here because this bar is sticky over scrolling content
+     and theirs is not; the shadow does not, since the border already separates
+     the two surfaces and doubling them is what read as heavy. */
   background: var(--color-card);
-  box-shadow: var(--shadow-sm);
 }
 
 .app-frame-brand {
@@ -80,7 +86,7 @@
   min-height: var(--touch-target);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: var(--space-2) var(--space-4);
+  padding: 0 var(--space-4);
   color: var(--color-fg);
   background: transparent;
   font-size: var(--text-sm);
@@ -109,7 +115,7 @@
 .app-frame-content {
   width: min(1280px, 100%);
   margin: 0 auto;
-  padding: var(--space-10) var(--space-6);
+  padding: var(--space-6) var(--space-4);
 }
 
 /* The legacy console still carries its own standalone shell padding; zero it
@@ -151,7 +157,10 @@
   min-height: var(--control-height);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: var(--space-2) var(--space-3);
+  /* No vertical padding: 8px + a 21px line box + 8px is 37px, which overshoots
+     --control-height and leaves the token inert. Zero it and the token governs,
+     with align-items centring the text. */
+  padding: 0 var(--space-3);
   color: var(--color-fg);
   background: var(--color-muted);
   font-family: var(--font-mono);
@@ -216,7 +225,9 @@
   margin: 0;
   font-family: var(--font-display);
   font-size: var(--text-5xl);
-  letter-spacing: var(--tracking-tighter);
+  /* 52px and 64px both sit in Geist's >=40px tier, where tracking is -0.06em
+     and leading approaches 1.0 (their 56px and 64px headings both set 1:1). */
+  letter-spacing: var(--tracking-tightest);
   line-height: var(--leading-none);
 }
 
@@ -292,7 +303,7 @@
   gap: var(--space-4);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-2) var(--space-4);
   background: var(--color-card);
   box-shadow: var(--shadow-sm);
   transition: all var(--duration-lift) var(--ease-out);
@@ -305,10 +316,17 @@
   box-shadow: var(--shadow-lg);
 }
 
-.stacks-list li a {
+/* Row names for both lists. Grouped rather than declared twice: these lists
+   already share their card treatment above, and when the typography lived in
+   two separate rules the sizes silently drifted apart (18px vs 16px). */
+.stacks-list li a,
+.templates-list__name {
   color: var(--color-fg);
-  font-size: var(--text-lg);
+  font-size: var(--text-base);
   font-weight: 600;
+}
+
+.stacks-list li a {
   text-decoration: none;
 }
 
@@ -373,10 +391,8 @@
   min-width: 0;
 }
 
+/* Typography is set with .stacks-list li a above; only the wrapping differs. */
 .templates-list__name {
-  color: var(--color-fg);
-  font-size: var(--text-lg);
-  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -412,7 +428,7 @@
   min-height: var(--touch-target);
   border: 0;
   border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-4);
+  padding: 0 var(--space-4);
   color: var(--color-muted-fg);
   background: transparent;
   font-family: var(--font-body);
@@ -480,15 +496,20 @@
   border-color: var(--color-accent-border);
 }
 
+/* flex: 1 makes the name column absorb the row's free space. Without it the
+   row's space-between distributes that slack around the badge, so the badge
+   lands at a different x on every row depending on how long the email is —
+   the pills stop forming a column. */
 .grant-row .grant-user {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: var(--space-1);
   min-width: 0;
 }
 
 .grant-row .grant-user span {
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   font-weight: 500;
 }
 
@@ -506,7 +527,7 @@
   min-height: var(--touch-target);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding: var(--space-1) var(--space-3);
+  padding: 0 var(--space-3);
   color: var(--color-fg);
   background: transparent;
   font-size: var(--text-sm);
@@ -618,7 +639,7 @@
 }
 
 .selected-user-card span {
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   font-weight: 500;
 }
 
@@ -653,7 +674,7 @@
   min-height: var(--touch-target);
   border: 0;
   border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-4);
+  padding: 0 var(--space-4);
   color: var(--color-accent-fg);
   background: var(--gradient-accent);
   font-size: var(--text-sm);
@@ -723,7 +744,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 26px;
+  min-width: var(--space-6);
   border-radius: var(--radius-full);
   padding: var(--space-1) var(--space-2);
   color: var(--color-accent);
@@ -741,7 +762,6 @@
   display: grid;
   gap: var(--space-1);
   width: 100%;
-  min-height: 56px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   padding: var(--space-3) var(--space-4);
@@ -770,7 +790,7 @@
 }
 
 .stack-template-items span {
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   font-weight: 500;
 }
 
@@ -951,7 +971,7 @@
 .panel-header {
   align-items: center;
   display: flex;
-  gap: 1rem;
+  gap: var(--space-4);
   justify-content: space-between;
 }
 
@@ -970,7 +990,7 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   display: flex;
-  gap: 0.75rem;
+  gap: var(--space-3);
   justify-content: space-between;
   padding: var(--space-3) var(--space-4);
 }
@@ -978,7 +998,7 @@
 .stack-template-revision-action p {
   align-items: center;
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-2);
   margin: 0;
 }
 
@@ -1052,9 +1072,9 @@
   color: var(--color-fg);
   cursor: pointer;
   display: flex;
-  gap: 0.75rem;
+  gap: var(--space-3);
   justify-content: space-between;
-  padding: 0.6rem 0.8rem;
+  padding: var(--space-2) var(--space-3);
   width: 100%;
 }
 
@@ -1070,14 +1090,14 @@
 
 .upgrade-variable-notes {
   color: var(--color-muted-fg);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   list-style: none;
-  margin: 0.75rem 0 0;
+  margin: var(--space-3) 0 0;
   padding: 0;
 }
 
 .upgrade-variable-notes li {
-  padding: 0.15rem 0;
+  padding: var(--space-1) 0;
 }
 
 .upgrade-variable-notes--removed li {
