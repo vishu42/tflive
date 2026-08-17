@@ -61,12 +61,17 @@
   box-sizing: border-box;
 }
 
+/* font-size stays at --text-base here on purpose: every --text-*, --space-* and
+   --radius-* value is expressed in rem or px against this root, so lowering it
+   would rescale the entire system rather than just the UI text. Geist does the
+   same — its root is 16px and its interface text is 14px
+   (--geist-form-font: .875rem). The 14px lives on body, below. */
 :root {
   color: var(--color-fg);
   background: var(--color-bg);
   font-family: var(--font-body);
   font-size: var(--text-base);
-  line-height: var(--leading-relaxed);
+  line-height: var(--leading-normal);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
@@ -76,6 +81,9 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  /* Interface text is 14px. Headings set their own size in rem, so they are
+     unaffected by this and keep scaling off the 16px root. */
+  font-size: var(--text-sm);
 }
 
 /* ---- Ambient accent glows. Large, heavily blurred, very low opacity —
@@ -99,27 +107,36 @@ body > * {
 /* ---- Typography ---- */
 /* Archivo ships a weight range, so every display-face rule states its weight
    explicitly — inheriting would land on 400 and lose the display contrast. */
+/* Tracking and leading are per-level rather than shared, because Geist scales
+   both with size: the tighter the tracking, the larger the type. */
 h1, h2 {
   margin: 0;
   font-family: var(--font-display);
   font-weight: 600;
-  letter-spacing: var(--tracking-tighter);
-  line-height: var(--leading-none);
 }
 
-h1 { font-size: var(--text-4xl); }
-h2 { font-size: var(--text-3xl); }
+h1 {
+  font-size: var(--text-4xl);              /* 40px — Geist heading-40 */
+  letter-spacing: var(--tracking-tightest); /* -0.06em ~ Geist -2.4px */
+  line-height: var(--leading-tight);        /* 1.2 ~ Geist 48/40 */
+}
+
+h2 {
+  font-size: var(--text-3xl);              /* 32px — Geist heading-32 */
+  letter-spacing: var(--tracking-tighter);  /* -0.04em ~ Geist -1.28px */
+  line-height: var(--leading-tight);        /* 1.2 ~ Geist 40/32 */
+}
 
 h3, h4 {
   margin: 0;
   font-family: var(--font-body);
   font-weight: 600;
-  letter-spacing: var(--tracking-tight);
-  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);    /* -0.02em ~ Geist -0.4px at 20px */
+  line-height: var(--leading-snug);         /* 1.3 ~ Geist 26/20 */
 }
 
-h3 { font-size: var(--text-xl); }
-h4 { font-size: var(--text-lg); }
+h3 { font-size: var(--text-xl); }  /* 20px — Geist heading-20 */
+h4 { font-size: var(--text-lg); }  /* 18px */
 
 code, kbd, samp, pre {
   font-family: var(--font-mono);

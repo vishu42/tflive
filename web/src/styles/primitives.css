@@ -6,9 +6,12 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
+  /* Height comes from --control-height alone. With vertical padding the
+     min-height never binds — padding plus line-height set the height, and the
+     token becomes inert. Side padding is deliberately generous; leave it. */
   min-height: var(--control-height);
   border-radius: var(--radius-lg);
-  padding: var(--space-3) var(--space-6);
+  padding: 0 var(--space-6);
   font-family: var(--font-body);
   font-size: var(--text-sm);
   font-weight: 500;
@@ -113,15 +116,23 @@ label {
 input,
 textarea,
 select {
+  /* Fields are block-level form controls and should fill their container.
+     Without this they fall back to an intrinsic inline-block width — roughly
+     200px for text inputs and content-width for selects — which only looks
+     right where the field happens to be wrapped in a `label { display: grid }`
+     and inherits its stretch. A field placed as a sibling of its label instead
+     stays stubbornly narrow. */
+  width: 100%;
   min-height: var(--control-height);
   min-width: 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: var(--space-3) var(--space-4);
+  /* Zero vertical padding so --control-height governs; see the button rule. */
+  padding: 0 var(--space-4);
   color: var(--color-fg);
   background: var(--color-card);
   font-family: var(--font-body);
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   transition: border-color var(--duration-fast) var(--ease-out),
               box-shadow var(--duration-fast) var(--ease-out);
 }
@@ -140,7 +151,10 @@ select:focus {
 }
 
 textarea {
-  min-height: 96px;
+  min-height: var(--space-24);
+  /* Multi-line, so it opts back into vertical padding: unlike a single-line
+     input it has no centred line box to sit in, and text would touch the edge. */
+  padding: var(--space-3) var(--space-4);
   resize: vertical;
 }
 
@@ -149,7 +163,7 @@ textarea {
   min-width: 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
-  padding: var(--space-6);
+  padding: var(--space-5);
   background: var(--color-card);
   box-shadow: var(--shadow-md);
   transition: box-shadow var(--duration-lift) var(--ease-out);
@@ -157,7 +171,7 @@ textarea {
 
 @media (min-width: 768px) {
   .panel {
-    padding: var(--space-8);
+    padding: var(--space-6);
   }
 }
 
@@ -165,13 +179,20 @@ textarea {
   grid-column: 1 / -1;
 }
 
+/* Several panel headings lead with a lucide icon. JSX strips the newline
+   between the element and the label, so without an explicit gap the glyph sits
+   flush against the first letter. Flex also centres the icon against the cap
+   height instead of dropping it to the text baseline. */
 .panel h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin: 0 0 var(--space-5);
   font-family: var(--font-body);
   font-weight: 600;
   font-size: var(--text-xl);
   letter-spacing: var(--tracking-tight);
-  line-height: var(--leading-tight);
+  line-height: var(--leading-snug);
 }
 
 .panel > .secondary-button {
@@ -232,6 +253,8 @@ textarea {
 @media (min-width: 768px) {
   .page-header h1 {
     font-size: var(--text-4xl);
+    /* Tracking follows size, so it tightens with the breakpoint. */
+    letter-spacing: var(--tracking-tightest);
   }
 }
 
@@ -483,7 +506,11 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 84px;
+  /* Wide enough for the longest role label, so every badge renders at exactly
+     this width and the pills line up as a column down a list. At 84px "owner"
+     and "viewer" hit the floor while "operator" and "approver" measured 86px
+     and pushed past it, leaving the column 2px ragged. */
+  min-width: 88px;
   border-radius: var(--radius-full);
   padding: var(--space-1) var(--space-3);
   font-family: var(--font-mono);
