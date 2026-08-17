@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -65,8 +66,34 @@ func run(ctx context.Context, args []string, getenv func(string) string, modelJS
 	if _, err := fmt.Fprintf(stdout, "OPENFGA_STORE_ID=%s\nOPENFGA_MODEL_ID=%s\n", result.StoreID, result.ModelID); err != nil {
 		return fmt.Errorf("write OpenFGA environment assignments: %w", err)
 	}
+	if err := writeIdentifierFiles(getenv("OPENFGA_ID_OUTPUT_DIR"), result); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(stderr, "OpenFGA %s succeeded for explicit store and model identifiers\n", operation); err != nil {
 		return fmt.Errorf("write OpenFGA diagnostic: %w", err)
+	}
+	return nil
+}
+
+// writeIdentifierFiles hands the resolved identifiers to the API and worker
+// through a shared volume, replacing the manual copy into .env. The values are
+// identifiers rather than secrets — the same values are printed to stdout by
+// the documented workflow — so the files are world-readable.
+func writeIdentifierFiles(dir string, result openfga.Result) error {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create OpenFGA identifier directory: %w", err)
+	}
+	for name, value := range map[string]string{
+		"store_id": result.StoreID,
+		"model_id": result.ModelID,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0o644); err != nil {
+			return fmt.Errorf("write OpenFGA identifier file %s: %w", name, err)
+		}
 	}
 	return nil
 }

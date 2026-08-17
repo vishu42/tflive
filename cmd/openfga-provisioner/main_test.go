@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -131,4 +133,67 @@ func commandEnv(withIDs bool) func(string) string {
 		values["OPENFGA_MODEL_ID"] = "model-id"
 	}
 	return func(name string) string { return values[name] }
+}
+
+func TestRunWritesIdentifierFiles(t *testing.T) {
+	dir := t.TempDir()
+	getenv := func(name string) string {
+		switch name {
+		case "OPENFGA_API_URL":
+			return "http://openfga:8080"
+		case "OPENFGA_ID_OUTPUT_DIR":
+			return dir
+		default:
+			return ""
+		}
+	}
+	execute := func(context.Context, string, openfga.Config, openfga.AuthorizationModel) (openfga.Result, error) {
+		return openfga.Result{StoreID: "store-123", ModelID: "model-456"}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := run(context.Background(), []string{"bootstrap"}, getenv, openfgamodel.AuthorizationModelJSON(), execute, &stdout, &stderr); err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+
+	for path, want := range map[string]string{
+		filepath.Join(dir, "store_id"): "store-123",
+		filepath.Join(dir, "model_id"): "model-456",
+	} {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if string(contents) != want {
+			t.Fatalf("%s = %q, want %q", path, string(contents), want)
+		}
+	}
+}
+
+func TestRunWithoutOutputDirWritesNoFiles(t *testing.T) {
+	dir := t.TempDir()
+	getenv := func(name string) string {
+		if name == "OPENFGA_API_URL" {
+			return "http://openfga:8080"
+		}
+		return ""
+	}
+	execute := func(context.Context, string, openfga.Config, openfga.AuthorizationModel) (openfga.Result, error) {
+		return openfga.Result{StoreID: "store-123", ModelID: "model-456"}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := run(context.Background(), []string{"bootstrap"}, getenv, openfgamodel.AuthorizationModelJSON(), execute, &stdout, &stderr); err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("wrote %d files, want none", len(entries))
+	}
+	if !strings.Contains(stdout.String(), "OPENFGA_STORE_ID=store-123") {
+		t.Fatalf("stdout = %q, want the existing assignments", stdout.String())
+	}
 }
