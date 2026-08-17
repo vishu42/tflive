@@ -177,14 +177,22 @@ starts by default, and both retain their current configuration.
 
 ## Risks
 
-Resolution of `*.localhost` to loopback is specified by RFC 6761 and implemented
-by Chrome, Firefox, and macOS, but has historical variance across resolvers.
-This is the single assumption the identity path depends on, so it is verified
-first, before any other work in the implementation, with a documented
-`/etc/hosts` fallback if it does not hold.
-
-Keycloak's behavior when its internal and external ports match is assumed rather
-than verified; this is confirmed against 26.6.3 during the same first step.
+Verified: `tflive.localhost` resolves to `127.0.0.1` on macOS (`dscacheutil`,
+`ping`), and Keycloak 26.6.3 serves a discovery document with `issuer` and
+`jwks_uri` both on `http://tflive.localhost:8082/realms/master` when
+`KC_HTTP_PORT` and the published port are both 8082. From a sibling container
+on a Docker network with `--alias tflive.localhost` on the Keycloak container,
+a Go 1.24.1 binary built `CGO_ENABLED=0` (matching Dockerfile.api) using
+`net/http` resolved the alias via Docker's embedded DNS (`127.0.0.11`) and
+received the identical discovery document, confirming the API's actual
+resolution path works. Resolution is client-dependent, though: `curl`, on both
+musl and glibc, hardcodes `*.localhost` to loopback per its own RFC 6761
+handling and never consults the system or Docker resolver, so it fails inside
+a sibling container even though `getent`, `nslookup` against `127.0.0.11`,
+`wget`, and Go's `net/http` all resolve the alias correctly. Anyone debugging
+this stack with `curl` from inside a container will see a spurious
+connection-refused on `tflive.localhost` and should use `wget` or a language
+HTTP client instead. No `/etc/hosts` fallback is needed.
 
 First `docker compose up` compiles Go binaries and runs a Vite production build,
 so it is materially slower than subsequent runs. Published images would remove
