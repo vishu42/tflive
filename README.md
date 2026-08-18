@@ -82,6 +82,20 @@ docker compose --profile debug up -d   # Temporal UI on http://localhost:8080
 ```
 
 
+### Stopping the stack
+
+Name both files, or the application services are left running:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.app.yaml down
+```
+
+A plain `docker compose down` only sees the services `docker-compose.yaml`
+declares, so it stops the infrastructure and leaves `api`, `worker` and `web`
+up. `docker compose down --remove-orphans` also works — from the base file
+those three are orphans of the same project — but naming both files is the
+clearer habit, and it matches the form the upgrade steps use.
+
 ### Upgrading an existing checkout
 
 The four Postgres instances are now one server hosting five databases. Its init
