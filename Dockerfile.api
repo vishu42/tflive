@@ -10,7 +10,9 @@ FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates \
     && addgroup -S tflive \
-    && adduser -S -D -H -G tflive tflive
+    && adduser -S -D -H -G tflive tflive \
+    && mkdir -p /var/lib/tflive/artifacts \
+    && chown -R tflive:tflive /var/lib/tflive
 COPY --from=build /out/tflive-api /usr/local/bin/tflive-api
 
 USER tflive

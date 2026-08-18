@@ -12,12 +12,19 @@ ARG OPENTOFU_VERSION=1.12.5
 ARG TARGETARCH
 
 RUN apk add --no-cache ca-certificates git \
-    && wget -qO /tmp/tofu.tar.gz \
+    && wget -O "/tmp/tofu_${OPENTOFU_VERSION}_linux_${TARGETARCH}.tar.gz" \
         "https://github.com/opentofu/opentofu/releases/download/v${OPENTOFU_VERSION}/tofu_${OPENTOFU_VERSION}_linux_${TARGETARCH}.tar.gz" \
-    && tar -xzf /tmp/tofu.tar.gz -C /usr/local/bin tofu \
-    && rm /tmp/tofu.tar.gz \
+    && wget -O "/tmp/tofu_${OPENTOFU_VERSION}_SHA256SUMS" \
+        "https://github.com/opentofu/opentofu/releases/download/v${OPENTOFU_VERSION}/tofu_${OPENTOFU_VERSION}_SHA256SUMS" \
+    && cd /tmp \
+    && grep -F "  tofu_${OPENTOFU_VERSION}_linux_${TARGETARCH}.tar.gz" "tofu_${OPENTOFU_VERSION}_SHA256SUMS" | sha256sum -c - \
+    && tar -xzf "tofu_${OPENTOFU_VERSION}_linux_${TARGETARCH}.tar.gz" -C /usr/local/bin tofu \
+    && rm -f "tofu_${OPENTOFU_VERSION}_linux_${TARGETARCH}.tar.gz" "tofu_${OPENTOFU_VERSION}_SHA256SUMS" \
+    && cd / \
     && addgroup -S tflive \
-    && adduser -S -D -H -G tflive tflive
+    && adduser -S -D -H -G tflive tflive \
+    && mkdir -p /var/lib/tflive/artifacts /var/lib/tflive/runs \
+    && chown -R tflive:tflive /var/lib/tflive
 COPY --from=build /out/tflive-worker /usr/local/bin/tflive-worker
 
 USER tflive
