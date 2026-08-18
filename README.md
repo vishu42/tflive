@@ -55,6 +55,18 @@ docker compose down -v
 docker compose up
 ```
 
+If you keep a `.env`, update two values in it to match `.env.example`:
+
+```bash
+OIDC_ISSUER_URL=http://tflive.localhost:8082/realms/tflive
+KEYCLOAK_ADMIN_URL=http://keycloak:8082
+```
+
+Keycloak now advertises the `tflive.localhost` issuer however it is reached, and
+the API compares the discovery document's issuer to `OIDC_ISSUER_URL` exactly. A
+stale `localhost:8082` value fails that check at startup rather than at sign-in,
+which is easy to misread as Keycloak being down.
+
 ## Developing against the stack
 
 Run the API, worker, and UI on the host against the containerised dependencies.
