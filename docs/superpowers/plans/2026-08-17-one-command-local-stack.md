@@ -14,7 +14,7 @@
 
 - Go floor is `go 1.24.0` with `toolchain go1.24.1` (`go.mod`). Do not raise either.
 - Pinned images, unchanged from the current compose file: `postgres:16-alpine`, `quay.io/keycloak/keycloak:26.6.3`, `openfga/openfga:v1.15.1`, `temporalio/auto-setup:1.28.1`, `temporalio/ui:2.49.1`.
-- The canonical issuer string is `http://tflive.localhost:8082/realms/tflive`. It must be byte-identical everywhere it appears: `OIDC_ISSUER_URL`, `VITE_OIDC_ISSUER`, and Keycloak's `KC_HOSTNAME` origin.
+- The canonical issuer string is `http://keycloak.localhost:8082/realms/tflive`. It must be byte-identical everywhere it appears: `OIDC_ISSUER_URL`, `VITE_OIDC_ISSUER`, and Keycloak's `KC_HOSTNAME` origin.
 - Keycloak's internal and external ports must both be `8082`, because the port is part of the issuer string.
 - No change to `internal/authn`. The issuer equality check at `internal/authn/oidc_provider.go:65` stays exactly as it is.
 - OpenFGA store and model identifiers are **not secrets** — they are already printed to stdout by the current documented workflow. Identifier files are mode `0644`.
@@ -34,17 +34,17 @@ deliverable is a go/no-go recorded in the spec.
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: a confirmed or rejected `tflive.localhost` alias scheme. Every later task assumes it holds.
+- Produces: a confirmed or rejected `keycloak.localhost` alias scheme. Every later task assumes it holds.
 
 - [ ] **Step 1: Confirm `*.localhost` resolves to loopback on this machine**
 
 ```bash
-dscacheutil -q host -a name tflive.localhost
-ping -c 1 tflive.localhost
+dscacheutil -q host -a name keycloak.localhost
+ping -c 1 keycloak.localhost
 ```
 
 Expected: resolves to `127.0.0.1`. If it does not resolve, the fallback is a
-`/etc/hosts` line (`127.0.0.1 tflive.localhost`), which must then be documented
+`/etc/hosts` line (`127.0.0.1 keycloak.localhost`), which must then be documented
 as a prerequisite in Task 8 — that materially weakens "one command", so record
 it explicitly.
 
@@ -55,23 +55,23 @@ docker run --rm -d --name kc-probe -p 8082:8082 \
   -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
   -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
   -e KC_HTTP_PORT=8082 \
-  -e KC_HOSTNAME=http://tflive.localhost:8082 \
+  -e KC_HOSTNAME=http://keycloak.localhost:8082 \
   quay.io/keycloak/keycloak:26.6.3 start-dev
 sleep 25
-curl -s http://tflive.localhost:8082/realms/master/.well-known/openid-configuration | head -c 400
+curl -s http://keycloak.localhost:8082/realms/master/.well-known/openid-configuration | head -c 400
 ```
 
 Expected: a discovery document whose `issuer` is exactly
-`http://tflive.localhost:8082/realms/master`, and whose `jwks_uri` is on the
+`http://keycloak.localhost:8082/realms/master`, and whose `jwks_uri` is on the
 same origin.
 
 - [ ] **Step 3: Confirm the same name resolves from inside a sibling container**
 
 ```bash
 docker network create kc-probe-net
-docker network connect --alias tflive.localhost kc-probe-net kc-probe
+docker network connect --alias keycloak.localhost kc-probe-net kc-probe
 docker run --rm --network kc-probe-net alpine:3.21 \
-  sh -c "apk add --no-cache curl >/dev/null && curl -s http://tflive.localhost:8082/realms/master/.well-known/openid-configuration | head -c 200"
+  sh -c "apk add --no-cache curl >/dev/null && curl -s http://keycloak.localhost:8082/realms/master/.well-known/openid-configuration | head -c 200"
 ```
 
 Expected: the same discovery document, fetched by container name resolution.
@@ -93,7 +93,7 @@ redesigning and the remaining tasks rest on it.
 
 ```bash
 git add docs/superpowers/specs/2026-08-17-one-command-local-stack-design.md
-git commit -m "docs: verify tflive.localhost issuer resolution assumptions"
+git commit -m "docs: verify keycloak.localhost issuer resolution assumptions"
 ```
 
 ---
@@ -751,7 +751,7 @@ runtime environment.
 ```dockerfile
 FROM node:22-alpine3.21 AS build
 
-ARG VITE_OIDC_ISSUER=http://tflive.localhost:8082/realms/tflive
+ARG VITE_OIDC_ISSUER=http://keycloak.localhost:8082/realms/tflive
 ARG VITE_OIDC_CLIENT_ID=tflive-web
 ARG VITE_OIDC_REDIRECT_URI=http://localhost:5173/auth/callback
 ARG VITE_TFLIVE_TENANT_ID=tenant_123
@@ -856,7 +856,7 @@ and network alias:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-tflive-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD:-tflive-admin-local-only}
       KC_HTTP_PORT: "8082"
-      KC_HOSTNAME: http://tflive.localhost:8082
+      KC_HOSTNAME: http://keycloak.localhost:8082
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
     ports:
@@ -864,11 +864,11 @@ and network alias:
     networks:
       default:
         aliases:
-          - tflive.localhost
+          - keycloak.localhost
 ```
 
 The published and internal ports must both be `8082`: the browser reaches
-`tflive.localhost:8082` through the published port, `api` reaches the same name
+`keycloak.localhost:8082` through the published port, `api` reaches the same name
 through the Docker DNS alias, and the port is part of the issuer string that
 `internal/authn/oidc_provider.go:65` compares byte-for-byte.
 
@@ -899,7 +899,7 @@ unaffected by `KC_HTTP_PORT`. Leave it as it is.
       TFLIVE_ENVIRONMENT: development
       TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?set CREDENTIAL_ENCRYPTION_KEY}
-      OIDC_ISSUER_URL: http://tflive.localhost:8082/realms/tflive
+      OIDC_ISSUER_URL: http://keycloak.localhost:8082/realms/tflive
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-tflive-api}
       OPENFGA_API_URL: http://openfga:8080
       OPENFGA_STORE_ID_FILE: /run/openfga/store_id
@@ -930,7 +930,7 @@ unaffected by `KC_HTTP_PORT`. Leave it as it is.
       TFLIVE_ENVIRONMENT: development
       TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?set CREDENTIAL_ENCRYPTION_KEY}
-      OIDC_ISSUER_URL: http://tflive.localhost:8082/realms/tflive
+      OIDC_ISSUER_URL: http://keycloak.localhost:8082/realms/tflive
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-tflive-api}
       OPENFGA_API_URL: http://openfga:8080
       OPENFGA_STORE_ID_FILE: /run/openfga/store_id
@@ -977,12 +977,12 @@ started.
 
 ```bash
 curl -s http://localhost:8081/healthz
-curl -s http://tflive.localhost:8082/realms/tflive/.well-known/openid-configuration | head -c 200
+curl -s http://keycloak.localhost:8082/realms/tflive/.well-known/openid-configuration | head -c 200
 docker compose --env-file .env.example logs api | grep -i "openfga\|error" | head
 ```
 
 Expected: the API is healthy; the discovery document's `issuer` is exactly
-`http://tflive.localhost:8082/realms/tflive`; the API logs show no OpenFGA
+`http://keycloak.localhost:8082/realms/tflive`; the API logs show no OpenFGA
 configuration error, proving the file handoff worked.
 
 Then open `http://localhost:5173`, log in as the platform admin from
@@ -1030,7 +1030,7 @@ docker compose up
 ```
 
 The UI is at `http://localhost:5173`, the API at `http://localhost:8081`, and
-Keycloak at `http://tflive.localhost:8082`. Sign in with the platform
+Keycloak at `http://keycloak.localhost:8082`. Sign in with the platform
 administrator credentials in `.env.example`.
 
 Optional profiles:

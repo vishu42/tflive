@@ -121,15 +121,15 @@ that document. One issuer string must therefore be resolvable from the browser
 and from inside the `api` container, and must match what Keycloak advertises.
 `localhost:8082` satisfies the browser and Keycloak but not the container.
 
-Keycloak is configured with `KC_HOSTNAME=http://tflive.localhost:8082`,
+Keycloak is configured with `KC_HOSTNAME=http://keycloak.localhost:8082`,
 `KC_HTTP_PORT=8082`, a published mapping of `8082:8082`, and a Docker network
-alias of `tflive.localhost`. The browser resolves `tflive.localhost` to loopback
+alias of `keycloak.localhost`. The browser resolves `keycloak.localhost` to loopback
 and reaches the published port; `api` resolves the same name through Docker DNS
 and reaches the container directly. Matching the internal and external port is
 required because the port is part of the issuer string.
 
 `VITE_OIDC_ISSUER` and `OIDC_ISSUER_URL` are both set to
-`http://tflive.localhost:8082/realms/tflive`. `KEYCLOAK_WEB_REDIRECT_URIS` and
+`http://keycloak.localhost:8082/realms/tflive`. `KEYCLOAK_WEB_REDIRECT_URIS` and
 `KEYCLOAK_WEB_ORIGINS` continue to name the browser origin of the `web`
 service.
 
@@ -177,11 +177,11 @@ starts by default, and both retain their current configuration.
 
 ## Risks
 
-Verified: `tflive.localhost` resolves to `127.0.0.1` on macOS (`dscacheutil`,
+Verified: `keycloak.localhost` resolves to `127.0.0.1` on macOS (`dscacheutil`,
 `ping`), and Keycloak 26.6.3 serves a discovery document with `issuer` and
-`jwks_uri` both on the `http://tflive.localhost:8082` origin when
+`jwks_uri` both on the `http://keycloak.localhost:8082` origin when
 `KC_HTTP_PORT` and the published port are both 8082. From a sibling container
-on a Docker network with `--alias tflive.localhost` on the Keycloak container,
+on a Docker network with `--alias keycloak.localhost` on the Keycloak container,
 a Go 1.24.1 binary using `net/http`, built `CGO_ENABLED=0` — the build the api
 image will use — resolved the alias and received the identical discovery
 document, confirming the API's actual resolution path works; a separate
@@ -194,7 +194,7 @@ consults the system or Docker resolver, so it fails inside a sibling container
 even though `getent`, `nslookup` against `127.0.0.11`, `wget`, and Go's
 `net/http` all resolve the alias correctly. Anyone debugging this stack with
 `curl` from inside a container will see a spurious connection-refused on
-`tflive.localhost` and should use `wget` or a language HTTP client instead. No
+`keycloak.localhost` and should use `wget` or a language HTTP client instead. No
 `/etc/hosts` fallback is needed.
 
 First `docker compose up` compiles Go binaries and runs a Vite production build,

@@ -50,7 +50,7 @@ function envValue(name) {
 for (const [name, value] of Object.entries({
   TFLIVE_ENVIRONMENT: "development",
   TFLIVE_TENANT_ID: "tenant_123",
-  OIDC_ISSUER_URL: "http://tflive.localhost:8082/realms/tflive",
+  OIDC_ISSUER_URL: "http://keycloak.localhost:8082/realms/tflive",
   OIDC_AUDIENCE: "tflive-api",
   OPENFGA_API_URL: "http://localhost:8083",
   OPENFGA_STORE_ID: "",
@@ -94,10 +94,10 @@ assert.equal(keycloakProvision.build?.dockerfile, "Dockerfile.keycloak-provision
 assert.deepEqual(keycloakProvision.ports ?? [], []);
 assert.equal(keycloakProvision.environment?.KEYCLOAK_ADMIN_URL, "http://keycloak:8082");
 assert.equal(keycloak.environment?.KC_HTTP_PORT, "8082");
-assert.equal(keycloak.environment?.KC_HOSTNAME, "http://tflive.localhost:8082");
+assert.equal(keycloak.environment?.KC_HOSTNAME, "http://keycloak.localhost:8082");
 assert.ok(
-  keycloak.networks?.default?.aliases?.includes("tflive.localhost"),
-  "keycloak needs the tflive.localhost alias so one issuer string resolves from both sides",
+  keycloak.networks?.default?.aliases?.includes("keycloak.localhost"),
+  "keycloak needs the keycloak.localhost alias so one issuer string resolves from both sides",
 );
 assert.equal(
   keycloakProvision.environment?.KEYCLOAK_WEB_REDIRECT_URIS,

@@ -42,7 +42,7 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-tflive-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD:-tflive-admin-local-only}
       KC_HTTP_PORT: "8082"
-      KC_HOSTNAME: http://tflive.localhost:8082
+      KC_HOSTNAME: http://keycloak.localhost:8082
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
     ports:
@@ -50,7 +50,7 @@ services:
     networks:
       default:
         aliases:
-          - tflive.localhost
+          - keycloak.localhost
     healthcheck:
       test:
         - CMD-SHELL

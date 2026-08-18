@@ -7,7 +7,7 @@ trust model and authorization invariants remain in the
 
 ## Local Realm
 
-Docker Compose runs Keycloak 26.6.3 at `http://tflive.localhost:8082` and executes the
+Docker Compose runs Keycloak 26.6.3 at `http://keycloak.localhost:8082` and executes the
 `keycloak-provision` one-shot service after Keycloak reports healthy. The
 service reconciles named resources through the Keycloak Admin REST API and
 exits non-zero if any operation or effective-token postcondition fails.
@@ -15,7 +15,7 @@ exits non-zero if any operation or effective-token postcondition fails.
 The local issuer is:
 
 ```text
-http://tflive.localhost:8082/realms/tflive
+http://keycloak.localhost:8082/realms/tflive
 ```
 
 The realm has a 300-second access-token lifespan, is enabled, does not permit
@@ -85,7 +85,7 @@ Two different identities serve different purposes:
    `manage-users`, and `view-realm`.
 
 The tflive administrator can use the dedicated console at
-`http://tflive.localhost:8082/admin/tflive/console/` to find and manage tflive users
+`http://keycloak.localhost:8082/admin/tflive/console/` to find and manage tflive users
 and assign the fixed global roles. It does not receive the broad `realm-admin`
 composite and cannot administer the master realm.
 

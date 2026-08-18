@@ -6,7 +6,7 @@ const getOidcConfig = () => {
     : `${origin}/auth/callback`;
 
   return {
-    authority: import.meta.env.VITE_OIDC_ISSUER ?? "http://tflive.localhost:8082/realms/tflive",
+    authority: import.meta.env.VITE_OIDC_ISSUER ?? "http://keycloak.localhost:8082/realms/tflive",
     client_id: import.meta.env.VITE_OIDC_CLIENT_ID ?? "tflive-web",
     redirect_uri: redirectUri,
     post_logout_redirect_uri: redirectUri,

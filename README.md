@@ -47,7 +47,7 @@ docker compose -f docker-compose.yaml -f docker-compose.app.yaml up -d
 ```
 
 The UI is at `http://localhost:5173`, the API at `http://localhost:8081`, and
-Keycloak at `http://tflive.localhost:8082`. Sign in with the platform
+Keycloak at `http://keycloak.localhost:8082`. Sign in with the platform
 administrator credentials in `.env.example`.
 
 The application phase refuses to start until both identifiers are set, naming
@@ -99,11 +99,11 @@ docker compose -f docker-compose.yaml -f docker-compose.app.yaml up -d
 If you keep a `.env`, update two values in it to match `.env.example`:
 
 ```bash
-OIDC_ISSUER_URL=http://tflive.localhost:8082/realms/tflive
+OIDC_ISSUER_URL=http://keycloak.localhost:8082/realms/tflive
 KEYCLOAK_ADMIN_URL=http://keycloak:8082
 ```
 
-Keycloak now advertises the `tflive.localhost` issuer however it is reached, and
+Keycloak now advertises the `keycloak.localhost` issuer however it is reached, and
 the API compares the discovery document's issuer to `OIDC_ISSUER_URL` exactly. A
 stale `localhost:8082` value fails that check at startup rather than at sign-in,
 which is easy to misread as Keycloak being down.
@@ -157,7 +157,7 @@ The Vite dev server proxies `/v1/*` and `/healthz` to the Go API. It binds port
 `5173`, the same port as the `web` container, so run one or the other rather
 than both.
 
-Keycloak is reached at `http://tflive.localhost:8082`. That hostname resolves to
+Keycloak is reached at `http://keycloak.localhost:8082`. That hostname resolves to
 loopback in the browser and to the container through Docker's DNS, which is what
 lets one issuer string satisfy both. Note that `curl` resolves `*.localhost` to
 its own loopback and ignores the Docker alias, so a `curl` test from inside a

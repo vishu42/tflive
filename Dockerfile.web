@@ -1,6 +1,6 @@
 FROM node:22-alpine3.21 AS build
 
-ARG VITE_OIDC_ISSUER=http://tflive.localhost:8082/realms/tflive
+ARG VITE_OIDC_ISSUER=http://keycloak.localhost:8082/realms/tflive
 ARG VITE_OIDC_CLIENT_ID=tflive-web
 ARG VITE_OIDC_REDIRECT_URI=http://localhost:5173/auth/callback
 ARG VITE_TFLIVE_TENANT_ID=tenant_123
