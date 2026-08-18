@@ -303,7 +303,8 @@ allowed operation or an unfiltered list.
 
 ### Provisioning and Verification
 
-`docker compose up` provisions OpenFGA automatically. The `openfga-provision`
+`docker compose up` provisions OpenFGA automatically, before the application
+is started by the `docker-compose.app.yaml` overlay. The `openfga-provision`
 one-shot runs `bootstrap`, which reuses a store whose name already matches and
 reuses a semantically equal authorization model, creating either only when
 absent, so repeated runs converge rather than duplicating.

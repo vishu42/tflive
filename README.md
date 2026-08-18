@@ -23,24 +23,70 @@ Template-run creation atomically commits the run and workflow-start intent in Po
 
 Requires Docker. No Go or Node toolchain, and no `.env`.
 
+Infrastructure first, then the application:
+
 ```bash
-docker compose up
+docker compose up -d
+docker compose -f docker-compose.yaml -f docker-compose.app.yaml up -d
 ```
 
 The UI is at `http://localhost:5173`, the API at `http://localhost:8081`, and
 Keycloak at `http://tflive.localhost:8082`. Sign in with the platform
 administrator credentials in `.env.example`.
 
+The split is deliberate. `docker-compose.yaml` brings up Postgres, Keycloak,
+OpenFGA and Temporal and provisions them; `docker-compose.app.yaml` adds the
+API, worker and UI on top. Keeping them apart means the authorization store and
+model can be provisioned, inspected and recorded before anything runs against
+them, rather than the application adopting whatever a bootstrap happened to
+produce. The second command names both files so the two merge into one project,
+which is what preserves the startup ordering between them.
+
 First run builds the Go binaries and the Vite bundle, so it takes a few minutes;
-later runs are cached. Provisioning is automatic and converges when re-run, so
-`docker compose up` is safe to repeat.
+later runs are cached. Provisioning converges when re-run, so both commands are
+safe to repeat.
 
 Optional profiles, neither started by default:
 
 ```bash
-docker compose --profile s3 up     # MinIO, for the S3 artifact adapter
-docker compose --profile debug up  # Temporal UI on http://localhost:8080
+docker compose --profile s3 up -d      # MinIO, for the S3 artifact adapter
+docker compose --profile debug up -d   # Temporal UI on http://localhost:8080
 ```
+
+### Pinning the OpenFGA identifiers
+
+By default the provisioner writes the store and model IDs to a volume the API
+and worker read, so the two commands above need nothing in between. To choose
+them deliberately instead, read them after the first command:
+
+```bash
+docker compose logs openfga-provision
+```
+
+It prints exactly two assignments:
+
+```text
+OPENFGA_STORE_ID=<store ID>
+OPENFGA_MODEL_ID=<authorization model ID>
+```
+
+Copy those into `.env` as text — do not execute the output — then run the second
+command. A value in `.env` takes precedence over the file, so the application
+runs against exactly the pair you recorded. Confirm it against the live store
+first, which never mutates anything:
+
+```bash
+docker compose run --rm openfga-provision verify
+```
+
+Either way the identifiers are pinned rather than discovered, so nothing
+silently authorizes against a store you did not choose. Note that the API does
+not check the pair at startup — it starts, and authorization then fails closed
+at request time. `verify` is what catches a wrong or stale pair up front, which
+is why it is worth running before the second command.
+
+Run only one bootstrap at a time. OpenFGA store names are not unique, and
+bootstrap fails closed if the `tflive` name is ambiguous.
 
 ### Upgrading an existing checkout
 
@@ -51,8 +97,9 @@ development data — the app database, the provisioned realm, the OpenFGA store,
 and Temporal history.** All of it is rebuilt automatically on the next start.
 
 ```bash
-docker compose down -v
-docker compose up
+docker compose -f docker-compose.yaml -f docker-compose.app.yaml down -v
+docker compose up -d
+docker compose -f docker-compose.yaml -f docker-compose.app.yaml up -d
 ```
 
 If you keep a `.env`, update two values in it to match `.env.example`:
@@ -66,6 +113,7 @@ Keycloak now advertises the `tflive.localhost` issuer however it is reached, and
 the API compares the discovery document's issuer to `OIDC_ISSUER_URL` exactly. A
 stale `localhost:8082` value fails that check at startup rather than at sign-in,
 which is easy to misread as Keycloak being down.
+
 
 ## Developing against the stack
 

@@ -9,11 +9,24 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rendered = execFileSync(
   "docker",
-  ["compose", "--env-file", ".env.example", "config", "--format", "json"],
+  [
+    "compose",
+    "--env-file",
+    ".env.example",
+    "-f",
+    "docker-compose.yaml",
+    "-f",
+    "docker-compose.app.yaml",
+    "config",
+    "--format",
+    "json",
+  ],
   { cwd: root, encoding: "utf8" },
 );
 const config = JSON.parse(rendered);
-const source = readFileSync(resolve(root, "docker-compose.yaml"), "utf8");
+const source =
+  readFileSync(resolve(root, "docker-compose.yaml"), "utf8") +
+  readFileSync(resolve(root, "docker-compose.app.yaml"), "utf8");
 const envExample = readFileSync(resolve(root, ".env.example"), "utf8");
 
 function envValue(name) {

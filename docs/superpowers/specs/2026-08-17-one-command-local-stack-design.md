@@ -25,9 +25,13 @@ startup, so no separate migration step is required.
 
 ## Architecture
 
-Compose builds and runs the full product: one Postgres server hosting every
-component database, Keycloak, OpenFGA, Temporal, and the `api`, `worker`, and
-`web` services built from source in this repository. Provisioning runs as
+Compose builds and runs the full product across two files. `docker-compose.yaml`
+holds one Postgres server hosting every component database, Keycloak, OpenFGA,
+Temporal, and the provisioners; `docker-compose.app.yaml` overlays the `api`,
+`worker`, and `web` services built from source in this repository. The split
+lets the authorization store and model be provisioned and recorded before
+anything runs against them; the application phase names both files so they merge
+into one project and the startup ordering between them survives. Provisioning runs as
 one-shot services that exit zero before dependents start. OpenFGA identifiers
 move from a human copy-paste step to a file on a shared volume. Artifact storage
 defaults to the filesystem backend on a volume shared by `api` and `worker`,
