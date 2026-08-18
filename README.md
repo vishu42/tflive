@@ -11,6 +11,40 @@ a team. Register a module once, and anyone with access can stand up their own
 copy of it from a web UI — with their own variables, their own credentials, and
 a full history of every change.
 
+## Demo
+
+[![Watch the tflive demo](https://img.youtube.com/vi/2oFE764dnIs/maxresdefault.jpg)](https://youtu.be/2oFE764dnIs)
+
+## Screenshots
+
+**Stacks.** Everything a team has running, in one list.
+
+![The stacks list](docs/ss/stacks-list.png)
+
+**Templates and runs.** The templates a stack is built from, the plan and apply
+controls, and the input variables for this stack — on one screen.
+
+![A stack's template tab, showing runs and variables](docs/ss/stack-template-and-runs.png)
+
+**Runs and logs.** Every run keeps its status, its timings, and the full
+`init`, `plan` and `workspace` output.
+
+![A completed plan run with its logs](docs/ss/run-logs.png)
+
+**Credentials.** Cloud credentials are write-only and injected only while
+Terraform runs.
+
+![The environment credentials tab](docs/ss/environment-credentials.png)
+
+**Access.** Grant people a role on the stacks they need, not on everything.
+
+![The stack access tab, showing grants and role assignment](docs/ss/stack-access.png)
+
+**History, and a way out.** Past runs stay linked, and destroying is an
+explicit, guarded action.
+
+![Run history and the destroy danger zone](docs/ss/run-history-and-destroy.png)
+
 ## What you can do
 
 - **Register templates.** Point tflive at a Git repository and a revision. That
