@@ -1,0 +1,20 @@
+FROM golang:1.24.1-alpine3.21 AS build
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/tflive-api ./cmd/api
+
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S tflive \
+    && adduser -S -D -H -G tflive tflive \
+    && mkdir -p /var/lib/tflive/artifacts \
+    && chown -R tflive:tflive /var/lib/tflive
+COPY --from=build /out/tflive-api /usr/local/bin/tflive-api
+
+USER tflive
+EXPOSE 8081
+ENTRYPOINT ["/usr/local/bin/tflive-api"]

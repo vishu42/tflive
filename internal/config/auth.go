@@ -25,11 +25,11 @@ type SecurityConfig struct {
 	OIDC     OIDCConfig
 	OpenFGA  OpenFGAConfig
 
-	KeycloakAdminURL             *url.URL
-	KeycloakRealm                string
-	DirectoryReaderClientID      string
-	DirectoryReaderClientSecret  Secret
-	DirectoryReaderHTTPTimeout   time.Duration
+	KeycloakAdminURL            *url.URL
+	KeycloakRealm               string
+	DirectoryReaderClientID     string
+	DirectoryReaderClientSecret Secret
+	DirectoryReaderHTTPTimeout  time.Duration
 }
 
 type OIDCConfig struct {

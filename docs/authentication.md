@@ -7,7 +7,7 @@ trust model and authorization invariants remain in the
 
 ## Local Realm
 
-Docker Compose runs Keycloak 26.6.3 at `http://localhost:8082` and executes the
+Docker Compose runs Keycloak 26.6.3 at `http://keycloak.localhost:8082` and executes the
 `keycloak-provision` one-shot service after Keycloak reports healthy. The
 service reconciles named resources through the Keycloak Admin REST API and
 exits non-zero if any operation or effective-token postcondition fails.
@@ -15,7 +15,7 @@ exits non-zero if any operation or effective-token postcondition fails.
 The local issuer is:
 
 ```text
-http://localhost:8082/realms/tflive
+http://keycloak.localhost:8082/realms/tflive
 ```
 
 The realm has a 300-second access-token lifespan, is enabled, does not permit
@@ -35,8 +35,8 @@ The local browser allowlist contains exact entries only:
 
 ```text
 Redirect URIs:
-  http://localhost:5173/
-  http://127.0.0.1:5173/
+  http://localhost:5173/auth/callback
+  http://127.0.0.1:5173/auth/callback
 
 Web origins:
   http://localhost:5173
@@ -85,7 +85,7 @@ Two different identities serve different purposes:
    `manage-users`, and `view-realm`.
 
 The tflive administrator can use the dedicated console at
-`http://localhost:8082/admin/tflive/console/` to find and manage tflive users
+`http://keycloak.localhost:8082/admin/tflive/console/` to find and manage tflive users
 and assign the fixed global roles. It does not receive the broad `realm-admin`
 composite and cannot administer the master realm.
 
@@ -303,14 +303,25 @@ allowed operation or an unfiltered list.
 
 ### Provisioning and Verification
 
-On a clean checkout, initialize OpenFGA with the two-phase workflow:
+`docker compose up` provisions OpenFGA as part of the infrastructure phase. The
+`openfga-provision` one-shot runs `bootstrap`, which reuses a store whose name
+already matches and reuses a semantically equal authorization model, creating
+either only when absent, so repeated runs converge rather than duplicating.
+
+Bootstrap prints the resolved identifiers to stdout. Copy both into `.env` before
+starting the application phase, which refuses to start without them. The
+identifiers are therefore always exact and pinned: nothing discovers a store by
+name at runtime, and nothing resolves "the latest model".
 
 ```bash
-docker compose --env-file .env.example up -d openfga-postgres openfga-migrate openfga
-docker compose --env-file .env.example run --rm openfga-provision bootstrap
-# Copy OPENFGA_STORE_ID and OPENFGA_MODEL_ID from stdout into .env.
+docker compose up -d
+docker compose logs openfga-provision
+# Copy OPENFGA_STORE_ID and OPENFGA_MODEL_ID into .env.
 docker compose run --rm openfga-provision verify
 ```
+
+`verify` reads the exact pair from `.env` and checks it against the live store
+and model without mutating either.
 
 The provisioner's standard output contains only these two assignments:
 

@@ -1,0 +1,89 @@
+# Application overlay for the local stack. Merged onto docker-compose.yaml:
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.app.yaml up -d
+#
+# Kept separate so infrastructure can be brought up and provisioned first,
+# letting you record the OpenFGA identifiers deliberately rather than having
+# the application adopt whatever a bootstrap produced. See README.md.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      keycloak-provision:
+        condition: service_completed_successfully
+      openfga-provision:
+        condition: service_completed_successfully
+    environment:
+      HTTP_ADDRESS: ":8081"
+      KEYCLOAK_ADMIN_URL: http://keycloak:8082
+      KEYCLOAK_REALM: tflive
+      KEYCLOAK_DIRECTORY_READER_CLIENT_ID: ${KEYCLOAK_DIRECTORY_READER_CLIENT_ID:-tflive-directory-reader}
+      KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET: ${KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET:-somerandsomesecret}
+      DATABASE_URL: postgres://${APP_DB_USER:-tflive}:${APP_DB_PASSWORD:-tflive}@postgres:5432/${APP_DB_NAME:-tflive_test}?sslmode=disable
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-terraform-runs}
+      TFLIVE_ENVIRONMENT: development
+      TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3}
+      OIDC_ISSUER_URL: http://keycloak.localhost:8082/realms/tflive
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-tflive-api}
+      OPENFGA_API_URL: http://openfga:8080
+      # Recorded from the provisioning phase. See "Pinning the OpenFGA
+      # identifiers" in README.md.
+      OPENFGA_STORE_ID: ${OPENFGA_STORE_ID:?run the provisioning phase first and copy OPENFGA_STORE_ID into .env}
+      OPENFGA_MODEL_ID: ${OPENFGA_MODEL_ID:?run the provisioning phase first and copy OPENFGA_MODEL_ID into .env}
+      ARTIFACT_STORE_KIND: filesystem
+      ARTIFACT_STORE_FILESYSTEM_ROOT: /var/lib/tflive/artifacts
+    restart: on-failure
+    ports:
+      - "8081:8081"
+    volumes:
+      - artifacts:/var/lib/tflive/artifacts
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      openfga-provision:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://${APP_DB_USER:-tflive}:${APP_DB_PASSWORD:-tflive}@postgres:5432/${APP_DB_NAME:-tflive_test}?sslmode=disable
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-terraform-runs}
+      TFLIVE_ENVIRONMENT: development
+      TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3}
+      OIDC_ISSUER_URL: http://keycloak.localhost:8082/realms/tflive
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-tflive-api}
+      OPENFGA_API_URL: http://openfga:8080
+      # Recorded from the provisioning phase. See "Pinning the OpenFGA
+      # identifiers" in README.md.
+      OPENFGA_STORE_ID: ${OPENFGA_STORE_ID:?run the provisioning phase first and copy OPENFGA_STORE_ID into .env}
+      OPENFGA_MODEL_ID: ${OPENFGA_MODEL_ID:?run the provisioning phase first and copy OPENFGA_MODEL_ID into .env}
+      ARTIFACT_STORE_KIND: filesystem
+      ARTIFACT_STORE_FILESYSTEM_ROOT: /var/lib/tflive/artifacts
+      WORKER_RUN_ROOT: /var/lib/tflive/runs
+    restart: on-failure
+    volumes:
+      - artifacts:/var/lib/tflive/artifacts
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    depends_on:
+      - api
+    restart: on-failure
+    ports:
+      - "5173:5173"

@@ -1,0 +1,15 @@
+.git
+.env
+node_modules
+web/node_modules
+web/dist
+tmp
+api
+keycloak-provisioner
+.worktrees
+docs
+.superpowers
+.claude
+**/.npmrc
+backlog.txt
+issues.txt
