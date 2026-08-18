@@ -28,7 +28,7 @@ function envValue(name) {
 for (const [name, value] of Object.entries({
   TFLIVE_ENVIRONMENT: "development",
   TFLIVE_TENANT_ID: "tenant_123",
-  OIDC_ISSUER_URL: "http://localhost:8082/realms/tflive",
+  OIDC_ISSUER_URL: "http://tflive.localhost:8082/realms/tflive",
   OIDC_AUDIENCE: "tflive-api",
   OPENFGA_API_URL: "http://localhost:8080",
   OPENFGA_STORE_ID: "",
@@ -51,38 +51,41 @@ function hasVolume(value, sourceName) {
   );
 }
 
-const keycloakPostgres = service("keycloak-postgres");
+const postgres = service("postgres");
 const keycloak = service("keycloak");
 const keycloakProvision = service("keycloak-provision");
-const openfgaPostgres = service("openfga-postgres");
 const openfgaMigrate = service("openfga-migrate");
 const openfga = service("openfga");
 const openfgaProvision = service("openfga-provision");
 
-assert.equal(keycloakPostgres.image, "postgres:16-alpine");
+assert.equal(postgres.image, "postgres:16-alpine");
 assert.equal(keycloak.image, "quay.io/keycloak/keycloak:26.6.3");
-assert.equal(openfgaPostgres.image, "postgres:16-alpine");
 assert.equal(openfgaMigrate.image, "openfga/openfga:v1.15.1");
 assert.equal(openfga.image, "openfga/openfga:v1.15.1");
 
-assert.ok(keycloakPostgres.healthcheck, "Keycloak Postgres needs a health check");
+assert.ok(postgres.healthcheck, "the shared Postgres needs a health check");
 assert.ok(keycloak.healthcheck?.test?.join(" ").includes("/health/ready"));
-assert.equal(keycloak.depends_on?.["keycloak-postgres"]?.condition, "service_healthy");
+assert.equal(keycloak.depends_on?.postgres?.condition, "service_healthy");
 assert.equal(keycloakProvision.depends_on?.keycloak?.condition, "service_healthy");
 assert.equal(keycloakProvision.restart, "no");
 assert.equal(keycloakProvision.build?.dockerfile, "Dockerfile.keycloak-provisioner");
 assert.deepEqual(keycloakProvision.ports ?? [], []);
-assert.equal(keycloakProvision.environment?.KEYCLOAK_ADMIN_URL, "http://keycloak:8080");
+assert.equal(keycloakProvision.environment?.KEYCLOAK_ADMIN_URL, "http://keycloak:8082");
+assert.equal(keycloak.environment?.KC_HTTP_PORT, "8082");
+assert.equal(keycloak.environment?.KC_HOSTNAME, "http://tflive.localhost:8082");
+assert.ok(
+  keycloak.networks?.default?.aliases?.includes("tflive.localhost"),
+  "keycloak needs the tflive.localhost alias so one issuer string resolves from both sides",
+);
 assert.equal(
   keycloakProvision.environment?.KEYCLOAK_WEB_REDIRECT_URIS,
-  "http://localhost:5173/,http://127.0.0.1:5173/",
+  "http://localhost:5173/auth/callback,http://127.0.0.1:5173/auth/callback",
 );
 assert.equal(
   keycloakProvision.environment?.KEYCLOAK_WEB_ORIGINS,
   "http://localhost:5173,http://127.0.0.1:5173",
 );
-assert.ok(openfgaPostgres.healthcheck, "OpenFGA Postgres needs a health check");
-assert.equal(openfgaMigrate.depends_on?.["openfga-postgres"]?.condition, "service_healthy");
+assert.equal(openfgaMigrate.depends_on?.postgres?.condition, "service_healthy");
 assert.equal(openfga.depends_on?.["openfga-migrate"]?.condition, "service_completed_successfully");
 assert.ok(openfga.healthcheck?.test?.join(" ").includes("grpc_health_probe"));
 assert.equal(openfgaProvision.depends_on?.openfga?.condition, "service_healthy");
@@ -90,27 +93,23 @@ assert.equal(openfgaProvision.restart, "no");
 assert.equal(openfgaProvision.build?.dockerfile, "Dockerfile.openfga-provisioner");
 assert.equal(resolve(root, openfgaProvision.build?.context ?? "__missing__"), root);
 assert.deepEqual(openfgaProvision.ports ?? [], []);
-assert.deepEqual(openfgaProvision.command, ["verify"]);
+assert.deepEqual(openfgaProvision.command, ["bootstrap"]);
+assert.equal(openfgaProvision.environment?.OPENFGA_ID_OUTPUT_DIR, "/run/openfga");
 assert.equal(openfgaProvision.environment?.OPENFGA_API_URL, "http://openfga:8080");
 assert.equal(openfgaProvision.environment?.OPENFGA_STORE_NAME, "tflive");
-assert.equal(openfgaProvision.environment?.OPENFGA_STORE_ID, "");
-assert.equal(openfgaProvision.environment?.OPENFGA_MODEL_ID, "");
 assert.equal(openfgaProvision.environment?.OPENFGA_API_TOKEN, "");
 assert.equal(openfgaProvision.environment?.OPENFGA_HTTP_TIMEOUT, "10s");
 
 for (const token of [
-  "${OPENFGA_STORE_ID:-}",
-  "${OPENFGA_MODEL_ID:-}",
   "${OPENFGA_API_TOKEN:-}",
   "${OPENFGA_HTTP_TIMEOUT:-10s}",
 ]) {
   assert.ok(source.includes(token), `${token} must remain explicit`);
 }
 
-assert.ok(hasVolume(keycloakPostgres, "keycloak-postgres-data"));
-assert.ok(hasVolume(openfgaPostgres, "openfga-postgres-data"));
-assert.ok(config.volumes?.["keycloak-postgres-data"]);
-assert.ok(config.volumes?.["openfga-postgres-data"]);
+assert.ok(hasVolume(postgres, "postgres-data"));
+assert.ok(config.volumes?.["postgres-data"]);
+assert.ok(config.volumes?.["openfga-ids"]);
 
 for (const name of [
   "KEYCLOAK_DB_NAME",
@@ -127,7 +126,11 @@ for (const name of [
   "OPENFGA_DB_USER",
   "OPENFGA_DB_PASSWORD",
 ]) {
-  assert.match(source, new RegExp(`\\$\\{${name}:\\?`), `${name} must be required`);
+  assert.match(
+    source,
+    new RegExp(`\\$\\{${name}:-`),
+    `${name} must have an inline default so the stack runs without .env`,
+  );
 }
 
 const provisionerDockerfile = resolve(root, "Dockerfile.keycloak-provisioner");
@@ -148,9 +151,7 @@ const openfgaProvisionerBuildCopies =
   openfgaProvisionerBuildStage.match(/^COPY[ \t]+.*$/gm) ?? [];
 assert.deepEqual(openfgaProvisionerBuildCopies, [
   "COPY go.mod go.sum ./",
-  "COPY openfga ./openfga",
-  "COPY internal/openfga ./internal/openfga",
-  "COPY cmd/openfga-provisioner ./cmd/openfga-provisioner",
+  "COPY . .",
 ]);
 assert.match(openfgaProvisionerImage, /^RUN CGO_ENABLED=0 go build /m);
 assert.match(openfgaProvisionerImage, /^RUN [^\n]* -trimpath(?: |$)/m);
@@ -163,13 +164,23 @@ assert.match(openfgaProvisionerImage, /^RUN apk add --no-cache ca-certificates \
 assert.match(openfgaProvisionerImage, /^[ \t]*&& addgroup -S openfga-provisioner \\$/m);
 assert.match(
   openfgaProvisionerImage,
-  /^[ \t]*&& adduser -S -D -H -G openfga-provisioner openfga-provisioner$/m,
+  /^[ \t]*&& adduser -S -D -H -G openfga-provisioner openfga-provisioner( \\)?$/m,
 );
 assert.match(
   openfgaProvisionerImage,
   /^COPY --from=build \/out\/openfga-provisioner \/usr\/local\/bin\/openfga-provisioner$/m,
 );
 assert.match(openfgaProvisionerImage, /^USER openfga-provisioner$/m);
+assert.match(
+  openfgaProvisionerImage,
+  /mkdir -p \/run\/openfga/,
+  "the identifier directory must exist in the image so the volume mount inherits its ownership",
+);
+assert.match(
+  openfgaProvisionerImage,
+  /chown -R openfga-provisioner:openfga-provisioner \/run\/openfga/,
+  "the provisioner user must own the identifier directory",
+);
 assert.match(
   openfgaProvisionerImage,
   /^ENTRYPOINT \["\/usr\/local\/bin\/openfga-provisioner"\]$/m,

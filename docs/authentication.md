@@ -303,11 +303,22 @@ allowed operation or an unfiltered list.
 
 ### Provisioning and Verification
 
-On a clean checkout, initialize OpenFGA with the two-phase workflow:
+`docker compose up` provisions OpenFGA automatically. The `openfga-provision`
+one-shot runs `bootstrap`, which reuses a store whose name already matches and
+reuses a semantically equal authorization model, creating either only when
+absent, so repeated runs converge rather than duplicating.
+
+Bootstrap writes the resolved identifiers to `store_id` and `model_id` on a
+shared volume, and the API and worker read them through `OPENFGA_STORE_ID_FILE`
+and `OPENFGA_MODEL_ID_FILE`. The identifiers stay exact and pinned — nothing
+resolves "the latest model" — and setting `OPENFGA_STORE_ID` or
+`OPENFGA_MODEL_ID` directly still takes precedence over the files.
+
+To provision by hand instead, against dependencies only:
 
 ```bash
-docker compose --env-file .env.example up -d openfga-postgres openfga-migrate openfga
-docker compose --env-file .env.example run --rm openfga-provision bootstrap
+docker compose up -d postgres openfga-migrate openfga
+docker compose run --rm openfga-provision bootstrap
 # Copy OPENFGA_STORE_ID and OPENFGA_MODEL_ID from stdout into .env.
 docker compose run --rm openfga-provision verify
 ```

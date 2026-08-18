@@ -43,7 +43,7 @@ work against the same dependency services.
 | --- | --- | --- |
 | services | 13 | 10 |
 | long-running services | 9 | 7 |
-| volumes | 5 | 2 |
+| volumes | 5 | 4 (3 active by default) |
 | host processes | 3 | 0 |
 | required toolchains | Go, Node | none |
 
