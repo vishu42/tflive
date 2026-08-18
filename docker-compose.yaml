@@ -34,14 +34,20 @@ services:
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB_NAME:-keycloak}
-      KC_DB_USERNAME: ${KEYCLOAK_DB_USER:?set KEYCLOAK_DB_USER in .env}
-      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD in .env}
-      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:?set KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME in .env}
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD:?set KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD in .env}
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USER:-keycloak}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak-local-only}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-tflive-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD:-tflive-admin-local-only}
+      KC_HTTP_PORT: "8082"
+      KC_HOSTNAME: http://tflive.localhost:8082
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
     ports:
-      - "8082:8080"
+      - "8082:8082"
+    networks:
+      default:
+        aliases:
+          - tflive.localhost
     healthcheck:
       test:
         - CMD-SHELL
@@ -61,22 +67,22 @@ services:
       keycloak:
         condition: service_healthy
     environment:
-      KEYCLOAK_ADMIN_URL: http://keycloak:8080
+      KEYCLOAK_ADMIN_URL: http://keycloak:8082
       KEYCLOAK_ADMIN_REALM: master
-      KEYCLOAK_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:?set KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME in .env}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD:?set KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD in .env}
+      KEYCLOAK_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-tflive-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD:-tflive-admin-local-only}
       KEYCLOAK_REALM: tflive
       KEYCLOAK_WEB_CLIENT_ID: tflive-web
       KEYCLOAK_API_CLIENT_ID: tflive-api
-      KEYCLOAK_WEB_REDIRECT_URIS: ${KEYCLOAK_WEB_REDIRECT_URIS:?set KEYCLOAK_WEB_REDIRECT_URIS in .env}
-      KEYCLOAK_WEB_ORIGINS: ${KEYCLOAK_WEB_ORIGINS:?set KEYCLOAK_WEB_ORIGINS in .env}
-      KEYCLOAK_PLATFORM_ADMIN_USERNAME: ${KEYCLOAK_PLATFORM_ADMIN_USERNAME:?set KEYCLOAK_PLATFORM_ADMIN_USERNAME in .env}
-      KEYCLOAK_PLATFORM_ADMIN_PASSWORD: ${KEYCLOAK_PLATFORM_ADMIN_PASSWORD:?set KEYCLOAK_PLATFORM_ADMIN_PASSWORD in .env}
-      KEYCLOAK_PLATFORM_ADMIN_EMAIL: ${KEYCLOAK_PLATFORM_ADMIN_EMAIL:?set KEYCLOAK_PLATFORM_ADMIN_EMAIL in .env}
-      KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME: ${KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME:?set KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME in .env}
-      KEYCLOAK_PLATFORM_ADMIN_LAST_NAME: ${KEYCLOAK_PLATFORM_ADMIN_LAST_NAME:?set KEYCLOAK_PLATFORM_ADMIN_LAST_NAME in .env}
+      KEYCLOAK_WEB_REDIRECT_URIS: ${KEYCLOAK_WEB_REDIRECT_URIS:-http://localhost:5173/auth/callback,http://127.0.0.1:5173/auth/callback}
+      KEYCLOAK_WEB_ORIGINS: ${KEYCLOAK_WEB_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      KEYCLOAK_PLATFORM_ADMIN_USERNAME: ${KEYCLOAK_PLATFORM_ADMIN_USERNAME:-tflive-platform-admin}
+      KEYCLOAK_PLATFORM_ADMIN_PASSWORD: ${KEYCLOAK_PLATFORM_ADMIN_PASSWORD:-tflive-platform-admin-local-only}
+      KEYCLOAK_PLATFORM_ADMIN_EMAIL: ${KEYCLOAK_PLATFORM_ADMIN_EMAIL:-tflive-platform-admin@local.test}
+      KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME: ${KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME:-tflive}
+      KEYCLOAK_PLATFORM_ADMIN_LAST_NAME: ${KEYCLOAK_PLATFORM_ADMIN_LAST_NAME:-Platform Administrator}
       KEYCLOAK_HTTP_TIMEOUT: 10s
-      KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET: ${KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET:?set KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET in .env}
+      KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET: ${KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET:-somerandsomesecret}
       TFLIVE_ENVIRONMENT: ${TFLIVE_ENVIRONMENT:-development}
     restart: "no"
 
@@ -116,17 +122,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.openfga-provisioner
-    command: ["verify"]
+    command: ["bootstrap"]
     depends_on:
       openfga:
         condition: service_healthy
     environment:
       OPENFGA_API_URL: http://openfga:8080
       OPENFGA_STORE_NAME: tflive
-      OPENFGA_STORE_ID: ${OPENFGA_STORE_ID:-}
-      OPENFGA_MODEL_ID: ${OPENFGA_MODEL_ID:-}
+      OPENFGA_ID_OUTPUT_DIR: /run/openfga
       OPENFGA_HTTP_TIMEOUT: ${OPENFGA_HTTP_TIMEOUT:-10s}
       OPENFGA_API_TOKEN: ${OPENFGA_API_TOKEN:-}
+    volumes:
+      - openfga-ids:/run/openfga
     restart: "no"
 
   temporal:
@@ -151,6 +158,7 @@ services:
       - "7233:7233"
 
   temporal-ui:
+    profiles: [\"debug\"]
     image: temporalio/ui:2.49.1
     depends_on:
       - temporal
@@ -161,6 +169,7 @@ services:
       - "8080:8080"
 
   minio:
+    profiles: [\"s3\"]
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
@@ -173,6 +182,7 @@ services:
       - minio-data:/data
 
   minio-init:
+    profiles: [\"s3\"]
     image: minio/mc:latest
     depends_on:
       - minio
@@ -183,6 +193,79 @@ services:
       done;
       mc mb --ignore-existing local/${S3_BUCKET:-tflive-artifacts}
       "
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+      keycloak-provision:
+        condition: service_completed_successfully
+      openfga-provision:
+        condition: service_completed_successfully
+    environment:
+      HTTP_ADDRESS: ":8081"
+      DATABASE_URL: postgres://${APP_DB_USER:-tflive}:${APP_DB_PASSWORD:-tflive}@postgres:5432/${APP_DB_NAME:-tflive_test}?sslmode=disable
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-terraform-runs}
+      TFLIVE_ENVIRONMENT: development
+      TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3}
+      OIDC_ISSUER_URL: http://tflive.localhost:8082/realms/tflive
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-tflive-api}
+      OPENFGA_API_URL: http://openfga:8080
+      OPENFGA_STORE_ID_FILE: /run/openfga/store_id
+      OPENFGA_MODEL_ID_FILE: /run/openfga/model_id
+      ARTIFACT_STORE_KIND: filesystem
+      ARTIFACT_STORE_FILESYSTEM_ROOT: /var/lib/tflive/artifacts
+    ports:
+      - "8081:8081"
+    volumes:
+      - openfga-ids:/run/openfga:ro
+      - artifacts:/var/lib/tflive/artifacts
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+      openfga-provision:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://${APP_DB_USER:-tflive}:${APP_DB_PASSWORD:-tflive}@postgres:5432/${APP_DB_NAME:-tflive_test}?sslmode=disable
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-terraform-runs}
+      TFLIVE_ENVIRONMENT: development
+      TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3}
+      OIDC_ISSUER_URL: http://tflive.localhost:8082/realms/tflive
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-tflive-api}
+      OPENFGA_API_URL: http://openfga:8080
+      OPENFGA_STORE_ID_FILE: /run/openfga/store_id
+      OPENFGA_MODEL_ID_FILE: /run/openfga/model_id
+      ARTIFACT_STORE_KIND: filesystem
+      ARTIFACT_STORE_FILESYSTEM_ROOT: /var/lib/tflive/artifacts
+      WORKER_RUN_ROOT: /var/lib/tflive/runs
+    volumes:
+      - openfga-ids:/run/openfga:ro
+      - artifacts:/var/lib/tflive/artifacts
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    depends_on:
+      - api
+    ports:
+      - "5173:5173"
 
 volumes:
   postgres-data:
