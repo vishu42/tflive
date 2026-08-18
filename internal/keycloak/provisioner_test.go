@@ -86,8 +86,14 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 		t.Fatalf("web default scopes = %#v", backend.defaultScopes[cfg.WebClientID])
 	}
 
-	if !backend.realmRoleMappings[cfg.PlatformAdminUsername]["platform-admin"] {
-		t.Fatalf("platform user realm roles = %#v", backend.realmRoleMappings[cfg.PlatformAdminUsername])
+	// The seeded administrator must carry every role the product's own
+	// permission checks read, not only platform-admin: /v1/me projects
+	// canCreateStack from stack-creator alone, so an admin without it cannot
+	// reach the create-stack affordance the API would have allowed.
+	for _, role := range []string{"platform-admin", "stack-creator"} {
+		if !backend.realmRoleMappings[cfg.PlatformAdminUsername][role] {
+			t.Fatalf("platform user realm roles = %#v, missing %q", backend.realmRoleMappings[cfg.PlatformAdminUsername], role)
+		}
 	}
 	wantAdminRoles := []string{"manage-users", "query-users", "view-realm", "view-users"}
 	for _, role := range wantAdminRoles {
@@ -140,6 +146,7 @@ func TestProvisionWithBackendRejectsInvalidEffectiveToken(t *testing.T) {
 	}{
 		{name: "missing API audience", token: ExampleAccessToken{Audience: []string{"account"}, RealmRoles: []string{"platform-admin"}}, wantErr: "missing audience tflive-api"},
 		{name: "missing platform role", token: ExampleAccessToken{Audience: []string{"tflive-api"}, RealmRoles: []string{"default-roles-tflive"}}, wantErr: "missing realm role platform-admin"},
+		{name: "missing stack creator role", token: ExampleAccessToken{Audience: []string{"tflive-api"}, RealmRoles: []string{"platform-admin"}}, wantErr: "missing realm role stack-creator"},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -214,7 +221,7 @@ func newFakeProvisionBackend(cfg Config) *fakeProvisionBackend {
 		defaultScopes: map[string]map[string]bool{}, realmRoleMappings: map[string]map[string]bool{},
 		clientRoleMappings:  map[string]map[string]map[string]bool{},
 		clientScopeMappings: map[string]map[string]map[string]bool{},
-		exampleToken:        ExampleAccessToken{Audience: []string{cfg.APIClientID}, RealmRoles: []string{"platform-admin"}},
+		exampleToken:        ExampleAccessToken{Audience: []string{cfg.APIClientID}, RealmRoles: []string{"platform-admin", "stack-creator"}},
 	}
 }
 
