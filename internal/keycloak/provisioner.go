@@ -146,11 +146,12 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 	if err != nil {
 		return Result{}, fmt.Errorf("ensure realm role platform-admin: %w", err)
 	}
-	if _, err := backend.EnsureRole(ctx, cfg.Realm, RoleSpec{
+	stackCreatorRole, err := backend.EnsureRole(ctx, cfg.Realm, RoleSpec{
 		Name:        "stack-creator",
 		Description: stackCreatorDescription,
 		Composite:   false,
-	}); err != nil {
+	})
+	if err != nil {
 		return Result{}, fmt.Errorf("ensure realm role stack-creator: %w", err)
 	}
 
@@ -244,8 +245,13 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 	if err != nil {
 		return Result{}, fmt.Errorf("ensure bootstrap platform administrator: %w", err)
 	}
-	if err := backend.EnsureRealmRoleMapping(ctx, cfg.Realm, platformUser, []ResourceRef{platformRole}); err != nil {
-		return Result{}, fmt.Errorf("assign platform-admin realm role: %w", err)
+	// The seeded administrator gets every global role the product reads, not
+	// just platform-admin. Permission checks are not uniform: /v1/me projects
+	// canCreateStack from stack-creator alone, so an admin holding only
+	// platform-admin cannot reach affordances the API would have allowed.
+	// Roles for users created later are their creator's responsibility.
+	if err := backend.EnsureRealmRoleMapping(ctx, cfg.Realm, platformUser, []ResourceRef{platformRole, stackCreatorRole}); err != nil {
+		return Result{}, fmt.Errorf("assign global realm roles: %w", err)
 	}
 
 	realmManagement, err := backend.LookupClient(ctx, cfg.Realm, "realm-management")
@@ -312,8 +318,10 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 	if !containsString(exampleToken.Audience, cfg.APIClientID) {
 		return Result{}, fmt.Errorf("effective access token is missing audience %s", cfg.APIClientID)
 	}
-	if !containsString(exampleToken.RealmRoles, "platform-admin") {
-		return Result{}, fmt.Errorf("effective access token is missing realm role platform-admin")
+	for _, role := range []string{"platform-admin", "stack-creator"} {
+		if !containsString(exampleToken.RealmRoles, role) {
+			return Result{}, fmt.Errorf("effective access token is missing realm role %s", role)
+		}
 	}
 
 	return Result{
