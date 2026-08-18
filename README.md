@@ -26,8 +26,8 @@ a full history of every change.
   to it as an explicit, reviewable step instead of drifting silently.
 - **Control access per stack.** Grant people access to the stacks they need,
   rather than to everything.
-- **Sign in through Keycloak.** Authentication is OIDC, and authorization is
-  backed by OpenFGA.
+- **Sign in with SSO.** Authentication is standard OIDC, and the local stack
+  ships an identity provider so there is nothing to wire up to try it.
 
 ## Running it locally
 
@@ -93,27 +93,6 @@ Then repeat from step 2 — a new store means new identifiers.
 ```bash
 docker compose --profile s3 up -d      # MinIO, for S3-backed artifacts
 docker compose --profile debug up -d   # Temporal UI on http://localhost:8080
-```
-
-### Upgrading an older checkout
-
-Earlier versions ran four Postgres containers and reached Keycloak on a
-different hostname. If you have a checkout from before that, update two values
-in your `.env` to match `.env.example`:
-
-```bash
-OIDC_ISSUER_URL=http://keycloak.localhost:8082/realms/tflive
-KEYCLOAK_ADMIN_URL=http://keycloak:8082
-```
-
-Then start over as above. Your old data is not carried across, and the old
-containers' volumes are left behind — remove them once you are satisfied:
-
-```bash
-docker volume rm tflive-compose_app-postgres-data \
-  tflive-compose_keycloak-postgres-data \
-  tflive-compose_openfga-postgres-data \
-  tflive-compose_temporal-postgres-data
 ```
 
 ## Documentation
