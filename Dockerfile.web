@@ -1,0 +1,23 @@
+FROM node:22-alpine3.21 AS build
+
+ARG VITE_OIDC_ISSUER=http://tflive.localhost:8082/realms/tflive
+ARG VITE_OIDC_CLIENT_ID=tflive-web
+ARG VITE_OIDC_REDIRECT_URI=http://localhost:5173/auth/callback
+ARG VITE_TFLIVE_TENANT_ID=tenant_123
+ENV VITE_OIDC_ISSUER=$VITE_OIDC_ISSUER \
+    VITE_OIDC_CLIENT_ID=$VITE_OIDC_CLIENT_ID \
+    VITE_OIDC_REDIRECT_URI=$VITE_OIDC_REDIRECT_URI \
+    VITE_TFLIVE_TENANT_ID=$VITE_TFLIVE_TENANT_ID
+
+WORKDIR /src
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
+FROM nginx:1.27-alpine
+
+COPY deploy/web/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /src/dist /usr/share/nginx/html
+
+EXPOSE 5173
