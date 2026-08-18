@@ -21,12 +21,21 @@ const rendered = execFileSync(
     "--format",
     "json",
   ],
-  { cwd: root, encoding: "utf8" },
+  {
+    cwd: root,
+    encoding: "utf8",
+    // The application phase requires these, and .env.example deliberately ships
+    // them empty because they are recorded from the provisioning phase.
+    env: {
+      ...process.env,
+      OPENFGA_STORE_ID: "verify-store-id",
+      OPENFGA_MODEL_ID: "verify-model-id",
+    },
+  },
 );
 const config = JSON.parse(rendered);
-const source =
-  readFileSync(resolve(root, "docker-compose.yaml"), "utf8") +
-  readFileSync(resolve(root, "docker-compose.app.yaml"), "utf8");
+const appSource = readFileSync(resolve(root, "docker-compose.app.yaml"), "utf8");
+const source = readFileSync(resolve(root, "docker-compose.yaml"), "utf8") + appSource;
 const envExample = readFileSync(resolve(root, ".env.example"), "utf8");
 
 function envValue(name) {
@@ -107,7 +116,13 @@ assert.equal(openfgaProvision.build?.dockerfile, "Dockerfile.openfga-provisioner
 assert.equal(resolve(root, openfgaProvision.build?.context ?? "__missing__"), root);
 assert.deepEqual(openfgaProvision.ports ?? [], []);
 assert.deepEqual(openfgaProvision.command, ["bootstrap"]);
-assert.equal(openfgaProvision.environment?.OPENFGA_ID_OUTPUT_DIR, "/run/openfga");
+for (const name of ["OPENFGA_STORE_ID", "OPENFGA_MODEL_ID"]) {
+  assert.match(
+    appSource,
+    new RegExp(`\\$\\{${name}:\\?`),
+    `${name} must be required in the application phase, not silently defaulted`,
+  );
+}
 assert.equal(openfgaProvision.environment?.OPENFGA_API_URL, "http://openfga:8080");
 assert.equal(openfgaProvision.environment?.OPENFGA_STORE_NAME, "tflive");
 assert.equal(openfgaProvision.environment?.OPENFGA_API_TOKEN, "");
@@ -122,7 +137,6 @@ for (const token of [
 
 assert.ok(hasVolume(postgres, "postgres-data"));
 assert.ok(config.volumes?.["postgres-data"]);
-assert.ok(config.volumes?.["openfga-ids"]);
 
 for (const name of [
   "KEYCLOAK_DB_NAME",
@@ -184,16 +198,6 @@ assert.match(
   /^COPY --from=build \/out\/openfga-provisioner \/usr\/local\/bin\/openfga-provisioner$/m,
 );
 assert.match(openfgaProvisionerImage, /^USER openfga-provisioner$/m);
-assert.match(
-  openfgaProvisionerImage,
-  /mkdir -p \/run\/openfga/,
-  "the identifier directory must exist in the image so the volume mount inherits its ownership",
-);
-assert.match(
-  openfgaProvisionerImage,
-  /chown -R openfga-provisioner:openfga-provisioner \/run\/openfga/,
-  "the provisioner user must own the identifier directory",
-);
 assert.match(
   openfgaProvisionerImage,
   /^ENTRYPOINT \["\/usr\/local\/bin\/openfga-provisioner"\]$/m,

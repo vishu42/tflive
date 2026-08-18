@@ -1,8 +1,6 @@
 package openfga
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -121,56 +119,4 @@ func TestValidateVerifyRejectsUnsafeOpaqueIdentifiers(t *testing.T) {
 
 func mapEnv(values map[string]string) func(string) string {
 	return func(name string) string { return values[name] }
-}
-
-func TestLoadConfigReadsIdentifiersFromFiles(t *testing.T) {
-	dir := t.TempDir()
-	storePath := filepath.Join(dir, "store_id")
-	modelPath := filepath.Join(dir, "model_id")
-	if err := os.WriteFile(storePath, []byte("store-from-file\n"), 0o644); err != nil {
-		t.Fatalf("write store file: %v", err)
-	}
-	if err := os.WriteFile(modelPath, []byte("model-from-file"), 0o644); err != nil {
-		t.Fatalf("write model file: %v", err)
-	}
-
-	values := map[string]string{
-		"OPENFGA_API_URL":       "http://openfga:8080",
-		"OPENFGA_STORE_ID_FILE": storePath,
-		"OPENFGA_MODEL_ID_FILE": modelPath,
-	}
-	cfg, err := LoadConfig(func(name string) string { return values[name] })
-	if err != nil {
-		t.Fatalf("LoadConfig() error = %v", err)
-	}
-	if cfg.StoreID != "store-from-file" {
-		t.Fatalf("StoreID = %q, want %q", cfg.StoreID, "store-from-file")
-	}
-	if cfg.ModelID != "model-from-file" {
-		t.Fatalf("ModelID = %q, want %q", cfg.ModelID, "model-from-file")
-	}
-	if err := cfg.ValidateVerify(); err != nil {
-		t.Fatalf("ValidateVerify() error = %v", err)
-	}
-}
-
-func TestLoadConfigPrefersDirectIdentifierOverFile(t *testing.T) {
-	dir := t.TempDir()
-	storePath := filepath.Join(dir, "store_id")
-	if err := os.WriteFile(storePath, []byte("store-from-file"), 0o644); err != nil {
-		t.Fatalf("write store file: %v", err)
-	}
-
-	values := map[string]string{
-		"OPENFGA_API_URL":       "http://openfga:8080",
-		"OPENFGA_STORE_ID":      "store-from-env",
-		"OPENFGA_STORE_ID_FILE": storePath,
-	}
-	cfg, err := LoadConfig(func(name string) string { return values[name] })
-	if err != nil {
-		t.Fatalf("LoadConfig() error = %v", err)
-	}
-	if cfg.StoreID != "store-from-env" {
-		t.Fatalf("StoreID = %q, want the direct value to win", cfg.StoreID)
-	}
 }

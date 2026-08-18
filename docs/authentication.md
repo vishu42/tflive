@@ -303,26 +303,25 @@ allowed operation or an unfiltered list.
 
 ### Provisioning and Verification
 
-`docker compose up` provisions OpenFGA automatically, before the application
-is started by the `docker-compose.app.yaml` overlay. The `openfga-provision`
-one-shot runs `bootstrap`, which reuses a store whose name already matches and
-reuses a semantically equal authorization model, creating either only when
-absent, so repeated runs converge rather than duplicating.
+`docker compose up` provisions OpenFGA as part of the infrastructure phase. The
+`openfga-provision` one-shot runs `bootstrap`, which reuses a store whose name
+already matches and reuses a semantically equal authorization model, creating
+either only when absent, so repeated runs converge rather than duplicating.
 
-Bootstrap writes the resolved identifiers to `store_id` and `model_id` on a
-shared volume, and the API and worker read them through `OPENFGA_STORE_ID_FILE`
-and `OPENFGA_MODEL_ID_FILE`. The identifiers stay exact and pinned — nothing
-resolves "the latest model" — and setting `OPENFGA_STORE_ID` or
-`OPENFGA_MODEL_ID` directly still takes precedence over the files.
-
-To provision by hand instead, against dependencies only:
+Bootstrap prints the resolved identifiers to stdout. Copy both into `.env` before
+starting the application phase, which refuses to start without them. The
+identifiers are therefore always exact and pinned: nothing discovers a store by
+name at runtime, and nothing resolves "the latest model".
 
 ```bash
-docker compose up -d postgres openfga-migrate openfga
-docker compose run --rm openfga-provision bootstrap
-# Copy OPENFGA_STORE_ID and OPENFGA_MODEL_ID from stdout into .env.
+docker compose up -d
+docker compose logs openfga-provision
+# Copy OPENFGA_STORE_ID and OPENFGA_MODEL_ID into .env.
 docker compose run --rm openfga-provision verify
 ```
+
+`verify` reads the exact pair from `.env` and checks it against the live store
+and model without mutating either.
 
 The provisioner's standard output contains only these two assignments:
 

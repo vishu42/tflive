@@ -72,9 +72,8 @@ creation runs from the Postgres image entrypoint rather than as a service.
   `openfga-postgres`, and `temporal-postgres` with a single `postgres` service,
   repoints `KC_DB_URL`, `OPENFGA_DATASTORE_URI`, and Temporal's `POSTGRES_SEEDS`
   at it, and adds the three application services.
-- `cmd/openfga-provisioner` gains an identifier-file output path.
-- `internal/config` and `internal/openfga/config.go` gain file-backed fallbacks
-  for the two OpenFGA identifiers.
+- `docker-compose.app.yaml` declares the two OpenFGA identifiers required, so
+  the application phase cannot start against an unrecorded store or model.
 
 ## Database Consolidation
 
@@ -93,29 +92,26 @@ one-time cost for current developers and invisible to fresh clones.
 
 ## OpenFGA Identifier Handoff
 
-`openfga-provision bootstrap` writes the store and model identifiers to files on
-a named volume mounted read-write by the provisioner and read-only by `api` and
-`worker`. Two files are written, one identifier per file, matching the Docker
-secrets convention.
+`openfga-provision bootstrap` prints the store and model identifiers to stdout
+during the infrastructure phase. The operator copies both into `.env` before
+starting the application phase, which declares them required and refuses to
+interpolate without them, naming the missing variable.
 
-`api` and `worker` accept `OPENFGA_STORE_ID_FILE` and `OPENFGA_MODEL_ID_FILE`.
-Resolution order for each identifier is: the direct environment variable when
-non-empty; otherwise the contents of the corresponding file with surrounding
-whitespace trimmed; otherwise the existing required-variable error. A file that
-is configured but unreadable or empty is an error rather than a fallthrough, so
-a broken handoff fails at startup instead of surfacing as an authorization
-failure later. Values read from a file are validated identically to values read
-from the environment, including the existing rejection of whitespace and control
-characters.
+A file-based handoff over a shared volume was built first and then removed. It
+made the two phases collapse into one command, which is precisely what the split
+exists to prevent: the store and model an environment runs against should be a
+deliberate, recorded choice, not whatever a bootstrap produced. Removing it also
+deleted the `_FILE` fallbacks from `internal/config` and `internal/openfga`, the
+shared volume, and the directory-ownership handling its non-root writer needed.
 
-This preserves the property the current manual step protects. The API still
-consumes exact, pinned identifiers and still never resolves the latest model.
-Only the transcription is automated.
+The exactness property is unchanged and now simpler to state: identifiers only
+ever arrive as explicit configuration. Nothing discovers a store by name at
+runtime and nothing resolves the latest model.
 
-An entrypoint wrapper that sources an environment file before executing the
-binary was considered and rejected: it requires no Go changes but confines the
-mechanism to containers, whereas the `_FILE` convention is equally usable under
-Docker secrets, Kubernetes, and systemd credentials.
+The API does not check the pair at startup — it starts, and authorization fails
+closed at request time. `openfga-provision verify` is the up-front check, reading
+the exact pair from the environment and comparing it against the live store and
+model without mutating either.
 
 ## Issuer Resolution
 

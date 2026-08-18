@@ -132,13 +132,10 @@ services:
     environment:
       OPENFGA_API_URL: http://openfga:8080
       OPENFGA_STORE_NAME: tflive
-      OPENFGA_ID_OUTPUT_DIR: /run/openfga
-      OPENFGA_STORE_ID_FILE: /run/openfga/store_id
-      OPENFGA_MODEL_ID_FILE: /run/openfga/model_id
+      OPENFGA_STORE_ID: ${OPENFGA_STORE_ID:-}
+      OPENFGA_MODEL_ID: ${OPENFGA_MODEL_ID:-}
       OPENFGA_HTTP_TIMEOUT: ${OPENFGA_HTTP_TIMEOUT:-10s}
       OPENFGA_API_TOKEN: ${OPENFGA_API_TOKEN:-}
-    volumes:
-      - openfga-ids:/run/openfga
     restart: "no"
 
   temporal:
@@ -208,5 +205,4 @@ services:
 volumes:
   postgres-data:
   minio-data:
-  openfga-ids:
   artifacts:

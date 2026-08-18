@@ -10,9 +10,7 @@ FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates \
     && addgroup -S openfga-provisioner \
-    && adduser -S -D -H -G openfga-provisioner openfga-provisioner \
-    && mkdir -p /run/openfga \
-    && chown -R openfga-provisioner:openfga-provisioner /run/openfga
+    && adduser -S -D -H -G openfga-provisioner openfga-provisioner
 COPY --from=build /out/openfga-provisioner /usr/local/bin/openfga-provisioner
 
 USER openfga-provisioner
