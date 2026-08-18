@@ -3,6 +3,7 @@ package openfga
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -69,11 +70,33 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	return Config{
 		APIURL:      apiURL,
 		StoreName:   storeName,
-		StoreID:     getenv("OPENFGA_STORE_ID"),
-		ModelID:     getenv("OPENFGA_MODEL_ID"),
+		StoreID:     identifier(getenv, "OPENFGA_STORE_ID"),
+		ModelID:     identifier(getenv, "OPENFGA_MODEL_ID"),
 		APIToken:    getenv("OPENFGA_API_TOKEN"),
 		HTTPTimeout: timeout,
 	}, nil
+}
+
+// identifier reads an OpenFGA identifier from the environment, falling back to
+// the file named by "<name>_FILE". Bootstrap publishes the identifiers to a
+// shared volume, so verify reads them back from the same place rather than
+// requiring a human to copy them into the environment. An unreadable file
+// yields an empty value, which ValidateVerify reports as the missing variable.
+func identifier(getenv func(string) string, name string) string {
+	// The direct value is returned unmodified: ValidateVerify rejects an
+	// identifier carrying whitespace, and trimming here would silently accept it.
+	if value := getenv(name); value != "" {
+		return value
+	}
+	path := strings.TrimSpace(getenv(name + "_FILE"))
+	if path == "" {
+		return ""
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(contents))
 }
 
 func (cfg Config) ValidateVerify() error {

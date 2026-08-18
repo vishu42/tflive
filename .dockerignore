@@ -8,3 +8,8 @@ api
 keycloak-provisioner
 .worktrees
 docs
+.superpowers
+.claude
+**/.npmrc
+backlog.txt
+issues.txt

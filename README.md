@@ -74,8 +74,20 @@ Run the API, worker, and UI on the host against the containerised dependencies.
 
 ```bash
 cp .env.example .env
-docker compose up postgres keycloak keycloak-provision openfga-migrate openfga openfga-provision temporal
+docker compose up -d postgres keycloak keycloak-provision openfga-migrate openfga openfga-provision temporal
 ```
+
+The identifiers the provisioner writes live inside a Docker volume, which a host
+process cannot read, so copy them into `.env` once:
+
+```bash
+docker compose run --rm openfga-provision bootstrap
+# Copy the printed OPENFGA_STORE_ID and OPENFGA_MODEL_ID into .env.
+```
+
+Bootstrap reuses a matching store and model rather than creating duplicates, so
+re-running it is safe. Run only one at a time: OpenFGA store names are not
+unique, and bootstrap fails closed if the `tflive` name is ambiguous.
 
 Then, in separate shells:
 

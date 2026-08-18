@@ -1,3 +1,6 @@
+# Local development only. Every credential and key defaulted in this file is a
+# throwaway matching .env.example, including CREDENTIAL_ENCRYPTION_KEY, which is
+# duplicated there. Never point a real deployment at these values.
 name: tflive-compose
 services:
   postgres:
@@ -130,6 +133,8 @@ services:
       OPENFGA_API_URL: http://openfga:8080
       OPENFGA_STORE_NAME: tflive
       OPENFGA_ID_OUTPUT_DIR: /run/openfga
+      OPENFGA_STORE_ID_FILE: /run/openfga/store_id
+      OPENFGA_MODEL_ID_FILE: /run/openfga/model_id
       OPENFGA_HTTP_TIMEOUT: ${OPENFGA_HTTP_TIMEOUT:-10s}
       OPENFGA_API_TOKEN: ${OPENFGA_API_TOKEN:-}
     volumes:
@@ -156,9 +161,15 @@ services:
       SKIP_DB_CREATE: "true"
     ports:
       - "7233:7233"
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   temporal-ui:
-    profiles: [\"debug\"]
+    profiles: ["debug"]
     image: temporalio/ui:2.49.1
     depends_on:
       - temporal
@@ -169,7 +180,7 @@ services:
       - "8080:8080"
 
   minio:
-    profiles: [\"s3\"]
+    profiles: ["s3"]
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
@@ -182,7 +193,7 @@ services:
       - minio-data:/data
 
   minio-init:
-    profiles: [\"s3\"]
+    profiles: ["s3"]
     image: minio/mc:latest
     depends_on:
       - minio
@@ -202,13 +213,17 @@ services:
       postgres:
         condition: service_healthy
       temporal:
-        condition: service_started
+        condition: service_healthy
       keycloak-provision:
         condition: service_completed_successfully
       openfga-provision:
         condition: service_completed_successfully
     environment:
       HTTP_ADDRESS: ":8081"
+      KEYCLOAK_ADMIN_URL: http://keycloak:8082
+      KEYCLOAK_REALM: tflive
+      KEYCLOAK_DIRECTORY_READER_CLIENT_ID: ${KEYCLOAK_DIRECTORY_READER_CLIENT_ID:-tflive-directory-reader}
+      KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET: ${KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET:-somerandsomesecret}
       DATABASE_URL: postgres://${APP_DB_USER:-tflive}:${APP_DB_PASSWORD:-tflive}@postgres:5432/${APP_DB_NAME:-tflive_test}?sslmode=disable
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-terraform-runs}
@@ -222,6 +237,7 @@ services:
       OPENFGA_MODEL_ID_FILE: /run/openfga/model_id
       ARTIFACT_STORE_KIND: filesystem
       ARTIFACT_STORE_FILESYSTEM_ROOT: /var/lib/tflive/artifacts
+    restart: on-failure
     ports:
       - "8081:8081"
     volumes:
@@ -236,7 +252,7 @@ services:
       postgres:
         condition: service_healthy
       temporal:
-        condition: service_started
+        condition: service_healthy
       openfga-provision:
         condition: service_completed_successfully
     environment:
@@ -254,6 +270,7 @@ services:
       ARTIFACT_STORE_KIND: filesystem
       ARTIFACT_STORE_FILESYSTEM_ROOT: /var/lib/tflive/artifacts
       WORKER_RUN_ROOT: /var/lib/tflive/runs
+    restart: on-failure
     volumes:
       - openfga-ids:/run/openfga:ro
       - artifacts:/var/lib/tflive/artifacts
@@ -264,6 +281,7 @@ services:
       dockerfile: Dockerfile.web
     depends_on:
       - api
+    restart: on-failure
     ports:
       - "5173:5173"
 

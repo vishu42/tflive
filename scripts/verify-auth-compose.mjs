@@ -30,7 +30,7 @@ for (const [name, value] of Object.entries({
   TFLIVE_TENANT_ID: "tenant_123",
   OIDC_ISSUER_URL: "http://tflive.localhost:8082/realms/tflive",
   OIDC_AUDIENCE: "tflive-api",
-  OPENFGA_API_URL: "http://localhost:8080",
+  OPENFGA_API_URL: "http://localhost:8083",
   OPENFGA_STORE_ID: "",
   OPENFGA_MODEL_ID: "",
   OPENFGA_API_TOKEN: "",
