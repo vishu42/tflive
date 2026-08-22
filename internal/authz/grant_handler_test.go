@@ -110,7 +110,7 @@ func TestDeliverWritesDesiredRoleWhenAbsent(t *testing.T) {
 	if len(followUps) != 0 {
 		t.Fatalf("follow-ups = %+v, want none: a grant reconcile chains nothing", followUps)
 	}
-	if len(relationships.written) != 1 || relationships.written[0].Role() != RelationOwner {
+	if len(relationships.written) != 1 || relationships.written[0].Relation() != RelationOwner {
 		t.Fatalf("written = %+v, want one owner grant", relationships.written)
 	}
 	if len(relationships.deleted) != 0 {
@@ -129,10 +129,10 @@ func TestDeliverReplacesExistingRole(t *testing.T) {
 	if _, err := handler.Deliver(context.Background(), queue.Item{Payload: grantPayload("owner")}); err != nil {
 		t.Fatalf("Deliver returned error: %v", err)
 	}
-	if len(relationships.written) != 1 || relationships.written[0].Role() != RelationOwner {
+	if len(relationships.written) != 1 || relationships.written[0].Relation() != RelationOwner {
 		t.Fatalf("written = %+v, want one owner grant", relationships.written)
 	}
-	if len(relationships.deleted) != 1 || relationships.deleted[0].Role() != RelationViewer {
+	if len(relationships.deleted) != 1 || relationships.deleted[0].Relation() != RelationViewer {
 		t.Fatalf("deleted = %+v, want the stale viewer grant", relationships.deleted)
 	}
 }
@@ -169,7 +169,7 @@ func TestDeliverEmptyRoleRevokesEverything(t *testing.T) {
 	if len(relationships.written) != 0 {
 		t.Fatalf("written = %+v, want none", relationships.written)
 	}
-	if len(relationships.deleted) != 1 || relationships.deleted[0].Role() != RelationOperator {
+	if len(relationships.deleted) != 1 || relationships.deleted[0].Relation() != RelationOperator {
 		t.Fatalf("deleted = %+v, want the operator grant", relationships.deleted)
 	}
 }

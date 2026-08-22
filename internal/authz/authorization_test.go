@@ -95,68 +95,137 @@ func TestSubjectFromOIDCSubRejectsTupleSyntax(t *testing.T) {
 	}
 }
 
-func TestGrantAndMutationRequireValidatedDirectRoles(t *testing.T) {
+// The test that proves this refactor achieved its purpose rather than renaming
+// things: a Grant cannot hold a structural edge or a derived relation, however
+// the Relation reached it.
+func TestNewGrantRequiresAGrantableRelation(t *testing.T) {
+	subject, err := SubjectFromOIDCSub("kc-sub-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := ObjectFromID(TypeStack, "stack-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	grant, err := NewGrant(subject, object, RelationOwner)
+	if err != nil {
+		t.Fatalf("NewGrant() error = %v", err)
+	}
+	if grant.Relation() != RelationOwner || grant.Object() != object || grant.Subject() != subject {
+		t.Fatalf("NewGrant() = %#v", grant)
+	}
+
+	// A Grant must never be able to hold a structural edge or a derived
+	// relation, however the Relation reached it.
+	parent, err := NewRelation("parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, relation := range []Relation{parent, RelationCanView, {}} {
+		if _, err := NewGrant(subject, object, relation); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("NewGrant(%q) error = %v, want ErrInvalidInput", relation.String(), err)
+		}
+	}
+
+	if _, err := NewGrant(Subject{}, object, RelationOwner); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("NewGrant with zero subject error = %v", err)
+	}
+	if _, err := NewGrant(subject, Object{}, RelationOwner); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("NewGrant with zero object error = %v", err)
+	}
+}
+
+// Pins that checking admits relations writing refuses — the write/check
+// asymmetry the two constructors exist for.
+func TestCheckRequestValidity(t *testing.T) {
+	subject, err := SubjectFromOIDCSub("kc-sub-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := ObjectFromID(TypeStack, "stack-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !(CheckRequest{Subject: subject, Relation: RelationCanView, Object: object}).Valid() {
+		t.Fatal("well-formed check request must validate")
+	}
+	if (CheckRequest{}).Valid() {
+		t.Fatal("zero check request must not validate")
+	}
+	if (CheckRequest{Subject: subject, Object: object}).Valid() {
+		t.Fatal("check request without a relation must not validate")
+	}
+}
+
+// Pins that both list requests refuse to cross the adapter boundary half-built.
+func TestListRequestsValidity(t *testing.T) {
+	subject, err := SubjectFromOIDCSub("kc-sub-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := ObjectFromID(TypeStack, "stack-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !(ListGrantsRequest{Object: object}).Valid() {
+		t.Fatal("well-formed grants request must validate")
+	}
+	if (ListGrantsRequest{}).Valid() {
+		t.Fatal("zero grants request must not validate")
+	}
+	if !(ListSubjectGrantsRequest{Subject: subject, Object: object}).Valid() {
+		t.Fatal("well-formed subject grants request must validate")
+	}
+	if (ListSubjectGrantsRequest{}).Valid() {
+		t.Fatal("zero subject grants request must not validate")
+	}
+}
+
+// Pins that Mutation still requires validated grants, independent of what
+// makes a Grant valid.
+func TestMutationRequiresValidatedGrants(t *testing.T) {
 	subject, err := SubjectFromOIDCSub("kc-sub-123")
 	if err != nil {
 		t.Fatalf("SubjectFromOIDCSub() error = %v", err)
 	}
-	stack, err := ObjectFromID(TypeStack, "stack-123")
+	object, err := ObjectFromID(TypeStack, "stack-123")
 	if err != nil {
 		t.Fatalf("ObjectFromID() error = %v", err)
 	}
-	role, err := GrantRelation("owner")
+	grant, err := NewGrant(subject, object, RelationOwner)
 	if err != nil {
-		t.Fatalf("GrantRelation() error = %v", err)
-	}
-	grant, err := NewGrant(subject, stack, role)
-	if err != nil || !grant.Valid() {
-		t.Fatalf("NewGrant() = %#v, %v", grant, err)
+		t.Fatalf("NewGrant() error = %v", err)
 	}
 	mutation, err := NewMutation([]Grant{grant}, true)
 	if err != nil || !mutation.Valid() || !mutation.Confirm() {
 		t.Fatalf("NewMutation() = %#v, %v", mutation, err)
-	}
-	if _, err := NewGrant(Subject{}, stack, role); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("NewGrant() with zero subject error = %v", err)
 	}
 	if _, err := NewMutation([]Grant{{}}, false); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("NewMutation() with zero grant error = %v", err)
 	}
 }
 
-func TestRequestsValidateOpaqueValuesAtAdapterBoundary(t *testing.T) {
+// Pins that a batch request is valid only when every check in it is, on top
+// of the single-request cases TestCheckRequestValidity already covers.
+func TestBatchCheckRequestValidity(t *testing.T) {
 	subject, err := SubjectFromOIDCSub("kc-sub-123")
 	if err != nil {
 		t.Fatalf("SubjectFromOIDCSub() error = %v", err)
 	}
-	stack, err := ObjectFromID(TypeStack, "stack-123")
+	object, err := ObjectFromID(TypeStack, "stack-123")
 	if err != nil {
 		t.Fatalf("ObjectFromID() error = %v", err)
 	}
-	check := CheckRequest{Subject: subject, Stack: stack, Permission: RelationCanView}
-	if !check.Valid() {
-		t.Fatal("validated check request must be valid")
-	}
-	if (CheckRequest{}).Valid() {
-		t.Fatal("zero check request must be invalid")
-	}
+	check := CheckRequest{Subject: subject, Relation: RelationCanView, Object: object}
 	if !(BatchCheckRequest{Checks: []CheckRequest{check}}).Valid() {
 		t.Fatal("validated batch request must be valid")
 	}
 	if (BatchCheckRequest{}).Valid() {
 		t.Fatal("zero batch request must be invalid")
 	}
-	if !(ListAccessibleStacksRequest{Subject: subject, Permission: RelationCanView}).Valid() {
-		t.Fatal("validated accessible-stack request must be valid")
-	}
-	if (ListAccessibleStacksRequest{}).Valid() {
-		t.Fatal("zero accessible-stack request must be invalid")
-	}
-	if !(ListGrantsRequest{Stack: stack}).Valid() {
-		t.Fatal("validated grants request must be valid")
-	}
-	if (ListGrantsRequest{}).Valid() {
-		t.Fatal("zero grants request must be invalid")
+	if (BatchCheckRequest{Checks: []CheckRequest{check, {}}}).Valid() {
+		t.Fatal("batch request with one invalid check must be invalid")
 	}
 }
 

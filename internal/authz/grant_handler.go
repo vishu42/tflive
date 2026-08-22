@@ -75,7 +75,7 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 
 	current, err := handler.relationships.ListSubjectGrants(ctx, ListSubjectGrantsRequest{
 		Subject: identity.subject,
-		Stack:   identity.stack,
+		Object:  identity.stack,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("read current stack grants: %w", err)
@@ -84,7 +84,7 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 	var stale []Grant
 	satisfied := false
 	for _, grant := range current.Grants {
-		if identity.hasRole && grant.Role() == identity.role {
+		if identity.hasRole && grant.Relation() == identity.role {
 			satisfied = true
 			continue
 		}

@@ -42,8 +42,10 @@ func SubjectFromOIDCSub(sub string) (Subject, error) {
 	return Subject{object: object}, nil
 }
 
-// Type returns the subject's object type. Always TypeUser today; #141 adds
-// platform subjects for the parent edge.
+// Type returns the subject's object type. Always TypeUser today, because
+// SubjectFromOIDCSub is the only constructor and it always builds one; that is
+// a fact about today's one call site, not something this method enforces.
+// #141 adds platform subjects for the parent edge without changing Type.
 //
 //	SubjectFromOIDCSub("alice") then .Type()  → TypeUser
 //	Subject{}.Type()                          → ""
@@ -59,7 +61,12 @@ func (subject Subject) String() string {
 	return subject.object.String()
 }
 
-// Valid reports whether the subject is a canonical, validated authorization ID.
+// Valid reports whether the subject is a canonical, validated authorization
+// ID for its wrapped object type — whatever that type is. It does not assert
+// TypeUser: Subject wraps a general Object precisely so #141 can put
+// platform:tflive in the user slot without restructuring, and today's single
+// constructor (SubjectFromOIDCSub) is what keeps every Subject a user in
+// practice, not this method.
 //
 //	SubjectFromOIDCSub("alice") then .Valid()  → true
 //	Subject{}.Valid()                          → false
@@ -173,16 +180,21 @@ func validCanonicalIdentifier(kind, value string) bool {
 	return err == nil
 }
 
-// CheckRequest asks whether Subject has Permission for Stack.
+// CheckRequest asks whether Subject has Relation on Object.
 type CheckRequest struct {
-	Subject    Subject
-	Stack      Object
-	Permission Relation
+	Subject  Subject
+	Relation Relation
+	Object   Object
 }
 
 // Valid reports whether the request can safely cross the adapter boundary.
+//
+//	CheckRequest{user:alice, can_view, stack:abc}.Valid()  → true
+//	CheckRequest{user:alice, parent, stack:abc}.Valid()    → true   (checking is safe)
+//	CheckRequest{user:alice, <zero>, stack:abc}.Valid()    → false
+//	CheckRequest{}.Valid()                                 → false
 func (request CheckRequest) Valid() bool {
-	return request.Subject.Valid() && request.Stack.Valid() && request.Permission.Valid()
+	return request.Subject.Valid() && request.Relation.Valid() && request.Object.Valid()
 }
 
 // CheckResult is the explicit outcome of a Check request.
@@ -213,32 +225,17 @@ type BatchCheckResult struct {
 	Results []CheckResult
 }
 
-// ListAccessibleStacksRequest asks for stacks a subject can access through a
-// relation. Permission is typed Relation, so nothing here restricts it to a
-// derived permission — enforcing that, if it matters, is a caller concern.
-type ListAccessibleStacksRequest struct {
-	Subject    Subject
-	Permission Relation
-}
-
-// Valid reports whether the request can safely cross the adapter boundary.
-func (request ListAccessibleStacksRequest) Valid() bool {
-	return request.Subject.Valid() && request.Permission.Valid()
-}
-
-// ListAccessibleStacksResult contains only validated canonical stack IDs.
-type ListAccessibleStacksResult struct {
-	Stacks []Object
-}
-
-// ListGrantsRequest asks for direct role assignments on a stack.
+// ListGrantsRequest asks for direct role assignments on an object.
 type ListGrantsRequest struct {
-	Stack Object
+	Object Object
 }
 
 // Valid reports whether the request can safely cross the adapter boundary.
+//
+//	ListGrantsRequest{Object: stack:abc}.Valid()  → true
+//	ListGrantsRequest{}.Valid()                   → false
 func (request ListGrantsRequest) Valid() bool {
-	return request.Stack.Valid()
+	return request.Object.Valid()
 }
 
 // ListGrantsResult contains only validated grants. Valid checks well-formed
@@ -248,45 +245,60 @@ type ListGrantsResult struct {
 	Grants []Grant
 }
 
-// Grant is a relation assignment for a subject on a stack.
+// Grant is a direct, grantable role assignment for a subject on an object.
 type Grant struct {
-	subject Subject
-	stack   Object
-	role    Relation
+	subject  Subject
+	object   Object
+	relation Relation
 }
 
-// NewGrant returns a grant with well-formed subject, stack, and relation
-// name. It does not require the relation to be one the grant API may
-// actually write — that is Relation.Grantable, which Task 4 wires into
-// Grant.Valid.
-func NewGrant(subject Subject, stack Object, role Relation) (Grant, error) {
-	grant := Grant{subject: subject, stack: stack, role: role}
+// NewGrant returns a validated direct role assignment. It refuses any relation
+// the grant API may not write, so a Grant can never hold a structural edge
+// however the Relation reached it.
+//
+//	NewGrant(user:alice, stack:abc, RelationOwner)    → Grant{…}, nil
+//	NewGrant(user:alice, stack:abc, RelationCanView)  → Grant{}, ErrInvalidInput
+//	NewGrant(user:alice, stack:abc, <"parent">)       → Grant{}, ErrInvalidInput
+//	NewGrant(Subject{}, stack:abc, RelationOwner)     → Grant{}, ErrInvalidInput
+//	NewGrant(user:alice, Object{}, RelationOwner)     → Grant{}, ErrInvalidInput
+func NewGrant(subject Subject, object Object, relation Relation) (Grant, error) {
+	grant := Grant{subject: subject, object: object, relation: relation}
 	if !grant.Valid() {
-		return Grant{}, fmt.Errorf("%w: invalid grant", ErrInvalidInput)
+		return Grant{}, fmt.Errorf("%w: invalid direct role grant", ErrInvalidInput)
 	}
 	return grant, nil
 }
 
 // Subject returns the grant subject.
+//
+//	NewGrant(user:alice, stack:abc, RelationOwner) then .Subject().String()  → "user:alice"
 func (grant Grant) Subject() Subject {
 	return grant.subject
 }
 
-// Stack returns the grant stack.
-func (grant Grant) Stack() Object {
-	return grant.stack
+// Object returns the grant object.
+//
+//	NewGrant(user:alice, stack:abc, RelationOwner) then .Object().String()  → "stack:abc"
+func (grant Grant) Object() Object {
+	return grant.object
 }
 
-// Role returns the grant's relation.
-func (grant Grant) Role() Relation {
-	return grant.role
+// Relation returns the grant's direct relation. It is comparable by value, so
+// callers can write grant.Relation() == RelationOwner.
+//
+//	NewGrant(user:alice, stack:abc, RelationOwner) then .Relation()  → RelationOwner
+func (grant Grant) Relation() Relation {
+	return grant.relation
 }
 
-// Valid reports whether the grant has well-formed identifiers and a
-// well-formed relation name. It does not require the relation to be
-// grantable — Task 4 tightens this to Relation.Grantable.
+// Valid reports whether the grant has validated identifiers and a grantable
+// relation. Grantable, not merely valid: this is what keeps a structural edge
+// out of a Mutation.
+//
+//	NewGrant(user:alice, stack:abc, RelationOwner) then .Valid()  → true
+//	Grant{}.Valid()                                               → false
 func (grant Grant) Valid() bool {
-	return grant.subject.Valid() && grant.stack.Valid() && grant.role.Valid()
+	return grant.subject.Valid() && grant.object.Valid() && grant.relation.Grantable()
 }
 
 // Mutation changes a set of direct role assignments. Confirmation requests
@@ -335,15 +347,18 @@ func (mutation Mutation) Valid() bool {
 	return true
 }
 
-// ListSubjectGrantsRequest asks for one subject's direct roles on one stack.
+// ListSubjectGrantsRequest asks for one subject's direct roles on one object.
 type ListSubjectGrantsRequest struct {
 	Subject Subject
-	Stack   Object
+	Object  Object
 }
 
-// Valid reports whether the request names a well-formed subject and stack.
+// Valid reports whether the request names a well-formed subject and object.
+//
+//	ListSubjectGrantsRequest{user:alice, stack:abc}.Valid()  → true
+//	ListSubjectGrantsRequest{Object: stack:abc}.Valid()      → false  (no subject)
 func (request ListSubjectGrantsRequest) Valid() bool {
-	return request.Subject.Valid() && request.Stack.Valid()
+	return request.Subject.Valid() && request.Object.Valid()
 }
 
 // SubjectGrantLister reads the direct roles one subject holds on one stack.
@@ -359,7 +374,6 @@ type SubjectGrantLister interface {
 type Authorizer interface {
 	Check(context.Context, CheckRequest) (CheckResult, error)
 	BatchCheck(context.Context, BatchCheckRequest) (BatchCheckResult, error)
-	ListAccessibleStacks(context.Context, ListAccessibleStacksRequest) (ListAccessibleStacksResult, error)
 	ListGrants(context.Context, ListGrantsRequest) (ListGrantsResult, error)
 	WriteRelationships(context.Context, Mutation) error
 	DeleteRelationships(context.Context, Mutation) error
