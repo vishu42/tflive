@@ -505,7 +505,6 @@ func TestOIDCVerifierValidatedTokenAllowsMissingNotBefore(t *testing.T) {
 	_ = tok.Set(jwt.AudienceKey, []string{"test-audience"})
 	_ = tok.Set(jwt.ExpirationKey, now.Add(time.Hour))
 	_ = tok.Set(jwt.SubjectKey, "user-123")
-	_ = tok.Set("typ", "Bearer")
 	payload, err := json.Marshal(tok)
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
@@ -654,14 +653,6 @@ func TestOIDCVerifierRejectsInvalidTokens(t *testing.T) {
 			raw: func(t *testing.T, s *oidcTestServer) string {
 				return s.sign(t, "key-a", func(tok jwt.Token) {
 					_ = tok.Set(jwt.SubjectKey, "")
-				})
-			},
-		},
-		{
-			name: "non-Bearer type",
-			raw: func(t *testing.T, s *oidcTestServer) string {
-				return s.sign(t, "key-a", func(tok jwt.Token) {
-					_ = tok.Set("typ", "ID")
 				})
 			},
 		},
@@ -823,7 +814,6 @@ func (s *oidcTestServer) accessToken(mutate func(jwt.Token)) jwt.Token {
 	_ = tok.Set(jwt.ExpirationKey, now.Add(time.Hour))
 	_ = tok.Set(jwt.NotBeforeKey, now.Add(-time.Minute))
 	_ = tok.Set(jwt.SubjectKey, "user-123")
-	_ = tok.Set("typ", "Bearer")
 	if mutate != nil {
 		mutate(tok)
 	}
@@ -863,4 +853,67 @@ func tamperSignature(t *testing.T, raw string) string {
 		segments[2] = "A" + segments[2][1:]
 	}
 	return strings.Join(segments, ".")
+}
+
+func TestOIDCVerifierAcceptsProviderTokenShapes(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(jwt.Token)
+		want   VerifiedToken
+	}{
+		{
+			name: "Okta shaped token without typ or realm_access",
+			mutate: func(tok jwt.Token) {
+				_ = tok.Set("name", "Ada Lovelace")
+				_ = tok.Set("preferred_username", "ada")
+				_ = tok.Set("email", "ada@example.test")
+			},
+			want: VerifiedToken{Subject: "user-123", Name: "Ada Lovelace", PreferredUsername: "ada", Email: "ada@example.test"},
+		},
+		{
+			name: "Keycloak shaped token with typ Bearer and realm_access",
+			mutate: func(tok jwt.Token) {
+				_ = tok.Set("typ", "Bearer")
+				_ = tok.Set("name", "Ada Lovelace")
+				_ = tok.Set("preferred_username", "ada")
+				_ = tok.Set("email", "ada@example.test")
+				_ = tok.Set("realm_access", map[string]any{"roles": []string{"platform-admin"}})
+			},
+			want: VerifiedToken{Subject: "user-123", Name: "Ada Lovelace", PreferredUsername: "ada", Email: "ada@example.test", RealmRoles: []string{"platform-admin"}},
+		},
+		{
+			name: "Keycloak shaped ID token with typ ID",
+			mutate: func(tok jwt.Token) {
+				_ = tok.Set("typ", "ID")
+				_ = tok.Set("name", "Ada Lovelace")
+				_ = tok.Set("preferred_username", "ada")
+				_ = tok.Set("email", "ada@example.test")
+			},
+			want: VerifiedToken{Subject: "user-123", Name: "Ada Lovelace", PreferredUsername: "ada", Email: "ada@example.test"},
+		},
+		{
+			name:   "minimal token carrying only the subject",
+			mutate: nil,
+			want:   VerifiedToken{Subject: "user-123"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := newOIDCTestServer(t)
+			s.addRSAKey(t, "key-a")
+			s.publish("key-a")
+			v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+			if err != nil {
+				t.Fatalf("NewOIDCVerifier() error = %v", err)
+			}
+			defer v.Close(context.Background())
+
+			got, err := v.Verify(context.Background(), s.sign(t, "key-a", test.mutate))
+			if err != nil {
+				t.Fatalf("Verify() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("Verify() = %#v, want %#v", got, test.want)
+			}
+		})
+	}
 }
