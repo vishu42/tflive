@@ -653,15 +653,42 @@ func mustGrant(t *testing.T, subject, stack string, relation authz.Relation) aut
 func TestListGrantsRejectsAStructuralTuple(t *testing.T) {
 	t.Parallel()
 
-	adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		// A parent edge is a legal tuple on the wire; it is not a grant.
-		fmt.Fprint(w, `{"tuples":[{"key":{"user":"platform:tflive","relation":"parent","object":"stack:one"}}],"continuation_token":""}`)
-	})
+	// Two distinct reasons a parent edge must never surface as a Grant. A
+	// platform subject is refused by the subject-prefix guard before
+	// GrantRelation is ever reached. A well-formed user subject reaches
+	// GrantRelation, which refuses "parent" directly — and even if it
+	// admitted it, authz.NewGrant's own Grantable() check would still
+	// refuse the resulting Grant, so this case is defended twice over.
+	// Both must independently produce ErrMalformedResponse out of
+	// ListGrants.
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "user subject relies on GrantRelation",
+			body: `{"tuples":[{"key":{"user":"user:alice","relation":"parent","object":"stack:one"}}],"continuation_token":""}`,
+		},
+		{
+			name: "platform subject relies on the subject-prefix guard",
+			body: `{"tuples":[{"key":{"user":"platform:tflive","relation":"parent","object":"stack:one"}}],"continuation_token":""}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 
-	_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")})
-	if !errors.Is(err, authz.ErrMalformedResponse) {
-		t.Fatalf("ListGrants() error = %v, want ErrMalformedResponse", err)
+			adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				// A parent edge is a legal tuple on the wire; it is not a grant.
+				fmt.Fprint(w, test.body)
+			})
+
+			_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")})
+			if !errors.Is(err, authz.ErrMalformedResponse) {
+				t.Fatalf("ListGrants() error = %v, want ErrMalformedResponse", err)
+			}
+		})
 	}
 }
 

@@ -373,26 +373,6 @@ func tupleForGrant(grant authz.Grant) tupleKey {
 	return tupleKey{User: grant.Subject().String(), Relation: grant.Relation().String(), Object: grant.Object().String()}
 }
 
-// objectFromCanonical parses a wire object string back into a validated Object,
-// requiring it to round-trip exactly so a malformed response cannot smuggle a
-// different identifier past validation.
-//
-//	objectFromCanonical(TypeStack, "stack:abc")   → Object{"stack:abc"}, nil
-//	objectFromCanonical(TypeStack, "user:abc")    → Object{}, error  (wrong prefix)
-//	objectFromCanonical(TypeStack, "stack:a:b")   → Object{}, error
-//	objectFromCanonical(TypeStack, "abc")         → Object{}, error  (no prefix)
-func objectFromCanonical(objectType authz.ObjectType, raw string) (authz.Object, error) {
-	prefix := string(objectType) + ":"
-	if !strings.HasPrefix(raw, prefix) {
-		return authz.Object{}, fmt.Errorf("missing %s prefix", objectType)
-	}
-	object, err := authz.ObjectFromID(objectType, strings.TrimPrefix(raw, prefix))
-	if err != nil || object.String() != raw {
-		return authz.Object{}, fmt.Errorf("invalid %s object", objectType)
-	}
-	return object, nil
-}
-
 // grantFromReadTuple converts one tuple from a read response into a Grant,
 // refusing anything that is not a grant on the object that was asked about.
 //
