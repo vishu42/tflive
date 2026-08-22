@@ -36,13 +36,31 @@ func TestObjectCarriesItsType(t *testing.T) {
 	}
 }
 
-func TestCanonicalIdentifiersRejectUnsafeAndPrefixedValues(t *testing.T) {
-	for _, input := range []string{"", " ", "user:already", "stack:already", "bad\nsubject"} {
-		if _, err := SubjectFromKeycloakSub(input); !errors.Is(err, ErrInvalidInput) {
-			t.Fatalf("subject %q error = %v", input, err)
+// Pins the character rules. Each rejected input changes a tuple's meaning
+// rather than merely being malformed, which is why this is the highest-value
+// test in the package: sub is the one identifier tflive does not originate.
+func TestCanonicalIdentifiersRejectTupleSyntax(t *testing.T) {
+	// Each of these changes the meaning of a tuple rather than merely being
+	// malformed: ':' forges the type prefix, '#' makes a userset reference,
+	// '*' makes the typed wildcard that grants every user.
+	unsafe := []string{"", " ", "user:already", "stack:already", "bad\nsubject", "alice#member", "*", "al*ce", "a#b"}
+	for _, input := range unsafe {
+		if _, err := ObjectFromID(TypeUser, input); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("ObjectFromID(TypeUser, %q) error = %v, want ErrInvalidInput", input, err)
 		}
 		if _, err := ObjectFromID(TypeStack, input); !errors.Is(err, ErrInvalidInput) {
-			t.Fatalf("stack %q error = %v", input, err)
+			t.Fatalf("ObjectFromID(TypeStack, %q) error = %v, want ErrInvalidInput", input, err)
+		}
+	}
+}
+
+// Guards the tightening in Task 2 against over-rejecting: real Keycloak, Okta,
+// and UUID subjects must keep working.
+func TestCanonicalIdentifiersAcceptOrdinarySubjects(t *testing.T) {
+	// UUID and Okta-style subs must keep working.
+	for _, input := range []string{"kc-sub-123", "00u1b2c3d4e5", "6f7a8b9c-1d2e-3f40-5a6b-7c8d9e0f1a2b"} {
+		if _, err := ObjectFromID(TypeUser, input); err != nil {
+			t.Fatalf("ObjectFromID(TypeUser, %q) error = %v", input, err)
 		}
 	}
 }

@@ -164,8 +164,21 @@ func SubjectFromKeycloakSub(sub string) (Subject, error) {
 	return Subject{value: value}, nil
 }
 
+// canonicalIdentifier renders "kind:value" after refusing any value that could
+// change a tuple's meaning rather than merely be malformed. ':' would forge the
+// type prefix, '#' would make the value a userset reference, and '*' would make
+// it the typed wildcard that matches every user.
+//
+//	canonicalIdentifier("user", "kc-sub-1")      → "user:kc-sub-1", nil
+//	canonicalIdentifier("stack", "abc123")       → "stack:abc123", nil
+//	canonicalIdentifier("user", "alice#member")  → "", ErrInvalidInput
+//	canonicalIdentifier("user", "*")             → "", ErrInvalidInput
+//	canonicalIdentifier("user", "a b")           → "", ErrInvalidInput
 func canonicalIdentifier(kind, value string) (string, error) {
-	if value == "" || strings.Contains(value, ":") || strings.IndexFunc(value, unicode.IsSpace) >= 0 || strings.IndexFunc(value, unicode.IsControl) >= 0 {
+	if value == "" ||
+		strings.ContainsAny(value, ":#*") ||
+		strings.IndexFunc(value, unicode.IsSpace) >= 0 ||
+		strings.IndexFunc(value, unicode.IsControl) >= 0 {
 		return "", fmt.Errorf("%w: invalid %s identifier", ErrInvalidInput, kind)
 	}
 	return kind + ":" + value, nil
