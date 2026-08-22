@@ -27,25 +27,43 @@ nine-line allowlist.
 
 ## 2. What the port must actually refuse
 
-The current port refuses several things on the grounds that they are dangerous.
-Each was tested against the real model with the `fga` CLI rather than assumed:
+**The same three strings mean different things on different endpoints**, and
+this is the fact the whole design turns on. `check` asks a question and will
+evaluate any relation; `write` stores a fact and validates it against the
+model's `directly_related_user_types`. So a relation illegal to *store* can be
+entirely legal to *ask about* — indeed `user:alice can_view stack:X` is the
+primary question this port exists to ask, sent by `authorizeStack` on every
+request.
 
-| Tuple | OpenFGA's own verdict |
+The current port refuses several tuples on the grounds that they are dangerous.
+Each was tested against the real model with the `fga` CLI rather than assumed,
+**on the write path**:
+
+| Stored tuple | OpenFGA's own verdict |
 |---|---|
-| `user:alice can_view stack:X` — write to a derived relation | **REJECTED** — `type 'user' is not an allowed type restriction for 'stack#can_view'` |
+| `user:alice can_view stack:X` — derived relation | **REJECTED** — `type 'user' is not an allowed type restriction for 'stack#can_view'` |
 | `user:* viewer stack:X` — typed wildcard, grants everyone | **REJECTED** — wildcard not an allowed type restriction |
 | `user:alice#member viewer stack:X` — userset injection | **REJECTED** — `relation 'user#member' not found` |
 | `platform:tflive parent stack:X` — structural edge | **ACCEPTED** |
 | `user:alice viewer stack:X` — control | ACCEPTED |
 
-**Three of the four are already enforced by the server.** The `Role` /
-`Permission` split — the thing that would otherwise have to generalize into a
-per-type registry — duplicates a check OpenFGA does natively, against the model
-itself, and therefore without drift.
+To be explicit, since the first row is easy to misread: `can_view` is rejected
+as a *stored tuple* only. Asked as a check against a subject holding `owner`, it
+returns `true`, and must.
+
+**Three of the four are already enforced by the server** on the path that
+matters. The `Role` / `Permission` split — the thing that would otherwise have
+to generalize into a per-type registry — duplicates a check OpenFGA does
+natively, against the model itself, and therefore without drift.
 
 So the registry, the three-way relation classification, and the
 registry-versus-model agreement test are all deleted from this design. The one
 row the server does not refuse is handled by §3.4.
+
+This write/check asymmetry is also *why* §3.4 has two constructors rather than
+one validated `Relation` type. They are not "strict" and "lax" versions of the
+same rule — they are the two endpoints' genuinely different rules:
+`NewRelation` for the question, `GrantRelation` for the fact.
 
 ## 3. Target API in `internal/authz`
 
