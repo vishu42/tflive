@@ -19,6 +19,22 @@
 - **`go build ./...` and `go test ./...` must pass at every commit.** Because this changes an interface, intermediate states do not compile — Tasks 3–7 are therefore ordered so each ends compiling. Do not commit a broken build.
 - **Naming, exactly:** `Stack` → `Object`; `StackFromID` → `ObjectFromID`; `SubjectFromKeycloakSub` → `SubjectFromOIDCSub`; `Role` and `Permission` → `Relation`; `RoleOwner` → `RelationOwner`; `PermissionView` → `RelationCanView` (and the three siblings); `Grant.Role()` → `Grant.Relation()`; `ListGrantsRequest.Stack` → `.Object`; `ListSubjectGrantsRequest.Stack` → `.Object`; `CheckRequest.Stack`/`.Permission` → `.Object`/`.Relation`.
 - **Baseline before starting:** `go build ./...` clean, `go test ./internal/authz/... ./internal/openfga/...` = 121 passing.
+- **Every function gets a doc comment with worked examples**, in Go's indented-block form so `go doc` renders them:
+
+  ```go
+  // GrantRelation admits only relations the grant API may write.
+  //
+  //	GrantRelation("viewer")  → Relation{"viewer"}, nil
+  //	GrantRelation("parent")  → Relation{}, ErrInvalidInput
+  ```
+
+  Show at least one accepted and one rejected input for anything that validates —
+  for this port the rejections *are* the documentation. This is a deliberate
+  departure from the surrounding code, which uses bare one-line doc comments;
+  apply it to functions this plan creates or rewrites, not to untouched code.
+  Test *functions* take no inputs, so they get a comment stating which behaviour
+  they pin and why — not a worked example. Test *helpers* get examples like any
+  other function.
 
 ---
 
@@ -55,6 +71,7 @@
 Add to `internal/authz/authorization_test.go`, replacing `TestCanonicalIdentifiers`:
 
 ```go
+// Pins the canonical wire form and that an Object remembers its own type.
 func TestObjectFromIDIsCanonicalAndTyped(t *testing.T) {
 	object, err := ObjectFromID(TypeStack, "stack-123")
 	if err != nil || object.String() != "stack:stack-123" {
@@ -68,12 +85,14 @@ func TestObjectFromIDIsCanonicalAndTyped(t *testing.T) {
 	}
 }
 
+// Pins that a struct literal cannot bypass ObjectFromID's validation.
 func TestZeroObjectIsInvalid(t *testing.T) {
 	if (Object{}).Valid() {
 		t.Fatal("zero Object must not validate")
 	}
 }
 
+// Pins that ObjectFromID is genuinely type-parameterised, not stack-only.
 func TestObjectCarriesItsType(t *testing.T) {
 	user, err := ObjectFromID(TypeUser, "alice")
 	if err != nil || user.String() != "user:alice" {
@@ -109,7 +128,15 @@ type Object struct {
 	value      string
 }
 
-// ObjectFromID returns the canonical authorization identifier for id.
+// ObjectFromID returns the canonical authorization identifier for id. The id
+// must be a bare identifier: it is the caller's raw value, never an
+// already-prefixed one.
+//
+//	ObjectFromID(TypeStack, "abc123")      → Object{"stack:abc123"}, nil
+//	ObjectFromID(TypeUser, "00u1b2c3")     → Object{"user:00u1b2c3"}, nil
+//	ObjectFromID(TypeStack, "stack:abc")   → Object{}, ErrInvalidInput  (already prefixed)
+//	ObjectFromID(TypeUser, "al*ce")        → Object{}, ErrInvalidInput  (wildcard char)
+//	ObjectFromID(TypeUser, "")             → Object{}, ErrInvalidInput
 func ObjectFromID(objectType ObjectType, id string) (Object, error) {
 	if objectType == "" {
 		return Object{}, fmt.Errorf("%w: object type is required", ErrInvalidInput)
@@ -122,16 +149,27 @@ func ObjectFromID(objectType ObjectType, id string) (Object, error) {
 }
 
 // Type returns the object's declared type.
+//
+//	ObjectFromID(TypeStack, "abc").Type()  → TypeStack
+//	Object{}.Type()                        → ""
 func (object Object) Type() ObjectType {
 	return object.objectType
 }
 
 // String renders the canonical authorization identifier for a provider adapter.
+//
+//	ObjectFromID(TypeStack, "abc").String()  → "stack:abc"
+//	Object{}.String()                        → ""
 func (object Object) String() string {
 	return object.value
 }
 
 // Valid reports whether the object is a canonical, validated authorization ID.
+// The zero Object is never valid, so a struct literal cannot bypass the
+// constructor.
+//
+//	ObjectFromID(TypeStack, "abc") then .Valid()  → true
+//	Object{}.Valid()                              → false
 func (object Object) Valid() bool {
 	return object.objectType != "" && validCanonicalIdentifier(string(object.objectType), object.value)
 }
@@ -168,6 +206,9 @@ git commit -m "refactor(authz): replace Stack with a typed Object"
 Add to `internal/authz/authorization_test.go`:
 
 ```go
+// Pins the character rules. Each rejected input changes a tuple's meaning
+// rather than merely being malformed, which is why this is the highest-value
+// test in the package: sub is the one identifier tflive does not originate.
 func TestCanonicalIdentifiersRejectTupleSyntax(t *testing.T) {
 	// Each of these changes the meaning of a tuple rather than merely being
 	// malformed: ':' forges the type prefix, '#' makes a userset reference,
@@ -183,6 +224,8 @@ func TestCanonicalIdentifiersRejectTupleSyntax(t *testing.T) {
 	}
 }
 
+// Guards the tightening in Task 2 against over-rejecting: real Keycloak, Okta,
+// and UUID subjects must keep working.
 func TestCanonicalIdentifiersAcceptOrdinarySubjects(t *testing.T) {
 	// UUID and Okta-style subs must keep working.
 	for _, input := range []string{"kc-sub-123", "00u1b2c3d4e5", "6f7a8b9c-1d2e-3f40-5a6b-7c8d9e0f1a2b"} {
@@ -209,6 +252,12 @@ Replace `canonicalIdentifier` in `internal/authz/authorization.go`:
 // change a tuple's meaning rather than merely be malformed. ':' would forge the
 // type prefix, '#' would make the value a userset reference, and '*' would make
 // it the typed wildcard that matches every user.
+//
+//	canonicalIdentifier("user", "kc-sub-1")      → "user:kc-sub-1", nil
+//	canonicalIdentifier("stack", "abc123")       → "stack:abc123", nil
+//	canonicalIdentifier("user", "alice#member")  → "", ErrInvalidInput
+//	canonicalIdentifier("user", "*")             → "", ErrInvalidInput
+//	canonicalIdentifier("user", "a b")           → "", ErrInvalidInput
 func canonicalIdentifier(kind, value string) (string, error) {
 	if value == "" ||
 		strings.ContainsAny(value, ":#*") ||
@@ -273,6 +322,7 @@ func TestGrantRelationRefusesNonGrantableRelations(t *testing.T) {
 	}
 }
 
+// Pins the allowlist's contents. #141 extends this with admin and stack_creator.
 func TestGrantRelationAcceptsTheFourStackRoles(t *testing.T) {
 	for _, name := range []string{"owner", "operator", "approver", "viewer"} {
 		relation, err := GrantRelation(name)
@@ -299,6 +349,7 @@ func TestNewRelationAdmitsRelationsThatCannotBeGranted(t *testing.T) {
 	}
 }
 
+// Pins that relation names obey the same character rules as identifiers.
 func TestNewRelationRejectsNamesThatCorruptATuple(t *testing.T) {
 	for _, name := range []string{"", " ", "can view", "can:view", "can#view", "*", "bad\nrelation"} {
 		if _, err := NewRelation(name); !errors.Is(err, ErrInvalidInput) {
@@ -307,6 +358,7 @@ func TestNewRelationRejectsNamesThatCorruptATuple(t *testing.T) {
 	}
 }
 
+// Pins that a zero Relation cannot be smuggled into a write.
 func TestZeroRelationIsInvalidAndNotGrantable(t *testing.T) {
 	if (Relation{}).Valid() {
 		t.Fatal("zero Relation must not validate")
@@ -316,6 +368,8 @@ func TestZeroRelationIsInvalidAndNotGrantable(t *testing.T) {
 	}
 }
 
+// Pins that the package-level table is wired to the right constructors — a
+// permission accidentally built with mustGrantRelation would grant write access.
 func TestNamedRelationValuesMatchTheirBucket(t *testing.T) {
 	for _, relation := range []Relation{RelationOwner, RelationOperator, RelationApprover, RelationViewer} {
 		if !relation.Grantable() {
@@ -336,6 +390,7 @@ func TestNamedRelationValuesMatchTheirBucket(t *testing.T) {
 Add to `internal/authz/authorization_test.go`:
 
 ```go
+// Pins that Subject wraps a user Object rather than being its own encoding.
 func TestSubjectFromOIDCSubIsAUserObject(t *testing.T) {
 	subject, err := SubjectFromOIDCSub("kc-sub-123")
 	if err != nil || subject.String() != "user:kc-sub-123" {
@@ -346,6 +401,7 @@ func TestSubjectFromOIDCSubIsAUserObject(t *testing.T) {
 	}
 }
 
+// Pins that a struct literal cannot bypass SubjectFromOIDCSub's validation.
 func TestZeroSubjectIsInvalid(t *testing.T) {
 	if (Subject{}).Valid() {
 		t.Fatal("zero Subject must not validate")
@@ -400,7 +456,13 @@ type Relation struct {
 
 // NewRelation admits any well-formed relation name. Checking is always safe:
 // OpenFGA evaluates whatever relation it is asked about and rejects one that
-// does not exist on the object's type.
+// does not exist on the object's type. Use this for CheckRequest.
+//
+//	NewRelation("can_view")  → Relation{"can_view"}, nil
+//	NewRelation("owner")     → Relation{"owner"}, nil
+//	NewRelation("parent")    → Relation{"parent"}, nil   (checkable, not grantable)
+//	NewRelation("can view")  → Relation{}, ErrInvalidInput
+//	NewRelation("")          → Relation{}, ErrInvalidInput
 func NewRelation(name string) (Relation, error) {
 	if !safeRelationName(name) {
 		return Relation{}, fmt.Errorf("%w: invalid relation name", ErrInvalidInput)
@@ -411,6 +473,12 @@ func NewRelation(name string) (Relation, error) {
 // GrantRelation admits only relations the grant API may write. It is the write
 // path's counterpart to NewRelation: not a stricter version of the same rule,
 // but the other endpoint's genuinely different rule.
+//
+//	GrantRelation("viewer")    → Relation{"viewer"}, nil
+//	GrantRelation("owner")     → Relation{"owner"}, nil
+//	GrantRelation("parent")    → Relation{}, ErrInvalidInput  (structural edge)
+//	GrantRelation("can_view")  → Relation{}, ErrInvalidInput  (derived)
+//	GrantRelation("nonsense")  → Relation{}, ErrInvalidInput
 func GrantRelation(name string) (Relation, error) {
 	relation, err := NewRelation(name)
 	if err != nil {
@@ -423,20 +491,41 @@ func GrantRelation(name string) (Relation, error) {
 }
 
 // String renders the relation name for a provider adapter.
+//
+//	RelationOwner.String()    → "owner"
+//	RelationCanView.String()  → "can_view"
+//	Relation{}.String()       → ""
 func (relation Relation) String() string {
 	return relation.value
 }
 
-// Valid reports whether the relation is a well-formed name.
+// Valid reports whether the relation is a well-formed name. It says nothing
+// about whether the relation may be written — see Grantable.
+//
+//	RelationCanView.Valid()  → true
+//	Relation{}.Valid()       → false
 func (relation Relation) Valid() bool {
 	return safeRelationName(relation.value)
 }
 
 // Grantable reports whether the grant API may write this relation.
+//
+//	RelationOwner.Grantable()    → true
+//	RelationCanView.Grantable()  → false  (derived; OpenFGA refuses it too)
+//	Relation{}.Grantable()       → false
+//
+// A "parent" relation built through NewRelation also reports false, which is
+// the refusal this whole type exists for.
 func (relation Relation) Grantable() bool {
 	return grantableRelations[relation.value]
 }
 
+// safeRelationName rejects names that would corrupt a tuple's encoding, using
+// the same character rules as canonicalIdentifier.
+//
+//	safeRelationName("can_view")  → true
+//	safeRelationName("can#view")  → false
+//	safeRelationName("")          → false
 func safeRelationName(name string) bool {
 	if name == "" || strings.ContainsAny(name, ":#*") {
 		return false
@@ -461,6 +550,11 @@ var (
 	RelationCanManageAccess = mustRelation("can_manage_access")
 )
 
+// mustRelation is NewRelation for the package-level table below. It panics on
+// error, which at init time can only be a typo three lines above it.
+//
+//	mustRelation("can_view")  → Relation{"can_view"}
+//	mustRelation("can view")  → panics
 func mustRelation(name string) Relation {
 	relation, err := NewRelation(name)
 	if err != nil {
@@ -469,6 +563,10 @@ func mustRelation(name string) Relation {
 	return relation
 }
 
+// mustGrantRelation is GrantRelation for the package-level table below.
+//
+//	mustGrantRelation("owner")   → Relation{"owner"}
+//	mustGrantRelation("parent")  → panics (not in grantableRelations)
 func mustGrantRelation(name string) Relation {
 	relation, err := GrantRelation(name)
 	if err != nil {
@@ -488,7 +586,14 @@ type Subject struct {
 	object Object
 }
 
-// SubjectFromOIDCSub returns the canonical authorization identifier for sub.
+// SubjectFromOIDCSub returns the canonical authorization identifier for sub,
+// the "sub" claim of a verified ID token. This is the one identifier tflive
+// does not originate, so the character rules matter most here.
+//
+//	SubjectFromOIDCSub("00u1b2c3")      → Subject{"user:00u1b2c3"}, nil
+//	SubjectFromOIDCSub("kc-sub-123")    → Subject{"user:kc-sub-123"}, nil
+//	SubjectFromOIDCSub("alice#member")  → Subject{}, ErrInvalidInput  (userset)
+//	SubjectFromOIDCSub("*")             → Subject{}, ErrInvalidInput  (everyone)
 func SubjectFromOIDCSub(sub string) (Subject, error) {
 	object, err := ObjectFromID(TypeUser, sub)
 	if err != nil {
@@ -497,17 +602,27 @@ func SubjectFromOIDCSub(sub string) (Subject, error) {
 	return Subject{object: object}, nil
 }
 
-// Type returns the subject's object type.
+// Type returns the subject's object type. Always TypeUser today; #141 adds
+// platform subjects for the parent edge.
+//
+//	SubjectFromOIDCSub("alice") then .Type()  → TypeUser
+//	Subject{}.Type()                          → ""
 func (subject Subject) Type() ObjectType {
 	return subject.object.Type()
 }
 
 // String renders the canonical authorization identifier for a provider adapter.
+//
+//	SubjectFromOIDCSub("alice") then .String()  → "user:alice"
+//	Subject{}.String()                          → ""
 func (subject Subject) String() string {
 	return subject.object.String()
 }
 
 // Valid reports whether the subject is a canonical, validated authorization ID.
+//
+//	SubjectFromOIDCSub("alice") then .Valid()  → true
+//	Subject{}.Valid()                          → false
 func (subject Subject) Valid() bool {
 	return subject.object.Valid()
 }
@@ -549,6 +664,9 @@ inheritance to exist. The grantable allowlist guards exactly that."
 Replace `TestGrantAndMutationRequireValidatedDirectRoles` and the `ListAccessibleStacksRequest` assertions in `internal/authz/authorization_test.go` with:
 
 ```go
+// The test that proves this refactor achieved its purpose rather than renaming
+// things: a Grant cannot hold a structural edge or a derived relation, however
+// the Relation reached it.
 func TestNewGrantRequiresAGrantableRelation(t *testing.T) {
 	subject, err := SubjectFromOIDCSub("kc-sub-123")
 	if err != nil {
@@ -587,6 +705,8 @@ func TestNewGrantRequiresAGrantableRelation(t *testing.T) {
 	}
 }
 
+// Pins that checking admits relations writing refuses — the write/check
+// asymmetry the two constructors exist for.
 func TestCheckRequestValidity(t *testing.T) {
 	subject, err := SubjectFromOIDCSub("kc-sub-123")
 	if err != nil {
@@ -607,6 +727,7 @@ func TestCheckRequestValidity(t *testing.T) {
 	}
 }
 
+// Pins that both list requests refuse to cross the adapter boundary half-built.
 func TestListRequestsValidity(t *testing.T) {
 	subject, err := SubjectFromOIDCSub("kc-sub-123")
 	if err != nil {
@@ -651,6 +772,11 @@ type CheckRequest struct {
 }
 
 // Valid reports whether the request can safely cross the adapter boundary.
+//
+//	CheckRequest{user:alice, can_view, stack:abc}.Valid()  → true
+//	CheckRequest{user:alice, parent, stack:abc}.Valid()    → true   (checking is safe)
+//	CheckRequest{user:alice, <zero>, stack:abc}.Valid()    → false
+//	CheckRequest{}.Valid()                                 → false
 func (request CheckRequest) Valid() bool {
 	return request.Subject.Valid() && request.Relation.Valid() && request.Object.Valid()
 }
@@ -667,6 +793,9 @@ type ListGrantsRequest struct {
 }
 
 // Valid reports whether the request can safely cross the adapter boundary.
+//
+//	ListGrantsRequest{Object: stack:abc}.Valid()  → true
+//	ListGrantsRequest{}.Valid()                   → false
 func (request ListGrantsRequest) Valid() bool {
 	return request.Object.Valid()
 }
@@ -678,6 +807,9 @@ type ListSubjectGrantsRequest struct {
 }
 
 // Valid reports whether the request names a well-formed subject and object.
+//
+//	ListSubjectGrantsRequest{user:alice, stack:abc}.Valid()  → true
+//	ListSubjectGrantsRequest{Object: stack:abc}.Valid()      → false  (no subject)
 func (request ListSubjectGrantsRequest) Valid() bool {
 	return request.Subject.Valid() && request.Object.Valid()
 }
@@ -690,7 +822,14 @@ type Grant struct {
 }
 
 // NewGrant returns a validated direct role assignment. It refuses any relation
-// the grant API may not write, so a Grant can never hold a structural edge.
+// the grant API may not write, so a Grant can never hold a structural edge
+// however the Relation reached it.
+//
+//	NewGrant(user:alice, stack:abc, RelationOwner)    → Grant{…}, nil
+//	NewGrant(user:alice, stack:abc, RelationCanView)  → Grant{}, ErrInvalidInput
+//	NewGrant(user:alice, stack:abc, <"parent">)       → Grant{}, ErrInvalidInput
+//	NewGrant(Subject{}, stack:abc, RelationOwner)     → Grant{}, ErrInvalidInput
+//	NewGrant(user:alice, Object{}, RelationOwner)     → Grant{}, ErrInvalidInput
 func NewGrant(subject Subject, object Object, relation Relation) (Grant, error) {
 	grant := Grant{subject: subject, object: object, relation: relation}
 	if !grant.Valid() {
@@ -700,22 +839,33 @@ func NewGrant(subject Subject, object Object, relation Relation) (Grant, error) 
 }
 
 // Subject returns the grant subject.
+//
+//	NewGrant(user:alice, stack:abc, RelationOwner) then .Subject().String()  → "user:alice"
 func (grant Grant) Subject() Subject {
 	return grant.subject
 }
 
 // Object returns the grant object.
+//
+//	NewGrant(user:alice, stack:abc, RelationOwner) then .Object().String()  → "stack:abc"
 func (grant Grant) Object() Object {
 	return grant.object
 }
 
-// Relation returns the grant's direct relation.
+// Relation returns the grant's direct relation. It is comparable by value, so
+// callers can write grant.Relation() == RelationOwner.
+//
+//	NewGrant(user:alice, stack:abc, RelationOwner) then .Relation()  → RelationOwner
 func (grant Grant) Relation() Relation {
 	return grant.relation
 }
 
 // Valid reports whether the grant has validated identifiers and a grantable
-// relation.
+// relation. Grantable, not merely valid: this is what keeps a structural edge
+// out of a Mutation.
+//
+//	NewGrant(user:alice, stack:abc, RelationOwner) then .Valid()  → true
+//	Grant{}.Valid()                                               → false
 func (grant Grant) Valid() bool {
 	return grant.subject.Valid() && grant.object.Valid() && grant.relation.Grantable()
 }
@@ -773,6 +923,8 @@ cannot serve."
 Add to `internal/authz/grant_handler_test.go`:
 
 ```go
+// Pins a frozen contract. The key is persisted, so a format change splits one
+// resource across two keys and disables the queue's mutual exclusion.
 func TestStackGrantKeyFormatIsUnchanged(t *testing.T) {
 	// The key is persisted. Changing its format splits one resource across two
 	// keys and disables the queue's mutual exclusion.
@@ -806,6 +958,18 @@ type grantIdentity struct {
 	hasRelation bool
 }
 
+// parseGrantPayload decodes a reconcile_stack_grant payload into validated
+// identifiers. An empty Role means "revoke everything", which is why hasRelation
+// is separate from relation.
+//
+//	{"stack_id":"s1","subject":"u1","role":"viewer"}
+//	  → grantIdentity{stack:s1, user:u1, viewer, hasRelation:true}, nil
+//	{"stack_id":"s1","subject":"u1","role":""}
+//	  → grantIdentity{stack:s1, user:u1, <zero>, hasRelation:false}, nil
+//	{"stack_id":"s1","subject":"u1","role":"parent"}
+//	  → grantIdentity{}, error  (not grantable)
+//	{"stack_id":"","subject":"u1","role":"viewer"}
+//	  → grantIdentity{}, error
 func parseGrantPayload(payload json.RawMessage) (grantIdentity, error) {
 	var parsed GrantPayload
 	if err := json.Unmarshal(payload, &parsed); err != nil {
@@ -835,6 +999,13 @@ func parseGrantPayload(payload json.RawMessage) (grantIdentity, error) {
 Update `stackGrantKey` to use the new field — the produced string is identical:
 
 ```go
+// stackGrantKey derives the queue's mutual-exclusion key. The format is a
+// frozen contract: keys are persisted, and changing it splits one resource
+// across two keys, disabling the unique partial index's exclusion.
+//
+//	{"stack_id":"s1","subject":"u1","role":"viewer"}  → "stack:s1/user:u1", nil
+//	{"stack_id":"s1","subject":"u1","role":""}        → "stack:s1/user:u1", nil
+//	{"stack_id":"bad:id","subject":"u1"}              → "", error
 func stackGrantKey(payload json.RawMessage) (string, error) {
 	identity, err := parseGrantPayload(payload)
 	if err != nil {
@@ -906,6 +1077,10 @@ across two keys."
 In `internal/openfga/authorization_adapter_test.go`, replace the three helpers at lines 649-673. Every other test in the file then updates mechanically by following the compiler.
 
 ```go
+// mustSubject builds a Subject or fails the test.
+//
+//	mustSubject(t, "alice")  → Subject{"user:alice"}
+//	mustSubject(t, "a*b")    → t.Fatal
 func mustSubject(t *testing.T, sub string) authz.Subject {
 	t.Helper()
 	subject, err := authz.SubjectFromOIDCSub(sub)
@@ -915,6 +1090,10 @@ func mustSubject(t *testing.T, sub string) authz.Subject {
 	return subject
 }
 
+// mustObject builds an Object of any type, or fails the test.
+//
+//	mustObject(t, authz.TypeStack, "one")  → Object{"stack:one"}
+//	mustObject(t, authz.TypeUser, "alice") → Object{"user:alice"}
 func mustObject(t *testing.T, objectType authz.ObjectType, id string) authz.Object {
 	t.Helper()
 	object, err := authz.ObjectFromID(objectType, id)
@@ -924,11 +1103,19 @@ func mustObject(t *testing.T, objectType authz.ObjectType, id string) authz.Obje
 	return object
 }
 
+// mustStack is mustObject fixed to TypeStack, which most tests want.
+//
+//	mustStack(t, "one")  → Object{"stack:one"}
 func mustStack(t *testing.T, id string) authz.Object {
 	t.Helper()
 	return mustObject(t, authz.TypeStack, id)
 }
 
+// mustGrant builds a Grant from bare IDs, or fails the test.
+//
+//	mustGrant(t, "alice", "one", authz.RelationOwner)
+//	  → Grant{user:alice, stack:one, owner}
+//	mustGrant(t, "alice", "one", authz.RelationCanView)  → t.Fatal (not grantable)
 func mustGrant(t *testing.T, subject, stack string, relation authz.Relation) authz.Grant {
 	t.Helper()
 	grant, err := authz.NewGrant(mustSubject(t, subject), mustStack(t, stack), relation)
@@ -942,6 +1129,8 @@ func mustGrant(t *testing.T, subject, stack string, relation authz.Relation) aut
 Add a new test asserting the read path refuses a structural tuple — this is the case that starts mattering at #141:
 
 ```go
+// Pins that a parent edge read back from OpenFGA is refused rather than
+// surfacing as a grant. Inert until #141 writes the first one.
 func TestListGrantsRejectsAStructuralTuple(t *testing.T) {
 	t.Parallel()
 
@@ -976,10 +1165,22 @@ Delete `ListAccessibleStacks` entirely (the whole method, roughly lines 99-146).
 Replace the tuple builders at the bottom of the file:
 
 ```go
+// tupleForGrant renders a Grant as OpenFGA's wire tuple.
+//
+//	NewGrant(user:alice, stack:abc, RelationOwner)
+//	  → tupleKey{User: "user:alice", Relation: "owner", Object: "stack:abc"}
 func tupleForGrant(grant authz.Grant) tupleKey {
 	return tupleKey{User: grant.Subject().String(), Relation: grant.Relation().String(), Object: grant.Object().String()}
 }
 
+// objectFromCanonical parses a wire object string back into a validated Object,
+// requiring it to round-trip exactly so a malformed response cannot smuggle a
+// different identifier past validation.
+//
+//	objectFromCanonical(TypeStack, "stack:abc")   → Object{"stack:abc"}, nil
+//	objectFromCanonical(TypeStack, "user:abc")    → Object{}, error  (wrong prefix)
+//	objectFromCanonical(TypeStack, "stack:a:b")   → Object{}, error
+//	objectFromCanonical(TypeStack, "abc")         → Object{}, error  (no prefix)
 func objectFromCanonical(objectType authz.ObjectType, raw string) (authz.Object, error) {
 	prefix := string(objectType) + ":"
 	if !strings.HasPrefix(raw, prefix) {
@@ -992,6 +1193,14 @@ func objectFromCanonical(objectType authz.ObjectType, raw string) (authz.Object,
 	return object, nil
 }
 
+// grantFromReadTuple converts one tuple from a read response into a Grant,
+// refusing anything that is not a grant on the object that was asked about.
+//
+//	{user:alice, owner, stack:abc}, stack:abc      → Grant{…}, nil
+//	{platform:tflive, parent, stack:abc}, stack:abc → Grant{}, error  (not a grant)
+//	{user:alice, can_view, stack:abc}, stack:abc   → Grant{}, error
+//	{user:alice, owner, stack:other}, stack:abc    → Grant{}, error  (wrong object)
+//	nil, stack:abc                                 → Grant{}, error
 func grantFromReadTuple(key *tupleKey, requestedObject authz.Object) (authz.Grant, error) {
 	const subjectPrefix = "user:"
 	if key == nil || key.Object != requestedObject.String() || !strings.HasPrefix(key.User, subjectPrefix) {
@@ -1011,6 +1220,10 @@ func grantFromReadTuple(key *tupleKey, requestedObject authz.Object) (authz.Gran
 	return authz.NewGrant(subject, requestedObject, relation)
 }
 
+// tuple renders a CheckRequest as OpenFGA's wire tuple.
+//
+//	CheckRequest{user:alice, can_view, stack:abc}
+//	  → tupleKey{User: "user:alice", Relation: "can_view", Object: "stack:abc"}
 func tuple(request authz.CheckRequest) tupleKey {
 	return tupleKey{User: request.Subject.String(), Relation: request.Relation.String(), Object: request.Object.String()}
 }
@@ -1089,6 +1302,15 @@ Expected: a list of errors in `internal/app`, `internal/api`, `cmd/api`, `cmd/wo
 In `internal/app/authorization.go`:
 
 ```go
+// authorizeStack answers "may the request's principal do relation to this
+// stack?", returning denied rather than a generic error so a caller controls
+// whether the client sees 403 or 404.
+//
+//	stack owned by alice, principal alice, RelationCanOperate  → nil
+//	stack owned by alice, principal bob, RelationCanOperate    → denied
+//	principal is platform-admin, any stack                     → nil (short-circuit)
+//	stackID = "bad:id"                                         → denied
+//	OpenFGA unreachable                                        → authz.ErrUnavailable
 func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID, relation authz.Relation, denied error) error {
 	principal, err := requireAuthorizer(ctx, authorizer)
 	if err != nil {
@@ -1132,6 +1354,12 @@ In `internal/app/service.go` (~20 sites): `authz.PermissionView` → `authz.Rela
 `listGrantsForStack`'s parameter type changes:
 
 ```go
+// listGrantsForStack reads every direct role assignment on one stack. Structural
+// tuples such as parent edges are not grants and never appear in the result.
+//
+//	stack:abc with alice=owner, bob=viewer
+//	  → ListGrantsResult{Grants: [{user:alice, owner}, {user:bob, viewer}]}, nil
+//	stack:abc with no grants  → ListGrantsResult{}, nil
 func (service *Service) listGrantsForStack(ctx context.Context, object authz.Object) (authz.ListGrantsResult, error) {
 	return service.Authorizer.ListGrants(ctx, authz.ListGrantsRequest{Object: object})
 }
@@ -1188,6 +1416,8 @@ Also deletes the six ListAccessibleStacks stubs from test doubles."
 Add to `internal/openfga/authorization_adapter_test.go`:
 
 ```go
+// Pins #220. Ordering is asserted as well as chunking, because a merge that
+// loses the caller's positions silently returns another stack's answer.
 func TestBatchCheckChunksAtFiftyAndPreservesOrder(t *testing.T) {
 	t.Parallel()
 
@@ -1286,6 +1516,15 @@ const maxBatchChecks = 50
 Replace the body of `BatchCheck` with a chunking loop. The per-chunk request and response handling is the existing code unchanged; only the loop and the result offset are new:
 
 ```go
+// BatchCheck evaluates independently correlated permission checks and preserves
+// the caller's input ordering. It splits the request into upstream calls of at
+// most maxBatchChecks, so callers never have to know OpenFGA's limit.
+//
+//	 12 checks  → 1 upstream request,  12 results in input order
+//	 51 checks  → 2 upstream requests (50 + 1), 51 results in input order
+//	 52 checks  → 2 upstream requests (50 + 2)   [the 13-stack case, #220]
+//	  0 checks  → ErrInvalidInput (BatchCheckRequest.Valid rejects it)
+//	upstream 5xx → ErrUnavailable
 func (adapter *AuthorizationAdapter) BatchCheck(ctx context.Context, request authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
 	if !request.Valid() {
 		return authz.BatchCheckResult{}, fmt.Errorf("%w: invalid authorization batch check", authz.ErrInvalidInput)
