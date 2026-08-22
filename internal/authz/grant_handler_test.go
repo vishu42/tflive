@@ -42,15 +42,15 @@ func (f *fakeRelationships) DeleteRelationships(_ context.Context, mutation Muta
 	return nil
 }
 
-func mustGrant(t *testing.T, stackID, subject string, role Role) Grant {
+func mustGrant(t *testing.T, stackID, subject string, role Relation) Grant {
 	t.Helper()
-	stack, err := StackFromID(stackID)
+	stack, err := ObjectFromID(TypeStack, stackID)
 	if err != nil {
-		t.Fatalf("StackFromID(%q): %v", stackID, err)
+		t.Fatalf("ObjectFromID(TypeStack, %q): %v", stackID, err)
 	}
-	sub, err := SubjectFromKeycloakSub(subject)
+	sub, err := SubjectFromOIDCSub(subject)
 	if err != nil {
-		t.Fatalf("SubjectFromKeycloakSub(%q): %v", subject, err)
+		t.Fatalf("SubjectFromOIDCSub(%q): %v", subject, err)
 	}
 	grant, err := NewGrant(sub, stack, role)
 	if err != nil {
@@ -110,7 +110,7 @@ func TestDeliverWritesDesiredRoleWhenAbsent(t *testing.T) {
 	if len(followUps) != 0 {
 		t.Fatalf("follow-ups = %+v, want none: a grant reconcile chains nothing", followUps)
 	}
-	if len(relationships.written) != 1 || relationships.written[0].Role() != RoleOwner {
+	if len(relationships.written) != 1 || relationships.written[0].Relation() != RelationOwner {
 		t.Fatalf("written = %+v, want one owner grant", relationships.written)
 	}
 	if len(relationships.deleted) != 0 {
@@ -122,17 +122,17 @@ func TestDeliverReplacesExistingRole(t *testing.T) {
 	t.Parallel()
 
 	relationships := &fakeRelationships{
-		existing: []Grant{mustGrant(t, "stack_abc", testSubjectSub, RoleViewer)},
+		existing: []Grant{mustGrant(t, "stack_abc", testSubjectSub, RelationViewer)},
 	}
 	handler := NewStackGrantHandler(relationships)
 
 	if _, err := handler.Deliver(context.Background(), queue.Item{Payload: grantPayload("owner")}); err != nil {
 		t.Fatalf("Deliver returned error: %v", err)
 	}
-	if len(relationships.written) != 1 || relationships.written[0].Role() != RoleOwner {
+	if len(relationships.written) != 1 || relationships.written[0].Relation() != RelationOwner {
 		t.Fatalf("written = %+v, want one owner grant", relationships.written)
 	}
-	if len(relationships.deleted) != 1 || relationships.deleted[0].Role() != RoleViewer {
+	if len(relationships.deleted) != 1 || relationships.deleted[0].Relation() != RelationViewer {
 		t.Fatalf("deleted = %+v, want the stale viewer grant", relationships.deleted)
 	}
 }
@@ -141,7 +141,7 @@ func TestDeliverIsIdempotentWhenAlreadyConverged(t *testing.T) {
 	t.Parallel()
 
 	relationships := &fakeRelationships{
-		existing: []Grant{mustGrant(t, "stack_abc", testSubjectSub, RoleOwner)},
+		existing: []Grant{mustGrant(t, "stack_abc", testSubjectSub, RelationOwner)},
 	}
 	handler := NewStackGrantHandler(relationships)
 
@@ -159,7 +159,7 @@ func TestDeliverEmptyRoleRevokesEverything(t *testing.T) {
 	t.Parallel()
 
 	relationships := &fakeRelationships{
-		existing: []Grant{mustGrant(t, "stack_abc", testSubjectSub, RoleOperator)},
+		existing: []Grant{mustGrant(t, "stack_abc", testSubjectSub, RelationOperator)},
 	}
 	handler := NewStackGrantHandler(relationships)
 
@@ -169,8 +169,22 @@ func TestDeliverEmptyRoleRevokesEverything(t *testing.T) {
 	if len(relationships.written) != 0 {
 		t.Fatalf("written = %+v, want none", relationships.written)
 	}
-	if len(relationships.deleted) != 1 || relationships.deleted[0].Role() != RoleOperator {
+	if len(relationships.deleted) != 1 || relationships.deleted[0].Relation() != RelationOperator {
 		t.Fatalf("deleted = %+v, want the operator grant", relationships.deleted)
+	}
+}
+
+// Pins a frozen contract. The key is persisted, so a format change splits one
+// resource across two keys and disables the queue's mutual exclusion.
+func TestStackGrantKeyFormatIsUnchanged(t *testing.T) {
+	// The key is persisted. Changing its format splits one resource across two
+	// keys and disables the queue's mutual exclusion.
+	key, err := stackGrantKey([]byte(`{"stack_id":"stack-123","subject":"kc-sub-456","role":"viewer"}`))
+	if err != nil {
+		t.Fatalf("stackGrantKey() error = %v", err)
+	}
+	if key != "stack:stack-123/user:kc-sub-456" {
+		t.Fatalf("stackGrantKey() = %q, want %q", key, "stack:stack-123/user:kc-sub-456")
 	}
 }
 

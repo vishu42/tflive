@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/bits"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -222,44 +225,6 @@ func TestAuthorizationAdapterRejectsInvalidRequests(t *testing.T) {
 	}
 }
 
-func TestAuthorizationAdapterListAccessibleStacksWithConfiguredModel(t *testing.T) {
-	adapter, requests := testAuthorizationAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/stores/store-id/list-objects" {
-			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
-		}
-		var body struct {
-			AuthorizationModelID string `json:"authorization_model_id"`
-			Type                 string `json:"type"`
-			Relation             string `json:"relation"`
-			User                 string `json:"user"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		if body.AuthorizationModelID != "model-id" || body.Type != "stack" || body.Relation != "can_view" || body.User != "user:alice" {
-			t.Fatalf("body = %#v", body)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"objects":["stack:one","stack:two"]}`)
-	})
-
-	result, err := adapter.ListAccessibleStacks(context.Background(), authz.ListAccessibleStacksRequest{Subject: mustSubject(t, "alice"), Permission: authz.PermissionView})
-	want := authz.ListAccessibleStacksResult{Stacks: []authz.Stack{mustStack(t, "one"), mustStack(t, "two")}}
-	if err != nil || !reflect.DeepEqual(result, want) || *requests != 1 {
-		t.Fatalf("ListAccessibleStacks() = %#v, %v", result, err)
-	}
-}
-
-func TestAuthorizationAdapterRejectsInvalidListObjects(t *testing.T) {
-	for _, body := range []string{`{"objects":["stack:"]}`, `{"objects":["user:alice"]}`, `{"objects":["stack:one","stack:one"]}`, `{`, `{}`} {
-		adapter := adapterForResponse(t, http.StatusOK, "application/json", body)
-		_, err := adapter.ListAccessibleStacks(context.Background(), authz.ListAccessibleStacksRequest{Subject: mustSubject(t, "alice"), Permission: authz.PermissionView})
-		if !errors.Is(err, authz.ErrMalformedResponse) {
-			t.Fatalf("body %q error = %v", body, err)
-		}
-	}
-}
-
 func TestAuthorizationAdapterListsOnlyDirectRoleGrantsAcrossPages(t *testing.T) {
 	var requests *int
 	adapter, requests := testAuthorizationAdapter(t, func(w http.ResponseWriter, r *http.Request) {
@@ -296,10 +261,10 @@ func TestAuthorizationAdapterListsOnlyDirectRoleGrantsAcrossPages(t *testing.T) 
 		}
 	})
 
-	result, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Stack: mustStack(t, "one")})
+	result, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")})
 	want := authz.ListGrantsResult{Grants: []authz.Grant{
-		mustGrant(t, "alice", "one", authz.RoleOwner),
-		mustGrant(t, "bob", "one", authz.RoleViewer),
+		mustGrant(t, "alice", "one", authz.RelationOwner),
+		mustGrant(t, "bob", "one", authz.RelationViewer),
 	}}
 	if err != nil || !reflect.DeepEqual(result, want) || *requests != 2 {
 		t.Fatalf("ListGrants() = %#v, %v", result, err)
@@ -314,7 +279,7 @@ func TestAuthorizationAdapterRejectsMalformedGrantReadPages(t *testing.T) {
 		`{"tuples":[{"key":{"user":"user:alice","relation":"owner","object":"stack:one"}},{"key":{"user":"user:alice","relation":"owner","object":"stack:one"}}]}`,
 	} {
 		adapter := adapterForResponse(t, http.StatusOK, "application/json", body)
-		_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Stack: mustStack(t, "one")})
+		_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")})
 		if !errors.Is(err, authz.ErrMalformedResponse) {
 			t.Fatalf("body %q error = %v", body, err)
 		}
@@ -338,7 +303,7 @@ func TestAuthorizationAdapterRejectsRepeatedGrantReadTokens(t *testing.T) {
 		}
 	})
 
-	_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Stack: mustStack(t, "one")})
+	_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")})
 	if !errors.Is(err, authz.ErrMalformedResponse) {
 		t.Fatalf("ListGrants() error = %v", err)
 	}
@@ -411,7 +376,7 @@ func TestAuthorizationAdapterBoundsConfirmationBatchChecks(t *testing.T) {
 	const maxChecksPerRequest = 25
 	grants := make([]authz.Grant, maxChecksPerRequest+1)
 	for index := range grants {
-		grants[index] = mustGrant(t, fmt.Sprintf("user-%d", index), "one", authz.RoleOwner)
+		grants[index] = mustGrant(t, fmt.Sprintf("user-%d", index), "one", authz.RelationOwner)
 	}
 	mutation, err := authz.NewMutation(grants, true)
 	if err != nil {
@@ -573,7 +538,7 @@ func assertRelationshipConfirmation(t *testing.T, r *http.Request) {
 
 func ownerGrant(t *testing.T) authz.Grant {
 	t.Helper()
-	return mustGrant(t, "alice", "one", authz.RoleOwner)
+	return mustGrant(t, "alice", "one", authz.RelationOwner)
 }
 
 func mutationForGrant(t *testing.T, grant authz.Grant, confirm bool) authz.Mutation {
@@ -628,49 +593,106 @@ func (errorReader) Read([]byte) (int, error) {
 
 func viewCheck(t *testing.T) authz.CheckRequest {
 	t.Helper()
-	user, err := authz.SubjectFromKeycloakSub("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	stack, err := authz.StackFromID("one")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return authz.CheckRequest{Subject: user, Stack: stack, Permission: authz.PermissionView}
+	return authz.CheckRequest{Subject: mustSubject(t, "alice"), Object: mustStack(t, "one"), Relation: authz.RelationCanView}
 }
 
 func operateCheck(t *testing.T) authz.CheckRequest {
 	t.Helper()
 	check := viewCheck(t)
-	check.Permission = authz.PermissionOperate
+	check.Relation = authz.RelationCanOperate
 	return check
 }
 
+// mustSubject builds a Subject or fails the test.
+//
+//	mustSubject(t, "alice")  → Subject{"user:alice"}
+//	mustSubject(t, "a*b")    → t.Fatal
 func mustSubject(t *testing.T, sub string) authz.Subject {
 	t.Helper()
-	subject, err := authz.SubjectFromKeycloakSub(sub)
+	subject, err := authz.SubjectFromOIDCSub(sub)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return subject
 }
 
-func mustStack(t *testing.T, id string) authz.Stack {
+// mustObject builds an Object of any type, or fails the test.
+//
+//	mustObject(t, authz.TypeStack, "one")  → Object{"stack:one"}
+//	mustObject(t, authz.TypeUser, "alice") → Object{"user:alice"}
+func mustObject(t *testing.T, objectType authz.ObjectType, id string) authz.Object {
 	t.Helper()
-	stack, err := authz.StackFromID(id)
+	object, err := authz.ObjectFromID(objectType, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return stack
+	return object
 }
 
-func mustGrant(t *testing.T, subject, stack string, role authz.Role) authz.Grant {
+// mustStack is mustObject fixed to TypeStack, which most tests want.
+//
+//	mustStack(t, "one")  → Object{"stack:one"}
+func mustStack(t *testing.T, id string) authz.Object {
 	t.Helper()
-	grant, err := authz.NewGrant(mustSubject(t, subject), mustStack(t, stack), role)
+	return mustObject(t, authz.TypeStack, id)
+}
+
+// mustGrant builds a Grant from bare IDs, or fails the test.
+//
+//	mustGrant(t, "alice", "one", authz.RelationOwner)
+//	  → Grant{user:alice, stack:one, owner}
+//	mustGrant(t, "alice", "one", authz.RelationCanView)  → t.Fatal (not grantable)
+func mustGrant(t *testing.T, subject, stack string, relation authz.Relation) authz.Grant {
+	t.Helper()
+	grant, err := authz.NewGrant(mustSubject(t, subject), mustStack(t, stack), relation)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return grant
+}
+
+// Pins that a parent edge read back from OpenFGA is refused rather than
+// surfacing as a grant. Inert until #141 writes the first one.
+func TestListGrantsRejectsAStructuralTuple(t *testing.T) {
+	t.Parallel()
+
+	// Two distinct reasons a parent edge must never surface as a Grant. A
+	// platform subject is refused by the subject-prefix guard before
+	// GrantRelation is ever reached. A well-formed user subject reaches
+	// GrantRelation, which refuses "parent" directly — and even if it
+	// admitted it, authz.NewGrant's own Grantable() check would still
+	// refuse the resulting Grant, so this case is defended twice over.
+	// Both must independently produce ErrMalformedResponse out of
+	// ListGrants.
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "well-formed user subject carrying a structural relation is refused",
+			body: `{"tuples":[{"key":{"user":"user:alice","relation":"parent","object":"stack:one"}}],"continuation_token":""}`,
+		},
+		{
+			name: "platform subject relies on the subject-prefix guard",
+			body: `{"tuples":[{"key":{"user":"platform:tflive","relation":"parent","object":"stack:one"}}],"continuation_token":""}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				// A parent edge is a legal tuple on the wire; it is not a grant.
+				fmt.Fprint(w, test.body)
+			})
+
+			_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")})
+			if !errors.Is(err, authz.ErrMalformedResponse) {
+				t.Fatalf("ListGrants() error = %v, want ErrMalformedResponse", err)
+			}
+		})
+	}
 }
 
 func TestAuthorizationAdapterListSubjectGrantsFiltersByUserAndObject(t *testing.T) {
@@ -697,9 +719,9 @@ func TestAuthorizationAdapterListSubjectGrantsFiltersByUserAndObject(t *testing.
 
 	result, err := adapter.ListSubjectGrants(context.Background(), authz.ListSubjectGrantsRequest{
 		Subject: mustSubject(t, "alice"),
-		Stack:   mustStack(t, "one"),
+		Object:  mustStack(t, "one"),
 	})
-	want := authz.ListGrantsResult{Grants: []authz.Grant{mustGrant(t, "alice", "one", authz.RoleOwner)}}
+	want := authz.ListGrantsResult{Grants: []authz.Grant{mustGrant(t, "alice", "one", authz.RelationOwner)}}
 	if err != nil || !reflect.DeepEqual(result, want) || *requests != 1 {
 		t.Fatalf("ListSubjectGrants() = %#v, %v (requests %d)", result, err, *requests)
 	}
@@ -713,12 +735,164 @@ func TestAuthorizationAdapterListSubjectGrantsRejectsOtherSubjectsAndInvalidRequ
 
 	if _, err := adapter.ListSubjectGrants(context.Background(), authz.ListSubjectGrantsRequest{
 		Subject: mustSubject(t, "alice"),
-		Stack:   mustStack(t, "one"),
+		Object:  mustStack(t, "one"),
 	}); !errors.Is(err, authz.ErrMalformedResponse) {
 		t.Fatalf("ListSubjectGrants() error = %v, want ErrMalformedResponse", err)
 	}
 
 	if _, err := adapter.ListSubjectGrants(context.Background(), authz.ListSubjectGrantsRequest{}); !errors.Is(err, authz.ErrInvalidInput) {
 		t.Fatalf("ListSubjectGrants() error = %v, want ErrInvalidInput", err)
+	}
+}
+
+// batchCheckWantAllowed returns the deterministic decision the fake
+// batch-check handler in TestBatchCheckChunksAtFiftyAndPreservesOrder
+// answers for check index, and what the test asserts the merged result
+// holds at that index. It follows the parity of index's population count
+// (the Thue-Morse sequence) rather than any fixed-period pattern like
+// index%10, because a period that divides the 50-check chunk size would go
+// unnoticed by a merge bug that misaligns a chunk boundary by exactly that
+// period — the old %10 pattern could not distinguish index i from i+10,
+// i+20, ... within the first, 50-wide chunk.
+//
+//	batchCheckWantAllowed(0)   → false  (popcount 0, even)
+//	batchCheckWantAllowed(1)   → true   (popcount 1, odd)
+//	batchCheckWantAllowed(50)  → true   (popcount 3, odd; the lone check in the second chunk)
+func batchCheckWantAllowed(index int) bool {
+	return bits.OnesCount(uint(index))%2 == 1
+}
+
+// Pins #220. Ordering is asserted as well as chunking, because a merge that
+// loses the caller's positions silently returns another stack's answer. The
+// expected pattern (batchCheckWantAllowed) is per-index rather than
+// periodic so a merge offset wrong by any multiple of the chunk size's
+// divisors cannot alias with the correct answer. The batch sizes are
+// asserted exactly ([50, 1]), not just bounded by 50, so a chunker that
+// split unevenly would also be caught.
+func TestBatchCheckChunksAtFiftyAndPreservesOrder(t *testing.T) {
+	t.Parallel()
+
+	const total = 51
+	var mu sync.Mutex
+	var batchSizes []int
+
+	adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Checks []struct {
+				TupleKey      tupleKey `json:"tuple_key"`
+				CorrelationID string   `json:"correlation_id"`
+			} `json:"checks"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode batch-check body: %v", err)
+		}
+		mu.Lock()
+		batchSizes = append(batchSizes, len(body.Checks))
+		mu.Unlock()
+
+		// Each check's object encodes its own index (mustStack(t,
+		// fmt.Sprintf("stack-%d", i)) below), so the handler recovers that
+		// index and answers via batchCheckWantAllowed — the same function
+		// the assertion below uses, so a misordered merge produces a
+		// visibly wrong result rather than a coincidentally passing one.
+		results := map[string]any{}
+		for _, check := range body.Checks {
+			suffix := strings.TrimPrefix(check.TupleKey.Object, "stack:stack-")
+			index, err := strconv.Atoi(suffix)
+			if err != nil {
+				t.Errorf("object %q does not encode a check index: %v", check.TupleKey.Object, err)
+				continue
+			}
+			results[check.CorrelationID] = map[string]any{"allowed": batchCheckWantAllowed(index)}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": results})
+	})
+
+	checks := make([]authz.CheckRequest, total)
+	for i := range checks {
+		checks[i] = authz.CheckRequest{
+			Subject:  mustSubject(t, "alice"),
+			Relation: authz.RelationCanView,
+			Object:   mustStack(t, fmt.Sprintf("stack-%d", i)),
+		}
+	}
+
+	result, err := adapter.BatchCheck(context.Background(), authz.BatchCheckRequest{Checks: checks})
+	if err != nil {
+		t.Fatalf("BatchCheck() error = %v", err)
+	}
+	if len(result.Results) != total {
+		t.Fatalf("len(Results) = %d, want %d", len(result.Results), total)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []int{50, 1}; !reflect.DeepEqual(batchSizes, want) {
+		t.Fatalf("upstream batch sizes = %v, want %v", batchSizes, want)
+	}
+
+	for i, decision := range result.Results {
+		wantAllowed := batchCheckWantAllowed(i)
+		if decision.Allowed != wantAllowed {
+			t.Fatalf("Results[%d].Allowed = %t, want %t (ordering lost across chunks)", i, decision.Allowed, wantAllowed)
+		}
+	}
+}
+
+// Pins that a chunk failing after an earlier chunk already succeeded returns
+// ErrUnavailable and the zero BatchCheckResult — not the `result` variable
+// partially filled by the chunk(s) that did succeed. Every error return in
+// BatchCheck already says authz.BatchCheckResult{}, never `result`, but the
+// only multi-chunk test before this one was the happy path, so a change that
+// swapped one of those returns to `result` would have shipped undetected.
+func TestBatchCheckReturnsZeroResultWhenALaterChunkFails(t *testing.T) {
+	t.Parallel()
+
+	const total = 51
+	var mu sync.Mutex
+	requestCount := 0
+
+	adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requestCount++
+		n := requestCount
+		mu.Unlock()
+
+		if n == 1 {
+			var body struct {
+				Checks []struct {
+					CorrelationID string `json:"correlation_id"`
+				} `json:"checks"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode batch-check body: %v", err)
+			}
+			results := map[string]any{}
+			for _, check := range body.Checks {
+				results[check.CorrelationID] = map[string]any{"allowed": true}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": results})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	checks := make([]authz.CheckRequest, total)
+	for i := range checks {
+		checks[i] = authz.CheckRequest{
+			Subject:  mustSubject(t, "alice"),
+			Relation: authz.RelationCanView,
+			Object:   mustStack(t, fmt.Sprintf("stack-%d", i)),
+		}
+	}
+
+	result, err := adapter.BatchCheck(context.Background(), authz.BatchCheckRequest{Checks: checks})
+	if !errors.Is(err, authz.ErrUnavailable) {
+		t.Fatalf("BatchCheck() error = %v, want ErrUnavailable", err)
+	}
+	if !reflect.DeepEqual(result, authz.BatchCheckResult{}) {
+		t.Fatalf("BatchCheck() result = %#v, want the zero value, not the first chunk's partial results", result)
 	}
 }

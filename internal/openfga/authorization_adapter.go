@@ -22,6 +22,11 @@ type AuthorizationAdapter struct {
 
 const maxConfirmationChecks = 25
 
+// maxBatchChecks is OpenFGA's MaxChecksPerBatchCheck server default. Exceeding
+// it returns 400, which classify() maps to ErrMalformedResponse and the API
+// surfaces as a 503. The port owns this limit so no caller has to remember it.
+const maxBatchChecks = 50
+
 // NewAuthorizationAdapter returns an OpenFGA adapter configured to check the
 // exact verified store and authorization model.
 func NewAuthorizationAdapter(cfg Config) (*AuthorizationAdapter, error) {
@@ -53,8 +58,15 @@ func (adapter *AuthorizationAdapter) Check(ctx context.Context, request authz.Ch
 	return authz.CheckResult{Allowed: *response.Allowed}, nil
 }
 
-// BatchCheck evaluates independently correlated permission checks in one
-// OpenFGA request and preserves the caller's input ordering.
+// BatchCheck evaluates independently correlated permission checks and preserves
+// the caller's input ordering. It splits the request into upstream calls of at
+// most maxBatchChecks, so callers never have to know OpenFGA's limit.
+//
+//	 12 checks  → 1 upstream request,  12 results in input order
+//	 51 checks  → 2 upstream requests (50 + 1), 51 results in input order
+//	 52 checks  → 2 upstream requests (50 + 2)   [the 13-stack case, #220]
+//	  0 checks  → ErrInvalidInput (BatchCheckRequest.Valid rejects it)
+//	upstream 5xx → ErrUnavailable
 func (adapter *AuthorizationAdapter) BatchCheck(ctx context.Context, request authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
 	if !request.Valid() {
 		return authz.BatchCheckResult{}, fmt.Errorf("%w: invalid authorization batch check", authz.ErrInvalidInput)
@@ -64,84 +76,49 @@ func (adapter *AuthorizationAdapter) BatchCheck(ctx context.Context, request aut
 		TupleKey      tupleKey `json:"tuple_key"`
 		CorrelationID string   `json:"correlation_id"`
 	}
-	input := struct {
-		AuthorizationModelID string       `json:"authorization_model_id"`
-		Checks               []batchCheck `json:"checks"`
-	}{AuthorizationModelID: adapter.modelID, Checks: make([]batchCheck, len(request.Checks))}
-	for index, check := range request.Checks {
-		input.Checks[index] = batchCheck{TupleKey: tuple(check), CorrelationID: strconv.Itoa(index)}
-	}
-
-	var response struct {
-		Result map[string]struct {
-			Allowed *bool `json:"allowed"`
-		} `json:"result"`
-	}
-	err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "batch-check"), nil, input, &response, http.StatusOK)
-	if err != nil {
-		return authz.BatchCheckResult{}, adapter.classify(err)
-	}
-	if len(response.Result) != len(request.Checks) {
-		return authz.BatchCheckResult{}, fmt.Errorf("%w: batch check correlation results do not match requests", authz.ErrMalformedResponse)
-	}
 
 	result := authz.BatchCheckResult{Results: make([]authz.CheckResult, len(request.Checks))}
-	for index := range request.Checks {
-		correlationID := strconv.Itoa(index)
-		check, ok := response.Result[correlationID]
-		if !ok || check.Allowed == nil {
-			return authz.BatchCheckResult{}, fmt.Errorf("%w: batch check result %q is missing or invalid", authz.ErrMalformedResponse, correlationID)
+	for start := 0; start < len(request.Checks); start += maxBatchChecks {
+		end := start + maxBatchChecks
+		if end > len(request.Checks) {
+			end = len(request.Checks)
 		}
-		result.Results[index] = authz.CheckResult{Allowed: *check.Allowed}
-	}
-	return result, nil
-}
+		chunk := request.Checks[start:end]
 
-// ListAccessibleStacks returns validated stacks for which the subject has the
-// requested derived permission in the configured authorization model.
-func (adapter *AuthorizationAdapter) ListAccessibleStacks(ctx context.Context, request authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
-	if !request.Valid() {
-		return authz.ListAccessibleStacksResult{}, fmt.Errorf("%w: invalid accessible stacks request", authz.ErrInvalidInput)
-	}
+		input := struct {
+			AuthorizationModelID string       `json:"authorization_model_id"`
+			Checks               []batchCheck `json:"checks"`
+		}{AuthorizationModelID: adapter.modelID, Checks: make([]batchCheck, len(chunk))}
+		for index, check := range chunk {
+			input.Checks[index] = batchCheck{TupleKey: tuple(check), CorrelationID: strconv.Itoa(index)}
+		}
 
-	var response struct {
-		Objects *[]string `json:"objects"`
-	}
-	input := struct {
-		AuthorizationModelID string `json:"authorization_model_id"`
-		Type                 string `json:"type"`
-		Relation             string `json:"relation"`
-		User                 string `json:"user"`
-	}{
-		AuthorizationModelID: adapter.modelID,
-		Type:                 "stack",
-		Relation:             string(request.Permission),
-		User:                 request.Subject.String(),
-	}
-	if err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "list-objects"), nil, input, &response, http.StatusOK); err != nil {
-		return authz.ListAccessibleStacksResult{}, adapter.classify(err)
-	}
-	if response.Objects == nil {
-		return authz.ListAccessibleStacksResult{}, fmt.Errorf("%w: list objects response is missing objects", authz.ErrMalformedResponse)
-	}
-
-	result := authz.ListAccessibleStacksResult{Stacks: make([]authz.Stack, 0, len(*response.Objects))}
-	seen := make(map[string]struct{}, len(*response.Objects))
-	for _, object := range *response.Objects {
-		stack, err := stackFromCanonicalObject(object)
+		var response struct {
+			Result map[string]struct {
+				Allowed *bool `json:"allowed"`
+			} `json:"result"`
+		}
+		err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "batch-check"), nil, input, &response, http.StatusOK)
 		if err != nil {
-			return authz.ListAccessibleStacksResult{}, fmt.Errorf("%w: list objects contains invalid stack %q", authz.ErrMalformedResponse, object)
+			return authz.BatchCheckResult{}, adapter.classify(err)
 		}
-		if _, duplicate := seen[stack.String()]; duplicate {
-			return authz.ListAccessibleStacksResult{}, fmt.Errorf("%w: list objects contains duplicate stack %q", authz.ErrMalformedResponse, object)
+		if len(response.Result) != len(chunk) {
+			return authz.BatchCheckResult{}, fmt.Errorf("%w: batch check correlation results do not match requests", authz.ErrMalformedResponse)
 		}
-		seen[stack.String()] = struct{}{}
-		result.Stacks = append(result.Stacks, stack)
+
+		for index := range chunk {
+			correlationID := strconv.Itoa(index)
+			check, ok := response.Result[correlationID]
+			if !ok || check.Allowed == nil {
+				return authz.BatchCheckResult{}, fmt.Errorf("%w: batch check result %q is missing or invalid", authz.ErrMalformedResponse, correlationID)
+			}
+			result.Results[start+index] = authz.CheckResult{Allowed: *check.Allowed}
+		}
 	}
 	return result, nil
 }
 
-// ListGrants returns all direct role assignments for the requested stack.
+// ListGrants returns all direct role assignments for the requested object.
 func (adapter *AuthorizationAdapter) ListGrants(ctx context.Context, request authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
 	if !request.Valid() {
 		return authz.ListGrantsResult{}, fmt.Errorf("%w: invalid grants request", authz.ErrInvalidInput)
@@ -156,7 +133,7 @@ func (adapter *AuthorizationAdapter) ListGrants(ctx context.Context, request aut
 	}
 
 	result := authz.ListGrantsResult{}
-	seenGrants := map[struct{ subject, role string }]struct{}{}
+	seenGrants := map[struct{ subject, relation string }]struct{}{}
 	seenTokens := map[string]struct{}{}
 	continuationToken := ""
 	for {
@@ -167,7 +144,7 @@ func (adapter *AuthorizationAdapter) ListGrants(ctx context.Context, request aut
 			PageSize          int    `json:"page_size"`
 			ContinuationToken string `json:"continuation_token,omitempty"`
 		}{PageSize: 100, ContinuationToken: continuationToken}
-		input.TupleKey.Object = request.Stack.String()
+		input.TupleKey.Object = request.Object.String()
 
 		var response readResponse
 		if err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "read"), nil, input, &response, http.StatusOK); err != nil {
@@ -177,11 +154,11 @@ func (adapter *AuthorizationAdapter) ListGrants(ctx context.Context, request aut
 			return authz.ListGrantsResult{}, fmt.Errorf("%w: read response is missing tuples", authz.ErrMalformedResponse)
 		}
 		for _, tuple := range *response.Tuples {
-			grant, err := grantFromReadTuple(tuple.Key, request.Stack)
+			grant, err := grantFromReadTuple(tuple.Key, request.Object)
 			if err != nil {
 				return authz.ListGrantsResult{}, fmt.Errorf("%w: read response contains invalid tuple", authz.ErrMalformedResponse)
 			}
-			key := struct{ subject, role string }{subject: grant.Subject().String(), role: grant.Role().String()}
+			key := struct{ subject, relation string }{subject: grant.Subject().String(), relation: grant.Relation().String()}
 			if _, duplicate := seenGrants[key]; duplicate {
 				return authz.ListGrantsResult{}, fmt.Errorf("%w: read response contains duplicate grant", authz.ErrMalformedResponse)
 			}
@@ -205,7 +182,7 @@ func (adapter *AuthorizationAdapter) ListGrants(ctx context.Context, request aut
 		if result.Grants[i].Subject().String() != result.Grants[j].Subject().String() {
 			return result.Grants[i].Subject().String() < result.Grants[j].Subject().String()
 		}
-		return result.Grants[i].Role().String() < result.Grants[j].Role().String()
+		return result.Grants[i].Relation().String() < result.Grants[j].Relation().String()
 	})
 	return result, nil
 }
@@ -233,7 +210,7 @@ func (adapter *AuthorizationAdapter) ListSubjectGrants(ctx context.Context, requ
 		PageSize int `json:"page_size"`
 	}{PageSize: 100}
 	input.TupleKey.User = request.Subject.String()
-	input.TupleKey.Object = request.Stack.String()
+	input.TupleKey.Object = request.Object.String()
 
 	if err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "read"), nil, input, &response, http.StatusOK); err != nil {
 		return authz.ListGrantsResult{}, adapter.classify(err)
@@ -244,7 +221,7 @@ func (adapter *AuthorizationAdapter) ListSubjectGrants(ctx context.Context, requ
 
 	result := authz.ListGrantsResult{}
 	for _, tuple := range *response.Tuples {
-		grant, err := grantFromReadTuple(tuple.Key, request.Stack)
+		grant, err := grantFromReadTuple(tuple.Key, request.Object)
 		if err != nil {
 			return authz.ListGrantsResult{}, fmt.Errorf("%w: read response contains invalid tuple", authz.ErrMalformedResponse)
 		}
@@ -325,7 +302,7 @@ func validMutation(mutation authz.Mutation) ([]authz.Grant, error) {
 		if !grant.Valid() {
 			return nil, fmt.Errorf("%w: invalid relationship mutation grant", authz.ErrInvalidInput)
 		}
-		key := tupleKey{User: grant.Subject().String(), Relation: grant.Role().String(), Object: grant.Stack().String()}
+		key := tupleKey{User: grant.Subject().String(), Relation: grant.Relation().String(), Object: grant.Object().String()}
 		if _, duplicate := seen[key]; duplicate {
 			return nil, fmt.Errorf("%w: duplicate relationship mutation grant", authz.ErrInvalidInput)
 		}
@@ -409,36 +386,39 @@ func tuples(grants []authz.Grant) []tupleKey {
 	return result
 }
 
+// tupleForGrant renders a Grant as OpenFGA's wire tuple.
+//
+//	NewGrant(user:alice, stack:abc, RelationOwner)
+//	  → tupleKey{User: "user:alice", Relation: "owner", Object: "stack:abc"}
 func tupleForGrant(grant authz.Grant) tupleKey {
-	return tupleKey{User: grant.Subject().String(), Relation: grant.Role().String(), Object: grant.Stack().String()}
+	return tupleKey{User: grant.Subject().String(), Relation: grant.Relation().String(), Object: grant.Object().String()}
 }
 
-func stackFromCanonicalObject(object string) (authz.Stack, error) {
-	const prefix = "stack:"
-	if !strings.HasPrefix(object, prefix) {
-		return authz.Stack{}, fmt.Errorf("missing stack prefix")
-	}
-	stack, err := authz.StackFromID(strings.TrimPrefix(object, prefix))
-	if err != nil || stack.String() != object {
-		return authz.Stack{}, fmt.Errorf("invalid stack")
-	}
-	return stack, nil
-}
-
-func grantFromReadTuple(key *tupleKey, requestedStack authz.Stack) (authz.Grant, error) {
+// grantFromReadTuple converts one tuple from a read response into a Grant,
+// refusing anything that is not a grant on the object that was asked about.
+//
+//	{user:alice, owner, stack:abc}, stack:abc      → Grant{…}, nil
+//	{platform:tflive, parent, stack:abc}, stack:abc → Grant{}, error  (not a grant)
+//	{user:alice, can_view, stack:abc}, stack:abc   → Grant{}, error
+//	{user:alice, owner, stack:other}, stack:abc    → Grant{}, error  (wrong object)
+//	nil, stack:abc                                 → Grant{}, error
+func grantFromReadTuple(key *tupleKey, requestedObject authz.Object) (authz.Grant, error) {
 	const subjectPrefix = "user:"
-	if key == nil || key.Object != requestedStack.String() || !strings.HasPrefix(key.User, subjectPrefix) {
+	if key == nil || key.Object != requestedObject.String() || !strings.HasPrefix(key.User, subjectPrefix) {
 		return authz.Grant{}, fmt.Errorf("invalid tuple key")
 	}
-	subject, err := authz.SubjectFromKeycloakSub(strings.TrimPrefix(key.User, subjectPrefix))
+	subject, err := authz.SubjectFromOIDCSub(strings.TrimPrefix(key.User, subjectPrefix))
 	if err != nil || subject.String() != key.User {
 		return authz.Grant{}, fmt.Errorf("invalid tuple subject")
 	}
-	role, err := authz.RoleFromDirectRelation(key.Relation)
+	// GrantRelation, not NewRelation: ListGrants answers "who has access", and
+	// a structural edge such as parent is not access. Once #141 writes parent
+	// edges, this is what keeps them out of the grant list.
+	relation, err := authz.GrantRelation(key.Relation)
 	if err != nil {
 		return authz.Grant{}, fmt.Errorf("invalid tuple relation")
 	}
-	return authz.NewGrant(subject, requestedStack, role)
+	return authz.NewGrant(subject, requestedObject, relation)
 }
 
 type tupleKey struct {
@@ -447,8 +427,12 @@ type tupleKey struct {
 	Object   string `json:"object"`
 }
 
+// tuple renders a CheckRequest as OpenFGA's wire tuple.
+//
+//	CheckRequest{user:alice, can_view, stack:abc}
+//	  → tupleKey{User: "user:alice", Relation: "can_view", Object: "stack:abc"}
 func tuple(request authz.CheckRequest) tupleKey {
-	return tupleKey{User: request.Subject.String(), Relation: string(request.Permission), Object: request.Stack.String()}
+	return tupleKey{User: request.Subject.String(), Relation: request.Relation.String(), Object: request.Object.String()}
 }
 
 func checkInput(modelID string, request authz.CheckRequest) any {

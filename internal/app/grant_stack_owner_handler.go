@@ -50,11 +50,11 @@ func grantStackOwnerKey(payload json.RawMessage) (string, error) {
 	if err := json.Unmarshal(payload, &parsed); err != nil {
 		return "", fmt.Errorf("decode grant stack owner payload: %w", err)
 	}
-	stack, err := authz.StackFromID(parsed.StackID)
+	object, err := authz.ObjectFromID(authz.TypeStack, parsed.StackID)
 	if err != nil {
 		return "", fmt.Errorf("parse grant stack owner stack: %w", err)
 	}
-	return stack.String(), nil
+	return object.String(), nil
 }
 
 // GrantStackOwnerHandler is a thin adapter over Service.GrantStackOwner, keeping

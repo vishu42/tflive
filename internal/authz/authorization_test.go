@@ -7,108 +7,243 @@ import (
 	"testing"
 )
 
-func TestCanonicalIdentifiers(t *testing.T) {
-	subject, err := SubjectFromKeycloakSub("kc-sub-123")
+// Pins the canonical wire form and that an Object remembers its own type.
+func TestObjectFromIDIsCanonicalAndTyped(t *testing.T) {
+	object, err := ObjectFromID(TypeStack, "stack-123")
+	if err != nil || object.String() != "stack:stack-123" {
+		t.Fatalf("ObjectFromID() = %q, %v", object.String(), err)
+	}
+	if object.Type() != TypeStack {
+		t.Fatalf("Type() = %q, want %q", object.Type(), TypeStack)
+	}
+	if !object.Valid() {
+		t.Fatal("constructed object must be valid")
+	}
+}
+
+// Pins that a struct literal cannot bypass ObjectFromID's validation.
+func TestZeroObjectIsInvalid(t *testing.T) {
+	if (Object{}).Valid() {
+		t.Fatal("zero Object must not validate")
+	}
+}
+
+// Pins that ObjectFromID is genuinely type-parameterised, not stack-only.
+func TestObjectCarriesItsType(t *testing.T) {
+	user, err := ObjectFromID(TypeUser, "alice")
+	if err != nil || user.String() != "user:alice" {
+		t.Fatalf("ObjectFromID(TypeUser) = %q, %v", user.String(), err)
+	}
+}
+
+// Pins that ObjectFromID rejects a malformed object type with the same
+// character rules the id slot already gets, not just an empty-string check.
+// Before this guard, an exported ObjectType containing ':', '#', or '*' would
+// pass through unchecked and let a caller forge the rendered tuple's type
+// prefix (e.g. ObjectType("stack:evil") + "abc" → "stack:evil:abc", parsed by
+// OpenFGA as type "stack", id "evil:abc").
+func TestObjectFromIDRejectsMalformedType(t *testing.T) {
+	if _, err := ObjectFromID(ObjectType(""), "abc"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf(`ObjectFromID("", "abc") error = %v, want ErrInvalidInput`, err)
+	}
+	unsafeTypes := []ObjectType{"stack:evil", "stack#member", "stack*"}
+	for _, objectType := range unsafeTypes {
+		if _, err := ObjectFromID(objectType, "abc"); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("ObjectFromID(%q, \"abc\") error = %v, want ErrInvalidInput", objectType, err)
+		}
+	}
+}
+
+// Pins the character rules. Each rejected input changes a tuple's meaning
+// rather than merely being malformed, which is why this is the highest-value
+// test in the package: sub is the one identifier tflive does not originate.
+func TestCanonicalIdentifiersRejectTupleSyntax(t *testing.T) {
+	// Each of these changes the meaning of a tuple rather than merely being
+	// malformed: ':' forges the type prefix, '#' makes a userset reference,
+	// '*' makes the typed wildcard that grants every user.
+	unsafe := []string{"", " ", "user:already", "stack:already", "bad\nsubject", "alice#member", "*", "al*ce", "a#b"}
+	for _, input := range unsafe {
+		if _, err := ObjectFromID(TypeUser, input); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("ObjectFromID(TypeUser, %q) error = %v, want ErrInvalidInput", input, err)
+		}
+		if _, err := ObjectFromID(TypeStack, input); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("ObjectFromID(TypeStack, %q) error = %v, want ErrInvalidInput", input, err)
+		}
+	}
+}
+
+// Guards the identifier tightening against over-rejecting: real Keycloak,
+// Okta, and UUID subjects must keep working.
+func TestCanonicalIdentifiersAcceptOrdinarySubjects(t *testing.T) {
+	// UUID and Okta-style subs must keep working.
+	for _, input := range []string{"kc-sub-123", "00u1b2c3d4e5", "6f7a8b9c-1d2e-3f40-5a6b-7c8d9e0f1a2b"} {
+		if _, err := ObjectFromID(TypeUser, input); err != nil {
+			t.Fatalf("ObjectFromID(TypeUser, %q) error = %v", input, err)
+		}
+	}
+}
+
+// Pins that Subject wraps a user Object rather than being its own encoding.
+func TestSubjectFromOIDCSubIsAUserObject(t *testing.T) {
+	subject, err := SubjectFromOIDCSub("kc-sub-123")
 	if err != nil || subject.String() != "user:kc-sub-123" {
-		t.Fatalf("SubjectFromKeycloakSub() = %q, %v", subject, err)
+		t.Fatalf("SubjectFromOIDCSub() = %q, %v", subject.String(), err)
 	}
-
-	stack, err := StackFromID("stack-123")
-	if err != nil || stack.String() != "stack:stack-123" {
-		t.Fatalf("StackFromID() = %q, %v", stack, err)
+	if subject.Type() != TypeUser {
+		t.Fatalf("Type() = %q, want %q", subject.Type(), TypeUser)
 	}
 }
 
-func TestCanonicalIdentifiersRejectUnsafeAndPrefixedValues(t *testing.T) {
-	for _, input := range []string{"", " ", "user:already", "stack:already", "bad\nsubject"} {
-		if _, err := SubjectFromKeycloakSub(input); !errors.Is(err, ErrInvalidInput) {
-			t.Fatalf("subject %q error = %v", input, err)
-		}
-		if _, err := StackFromID(input); !errors.Is(err, ErrInvalidInput) {
-			t.Fatalf("stack %q error = %v", input, err)
+// Pins that a struct literal cannot bypass SubjectFromOIDCSub's validation.
+func TestZeroSubjectIsInvalid(t *testing.T) {
+	if (Subject{}).Valid() {
+		t.Fatal("zero Subject must not validate")
+	}
+}
+
+// Pins that SubjectFromOIDCSub rejects the same tuple-corrupting inputs as
+// every other identifier constructor: a userset reference, the typed
+// wildcard, and an already-prefixed value. This is the subject constructor
+// specifically, not merely coverage inferred from the shared code path.
+func TestSubjectFromOIDCSubRejectsTupleSyntax(t *testing.T) {
+	for _, sub := range []string{"", " ", "user:already", "alice#member", "*", "al*ce", "bad\nsubject"} {
+		if _, err := SubjectFromOIDCSub(sub); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("SubjectFromOIDCSub(%q) error = %v, want ErrInvalidInput", sub, err)
 		}
 	}
 }
 
-func TestOnlyDirectRolesAndDerivedPermissionsAreValid(t *testing.T) {
-	for _, role := range []Role{RoleOwner, RoleOperator, RoleApprover, RoleViewer} {
-		if !role.Valid() {
-			t.Fatalf("named direct role %q must validate", role.String())
+// The test that proves this refactor achieved its purpose rather than renaming
+// things: a Grant cannot hold a structural edge or a derived relation, however
+// the Relation reached it.
+func TestNewGrantRequiresAGrantableRelation(t *testing.T) {
+	subject, err := SubjectFromOIDCSub("kc-sub-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := ObjectFromID(TypeStack, "stack-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	grant, err := NewGrant(subject, object, RelationOwner)
+	if err != nil {
+		t.Fatalf("NewGrant() error = %v", err)
+	}
+	if grant.Relation() != RelationOwner || grant.Object() != object || grant.Subject() != subject {
+		t.Fatalf("NewGrant() = %#v", grant)
+	}
+
+	// A Grant must never be able to hold a structural edge or a derived
+	// relation, however the Relation reached it.
+	parent, err := NewRelation("parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, relation := range []Relation{parent, RelationCanView, {}} {
+		if _, err := NewGrant(subject, object, relation); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("NewGrant(%q) error = %v, want ErrInvalidInput", relation.String(), err)
 		}
 	}
-	if !PermissionView.Valid() {
-		t.Fatal("known permission must validate")
+
+	if _, err := NewGrant(Subject{}, object, RelationOwner); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("NewGrant with zero subject error = %v", err)
 	}
-	if _, err := RoleFromDirectRelation("can_view"); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("derived permission as role error = %v", err)
-	}
-	if Permission("owner").Valid() {
-		t.Fatal("roles and permissions must not overlap")
+	if _, err := NewGrant(subject, Object{}, RelationOwner); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("NewGrant with zero object error = %v", err)
 	}
 }
 
-func TestGrantAndMutationRequireValidatedDirectRoles(t *testing.T) {
-	subject, err := SubjectFromKeycloakSub("kc-sub-123")
+// Pins that checking admits relations writing refuses — the write/check
+// asymmetry the two constructors exist for.
+func TestCheckRequestValidity(t *testing.T) {
+	subject, err := SubjectFromOIDCSub("kc-sub-123")
 	if err != nil {
-		t.Fatalf("SubjectFromKeycloakSub() error = %v", err)
+		t.Fatal(err)
 	}
-	stack, err := StackFromID("stack-123")
+	object, err := ObjectFromID(TypeStack, "stack-123")
 	if err != nil {
-		t.Fatalf("StackFromID() error = %v", err)
+		t.Fatal(err)
 	}
-	role, err := RoleFromDirectRelation("owner")
+	if !(CheckRequest{Subject: subject, Relation: RelationCanView, Object: object}).Valid() {
+		t.Fatal("well-formed check request must validate")
+	}
+	if (CheckRequest{}).Valid() {
+		t.Fatal("zero check request must not validate")
+	}
+	if (CheckRequest{Subject: subject, Object: object}).Valid() {
+		t.Fatal("check request without a relation must not validate")
+	}
+}
+
+// Pins that both list requests refuse to cross the adapter boundary half-built.
+func TestListRequestsValidity(t *testing.T) {
+	subject, err := SubjectFromOIDCSub("kc-sub-123")
 	if err != nil {
-		t.Fatalf("RoleFromDirectRelation() error = %v", err)
+		t.Fatal(err)
 	}
-	grant, err := NewGrant(subject, stack, role)
-	if err != nil || !grant.Valid() {
-		t.Fatalf("NewGrant() = %#v, %v", grant, err)
+	object, err := ObjectFromID(TypeStack, "stack-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !(ListGrantsRequest{Object: object}).Valid() {
+		t.Fatal("well-formed grants request must validate")
+	}
+	if (ListGrantsRequest{}).Valid() {
+		t.Fatal("zero grants request must not validate")
+	}
+	if !(ListSubjectGrantsRequest{Subject: subject, Object: object}).Valid() {
+		t.Fatal("well-formed subject grants request must validate")
+	}
+	if (ListSubjectGrantsRequest{}).Valid() {
+		t.Fatal("zero subject grants request must not validate")
+	}
+}
+
+// Pins that Mutation still requires validated grants, independent of what
+// makes a Grant valid.
+func TestMutationRequiresValidatedGrants(t *testing.T) {
+	subject, err := SubjectFromOIDCSub("kc-sub-123")
+	if err != nil {
+		t.Fatalf("SubjectFromOIDCSub() error = %v", err)
+	}
+	object, err := ObjectFromID(TypeStack, "stack-123")
+	if err != nil {
+		t.Fatalf("ObjectFromID() error = %v", err)
+	}
+	grant, err := NewGrant(subject, object, RelationOwner)
+	if err != nil {
+		t.Fatalf("NewGrant() error = %v", err)
 	}
 	mutation, err := NewMutation([]Grant{grant}, true)
 	if err != nil || !mutation.Valid() || !mutation.Confirm() {
 		t.Fatalf("NewMutation() = %#v, %v", mutation, err)
-	}
-	if _, err := NewGrant(Subject{}, stack, role); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("NewGrant() with zero subject error = %v", err)
 	}
 	if _, err := NewMutation([]Grant{{}}, false); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("NewMutation() with zero grant error = %v", err)
 	}
 }
 
-func TestRequestsValidateOpaqueValuesAtAdapterBoundary(t *testing.T) {
-	subject, err := SubjectFromKeycloakSub("kc-sub-123")
+// Pins that a batch request is valid only when every check in it is, on top
+// of the single-request cases TestCheckRequestValidity already covers.
+func TestBatchCheckRequestValidity(t *testing.T) {
+	subject, err := SubjectFromOIDCSub("kc-sub-123")
 	if err != nil {
-		t.Fatalf("SubjectFromKeycloakSub() error = %v", err)
+		t.Fatalf("SubjectFromOIDCSub() error = %v", err)
 	}
-	stack, err := StackFromID("stack-123")
+	object, err := ObjectFromID(TypeStack, "stack-123")
 	if err != nil {
-		t.Fatalf("StackFromID() error = %v", err)
+		t.Fatalf("ObjectFromID() error = %v", err)
 	}
-	check := CheckRequest{Subject: subject, Stack: stack, Permission: PermissionView}
-	if !check.Valid() {
-		t.Fatal("validated check request must be valid")
-	}
-	if (CheckRequest{}).Valid() {
-		t.Fatal("zero check request must be invalid")
-	}
+	check := CheckRequest{Subject: subject, Relation: RelationCanView, Object: object}
 	if !(BatchCheckRequest{Checks: []CheckRequest{check}}).Valid() {
 		t.Fatal("validated batch request must be valid")
 	}
 	if (BatchCheckRequest{}).Valid() {
 		t.Fatal("zero batch request must be invalid")
 	}
-	if !(ListAccessibleStacksRequest{Subject: subject, Permission: PermissionView}).Valid() {
-		t.Fatal("validated accessible-stack request must be valid")
-	}
-	if (ListAccessibleStacksRequest{}).Valid() {
-		t.Fatal("zero accessible-stack request must be invalid")
-	}
-	if !(ListGrantsRequest{Stack: stack}).Valid() {
-		t.Fatal("validated grants request must be valid")
-	}
-	if (ListGrantsRequest{}).Valid() {
-		t.Fatal("zero grants request must be invalid")
+	if (BatchCheckRequest{Checks: []CheckRequest{check, {}}}).Valid() {
+		t.Fatal("batch request with one invalid check must be invalid")
 	}
 }
 
