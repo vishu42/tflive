@@ -129,19 +129,15 @@ func (v *OIDCVerifier) validatedToken(payload []byte) (VerifiedToken, error) {
 	if !ok || subject == "" {
 		return VerifiedToken{}, ErrInvalidToken
 	}
-	tokenType, ok := stringClaim(token, "typ")
-	if !ok || tokenType != "Bearer" {
-		return VerifiedToken{}, ErrInvalidToken
-	}
-	name, ok := stringClaim(token, "name")
+	name, ok := optionalStringClaim(token, "name")
 	if !ok {
 		return VerifiedToken{}, ErrInvalidToken
 	}
-	preferredUsername, ok := stringClaim(token, "preferred_username")
+	preferredUsername, ok := optionalStringClaim(token, "preferred_username")
 	if !ok {
 		return VerifiedToken{}, ErrInvalidToken
 	}
-	email, ok := stringClaim(token, "email")
+	email, ok := optionalStringClaim(token, "email")
 	if !ok {
 		return VerifiedToken{}, ErrInvalidToken
 	}
@@ -159,7 +155,11 @@ func (v *OIDCVerifier) validatedToken(payload []byte) (VerifiedToken, error) {
 	}, nil
 }
 
-func stringClaim(token jwt.Token, name string) (string, bool) {
+// optionalStringClaim reads a claim the token is not required to carry. An
+// absent claim yields an empty value and ok; a claim present with a non-string
+// value is malformed and yields !ok. Claims read through it are presentation
+// only and never authorization-bearing.
+func optionalStringClaim(token jwt.Token, name string) (string, bool) {
 	if !token.Has(name) {
 		return "", true
 	}
