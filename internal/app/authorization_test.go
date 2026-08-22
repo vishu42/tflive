@@ -24,8 +24,8 @@ func TestGetStackChecksViewPermission(t *testing.T) {
 	if _, err := service.GetStack(ctx, GetStackCommand{TenantID: "tenant_123", StackID: "stack_123"}); err != nil {
 		t.Fatalf("GetStack() error = %v", err)
 	}
-	if got := authorizer.check.Permission; got != authz.PermissionView {
-		t.Fatalf("permission = %q, want %q", got, authz.PermissionView)
+	if got := authorizer.check.Relation; got != authz.RelationCanView {
+		t.Fatalf("permission = %q, want %q", got, authz.RelationCanView)
 	}
 }
 
@@ -248,7 +248,6 @@ func TestMissingAuthorizerIsUnavailable(t *testing.T) {
 type permissionAuthorizer struct {
 	allowed             bool
 	check               authz.CheckRequest
-	stacks              []authz.Stack
 	batchSizes          []int
 	batchErr            error
 	failBatch           int
@@ -274,10 +273,6 @@ func (authorizer *permissionAuthorizer) BatchCheck(_ context.Context, request au
 		results = results[:len(results)-1]
 	}
 	return authz.BatchCheckResult{Results: results}, nil
-}
-
-func (authorizer *permissionAuthorizer) ListAccessibleStacks(context.Context, authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
-	return authz.ListAccessibleStacksResult{Stacks: authorizer.stacks}, nil
 }
 
 func (authorizer *permissionAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {

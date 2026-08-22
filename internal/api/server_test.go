@@ -1779,25 +1779,25 @@ func TestStackRoleRoutesUseInheritedPermissions(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		role       authz.Role
+		role       authz.Relation
 		method     string
 		path       string
 		body       string
 		status     int
-		permission authz.Permission
+		permission authz.Relation
 	}{
-		{name: "viewer lists stacks", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks", status: http.StatusOK, permission: authz.PermissionView},
-		{name: "viewer reads stack", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123", status: http.StatusOK, permission: authz.PermissionView},
-		{name: "operator installs template", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","config":{}}`, status: http.StatusCreated, permission: authz.PermissionOperate},
-		{name: "owner operates config", role: authz.RoleOwner, method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusOK, permission: authz.PermissionOperate},
-		{name: "operator upgrades template", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusOK, permission: authz.PermissionOperate},
-		{name: "operator starts run", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusCreated, permission: authz.PermissionOperate},
-		{name: "approver approves run", role: authz.RoleApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusNoContent, permission: authz.PermissionApprove},
-		{name: "owner cancels run", role: authz.RoleOwner, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusNoContent, permission: authz.PermissionOperate},
-		{name: "viewer reads run", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusOK, permission: authz.PermissionView},
-		{name: "approver lists run logs", role: authz.RoleApprover, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusOK, permission: authz.PermissionView},
-		{name: "viewer reads run log", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusOK, permission: authz.PermissionView},
-		{name: "viewer lists run history", role: authz.RoleViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", status: http.StatusOK, permission: authz.PermissionView},
+		{name: "viewer lists stacks", role: authz.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks", status: http.StatusOK, permission: authz.RelationCanView},
+		{name: "viewer reads stack", role: authz.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123", status: http.StatusOK, permission: authz.RelationCanView},
+		{name: "operator installs template", role: authz.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","config":{}}`, status: http.StatusCreated, permission: authz.RelationCanOperate},
+		{name: "owner operates config", role: authz.RelationOwner, method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusOK, permission: authz.RelationCanOperate},
+		{name: "operator upgrades template", role: authz.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusOK, permission: authz.RelationCanOperate},
+		{name: "operator starts run", role: authz.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusCreated, permission: authz.RelationCanOperate},
+		{name: "approver approves run", role: authz.RelationApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusNoContent, permission: authz.RelationCanApprove},
+		{name: "owner cancels run", role: authz.RelationOwner, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusNoContent, permission: authz.RelationCanOperate},
+		{name: "viewer reads run", role: authz.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusOK, permission: authz.RelationCanView},
+		{name: "approver lists run logs", role: authz.RelationApprover, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusOK, permission: authz.RelationCanView},
+		{name: "viewer reads run log", role: authz.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusOK, permission: authz.RelationCanView},
+		{name: "viewer lists run history", role: authz.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", status: http.StatusOK, permission: authz.RelationCanView},
 	}
 
 	for _, test := range tests {
@@ -1815,10 +1815,10 @@ func TestStackRoleRoutesUseInheritedPermissions(t *testing.T) {
 			if response.Code != test.status {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.status, response.Body.String())
 			}
-			matched := deps.authorizer.check.Permission == test.permission
+			matched := deps.authorizer.check.Relation == test.permission
 			if !matched {
 				for _, check := range deps.authorizer.batchChecks {
-					if check.Permission == test.permission {
+					if check.Relation == test.permission {
 						matched = true
 						break
 					}
@@ -1836,25 +1836,25 @@ func TestStackRoleRoutesDenyInsufficientRoles(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		role       authz.Role
+		role       authz.Relation
 		method     string
 		path       string
 		body       string
 		status     int
-		permission authz.Permission
+		permission authz.Relation
 	}{
-		{name: "unassigned list is empty", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks", status: http.StatusOK, permission: authz.PermissionView},
-		{name: "unassigned cannot read stack", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123", status: http.StatusNotFound, permission: authz.PermissionView},
-		{name: "viewer cannot install template", role: authz.RoleViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","config":{}}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
-		{name: "approver cannot update config", role: authz.RoleApprover, method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
-		{name: "viewer cannot upgrade template", role: authz.RoleViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
-		{name: "approver cannot start run", role: authz.RoleApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
-		{name: "operator cannot approve run", role: authz.RoleOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusForbidden, permission: authz.PermissionApprove},
-		{name: "approver cannot cancel run", role: authz.RoleApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusForbidden, permission: authz.PermissionOperate},
-		{name: "unassigned cannot read run", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusNotFound, permission: authz.PermissionView},
-		{name: "unassigned cannot list logs", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusNotFound, permission: authz.PermissionView},
-		{name: "unassigned cannot read log", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusNotFound, permission: authz.PermissionView},
-		{name: "unassigned cannot list run history", method: http.MethodGet, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", status: http.StatusNotFound, permission: authz.PermissionView},
+		{name: "unassigned list is empty", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks", status: http.StatusOK, permission: authz.RelationCanView},
+		{name: "unassigned cannot read stack", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123", status: http.StatusNotFound, permission: authz.RelationCanView},
+		{name: "viewer cannot install template", role: authz.RelationViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","config":{}}`, status: http.StatusForbidden, permission: authz.RelationCanOperate},
+		{name: "approver cannot update config", role: authz.RelationApprover, method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusForbidden, permission: authz.RelationCanOperate},
+		{name: "viewer cannot upgrade template", role: authz.RelationViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusForbidden, permission: authz.RelationCanOperate},
+		{name: "approver cannot start run", role: authz.RelationApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusForbidden, permission: authz.RelationCanOperate},
+		{name: "operator cannot approve run", role: authz.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusForbidden, permission: authz.RelationCanApprove},
+		{name: "approver cannot cancel run", role: authz.RelationApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusForbidden, permission: authz.RelationCanOperate},
+		{name: "unassigned cannot read run", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusNotFound, permission: authz.RelationCanView},
+		{name: "unassigned cannot list logs", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusNotFound, permission: authz.RelationCanView},
+		{name: "unassigned cannot read log", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusNotFound, permission: authz.RelationCanView},
+		{name: "unassigned cannot list run history", method: http.MethodGet, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", status: http.StatusNotFound, permission: authz.RelationCanView},
 	}
 
 	for _, test := range tests {
@@ -1872,10 +1872,10 @@ func TestStackRoleRoutesDenyInsufficientRoles(t *testing.T) {
 			if response.Code != test.status {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.status, response.Body.String())
 			}
-			matched := deps.authorizer.check.Permission == test.permission
+			matched := deps.authorizer.check.Relation == test.permission
 			if !matched {
 				for _, check := range deps.authorizer.batchChecks {
-					if check.Permission == test.permission {
+					if check.Relation == test.permission {
 						matched = true
 						break
 					}
@@ -2520,7 +2520,7 @@ type apiAuthorizer struct {
 	checkErr            error
 	denied              bool
 	enforceRole         bool
-	role                authz.Role
+	role                authz.Relation
 	check               authz.CheckRequest
 	batchErr            error
 	failBatch           int
@@ -2535,14 +2535,14 @@ type apiAuthorizer struct {
 
 func (authorizer *apiAuthorizer) roleAllows(request authz.CheckRequest) bool {
 	switch authorizer.role {
-	case authz.RoleOwner:
+	case authz.RelationOwner:
 		return true
-	case authz.RoleOperator:
-		return request.Permission == authz.PermissionView || request.Permission == authz.PermissionOperate
-	case authz.RoleApprover:
-		return request.Permission == authz.PermissionView || request.Permission == authz.PermissionApprove
-	case authz.RoleViewer:
-		return request.Permission == authz.PermissionView
+	case authz.RelationOperator:
+		return request.Relation == authz.RelationCanView || request.Relation == authz.RelationCanOperate
+	case authz.RelationApprover:
+		return request.Relation == authz.RelationCanView || request.Relation == authz.RelationCanApprove
+	case authz.RelationViewer:
+		return request.Relation == authz.RelationCanView
 	default:
 		return false
 	}
@@ -2578,13 +2578,6 @@ func (authorizer *apiAuthorizer) BatchCheck(ctx context.Context, request authz.B
 		result.Results = result.Results[:len(result.Results)-1]
 	}
 	return result, nil
-}
-func (authorizer apiAuthorizer) ListAccessibleStacks(context.Context, authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
-	if authorizer.denied {
-		return authz.ListAccessibleStacksResult{}, nil
-	}
-	stack, _ := authz.StackFromID("stack_123")
-	return authz.ListAccessibleStacksResult{Stacks: []authz.Stack{stack}}, nil
 }
 func (authorizer *apiAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
 	if authorizer.listGrantsErr != nil {
@@ -3102,15 +3095,15 @@ func TestMeReturnsUnauthorizedWithoutPrincipal(t *testing.T) {
 
 func testGrant(t *testing.T, sub, stackID, role string) authz.Grant {
 	t.Helper()
-	subject, err := authz.SubjectFromKeycloakSub(sub)
+	subject, err := authz.SubjectFromOIDCSub(sub)
 	if err != nil {
 		t.Fatalf("subject from sub: %v", err)
 	}
-	stack, err := authz.StackFromID(stackID)
+	stack, err := authz.ObjectFromID(authz.TypeStack, stackID)
 	if err != nil {
 		t.Fatalf("stack from id: %v", err)
 	}
-	r, err := authz.RoleFromDirectRelation(role)
+	r, err := authz.GrantRelation(role)
 	if err != nil {
 		t.Fatalf("role from relation: %v", err)
 	}

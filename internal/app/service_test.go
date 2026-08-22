@@ -2031,9 +2031,6 @@ func (denyingAuthorizer) Check(_ context.Context, _ authz.CheckRequest) (authz.C
 func (denyingAuthorizer) BatchCheck(_ context.Context, _ authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
 	return authz.BatchCheckResult{}, nil
 }
-func (denyingAuthorizer) ListAccessibleStacks(_ context.Context, _ authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
-	return authz.ListAccessibleStacksResult{}, nil
-}
 func (denyingAuthorizer) ListGrants(_ context.Context, _ authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
 	return authz.ListGrantsResult{}, nil
 }
@@ -2752,15 +2749,15 @@ func TestAssignStackRoleEnqueuesDesiredRoleWithoutCallingOpenFGA(t *testing.T) {
 func TestAssignStackRoleEnqueuesMatchingRole(t *testing.T) {
 	t.Parallel()
 
-	stack, err := authz.StackFromID("stack_abc")
+	stack, err := authz.ObjectFromID(authz.TypeStack, "stack_abc")
 	if err != nil {
-		t.Fatalf("StackFromID: %v", err)
+		t.Fatalf("ObjectFromID: %v", err)
 	}
-	subject, err := authz.SubjectFromKeycloakSub("user_456")
+	subject, err := authz.SubjectFromOIDCSub("user_456")
 	if err != nil {
-		t.Fatalf("SubjectFromKeycloakSub: %v", err)
+		t.Fatalf("SubjectFromOIDCSub: %v", err)
 	}
-	existing, err := authz.NewGrant(subject, stack, authz.RoleOperator)
+	existing, err := authz.NewGrant(subject, stack, authz.RelationOperator)
 	if err != nil {
 		t.Fatalf("NewGrant: %v", err)
 	}
@@ -2793,15 +2790,15 @@ func TestAssignStackRoleEnqueuesMatchingRole(t *testing.T) {
 func TestRevokeStackRoleEnqueuesEmptyRole(t *testing.T) {
 	t.Parallel()
 
-	stack, err := authz.StackFromID("stack_abc")
+	stack, err := authz.ObjectFromID(authz.TypeStack, "stack_abc")
 	if err != nil {
-		t.Fatalf("StackFromID: %v", err)
+		t.Fatalf("ObjectFromID: %v", err)
 	}
-	subject, err := authz.SubjectFromKeycloakSub("user_456")
+	subject, err := authz.SubjectFromOIDCSub("user_456")
 	if err != nil {
-		t.Fatalf("SubjectFromKeycloakSub: %v", err)
+		t.Fatalf("SubjectFromOIDCSub: %v", err)
 	}
-	existing, err := authz.NewGrant(subject, stack, authz.RoleOperator)
+	existing, err := authz.NewGrant(subject, stack, authz.RelationOperator)
 	if err != nil {
 		t.Fatalf("NewGrant: %v", err)
 	}

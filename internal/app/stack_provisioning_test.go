@@ -117,15 +117,15 @@ func TestGetStackStopsExceptingOnceTheStackIsReady(t *testing.T) {
 
 func mustOwnerGrant(t *testing.T, stackID, subject string) authz.Grant {
 	t.Helper()
-	stack, err := authz.StackFromID(stackID)
+	stack, err := authz.ObjectFromID(authz.TypeStack, stackID)
 	if err != nil {
-		t.Fatalf("StackFromID(%q): %v", stackID, err)
+		t.Fatalf("ObjectFromID(%q): %v", stackID, err)
 	}
-	sub, err := authz.SubjectFromKeycloakSub(subject)
+	sub, err := authz.SubjectFromOIDCSub(subject)
 	if err != nil {
-		t.Fatalf("SubjectFromKeycloakSub(%q): %v", subject, err)
+		t.Fatalf("SubjectFromOIDCSub(%q): %v", subject, err)
 	}
-	grant, err := authz.NewGrant(sub, stack, authz.RoleOwner)
+	grant, err := authz.NewGrant(sub, stack, authz.RelationOwner)
 	if err != nil {
 		t.Fatalf("NewGrant: %v", err)
 	}

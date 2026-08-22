@@ -165,9 +165,6 @@ func (authorizer *recordingAuthorizer) Check(context.Context, authz.CheckRequest
 func (authorizer *recordingAuthorizer) BatchCheck(context.Context, authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
 	return authz.BatchCheckResult{}, nil
 }
-func (authorizer *recordingAuthorizer) ListAccessibleStacks(context.Context, authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
-	return authz.ListAccessibleStacksResult{}, nil
-}
 func (authorizer *recordingAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
 	return authz.ListGrantsResult{Grants: authorizer.grants}, nil
 }
