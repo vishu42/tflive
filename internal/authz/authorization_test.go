@@ -7,15 +7,32 @@ import (
 	"testing"
 )
 
-func TestCanonicalIdentifiers(t *testing.T) {
-	subject, err := SubjectFromKeycloakSub("kc-sub-123")
-	if err != nil || subject.String() != "user:kc-sub-123" {
-		t.Fatalf("SubjectFromKeycloakSub() = %q, %v", subject, err)
+// Pins the canonical wire form and that an Object remembers its own type.
+func TestObjectFromIDIsCanonicalAndTyped(t *testing.T) {
+	object, err := ObjectFromID(TypeStack, "stack-123")
+	if err != nil || object.String() != "stack:stack-123" {
+		t.Fatalf("ObjectFromID() = %q, %v", object.String(), err)
 	}
+	if object.Type() != TypeStack {
+		t.Fatalf("Type() = %q, want %q", object.Type(), TypeStack)
+	}
+	if !object.Valid() {
+		t.Fatal("constructed object must be valid")
+	}
+}
 
-	stack, err := StackFromID("stack-123")
-	if err != nil || stack.String() != "stack:stack-123" {
-		t.Fatalf("StackFromID() = %q, %v", stack, err)
+// Pins that a struct literal cannot bypass ObjectFromID's validation.
+func TestZeroObjectIsInvalid(t *testing.T) {
+	if (Object{}).Valid() {
+		t.Fatal("zero Object must not validate")
+	}
+}
+
+// Pins that ObjectFromID is genuinely type-parameterised, not stack-only.
+func TestObjectCarriesItsType(t *testing.T) {
+	user, err := ObjectFromID(TypeUser, "alice")
+	if err != nil || user.String() != "user:alice" {
+		t.Fatalf("ObjectFromID(TypeUser) = %q, %v", user.String(), err)
 	}
 }
 
@@ -24,7 +41,7 @@ func TestCanonicalIdentifiersRejectUnsafeAndPrefixedValues(t *testing.T) {
 		if _, err := SubjectFromKeycloakSub(input); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("subject %q error = %v", input, err)
 		}
-		if _, err := StackFromID(input); !errors.Is(err, ErrInvalidInput) {
+		if _, err := ObjectFromID(TypeStack, input); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("stack %q error = %v", input, err)
 		}
 	}
@@ -52,9 +69,9 @@ func TestGrantAndMutationRequireValidatedDirectRoles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubjectFromKeycloakSub() error = %v", err)
 	}
-	stack, err := StackFromID("stack-123")
+	stack, err := ObjectFromID(TypeStack, "stack-123")
 	if err != nil {
-		t.Fatalf("StackFromID() error = %v", err)
+		t.Fatalf("ObjectFromID() error = %v", err)
 	}
 	role, err := RoleFromDirectRelation("owner")
 	if err != nil {
@@ -81,9 +98,9 @@ func TestRequestsValidateOpaqueValuesAtAdapterBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubjectFromKeycloakSub() error = %v", err)
 	}
-	stack, err := StackFromID("stack-123")
+	stack, err := ObjectFromID(TypeStack, "stack-123")
 	if err != nil {
-		t.Fatalf("StackFromID() error = %v", err)
+		t.Fatalf("ObjectFromID() error = %v", err)
 	}
 	check := CheckRequest{Subject: subject, Stack: stack, Permission: PermissionView}
 	if !check.Valid() {

@@ -44,9 +44,9 @@ func (f *fakeRelationships) DeleteRelationships(_ context.Context, mutation Muta
 
 func mustGrant(t *testing.T, stackID, subject string, role Role) Grant {
 	t.Helper()
-	stack, err := StackFromID(stackID)
+	stack, err := ObjectFromID(TypeStack, stackID)
 	if err != nil {
-		t.Fatalf("StackFromID(%q): %v", stackID, err)
+		t.Fatalf("ObjectFromID(TypeStack, %q): %v", stackID, err)
 	}
 	sub, err := SubjectFromKeycloakSub(subject)
 	if err != nil {

@@ -123,7 +123,7 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 // the role is parsed once here and compared by value; hasRole distinguishes
 // "grant this role" from "revoke everything".
 type grantIdentity struct {
-	stack   Stack
+	stack   Object
 	subject Subject
 	role    Role
 	hasRole bool
@@ -134,7 +134,7 @@ func parseGrantPayload(payload json.RawMessage) (grantIdentity, error) {
 	if err := json.Unmarshal(payload, &parsed); err != nil {
 		return grantIdentity{}, fmt.Errorf("decode stack grant payload: %w", err)
 	}
-	stack, err := StackFromID(parsed.StackID)
+	stack, err := ObjectFromID(TypeStack, parsed.StackID)
 	if err != nil {
 		return grantIdentity{}, fmt.Errorf("parse stack grant stack: %w", err)
 	}

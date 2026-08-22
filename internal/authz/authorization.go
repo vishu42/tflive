@@ -35,20 +35,67 @@ func (subject Subject) Valid() bool {
 	return validCanonicalIdentifier("user", subject.value)
 }
 
-// Stack is a validated application stack ID in its canonical authorization form.
-// Its value is intentionally opaque so callers cannot construct unchecked IDs.
-type Stack struct {
-	value string
+// ObjectType is an object type declared in the authorization model. It is not
+// validated against a local list: OpenFGA validates type against the model, so
+// an unknown type is refused against the single source of truth.
+type ObjectType string
+
+const (
+	TypeUser  ObjectType = "user"
+	TypeStack ObjectType = "stack"
+)
+
+// Object is a validated {type, id} in canonical "type:id" form. Its value is
+// intentionally opaque so callers cannot construct unchecked IDs.
+type Object struct {
+	objectType ObjectType
+	value      string
+}
+
+// ObjectFromID returns the canonical authorization identifier for id. The id
+// must be a bare identifier: it is the caller's raw value, never an
+// already-prefixed one.
+//
+//	ObjectFromID(TypeStack, "abc123")      → Object{"stack:abc123"}, nil
+//	ObjectFromID(TypeUser, "00u1b2c3")     → Object{"user:00u1b2c3"}, nil
+//	ObjectFromID(TypeStack, "stack:abc")   → Object{}, ErrInvalidInput  (already prefixed)
+//	ObjectFromID(TypeUser, "al*ce")        → Object{}, ErrInvalidInput  (wildcard char)
+//	ObjectFromID(TypeUser, "")             → Object{}, ErrInvalidInput
+func ObjectFromID(objectType ObjectType, id string) (Object, error) {
+	if objectType == "" {
+		return Object{}, fmt.Errorf("%w: object type is required", ErrInvalidInput)
+	}
+	value, err := canonicalIdentifier(string(objectType), id)
+	if err != nil {
+		return Object{}, err
+	}
+	return Object{objectType: objectType, value: value}, nil
+}
+
+// Type returns the object's declared type.
+//
+//	ObjectFromID(TypeStack, "abc").Type()  → TypeStack
+//	Object{}.Type()                        → ""
+func (object Object) Type() ObjectType {
+	return object.objectType
 }
 
 // String renders the canonical authorization identifier for a provider adapter.
-func (stack Stack) String() string {
-	return stack.value
+//
+//	ObjectFromID(TypeStack, "abc").String()  → "stack:abc"
+//	Object{}.String()                        → ""
+func (object Object) String() string {
+	return object.value
 }
 
-// Valid reports whether the stack is a canonical, validated authorization ID.
-func (stack Stack) Valid() bool {
-	return validCanonicalIdentifier("stack", stack.value)
+// Valid reports whether the object is a canonical, validated authorization ID.
+// The zero Object is never valid, so a struct literal cannot bypass the
+// constructor.
+//
+//	ObjectFromID(TypeStack, "abc") then .Valid()  → true
+//	Object{}.Valid()                              → false
+func (object Object) Valid() bool {
+	return object.objectType != "" && validCanonicalIdentifier(string(object.objectType), object.value)
 }
 
 // Role is a directly assignable stack relationship. Its value is intentionally
@@ -117,15 +164,6 @@ func SubjectFromKeycloakSub(sub string) (Subject, error) {
 	return Subject{value: value}, nil
 }
 
-// StackFromID returns the canonical authorization identifier for id.
-func StackFromID(id string) (Stack, error) {
-	value, err := canonicalIdentifier("stack", id)
-	if err != nil {
-		return Stack{}, err
-	}
-	return Stack{value: value}, nil
-}
-
 func canonicalIdentifier(kind, value string) (string, error) {
 	if value == "" || strings.Contains(value, ":") || strings.IndexFunc(value, unicode.IsSpace) >= 0 || strings.IndexFunc(value, unicode.IsControl) >= 0 {
 		return "", fmt.Errorf("%w: invalid %s identifier", ErrInvalidInput, kind)
@@ -145,7 +183,7 @@ func validCanonicalIdentifier(kind, value string) bool {
 // CheckRequest asks whether Subject has Permission for Stack.
 type CheckRequest struct {
 	Subject    Subject
-	Stack      Stack
+	Stack      Object
 	Permission Permission
 }
 
@@ -196,12 +234,12 @@ func (request ListAccessibleStacksRequest) Valid() bool {
 
 // ListAccessibleStacksResult contains only validated canonical stack IDs.
 type ListAccessibleStacksResult struct {
-	Stacks []Stack
+	Stacks []Object
 }
 
 // ListGrantsRequest asks for direct role assignments on a stack.
 type ListGrantsRequest struct {
-	Stack Stack
+	Stack Object
 }
 
 // Valid reports whether the request can safely cross the adapter boundary.
@@ -217,12 +255,12 @@ type ListGrantsResult struct {
 // Grant is a direct role assignment for a subject on a stack.
 type Grant struct {
 	subject Subject
-	stack   Stack
+	stack   Object
 	role    Role
 }
 
 // NewGrant returns a validated direct role assignment.
-func NewGrant(subject Subject, stack Stack, role Role) (Grant, error) {
+func NewGrant(subject Subject, stack Object, role Role) (Grant, error) {
 	grant := Grant{subject: subject, stack: stack, role: role}
 	if !grant.Valid() {
 		return Grant{}, fmt.Errorf("%w: invalid direct role grant", ErrInvalidInput)
@@ -236,7 +274,7 @@ func (grant Grant) Subject() Subject {
 }
 
 // Stack returns the grant stack.
-func (grant Grant) Stack() Stack {
+func (grant Grant) Stack() Object {
 	return grant.stack
 }
 
@@ -299,7 +337,7 @@ func (mutation Mutation) Valid() bool {
 // ListSubjectGrantsRequest asks for one subject's direct roles on one stack.
 type ListSubjectGrantsRequest struct {
 	Subject Subject
-	Stack   Stack
+	Stack   Object
 }
 
 // Valid reports whether the request names a well-formed subject and stack.
