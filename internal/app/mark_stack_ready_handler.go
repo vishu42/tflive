@@ -36,7 +36,7 @@ func markStackReadyKey(payload json.RawMessage) (string, error) {
 	if err := json.Unmarshal(payload, &parsed); err != nil {
 		return "", fmt.Errorf("decode mark stack ready payload: %w", err)
 	}
-	stack, err := authz.StackFromID(parsed.StackID)
+	stack, err := authz.ObjectFromID(authz.TypeStack, parsed.StackID)
 	if err != nil {
 		return "", fmt.Errorf("parse mark ready stack: %w", err)
 	}

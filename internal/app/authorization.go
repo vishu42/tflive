@@ -53,12 +53,12 @@ func requireTemplateCatalogAccess(ctx context.Context) error {
 	return ErrForbidden
 }
 
-func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID, permission authz.Permission, denied error) error {
+func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID, relation authz.Relation, denied error) error {
 	principal, err := requireAuthorizer(ctx, authorizer)
 	if err != nil {
 		return err
 	}
-	stack, err := authz.StackFromID(string(stackID))
+	object, err := authz.ObjectFromID(authz.TypeStack, string(stackID))
 	if errors.Is(err, authz.ErrInvalidInput) {
 		return denied
 	}
@@ -68,11 +68,11 @@ func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID tr
 	if isPlatformAdmin(principal) {
 		return nil
 	}
-	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
+	subject, err := authz.SubjectFromOIDCSub(principal.Subject)
 	if err != nil {
 		return err
 	}
-	result, err := authorizer.Check(ctx, authz.CheckRequest{Subject: subject, Stack: stack, Permission: permission})
+	result, err := authorizer.Check(ctx, authz.CheckRequest{Subject: subject, Relation: relation, Object: object})
 	if err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repo
 	if isPlatformAdmin(principal) {
 		return repository.ListStacks(ctx, tenantID)
 	}
-	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
+	subject, err := authz.SubjectFromOIDCSub(principal.Subject)
 	if err != nil {
 		return nil, err
 	}
@@ -119,14 +119,14 @@ func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repo
 
 		checks := make([]authz.CheckRequest, len(candidates))
 		for i, candidate := range candidates {
-			stack, err := authz.StackFromID(string(candidate.ID))
+			object, err := authz.ObjectFromID(authz.TypeStack, string(candidate.ID))
 			if errors.Is(err, authz.ErrInvalidInput) {
 				return nil, fmt.Errorf("%w: stack candidate has invalid ID", authz.ErrMalformedResponse)
 			}
 			if err != nil {
 				return nil, err
 			}
-			checks[i] = authz.CheckRequest{Subject: subject, Stack: stack, Permission: authz.PermissionView}
+			checks[i] = authz.CheckRequest{Subject: subject, Relation: authz.RelationCanView, Object: object}
 		}
 		result, err := authorizer.BatchCheck(ctx, authz.BatchCheckRequest{Checks: checks})
 		if err != nil {
@@ -155,7 +155,7 @@ func stackPageOrderBefore(left, right traits.Stack) bool {
 	return left.ID > right.ID
 }
 
-func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID, permission authz.Permission, denied error) (traits.StackTemplate, error) {
+func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID, relation authz.Relation, denied error) (traits.StackTemplate, error) {
 	principal, err := requireAuthorizer(ctx, service.Authorizer)
 	if err != nil {
 		return traits.StackTemplate{}, err
@@ -167,7 +167,7 @@ func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID tr
 	if err != nil {
 		return traits.StackTemplate{}, err
 	}
-	if _, err := authz.StackFromID(string(stackTemplate.StackID)); errors.Is(err, authz.ErrInvalidInput) {
+	if _, err := authz.ObjectFromID(authz.TypeStack, string(stackTemplate.StackID)); errors.Is(err, authz.ErrInvalidInput) {
 		return traits.StackTemplate{}, fmt.Errorf("%w: stack template has invalid owning stack ID", authz.ErrMalformedResponse)
 	} else if err != nil {
 		return traits.StackTemplate{}, err
@@ -175,7 +175,7 @@ func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID tr
 	if isPlatformAdmin(principal) {
 		return stackTemplate, nil
 	}
-	if err := authorizeStack(ctx, service.Authorizer, stackTemplate.StackID, permission, denied); err != nil {
+	if err := authorizeStack(ctx, service.Authorizer, stackTemplate.StackID, relation, denied); err != nil {
 		return traits.StackTemplate{}, err
 	}
 	return stackTemplate, nil
@@ -196,27 +196,27 @@ func ResolveStackCapabilities(ctx context.Context, authorizer authz.Authorizer, 
 	if isPlatformAdmin(principal) {
 		return StackCapabilities{CanView: true, CanOperate: true, CanApprove: true, CanManageAccess: true}, nil
 	}
-	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
+	subject, err := authz.SubjectFromOIDCSub(principal.Subject)
 	if err != nil {
 		return StackCapabilities{}, err
 	}
-	stack, err := authz.StackFromID(string(stackID))
+	object, err := authz.ObjectFromID(authz.TypeStack, string(stackID))
 	if err != nil {
 		return StackCapabilities{}, err
 	}
 
-	permissions := []authz.Permission{
-		authz.PermissionView, authz.PermissionOperate, authz.PermissionApprove, authz.PermissionManageAccess,
+	relations := []authz.Relation{
+		authz.RelationCanView, authz.RelationCanOperate, authz.RelationCanApprove, authz.RelationCanManageAccess,
 	}
-	checks := make([]authz.CheckRequest, len(permissions))
-	for i, perm := range permissions {
-		checks[i] = authz.CheckRequest{Subject: subject, Stack: stack, Permission: perm}
+	checks := make([]authz.CheckRequest, len(relations))
+	for i, relation := range relations {
+		checks[i] = authz.CheckRequest{Subject: subject, Relation: relation, Object: object}
 	}
 	result, err := authorizer.BatchCheck(ctx, authz.BatchCheckRequest{Checks: checks})
 	if err != nil {
 		return StackCapabilities{}, err
 	}
-	if len(result.Results) != len(permissions) {
+	if len(result.Results) != len(relations) {
 		return StackCapabilities{}, fmt.Errorf("%w: batch result count does not match permissions", authz.ErrMalformedResponse)
 	}
 	return StackCapabilities{
@@ -243,21 +243,21 @@ func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer,
 		}
 		return result, nil
 	}
-	subject, err := authz.SubjectFromKeycloakSub(principal.Subject)
+	subject, err := authz.SubjectFromOIDCSub(principal.Subject)
 	if err != nil {
 		return nil, err
 	}
-	permissions := []authz.Permission{
-		authz.PermissionView, authz.PermissionOperate, authz.PermissionApprove, authz.PermissionManageAccess,
+	relations := []authz.Relation{
+		authz.RelationCanView, authz.RelationCanOperate, authz.RelationCanApprove, authz.RelationCanManageAccess,
 	}
-	checks := make([]authz.CheckRequest, 0, len(stacks)*len(permissions))
+	checks := make([]authz.CheckRequest, 0, len(stacks)*len(relations))
 	for _, s := range stacks {
-		stack, err := authz.StackFromID(string(s.ID))
+		object, err := authz.ObjectFromID(authz.TypeStack, string(s.ID))
 		if err != nil {
 			return nil, err
 		}
-		for _, perm := range permissions {
-			checks = append(checks, authz.CheckRequest{Subject: subject, Stack: stack, Permission: perm})
+		for _, relation := range relations {
+			checks = append(checks, authz.CheckRequest{Subject: subject, Relation: relation, Object: object})
 		}
 	}
 	result, err := authorizer.BatchCheck(ctx, authz.BatchCheckRequest{Checks: checks})
@@ -269,7 +269,7 @@ func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer,
 	}
 	caps := make(map[traits.StackID]StackCapabilities, len(stacks))
 	for i, s := range stacks {
-		base := i * len(permissions)
+		base := i * len(relations)
 		caps[s.ID] = StackCapabilities{
 			CanView:         result.Results[base+0].Allowed,
 			CanOperate:      result.Results[base+1].Allowed,
@@ -280,7 +280,7 @@ func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer,
 	return caps, nil
 }
 
-func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, permission authz.Permission, denied error) (traits.TemplateRun, error) {
+func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, relation authz.Relation, denied error) (traits.TemplateRun, error) {
 	if _, err := requireAuthorizer(ctx, service.Authorizer); err != nil {
 		return traits.TemplateRun{}, err
 	}
@@ -291,7 +291,7 @@ func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID trai
 	if err != nil {
 		return traits.TemplateRun{}, err
 	}
-	if _, err := service.authorizedStackTemplate(ctx, tenantID, run.StackTemplateID, permission, denied); err != nil {
+	if _, err := service.authorizedStackTemplate(ctx, tenantID, run.StackTemplateID, relation, denied); err != nil {
 		return traits.TemplateRun{}, err
 	}
 	return run, nil
