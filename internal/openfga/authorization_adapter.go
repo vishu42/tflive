@@ -22,6 +22,11 @@ type AuthorizationAdapter struct {
 
 const maxConfirmationChecks = 25
 
+// maxBatchChecks is OpenFGA's MaxChecksPerBatchCheck server default. Exceeding
+// it returns 400, which classify() maps to ErrMalformedResponse and the API
+// surfaces as a 503. The port owns this limit so no caller has to remember it.
+const maxBatchChecks = 50
+
 // NewAuthorizationAdapter returns an OpenFGA adapter configured to check the
 // exact verified store and authorization model.
 func NewAuthorizationAdapter(cfg Config) (*AuthorizationAdapter, error) {
@@ -53,8 +58,15 @@ func (adapter *AuthorizationAdapter) Check(ctx context.Context, request authz.Ch
 	return authz.CheckResult{Allowed: *response.Allowed}, nil
 }
 
-// BatchCheck evaluates independently correlated permission checks in one
-// OpenFGA request and preserves the caller's input ordering.
+// BatchCheck evaluates independently correlated permission checks and preserves
+// the caller's input ordering. It splits the request into upstream calls of at
+// most maxBatchChecks, so callers never have to know OpenFGA's limit.
+//
+//	 12 checks  → 1 upstream request,  12 results in input order
+//	 51 checks  → 2 upstream requests (50 + 1), 51 results in input order
+//	 52 checks  → 2 upstream requests (50 + 2)   [the 13-stack case, #220]
+//	  0 checks  → ErrInvalidInput (BatchCheckRequest.Valid rejects it)
+//	upstream 5xx → ErrUnavailable
 func (adapter *AuthorizationAdapter) BatchCheck(ctx context.Context, request authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
 	if !request.Valid() {
 		return authz.BatchCheckResult{}, fmt.Errorf("%w: invalid authorization batch check", authz.ErrInvalidInput)
@@ -64,35 +76,44 @@ func (adapter *AuthorizationAdapter) BatchCheck(ctx context.Context, request aut
 		TupleKey      tupleKey `json:"tuple_key"`
 		CorrelationID string   `json:"correlation_id"`
 	}
-	input := struct {
-		AuthorizationModelID string       `json:"authorization_model_id"`
-		Checks               []batchCheck `json:"checks"`
-	}{AuthorizationModelID: adapter.modelID, Checks: make([]batchCheck, len(request.Checks))}
-	for index, check := range request.Checks {
-		input.Checks[index] = batchCheck{TupleKey: tuple(check), CorrelationID: strconv.Itoa(index)}
-	}
-
-	var response struct {
-		Result map[string]struct {
-			Allowed *bool `json:"allowed"`
-		} `json:"result"`
-	}
-	err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "batch-check"), nil, input, &response, http.StatusOK)
-	if err != nil {
-		return authz.BatchCheckResult{}, adapter.classify(err)
-	}
-	if len(response.Result) != len(request.Checks) {
-		return authz.BatchCheckResult{}, fmt.Errorf("%w: batch check correlation results do not match requests", authz.ErrMalformedResponse)
-	}
 
 	result := authz.BatchCheckResult{Results: make([]authz.CheckResult, len(request.Checks))}
-	for index := range request.Checks {
-		correlationID := strconv.Itoa(index)
-		check, ok := response.Result[correlationID]
-		if !ok || check.Allowed == nil {
-			return authz.BatchCheckResult{}, fmt.Errorf("%w: batch check result %q is missing or invalid", authz.ErrMalformedResponse, correlationID)
+	for start := 0; start < len(request.Checks); start += maxBatchChecks {
+		end := start + maxBatchChecks
+		if end > len(request.Checks) {
+			end = len(request.Checks)
 		}
-		result.Results[index] = authz.CheckResult{Allowed: *check.Allowed}
+		chunk := request.Checks[start:end]
+
+		input := struct {
+			AuthorizationModelID string       `json:"authorization_model_id"`
+			Checks               []batchCheck `json:"checks"`
+		}{AuthorizationModelID: adapter.modelID, Checks: make([]batchCheck, len(chunk))}
+		for index, check := range chunk {
+			input.Checks[index] = batchCheck{TupleKey: tuple(check), CorrelationID: strconv.Itoa(index)}
+		}
+
+		var response struct {
+			Result map[string]struct {
+				Allowed *bool `json:"allowed"`
+			} `json:"result"`
+		}
+		err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "batch-check"), nil, input, &response, http.StatusOK)
+		if err != nil {
+			return authz.BatchCheckResult{}, adapter.classify(err)
+		}
+		if len(response.Result) != len(chunk) {
+			return authz.BatchCheckResult{}, fmt.Errorf("%w: batch check correlation results do not match requests", authz.ErrMalformedResponse)
+		}
+
+		for index := range chunk {
+			correlationID := strconv.Itoa(index)
+			check, ok := response.Result[correlationID]
+			if !ok || check.Allowed == nil {
+				return authz.BatchCheckResult{}, fmt.Errorf("%w: batch check result %q is missing or invalid", authz.ErrMalformedResponse, correlationID)
+			}
+			result.Results[start+index] = authz.CheckResult{Allowed: *check.Allowed}
+		}
 	}
 	return result, nil
 }

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -666,7 +667,7 @@ func TestListGrantsRejectsAStructuralTuple(t *testing.T) {
 		body string
 	}{
 		{
-			name: "user subject relies on GrantRelation",
+			name: "well-formed user subject carrying a structural relation is refused",
 			body: `{"tuples":[{"key":{"user":"user:alice","relation":"parent","object":"stack:one"}}],"continuation_token":""}`,
 		},
 		{
@@ -739,5 +740,77 @@ func TestAuthorizationAdapterListSubjectGrantsRejectsOtherSubjectsAndInvalidRequ
 
 	if _, err := adapter.ListSubjectGrants(context.Background(), authz.ListSubjectGrantsRequest{}); !errors.Is(err, authz.ErrInvalidInput) {
 		t.Fatalf("ListSubjectGrants() error = %v, want ErrInvalidInput", err)
+	}
+}
+
+// Pins #220. Ordering is asserted as well as chunking, because a merge that
+// loses the caller's positions silently returns another stack's answer.
+func TestBatchCheckChunksAtFiftyAndPreservesOrder(t *testing.T) {
+	t.Parallel()
+
+	const total = 51
+	var mu sync.Mutex
+	var batchSizes []int
+
+	adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Checks []struct {
+				TupleKey      tupleKey `json:"tuple_key"`
+				CorrelationID string   `json:"correlation_id"`
+			} `json:"checks"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode batch-check body: %v", err)
+		}
+		mu.Lock()
+		batchSizes = append(batchSizes, len(body.Checks))
+		mu.Unlock()
+
+		// Answer true only for the stack whose ID encodes an even number, so a
+		// misordered merge produces a visibly wrong result rather than passing.
+		results := map[string]any{}
+		for _, check := range body.Checks {
+			allowed := strings.HasSuffix(check.TupleKey.Object, "0") || strings.HasSuffix(check.TupleKey.Object, "2") ||
+				strings.HasSuffix(check.TupleKey.Object, "4") || strings.HasSuffix(check.TupleKey.Object, "6") ||
+				strings.HasSuffix(check.TupleKey.Object, "8")
+			results[check.CorrelationID] = map[string]any{"allowed": allowed}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": results})
+	})
+
+	checks := make([]authz.CheckRequest, total)
+	for i := range checks {
+		checks[i] = authz.CheckRequest{
+			Subject:  mustSubject(t, "alice"),
+			Relation: authz.RelationCanView,
+			Object:   mustStack(t, fmt.Sprintf("stack-%d", i)),
+		}
+	}
+
+	result, err := adapter.BatchCheck(context.Background(), authz.BatchCheckRequest{Checks: checks})
+	if err != nil {
+		t.Fatalf("BatchCheck() error = %v", err)
+	}
+	if len(result.Results) != total {
+		t.Fatalf("len(Results) = %d, want %d", len(result.Results), total)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(batchSizes) != 2 {
+		t.Fatalf("upstream requests = %d (sizes %v), want 2", len(batchSizes), batchSizes)
+	}
+	for _, size := range batchSizes {
+		if size > 50 {
+			t.Fatalf("upstream batch of %d exceeds OpenFGA's limit of 50", size)
+		}
+	}
+
+	for i, decision := range result.Results {
+		wantAllowed := i%10 == 0 || i%10 == 2 || i%10 == 4 || i%10 == 6 || i%10 == 8
+		if decision.Allowed != wantAllowed {
+			t.Fatalf("Results[%d].Allowed = %t, want %t (ordering lost across chunks)", i, decision.Allowed, wantAllowed)
+		}
 	}
 }
