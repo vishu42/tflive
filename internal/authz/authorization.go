@@ -147,18 +147,18 @@ func canonicalIdentifier(kind, value string) (string, error) {
 	return kind + ":" + value, nil
 }
 
-// safeTupleToken reports whether s can appear in a tuple without changing its
-// meaning. ':' would forge a type prefix, '#' would make a userset reference,
-// and '*' would make the typed wildcard that matches every user.
+// safeTupleToken reports whether token can appear in a tuple without changing
+// its meaning. ':' would forge a type prefix, '#' would make a userset
+// reference, and '*' would make the typed wildcard that matches every user.
 //
 //	safeTupleToken("can_view")  → true
 //	safeTupleToken("a#b")       → false
 //	safeTupleToken("")          → false
-func safeTupleToken(s string) bool {
-	if s == "" || strings.ContainsAny(s, ":#*") {
+func safeTupleToken(token string) bool {
+	if token == "" || strings.ContainsAny(token, ":#*") {
 		return false
 	}
-	if strings.IndexFunc(s, unicode.IsSpace) >= 0 || strings.IndexFunc(s, unicode.IsControl) >= 0 {
+	if strings.IndexFunc(token, unicode.IsSpace) >= 0 || strings.IndexFunc(token, unicode.IsControl) >= 0 {
 		return false
 	}
 	return true
@@ -214,7 +214,8 @@ type BatchCheckResult struct {
 }
 
 // ListAccessibleStacksRequest asks for stacks a subject can access through a
-// derived permission.
+// relation. Permission is typed Relation, so nothing here restricts it to a
+// derived permission — enforcing that, if it matters, is a caller concern.
 type ListAccessibleStacksRequest struct {
 	Subject    Subject
 	Permission Relation
@@ -240,23 +241,28 @@ func (request ListGrantsRequest) Valid() bool {
 	return request.Stack.Valid()
 }
 
-// ListGrantsResult contains only validated direct role assignments.
+// ListGrantsResult contains only validated grants. Valid checks well-formed
+// identifiers and a well-formed relation name, not that the relation is a
+// direct, writable one — see Grant.Valid.
 type ListGrantsResult struct {
 	Grants []Grant
 }
 
-// Grant is a direct role assignment for a subject on a stack.
+// Grant is a relation assignment for a subject on a stack.
 type Grant struct {
 	subject Subject
 	stack   Object
 	role    Relation
 }
 
-// NewGrant returns a validated direct role assignment.
+// NewGrant returns a grant with well-formed subject, stack, and relation
+// name. It does not require the relation to be one the grant API may
+// actually write — that is Relation.Grantable, which Task 4 wires into
+// Grant.Valid.
 func NewGrant(subject Subject, stack Object, role Relation) (Grant, error) {
 	grant := Grant{subject: subject, stack: stack, role: role}
 	if !grant.Valid() {
-		return Grant{}, fmt.Errorf("%w: invalid direct role grant", ErrInvalidInput)
+		return Grant{}, fmt.Errorf("%w: invalid grant", ErrInvalidInput)
 	}
 	return grant, nil
 }
@@ -271,12 +277,14 @@ func (grant Grant) Stack() Object {
 	return grant.stack
 }
 
-// Role returns the grant's direct role.
+// Role returns the grant's relation.
 func (grant Grant) Role() Relation {
 	return grant.role
 }
 
-// Valid reports whether the grant has validated identifiers and a direct role.
+// Valid reports whether the grant has well-formed identifiers and a
+// well-formed relation name. It does not require the relation to be
+// grantable — Task 4 tightens this to Relation.Grantable.
 func (grant Grant) Valid() bool {
 	return grant.subject.Valid() && grant.stack.Valid() && grant.role.Valid()
 }

@@ -106,7 +106,7 @@ func safeRelationName(name string) bool {
 }
 
 // Named relations. must* panics at package init, which can only be a
-// programming error in the literal table above it.
+// programming error in the literal table below.
 var (
 	RelationOwner    = mustGrantRelation("owner")
 	RelationOperator = mustGrantRelation("operator")
@@ -119,8 +119,8 @@ var (
 	RelationCanManageAccess = mustRelation("can_manage_access")
 )
 
-// mustRelation is NewRelation for the package-level table below. It panics on
-// error, which at init time can only be a typo three lines above it.
+// mustRelation is NewRelation for the package-level table above. It panics on
+// error, which at init time can only be a typo in one of that table's calls.
 //
 //	mustRelation("can_view")  → Relation{"can_view"}
 //	mustRelation("can view")  → panics
@@ -132,7 +132,7 @@ func mustRelation(name string) Relation {
 	return relation
 }
 
-// mustGrantRelation is GrantRelation for the package-level table below.
+// mustGrantRelation is GrantRelation for the package-level table above.
 //
 //	mustGrantRelation("owner")   → Relation{"owner"}
 //	mustGrantRelation("parent")  → panics (not in grantableRelations)
