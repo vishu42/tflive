@@ -119,13 +119,13 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 	return nil, nil
 }
 
-// grantIdentity is the parsed payload. Role is a struct, not a string, so
+// grantIdentity is the parsed payload. Relation is a struct, not a string, so
 // the role is parsed once here and compared by value; hasRole distinguishes
 // "grant this role" from "revoke everything".
 type grantIdentity struct {
 	stack   Object
 	subject Subject
-	role    Role
+	role    Relation
 	hasRole bool
 }
 
@@ -138,13 +138,13 @@ func parseGrantPayload(payload json.RawMessage) (grantIdentity, error) {
 	if err != nil {
 		return grantIdentity{}, fmt.Errorf("parse stack grant stack: %w", err)
 	}
-	subject, err := SubjectFromKeycloakSub(parsed.Subject)
+	subject, err := SubjectFromOIDCSub(parsed.Subject)
 	if err != nil {
 		return grantIdentity{}, fmt.Errorf("parse stack grant subject: %w", err)
 	}
 	identity := grantIdentity{stack: stack, subject: subject}
 	if parsed.Role != "" {
-		role, err := RoleFromDirectRelation(parsed.Role)
+		role, err := GrantRelation(parsed.Role)
 		if err != nil {
 			return grantIdentity{}, fmt.Errorf("parse stack grant role: %w", err)
 		}

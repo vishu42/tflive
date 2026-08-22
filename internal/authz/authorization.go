@@ -19,20 +19,52 @@ var (
 	ErrWriteUnconfirmed  = errors.New("authorization write unconfirmed")
 )
 
-// Subject is a validated Keycloak subject in its canonical authorization form.
-// Its value is intentionally opaque so callers cannot construct unchecked IDs.
+// Subject is an Object in the tuple's user slot. It wraps Object because on the
+// wire both slots hold "type:id"; a future relation field carries usersets
+// ("group:eng#member") with no restructuring.
 type Subject struct {
-	value string
+	object Object
+}
+
+// SubjectFromOIDCSub returns the canonical authorization identifier for sub,
+// the "sub" claim of a verified ID token. This is the one identifier tflive
+// does not originate, so the character rules matter most here.
+//
+//	SubjectFromOIDCSub("00u1b2c3")      → Subject{"user:00u1b2c3"}, nil
+//	SubjectFromOIDCSub("kc-sub-123")    → Subject{"user:kc-sub-123"}, nil
+//	SubjectFromOIDCSub("alice#member")  → Subject{}, ErrInvalidInput  (userset)
+//	SubjectFromOIDCSub("*")             → Subject{}, ErrInvalidInput  (everyone)
+func SubjectFromOIDCSub(sub string) (Subject, error) {
+	object, err := ObjectFromID(TypeUser, sub)
+	if err != nil {
+		return Subject{}, err
+	}
+	return Subject{object: object}, nil
+}
+
+// Type returns the subject's object type. Always TypeUser today; #141 adds
+// platform subjects for the parent edge.
+//
+//	SubjectFromOIDCSub("alice") then .Type()  → TypeUser
+//	Subject{}.Type()                          → ""
+func (subject Subject) Type() ObjectType {
+	return subject.object.Type()
 }
 
 // String renders the canonical authorization identifier for a provider adapter.
+//
+//	SubjectFromOIDCSub("alice") then .String()  → "user:alice"
+//	Subject{}.String()                          → ""
 func (subject Subject) String() string {
-	return subject.value
+	return subject.object.String()
 }
 
 // Valid reports whether the subject is a canonical, validated authorization ID.
+//
+//	SubjectFromOIDCSub("alice") then .Valid()  → true
+//	Subject{}.Valid()                          → false
 func (subject Subject) Valid() bool {
-	return validCanonicalIdentifier("user", subject.value)
+	return subject.object.Valid()
 }
 
 // ObjectType is an object type declared in the authorization model. It is not
@@ -98,72 +130,6 @@ func (object Object) Valid() bool {
 	return object.objectType != "" && validCanonicalIdentifier(string(object.objectType), object.value)
 }
 
-// Role is a directly assignable stack relationship. Its value is intentionally
-// opaque so derived permissions cannot be used as relationship-write targets.
-type Role struct {
-	value string
-}
-
-var (
-	RoleOwner    = Role{value: "owner"}
-	RoleOperator = Role{value: "operator"}
-	RoleApprover = Role{value: "approver"}
-	RoleViewer   = Role{value: "viewer"}
-)
-
-// RoleFromDirectRelation returns one of the direct, writable role relations.
-func RoleFromDirectRelation(relation string) (Role, error) {
-	role := Role{value: relation}
-	if !role.Valid() {
-		return Role{}, fmt.Errorf("%w: invalid direct role", ErrInvalidInput)
-	}
-	return role, nil
-}
-
-// String renders the direct relationship name for a provider adapter.
-func (role Role) String() string {
-	return role.value
-}
-
-// Valid reports whether the role is a direct, writable relationship.
-func (role Role) Valid() bool {
-	switch role.value {
-	case "owner", "operator", "approver", "viewer":
-		return true
-	default:
-		return false
-	}
-}
-
-// Permission is a derived authorization relationship.
-type Permission string
-
-const (
-	PermissionView         Permission = "can_view"
-	PermissionOperate      Permission = "can_operate"
-	PermissionApprove      Permission = "can_approve"
-	PermissionManageAccess Permission = "can_manage_access"
-)
-
-// Valid reports whether the permission is a supported derived relationship.
-func (permission Permission) Valid() bool {
-	switch permission {
-	case PermissionView, PermissionOperate, PermissionApprove, PermissionManageAccess:
-		return true
-	default:
-		return false
-	}
-}
-
-// SubjectFromKeycloakSub returns the canonical authorization identifier for sub.
-func SubjectFromKeycloakSub(sub string) (Subject, error) {
-	value, err := canonicalIdentifier("user", sub)
-	if err != nil {
-		return Subject{}, err
-	}
-	return Subject{value: value}, nil
-}
-
 // canonicalIdentifier renders "kind:value" after refusing any value that could
 // change a tuple's meaning rather than merely be malformed. ':' would forge the
 // type prefix, '#' would make the value a userset reference, and '*' would make
@@ -175,13 +141,27 @@ func SubjectFromKeycloakSub(sub string) (Subject, error) {
 //	canonicalIdentifier("user", "*")             → "", ErrInvalidInput
 //	canonicalIdentifier("user", "a b")           → "", ErrInvalidInput
 func canonicalIdentifier(kind, value string) (string, error) {
-	if value == "" ||
-		strings.ContainsAny(value, ":#*") ||
-		strings.IndexFunc(value, unicode.IsSpace) >= 0 ||
-		strings.IndexFunc(value, unicode.IsControl) >= 0 {
+	if !safeTupleToken(value) {
 		return "", fmt.Errorf("%w: invalid %s identifier", ErrInvalidInput, kind)
 	}
 	return kind + ":" + value, nil
+}
+
+// safeTupleToken reports whether s can appear in a tuple without changing its
+// meaning. ':' would forge a type prefix, '#' would make a userset reference,
+// and '*' would make the typed wildcard that matches every user.
+//
+//	safeTupleToken("can_view")  → true
+//	safeTupleToken("a#b")       → false
+//	safeTupleToken("")          → false
+func safeTupleToken(s string) bool {
+	if s == "" || strings.ContainsAny(s, ":#*") {
+		return false
+	}
+	if strings.IndexFunc(s, unicode.IsSpace) >= 0 || strings.IndexFunc(s, unicode.IsControl) >= 0 {
+		return false
+	}
+	return true
 }
 
 func validCanonicalIdentifier(kind, value string) bool {
@@ -197,7 +177,7 @@ func validCanonicalIdentifier(kind, value string) bool {
 type CheckRequest struct {
 	Subject    Subject
 	Stack      Object
-	Permission Permission
+	Permission Relation
 }
 
 // Valid reports whether the request can safely cross the adapter boundary.
@@ -237,7 +217,7 @@ type BatchCheckResult struct {
 // derived permission.
 type ListAccessibleStacksRequest struct {
 	Subject    Subject
-	Permission Permission
+	Permission Relation
 }
 
 // Valid reports whether the request can safely cross the adapter boundary.
@@ -269,11 +249,11 @@ type ListGrantsResult struct {
 type Grant struct {
 	subject Subject
 	stack   Object
-	role    Role
+	role    Relation
 }
 
 // NewGrant returns a validated direct role assignment.
-func NewGrant(subject Subject, stack Object, role Role) (Grant, error) {
+func NewGrant(subject Subject, stack Object, role Relation) (Grant, error) {
 	grant := Grant{subject: subject, stack: stack, role: role}
 	if !grant.Valid() {
 		return Grant{}, fmt.Errorf("%w: invalid direct role grant", ErrInvalidInput)
@@ -292,7 +272,7 @@ func (grant Grant) Stack() Object {
 }
 
 // Role returns the grant's direct role.
-func (grant Grant) Role() Role {
+func (grant Grant) Role() Relation {
 	return grant.role
 }
 

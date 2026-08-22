@@ -65,35 +65,48 @@ func TestCanonicalIdentifiersAcceptOrdinarySubjects(t *testing.T) {
 	}
 }
 
-func TestOnlyDirectRolesAndDerivedPermissionsAreValid(t *testing.T) {
-	for _, role := range []Role{RoleOwner, RoleOperator, RoleApprover, RoleViewer} {
-		if !role.Valid() {
-			t.Fatalf("named direct role %q must validate", role.String())
+// Pins that Subject wraps a user Object rather than being its own encoding.
+func TestSubjectFromOIDCSubIsAUserObject(t *testing.T) {
+	subject, err := SubjectFromOIDCSub("kc-sub-123")
+	if err != nil || subject.String() != "user:kc-sub-123" {
+		t.Fatalf("SubjectFromOIDCSub() = %q, %v", subject.String(), err)
+	}
+	if subject.Type() != TypeUser {
+		t.Fatalf("Type() = %q, want %q", subject.Type(), TypeUser)
+	}
+}
+
+// Pins that a struct literal cannot bypass SubjectFromOIDCSub's validation.
+func TestZeroSubjectIsInvalid(t *testing.T) {
+	if (Subject{}).Valid() {
+		t.Fatal("zero Subject must not validate")
+	}
+}
+
+// Pins that SubjectFromOIDCSub rejects the same tuple-corrupting inputs as
+// every other identifier constructor: a userset reference, the typed
+// wildcard, and an already-prefixed value. This is the subject constructor
+// specifically, not merely coverage inferred from the shared code path.
+func TestSubjectFromOIDCSubRejectsTupleSyntax(t *testing.T) {
+	for _, sub := range []string{"", " ", "user:already", "alice#member", "*", "al*ce", "bad\nsubject"} {
+		if _, err := SubjectFromOIDCSub(sub); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("SubjectFromOIDCSub(%q) error = %v, want ErrInvalidInput", sub, err)
 		}
-	}
-	if !PermissionView.Valid() {
-		t.Fatal("known permission must validate")
-	}
-	if _, err := RoleFromDirectRelation("can_view"); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("derived permission as role error = %v", err)
-	}
-	if Permission("owner").Valid() {
-		t.Fatal("roles and permissions must not overlap")
 	}
 }
 
 func TestGrantAndMutationRequireValidatedDirectRoles(t *testing.T) {
-	subject, err := SubjectFromKeycloakSub("kc-sub-123")
+	subject, err := SubjectFromOIDCSub("kc-sub-123")
 	if err != nil {
-		t.Fatalf("SubjectFromKeycloakSub() error = %v", err)
+		t.Fatalf("SubjectFromOIDCSub() error = %v", err)
 	}
 	stack, err := ObjectFromID(TypeStack, "stack-123")
 	if err != nil {
 		t.Fatalf("ObjectFromID() error = %v", err)
 	}
-	role, err := RoleFromDirectRelation("owner")
+	role, err := GrantRelation("owner")
 	if err != nil {
-		t.Fatalf("RoleFromDirectRelation() error = %v", err)
+		t.Fatalf("GrantRelation() error = %v", err)
 	}
 	grant, err := NewGrant(subject, stack, role)
 	if err != nil || !grant.Valid() {
@@ -112,15 +125,15 @@ func TestGrantAndMutationRequireValidatedDirectRoles(t *testing.T) {
 }
 
 func TestRequestsValidateOpaqueValuesAtAdapterBoundary(t *testing.T) {
-	subject, err := SubjectFromKeycloakSub("kc-sub-123")
+	subject, err := SubjectFromOIDCSub("kc-sub-123")
 	if err != nil {
-		t.Fatalf("SubjectFromKeycloakSub() error = %v", err)
+		t.Fatalf("SubjectFromOIDCSub() error = %v", err)
 	}
 	stack, err := ObjectFromID(TypeStack, "stack-123")
 	if err != nil {
 		t.Fatalf("ObjectFromID() error = %v", err)
 	}
-	check := CheckRequest{Subject: subject, Stack: stack, Permission: PermissionView}
+	check := CheckRequest{Subject: subject, Stack: stack, Permission: RelationCanView}
 	if !check.Valid() {
 		t.Fatal("validated check request must be valid")
 	}
@@ -133,7 +146,7 @@ func TestRequestsValidateOpaqueValuesAtAdapterBoundary(t *testing.T) {
 	if (BatchCheckRequest{}).Valid() {
 		t.Fatal("zero batch request must be invalid")
 	}
-	if !(ListAccessibleStacksRequest{Subject: subject, Permission: PermissionView}).Valid() {
+	if !(ListAccessibleStacksRequest{Subject: subject, Permission: RelationCanView}).Valid() {
 		t.Fatal("validated accessible-stack request must be valid")
 	}
 	if (ListAccessibleStacksRequest{}).Valid() {
