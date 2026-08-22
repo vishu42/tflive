@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/bits"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -743,8 +745,30 @@ func TestAuthorizationAdapterListSubjectGrantsRejectsOtherSubjectsAndInvalidRequ
 	}
 }
 
+// batchCheckWantAllowed returns the deterministic decision the fake
+// batch-check handler in TestBatchCheckChunksAtFiftyAndPreservesOrder
+// answers for check index, and what the test asserts the merged result
+// holds at that index. It follows the parity of index's population count
+// (the Thue-Morse sequence) rather than any fixed-period pattern like
+// index%10, because a period that divides the 50-check chunk size would go
+// unnoticed by a merge bug that misaligns a chunk boundary by exactly that
+// period — the old %10 pattern could not distinguish index i from i+10,
+// i+20, ... within the first, 50-wide chunk.
+//
+//	batchCheckWantAllowed(0)   → false  (popcount 0, even)
+//	batchCheckWantAllowed(1)   → true   (popcount 1, odd)
+//	batchCheckWantAllowed(50)  → true   (popcount 3, odd; the lone check in the second chunk)
+func batchCheckWantAllowed(index int) bool {
+	return bits.OnesCount(uint(index))%2 == 1
+}
+
 // Pins #220. Ordering is asserted as well as chunking, because a merge that
-// loses the caller's positions silently returns another stack's answer.
+// loses the caller's positions silently returns another stack's answer. The
+// expected pattern (batchCheckWantAllowed) is per-index rather than
+// periodic so a merge offset wrong by any multiple of the chunk size's
+// divisors cannot alias with the correct answer. The batch sizes are
+// asserted exactly ([50, 1]), not just bounded by 50, so a chunker that
+// split unevenly would also be caught.
 func TestBatchCheckChunksAtFiftyAndPreservesOrder(t *testing.T) {
 	t.Parallel()
 
@@ -766,14 +790,20 @@ func TestBatchCheckChunksAtFiftyAndPreservesOrder(t *testing.T) {
 		batchSizes = append(batchSizes, len(body.Checks))
 		mu.Unlock()
 
-		// Answer true only for the stack whose ID encodes an even number, so a
-		// misordered merge produces a visibly wrong result rather than passing.
+		// Each check's object encodes its own index (mustStack(t,
+		// fmt.Sprintf("stack-%d", i)) below), so the handler recovers that
+		// index and answers via batchCheckWantAllowed — the same function
+		// the assertion below uses, so a misordered merge produces a
+		// visibly wrong result rather than a coincidentally passing one.
 		results := map[string]any{}
 		for _, check := range body.Checks {
-			allowed := strings.HasSuffix(check.TupleKey.Object, "0") || strings.HasSuffix(check.TupleKey.Object, "2") ||
-				strings.HasSuffix(check.TupleKey.Object, "4") || strings.HasSuffix(check.TupleKey.Object, "6") ||
-				strings.HasSuffix(check.TupleKey.Object, "8")
-			results[check.CorrelationID] = map[string]any{"allowed": allowed}
+			suffix := strings.TrimPrefix(check.TupleKey.Object, "stack:stack-")
+			index, err := strconv.Atoi(suffix)
+			if err != nil {
+				t.Errorf("object %q does not encode a check index: %v", check.TupleKey.Object, err)
+				continue
+			}
+			results[check.CorrelationID] = map[string]any{"allowed": batchCheckWantAllowed(index)}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"result": results})
@@ -798,19 +828,71 @@ func TestBatchCheckChunksAtFiftyAndPreservesOrder(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(batchSizes) != 2 {
-		t.Fatalf("upstream requests = %d (sizes %v), want 2", len(batchSizes), batchSizes)
-	}
-	for _, size := range batchSizes {
-		if size > 50 {
-			t.Fatalf("upstream batch of %d exceeds OpenFGA's limit of 50", size)
-		}
+	if want := []int{50, 1}; !reflect.DeepEqual(batchSizes, want) {
+		t.Fatalf("upstream batch sizes = %v, want %v", batchSizes, want)
 	}
 
 	for i, decision := range result.Results {
-		wantAllowed := i%10 == 0 || i%10 == 2 || i%10 == 4 || i%10 == 6 || i%10 == 8
+		wantAllowed := batchCheckWantAllowed(i)
 		if decision.Allowed != wantAllowed {
 			t.Fatalf("Results[%d].Allowed = %t, want %t (ordering lost across chunks)", i, decision.Allowed, wantAllowed)
 		}
+	}
+}
+
+// Pins that a chunk failing after an earlier chunk already succeeded returns
+// ErrUnavailable and the zero BatchCheckResult — not the `result` variable
+// partially filled by the chunk(s) that did succeed. Every error return in
+// BatchCheck already says authz.BatchCheckResult{}, never `result`, but the
+// only multi-chunk test before this one was the happy path, so a change that
+// swapped one of those returns to `result` would have shipped undetected.
+func TestBatchCheckReturnsZeroResultWhenALaterChunkFails(t *testing.T) {
+	t.Parallel()
+
+	const total = 51
+	var mu sync.Mutex
+	requestCount := 0
+
+	adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requestCount++
+		n := requestCount
+		mu.Unlock()
+
+		if n == 1 {
+			var body struct {
+				Checks []struct {
+					CorrelationID string `json:"correlation_id"`
+				} `json:"checks"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode batch-check body: %v", err)
+			}
+			results := map[string]any{}
+			for _, check := range body.Checks {
+				results[check.CorrelationID] = map[string]any{"allowed": true}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": results})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	checks := make([]authz.CheckRequest, total)
+	for i := range checks {
+		checks[i] = authz.CheckRequest{
+			Subject:  mustSubject(t, "alice"),
+			Relation: authz.RelationCanView,
+			Object:   mustStack(t, fmt.Sprintf("stack-%d", i)),
+		}
+	}
+
+	result, err := adapter.BatchCheck(context.Background(), authz.BatchCheckRequest{Checks: checks})
+	if !errors.Is(err, authz.ErrUnavailable) {
+		t.Fatalf("BatchCheck() error = %v, want ErrUnavailable", err)
+	}
+	if !reflect.DeepEqual(result, authz.BatchCheckResult{}) {
+		t.Fatalf("BatchCheck() result = %#v, want the zero value, not the first chunk's partial results", result)
 	}
 }

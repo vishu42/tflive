@@ -94,16 +94,20 @@ type Object struct {
 
 // ObjectFromID returns the canonical authorization identifier for id. The id
 // must be a bare identifier: it is the caller's raw value, never an
-// already-prefixed one.
+// already-prefixed one. objectType gets the same structural character check
+// as id: callers pass it as an exported ObjectType value, not always an
+// in-package literal, so it must not be able to smuggle a ':', '#', or '*'
+// into the rendered tuple.
 //
-//	ObjectFromID(TypeStack, "abc123")      → Object{"stack:abc123"}, nil
-//	ObjectFromID(TypeUser, "00u1b2c3")     → Object{"user:00u1b2c3"}, nil
-//	ObjectFromID(TypeStack, "stack:abc")   → Object{}, ErrInvalidInput  (already prefixed)
-//	ObjectFromID(TypeUser, "al*ce")        → Object{}, ErrInvalidInput  (wildcard char)
-//	ObjectFromID(TypeUser, "")             → Object{}, ErrInvalidInput
+//	ObjectFromID(TypeStack, "abc123")            → Object{"stack:abc123"}, nil
+//	ObjectFromID(TypeUser, "00u1b2c3")           → Object{"user:00u1b2c3"}, nil
+//	ObjectFromID(TypeStack, "stack:abc")         → Object{}, ErrInvalidInput  (already prefixed)
+//	ObjectFromID(TypeUser, "al*ce")              → Object{}, ErrInvalidInput  (wildcard char)
+//	ObjectFromID(TypeUser, "")                   → Object{}, ErrInvalidInput
+//	ObjectFromID(ObjectType("stack:evil"), "abc") → Object{}, ErrInvalidInput  (type forges a prefix)
 func ObjectFromID(objectType ObjectType, id string) (Object, error) {
-	if objectType == "" {
-		return Object{}, fmt.Errorf("%w: object type is required", ErrInvalidInput)
+	if objectType == "" || !safeTupleToken(string(objectType)) {
+		return Object{}, fmt.Errorf("%w: invalid object type", ErrInvalidInput)
 	}
 	value, err := canonicalIdentifier(string(objectType), id)
 	if err != nil {

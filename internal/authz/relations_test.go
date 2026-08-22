@@ -99,3 +99,40 @@ func TestNamedRelationValuesMatchTheirBucket(t *testing.T) {
 		}
 	}
 }
+
+// Pins the literal wire string for each of the eight named relation
+// constants. RelationCanView and RelationCanOperate are already pinned by
+// wire assertions in internal/openfga's adapter tests, and all four grant
+// constants are additionally protected because mustGrantRelation panics at
+// init if its argument is not in grantableRelations — but RelationCanApprove
+// and RelationCanManageAccess are pinned by nothing else: a well-formed typo
+// like "can_aprove" does not panic at init and satisfies
+// TestNamedRelationValuesMatchTheirBucket (which only checks !Grantable()),
+// so it would reach OpenFGA as an unknown relation, get a 400, and surface
+// as a 503 on every approval request. This test would fail on that typo even
+// though every other test in the package still passes.
+func TestNamedRelationWireStringsAreExact(t *testing.T) {
+	permissions := map[string]Relation{
+		"can_view":          RelationCanView,
+		"can_operate":       RelationCanOperate,
+		"can_approve":       RelationCanApprove,
+		"can_manage_access": RelationCanManageAccess,
+	}
+	for want, relation := range permissions {
+		if got := relation.String(); got != want {
+			t.Fatalf("permission relation .String() = %q, want %q", got, want)
+		}
+	}
+
+	grants := map[string]Relation{
+		"owner":    RelationOwner,
+		"operator": RelationOperator,
+		"approver": RelationApprover,
+		"viewer":   RelationViewer,
+	}
+	for want, relation := range grants {
+		if got := relation.String(); got != want {
+			t.Fatalf("grant relation .String() = %q, want %q", got, want)
+		}
+	}
+}

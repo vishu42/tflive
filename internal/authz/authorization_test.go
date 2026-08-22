@@ -36,6 +36,24 @@ func TestObjectCarriesItsType(t *testing.T) {
 	}
 }
 
+// Pins that ObjectFromID rejects a malformed object type with the same
+// character rules the id slot already gets, not just an empty-string check.
+// Before this guard, an exported ObjectType containing ':', '#', or '*' would
+// pass through unchecked and let a caller forge the rendered tuple's type
+// prefix (e.g. ObjectType("stack:evil") + "abc" → "stack:evil:abc", parsed by
+// OpenFGA as type "stack", id "evil:abc").
+func TestObjectFromIDRejectsMalformedType(t *testing.T) {
+	if _, err := ObjectFromID(ObjectType(""), "abc"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf(`ObjectFromID("", "abc") error = %v, want ErrInvalidInput`, err)
+	}
+	unsafeTypes := []ObjectType{"stack:evil", "stack#member", "stack*"}
+	for _, objectType := range unsafeTypes {
+		if _, err := ObjectFromID(objectType, "abc"); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("ObjectFromID(%q, \"abc\") error = %v, want ErrInvalidInput", objectType, err)
+		}
+	}
+}
+
 // Pins the character rules. Each rejected input changes a tuple's meaning
 // rather than merely being malformed, which is why this is the highest-value
 // test in the package: sub is the one identifier tflive does not originate.

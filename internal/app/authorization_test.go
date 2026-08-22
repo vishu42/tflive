@@ -233,6 +233,136 @@ func TestInheritedResourceMissingMutationReturnsForbidden(t *testing.T) {
 	}
 }
 
+// stackCapabilityRelationsInOrder is the exact request order
+// ResolveStackCapabilities and ResolveStacksCapabilities are required to
+// send checks in. StackCapabilities' field build (CanView: Results[0],
+// CanOperate: Results[1], CanApprove: Results[2], CanManageAccess:
+// Results[3]) is a fixed literal that trusts the checks arrived in this
+// order — it does not re-derive position from the Relation each result
+// answers. A test that only inspects the boolean result of a bare
+// index-driven double cannot tell the two positions apart on its own,
+// because a permuted relations slice still produces the same number of
+// checks at the same indices; only inspecting the recorded Relation at each
+// position exposes the swap.
+var stackCapabilityRelationsInOrder = []authz.Relation{
+	authz.RelationCanView, authz.RelationCanOperate, authz.RelationCanApprove, authz.RelationCanManageAccess,
+}
+
+var stackCapabilityRelationNames = []string{"can_view", "can_operate", "can_approve", "can_manage_access"}
+
+// capabilityWithOnly builds the StackCapabilities that has exactly one field
+// set, keyed by its position in stackCapabilityRelationsInOrder.
+func capabilityWithOnly(relationIndex int) StackCapabilities {
+	switch relationIndex {
+	case 0:
+		return StackCapabilities{CanView: true}
+	case 1:
+		return StackCapabilities{CanOperate: true}
+	case 2:
+		return StackCapabilities{CanApprove: true}
+	case 3:
+		return StackCapabilities{CanManageAccess: true}
+	default:
+		panic("capabilityWithOnly: relationIndex out of range")
+	}
+}
+
+// assertStackCapabilityRelationOrder fails the test unless authorizer
+// recorded checks whose Relation values run through
+// stackCapabilityRelationsInOrder, repeated once per stack in stacks'
+// order — the exact request shape ResolveStackCapabilities and
+// ResolveStacksCapabilities must produce. This is what actually catches a
+// swap inside the relations slice literal: the boolean mapping assertions
+// alone cannot, because they never look at which Relation a result
+// answered.
+func assertStackCapabilityRelationOrder(t *testing.T, authorizer *permissionAuthorizer, stacks int) {
+	t.Helper()
+
+	want := stacks * len(stackCapabilityRelationsInOrder)
+	if len(authorizer.batchChecks) != want {
+		t.Fatalf("batch checks sent = %d, want %d", len(authorizer.batchChecks), want)
+	}
+	for i, check := range authorizer.batchChecks {
+		want := stackCapabilityRelationsInOrder[i%len(stackCapabilityRelationsInOrder)]
+		if check.Relation != want {
+			t.Fatalf("batchChecks[%d].Relation = %q, want %q (relations slice order changed)", i, check.Relation, want)
+		}
+	}
+}
+
+// Pins the positional mapping from BatchCheck's ordered results onto
+// StackCapabilities fields, and the request order that mapping depends on.
+// A double that allows everything or denies everything would pass under any
+// permutation of the relations slice, so this allows exactly one relation at
+// a time and asserts exactly the matching capability flips true while the
+// other three stay false — for each of the four positions — and separately
+// asserts the checks were sent in the exact relation order the field build
+// assumes.
+func TestResolveStackCapabilitiesMapsEachRelationPositionally(t *testing.T) {
+	t.Parallel()
+
+	for relationIndex, name := range stackCapabilityRelationNames {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			authorizer := &permissionAuthorizer{batchDecision: func(i int) bool { return i == relationIndex }}
+			ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
+
+			got, err := ResolveStackCapabilities(ctx, authorizer, "stack_123")
+			if err != nil {
+				t.Fatalf("ResolveStackCapabilities() error = %v", err)
+			}
+			if want := capabilityWithOnly(relationIndex); got != want {
+				t.Fatalf("ResolveStackCapabilities() = %+v, want %+v", got, want)
+			}
+			assertStackCapabilityRelationOrder(t, authorizer, 1)
+		})
+	}
+}
+
+// Pins the positional mapping ResolveStacksCapabilities applies to a single
+// flattened BatchCheck result, including the base := i * len(relations)
+// stride that walks from one stack's four results to the next, and the
+// request order that mapping depends on. Two stacks are required to
+// exercise the stride at all; a single stack would leave base == 0 for
+// every case. This allows exactly one (stack, relation) pair at a time and
+// asserts exactly the matching capability flips true, on the matching stack
+// only, for every stack/relation combination — and separately asserts the
+// checks were sent in the exact relation order, repeated once per stack,
+// that the field build assumes.
+func TestResolveStacksCapabilitiesMapsEachStackAndRelationPositionally(t *testing.T) {
+	t.Parallel()
+
+	stacks := []traits.Stack{{ID: "stack_a"}, {ID: "stack_b"}}
+
+	for stackIndex, stack := range stacks {
+		for relationIndex, name := range stackCapabilityRelationNames {
+			t.Run(fmt.Sprintf("%s/%s", stack.ID, name), func(t *testing.T) {
+				t.Parallel()
+
+				wantIndex := stackIndex*len(stackCapabilityRelationsInOrder) + relationIndex
+				authorizer := &permissionAuthorizer{batchDecision: func(i int) bool { return i == wantIndex }}
+				ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
+
+				got, err := ResolveStacksCapabilities(ctx, authorizer, stacks)
+				if err != nil {
+					t.Fatalf("ResolveStacksCapabilities() error = %v", err)
+				}
+				for _, s := range stacks {
+					want := StackCapabilities{}
+					if s.ID == stack.ID {
+						want = capabilityWithOnly(relationIndex)
+					}
+					if got[s.ID] != want {
+						t.Fatalf("caps[%q] = %+v, want %+v", s.ID, got[s.ID], want)
+					}
+				}
+				assertStackCapabilityRelationOrder(t, authorizer, len(stacks))
+			})
+		}
+	}
+}
+
 func TestMissingAuthorizerIsUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -249,6 +379,7 @@ type permissionAuthorizer struct {
 	allowed             bool
 	check               authz.CheckRequest
 	batchSizes          []int
+	batchChecks         []authz.CheckRequest
 	batchErr            error
 	failBatch           int
 	truncateBatchResult bool
@@ -262,6 +393,7 @@ func (authorizer *permissionAuthorizer) Check(_ context.Context, request authz.C
 
 func (authorizer *permissionAuthorizer) BatchCheck(_ context.Context, request authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
 	authorizer.batchSizes = append(authorizer.batchSizes, len(request.Checks))
+	authorizer.batchChecks = append(authorizer.batchChecks, request.Checks...)
 	if authorizer.batchErr != nil && (authorizer.failBatch == 0 || authorizer.failBatch == len(authorizer.batchSizes)) {
 		return authz.BatchCheckResult{}, authorizer.batchErr
 	}
