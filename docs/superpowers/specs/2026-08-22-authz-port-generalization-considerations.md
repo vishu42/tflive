@@ -3,6 +3,11 @@
 Feeds the design for [#214](https://github.com/vishu42/tflive/issues/214).
 Written 2026-08-22, before any code.
 
+> **Superseded in part.** §§1–3 below were overturned the same day by a probe
+> against the real model — see the postscript. The reasoning is kept because it
+> is what led to the probe, but the current position is the postscript's, and
+> [the design](./2026-08-22-authz-port-generalization-design.md) follows that.
+
 The target *shape* is not open. Decision 3 of
 [the IAM surface analysis](./2026-08-20-iam-openfga-surface-analysis.md) settled
 it: three slots mirroring OpenFGA's tuple, `Subject` wrapping `Object`, one
@@ -245,3 +250,58 @@ Three things are worth deciding rather than defaulting:
   the case for §2(b)'s extra 40 lines weakens considerably.
 - **#208 ordering** — whether model-semantics tests should be made to actually
   run before this change leans on them.
+
+
+---
+
+## Postscript — §§1–3 overturned by evidence (2026-08-22)
+
+Everything above §4 rests on one assumption I never tested: that the port's
+refusals are refusals *only the port* can make. Asked whether the design was
+overengineered, I probed the four hazards against the candidate model with the
+`fga` CLI instead of arguing:
+
+| Tuple | OpenFGA's own verdict |
+|---|---|
+| `user:alice can_view stack:X` — write to a derived relation | **REJECTED** |
+| `user:* viewer stack:X` — typed wildcard, grants everyone | **REJECTED** |
+| `user:alice#member viewer stack:X` — userset injection | **REJECTED** |
+| `platform:tflive parent stack:X` — structural edge | **ACCEPTED** |
+
+Three of four are enforced by the server already, against the model itself and
+therefore without drift. The `Role`/`Permission` split that §1 set out to
+generalize duplicates a check OpenFGA does natively and better.
+
+That collapses the design:
+
+- **§1 (registry location) is moot.** There is no registry. The two closed enums
+  become one `Relation` type plus a nine-line allowlist of grantable names.
+- **§2 (write-path guarding) shrinks to that allowlist.** The three buckets were
+  a classification of *why* a relation may not be written; only one reason
+  survives contact with the server, so naming them earned nothing. `derived` and
+  `structural` both reduce to "not in the allowlist."
+- **§3 (scope boundary) reverses to (a), pure shape.** I recommended pulling the
+  `platform` type into #214 *because* it made the registry's guardrails
+  testable. With no registry, the reason is gone and the model change returns to
+  #141.
+
+Two smaller things the probe changed:
+
+- The §1 argument that the bucket is *underivable* (because `platform#root` and
+  `stack#viewer` are indistinguishable in the model) was correct and is now
+  irrelevant — it argued about a table that no longer exists.
+- It surfaced a real gap in the **existing** code, independent of any of this:
+  `canonicalIdentifier` rejects `:`, whitespace, and control characters but
+  allows `#` and `*`, the two characters that change a tuple's meaning. OpenFGA
+  fails closed on both today, but only because our model declares `[user]`
+  rather than `[user:*]` and `user` has no relations — both model facts that can
+  change. The design tightens the check.
+
+**§§4–6 stand as written.** `ListAccessibleStacks` is still deleted, #220 is
+still fixed here, and #208 still does not block — this repo has no CI workflows
+at all, so nothing load-bearing may depend on `.fga.yaml` running.
+
+The lesson worth keeping: the hazard list came from decision 3, which inherited
+it from the code's own comments, and three of its four entries had been
+obsolete since the day the model gained type restrictions. A guardrail's
+justification decays; probing costs minutes.
