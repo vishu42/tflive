@@ -54,8 +54,8 @@ func TestCanonicalIdentifiersRejectTupleSyntax(t *testing.T) {
 	}
 }
 
-// Guards the tightening in Task 2 against over-rejecting: real Keycloak, Okta,
-// and UUID subjects must keep working.
+// Guards the identifier tightening against over-rejecting: real Keycloak,
+// Okta, and UUID subjects must keep working.
 func TestCanonicalIdentifiersAcceptOrdinarySubjects(t *testing.T) {
 	// UUID and Okta-style subs must keep working.
 	for _, input := range []string{"kc-sub-123", "00u1b2c3d4e5", "6f7a8b9c-1d2e-3f40-5a6b-7c8d9e0f1a2b"} {

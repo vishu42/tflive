@@ -53,6 +53,15 @@ func requireTemplateCatalogAccess(ctx context.Context) error {
 	return ErrForbidden
 }
 
+// authorizeStack answers "may the request's principal do relation to this
+// stack?", returning denied rather than a generic error so a caller controls
+// whether the client sees 403 or 404.
+//
+//	stack owned by alice, principal alice, RelationCanOperate  → nil
+//	stack owned by alice, principal bob, RelationCanOperate    → denied
+//	principal is platform-admin, any stack                     → nil (short-circuit)
+//	stackID = "bad:id"                                         → denied
+//	OpenFGA unreachable                                        → authz.ErrUnavailable
 func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID, relation authz.Relation, denied error) error {
 	principal, err := requireAuthorizer(ctx, authorizer)
 	if err != nil {

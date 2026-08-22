@@ -1246,11 +1246,11 @@ func (service *Service) ListStackGrants(ctx context.Context, command ListStackGr
 	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
 		return ListStackGrantsResult{}, err
 	}
-	stack, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
+	object, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
 	if err != nil {
 		return ListStackGrantsResult{}, fmt.Errorf("list grants stack: %w", err)
 	}
-	result, err := service.Authorizer.ListGrants(ctx, authz.ListGrantsRequest{Object: stack})
+	result, err := service.Authorizer.ListGrants(ctx, authz.ListGrantsRequest{Object: object})
 	if err != nil {
 		return ListStackGrantsResult{}, err
 	}
@@ -1284,8 +1284,10 @@ func displayNameFromUser(user DirectoryUser) string {
 	return user.Username
 }
 
-// listGrantsForStack reads every direct role assignment on one stack. Structural
-// tuples such as parent edges are not grants and never appear in the result.
+// listGrantsForStack reads every direct role assignment on one stack. The
+// adapter rejects the entire read response — rather than filtering out the
+// offending tuple — if it contains a structural tuple such as a parent edge,
+// since those are not grants.
 //
 //	stack:abc with alice=owner, bob=viewer
 //	  → ListGrantsResult{Grants: [{user:alice, owner}, {user:bob, viewer}]}, nil
@@ -1320,7 +1322,7 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 		}
 	}
 
-	stack, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
+	object, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
 	if err != nil {
 		return GrantView{}, fmt.Errorf("assign role stack: %w", err)
 	}
@@ -1329,7 +1331,7 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 		return GrantView{}, fmt.Errorf("%w: invalid user sub", ErrInvalidCommand)
 	}
 
-	currentGrants, err := service.listGrantsForStack(ctx, stack)
+	currentGrants, err := service.listGrantsForStack(ctx, object)
 	if err != nil {
 		return GrantView{}, err
 	}
@@ -1401,7 +1403,7 @@ func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStack
 		return err
 	}
 
-	stack, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
+	object, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
 	if err != nil {
 		return fmt.Errorf("revoke role stack: %w", err)
 	}
@@ -1413,7 +1415,7 @@ func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStack
 		return fmt.Errorf("%w: invalid user sub", ErrInvalidCommand)
 	}
 
-	currentGrants, err := service.listGrantsForStack(ctx, stack)
+	currentGrants, err := service.listGrantsForStack(ctx, object)
 	if err != nil {
 		return err
 	}
