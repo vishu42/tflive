@@ -361,7 +361,7 @@ func (request ListSubjectGrantsRequest) Valid() bool {
 	return request.Subject.Valid() && request.Object.Valid()
 }
 
-// SubjectGrantLister reads the direct roles one subject holds on one stack.
+// SubjectGrantLister reads the direct roles one subject holds on one object.
 //
 // It is deliberately separate from Authorizer: only reconciling handlers need
 // this narrow read, and widening Authorizer would force every implementation

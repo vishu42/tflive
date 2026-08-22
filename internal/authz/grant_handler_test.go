@@ -174,6 +174,20 @@ func TestDeliverEmptyRoleRevokesEverything(t *testing.T) {
 	}
 }
 
+// Pins a frozen contract. The key is persisted, so a format change splits one
+// resource across two keys and disables the queue's mutual exclusion.
+func TestStackGrantKeyFormatIsUnchanged(t *testing.T) {
+	// The key is persisted. Changing its format splits one resource across two
+	// keys and disables the queue's mutual exclusion.
+	key, err := stackGrantKey([]byte(`{"stack_id":"stack-123","subject":"kc-sub-456","role":"viewer"}`))
+	if err != nil {
+		t.Fatalf("stackGrantKey() error = %v", err)
+	}
+	if key != "stack:stack-123/user:kc-sub-456" {
+		t.Fatalf("stackGrantKey() = %q, want %q", key, "stack:stack-123/user:kc-sub-456")
+	}
+}
+
 func TestDeliverPropagatesListError(t *testing.T) {
 	t.Parallel()
 

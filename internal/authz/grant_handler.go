@@ -53,12 +53,19 @@ var StackGrantSpec = queue.Spec{
 	Key:  stackGrantKey,
 }
 
+// stackGrantKey derives the queue's mutual-exclusion key. The format is a
+// frozen contract: keys are persisted, and changing it splits one resource
+// across two keys, disabling the unique partial index's exclusion.
+//
+//	{"stack_id":"s1","subject":"u1","role":"viewer"}  → "stack:s1/user:u1", nil
+//	{"stack_id":"s1","subject":"u1","role":""}        → "stack:s1/user:u1", nil
+//	{"stack_id":"bad:id","subject":"u1"}              → "", error
 func stackGrantKey(payload json.RawMessage) (string, error) {
 	identity, err := parseGrantPayload(payload)
 	if err != nil {
 		return "", err
 	}
-	return identity.stack.String() + "/" + identity.subject.String(), nil
+	return identity.object.String() + "/" + identity.subject.String(), nil
 }
 
 func (handler *StackGrantHandler) Spec() queue.Spec { return StackGrantSpec }
@@ -75,7 +82,7 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 
 	current, err := handler.relationships.ListSubjectGrants(ctx, ListSubjectGrantsRequest{
 		Subject: identity.subject,
-		Object:  identity.stack,
+		Object:  identity.object,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("read current stack grants: %w", err)
@@ -84,7 +91,7 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 	var stale []Grant
 	satisfied := false
 	for _, grant := range current.Grants {
-		if identity.hasRole && grant.Relation() == identity.role {
+		if identity.hasRelation && grant.Relation() == identity.relation {
 			satisfied = true
 			continue
 		}
@@ -101,11 +108,11 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 		}
 	}
 
-	if !identity.hasRole || satisfied {
+	if !identity.hasRelation || satisfied {
 		return nil, nil
 	}
 
-	grant, err := NewGrant(identity.subject, identity.stack, identity.role)
+	grant, err := NewGrant(identity.subject, identity.object, identity.relation)
 	if err != nil {
 		return nil, fmt.Errorf("build desired grant: %w", err)
 	}
@@ -120,21 +127,33 @@ func (handler *StackGrantHandler) Deliver(ctx context.Context, item queue.Item) 
 }
 
 // grantIdentity is the parsed payload. Relation is a struct, not a string, so
-// the role is parsed once here and compared by value; hasRole distinguishes
+// it is parsed once here and compared by value; hasRelation distinguishes
 // "grant this role" from "revoke everything".
 type grantIdentity struct {
-	stack   Object
-	subject Subject
-	role    Relation
-	hasRole bool
+	object      Object
+	subject     Subject
+	relation    Relation
+	hasRelation bool
 }
 
+// parseGrantPayload decodes a reconcile_stack_grant payload into validated
+// identifiers. An empty Role means "revoke everything", which is why hasRelation
+// is separate from relation.
+//
+//	{"stack_id":"s1","subject":"u1","role":"viewer"}
+//	  → grantIdentity{stack:s1, user:u1, viewer, hasRelation:true}, nil
+//	{"stack_id":"s1","subject":"u1","role":""}
+//	  → grantIdentity{stack:s1, user:u1, <zero>, hasRelation:false}, nil
+//	{"stack_id":"s1","subject":"u1","role":"parent"}
+//	  → grantIdentity{}, error  (not grantable)
+//	{"stack_id":"","subject":"u1","role":"viewer"}
+//	  → grantIdentity{}, error
 func parseGrantPayload(payload json.RawMessage) (grantIdentity, error) {
 	var parsed GrantPayload
 	if err := json.Unmarshal(payload, &parsed); err != nil {
 		return grantIdentity{}, fmt.Errorf("decode stack grant payload: %w", err)
 	}
-	stack, err := ObjectFromID(TypeStack, parsed.StackID)
+	object, err := ObjectFromID(TypeStack, parsed.StackID)
 	if err != nil {
 		return grantIdentity{}, fmt.Errorf("parse stack grant stack: %w", err)
 	}
@@ -142,14 +161,14 @@ func parseGrantPayload(payload json.RawMessage) (grantIdentity, error) {
 	if err != nil {
 		return grantIdentity{}, fmt.Errorf("parse stack grant subject: %w", err)
 	}
-	identity := grantIdentity{stack: stack, subject: subject}
+	identity := grantIdentity{object: object, subject: subject}
 	if parsed.Role != "" {
-		role, err := GrantRelation(parsed.Role)
+		relation, err := GrantRelation(parsed.Role)
 		if err != nil {
 			return grantIdentity{}, fmt.Errorf("parse stack grant role: %w", err)
 		}
-		identity.role = role
-		identity.hasRole = true
+		identity.relation = relation
+		identity.hasRelation = true
 	}
 	return identity, nil
 }
