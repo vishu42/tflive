@@ -240,6 +240,12 @@ The derived relations are exactly:
 person or pipeline that configures and deploys the services is the deployment
 administrator.
 
+The model is authored in OpenFGA's DSL at `openfga/authorization-model.fga`,
+which is what changes to permissions are written and reviewed in. The API wire
+format at `openfga/authorization-model.json` is generated from it and committed
+so the provisioner can embed it; see
+[local development](development.md#the-authorization-model) for the commands.
+
 ### Runtime Authorization Behavior
 
 - Stack creation requires the authenticated user to have the Keycloak

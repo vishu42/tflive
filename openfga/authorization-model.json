@@ -5,19 +5,82 @@
       "type": "user"
     },
     {
-      "type": "stack",
+      "metadata": {
+        "relations": {
+          "approver": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              }
+            ]
+          },
+          "can_approve": {},
+          "can_manage_access": {},
+          "can_operate": {},
+          "can_view": {},
+          "operator": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              }
+            ]
+          },
+          "owner": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              }
+            ]
+          },
+          "viewer": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              }
+            ]
+          }
+        }
+      },
       "relations": {
-        "owner": {
-          "this": {}
-        },
-        "operator": {
-          "this": {}
-        },
         "approver": {
           "this": {}
         },
-        "viewer": {
-          "this": {}
+        "can_approve": {
+          "union": {
+            "child": [
+              {
+                "computedUserset": {
+                  "relation": "owner"
+                }
+              },
+              {
+                "computedUserset": {
+                  "relation": "approver"
+                }
+              }
+            ]
+          }
+        },
+        "can_manage_access": {
+          "computedUserset": {
+            "relation": "owner"
+          }
+        },
+        "can_operate": {
+          "union": {
+            "child": [
+              {
+                "computedUserset": {
+                  "relation": "owner"
+                }
+              },
+              {
+                "computedUserset": {
+                  "relation": "operator"
+                }
+              }
+            ]
+          }
         },
         "can_view": {
           "union": {
@@ -45,76 +108,17 @@
             ]
           }
         },
-        "can_operate": {
-          "union": {
-            "child": [
-              {
-                "computedUserset": {
-                  "relation": "owner"
-                }
-              },
-              {
-                "computedUserset": {
-                  "relation": "operator"
-                }
-              }
-            ]
-          }
+        "operator": {
+          "this": {}
         },
-        "can_approve": {
-          "union": {
-            "child": [
-              {
-                "computedUserset": {
-                  "relation": "owner"
-                }
-              },
-              {
-                "computedUserset": {
-                  "relation": "approver"
-                }
-              }
-            ]
-          }
+        "owner": {
+          "this": {}
         },
-        "can_manage_access": {
-          "computedUserset": {
-            "relation": "owner"
-          }
+        "viewer": {
+          "this": {}
         }
       },
-      "metadata": {
-        "relations": {
-          "owner": {
-            "directly_related_user_types": [
-              {
-                "type": "user"
-              }
-            ]
-          },
-          "operator": {
-            "directly_related_user_types": [
-              {
-                "type": "user"
-              }
-            ]
-          },
-          "approver": {
-            "directly_related_user_types": [
-              {
-                "type": "user"
-              }
-            ]
-          },
-          "viewer": {
-            "directly_related_user_types": [
-              {
-                "type": "user"
-              }
-            ]
-          }
-        }
-      }
+      "type": "stack"
     }
   ]
 }

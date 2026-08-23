@@ -96,12 +96,23 @@ func CanonicalJSON(model AuthorizationModel) ([]byte, error) {
 			definition.Relations[name] = canonical
 		}
 		for name, metadata := range definition.Metadata.Relations {
+			// The DSL transform emits an empty entry for every computed
+			// relation while hand-written models omit them. The entry says
+			// nothing about who may be assigned, so drop it rather than let
+			// it decide equality.
+			if len(metadata.DirectlyRelatedUserTypes) == 0 {
+				delete(definition.Metadata.Relations, name)
+				continue
+			}
 			sort.Slice(metadata.DirectlyRelatedUserTypes, func(i, j int) bool {
 				left, _ := json.Marshal(metadata.DirectlyRelatedUserTypes[i])
 				right, _ := json.Marshal(metadata.DirectlyRelatedUserTypes[j])
 				return bytes.Compare(left, right) < 0
 			})
 			definition.Metadata.Relations[name] = metadata
+		}
+		if len(definition.Metadata.Relations) == 0 {
+			definition.Metadata.Relations = nil
 		}
 	}
 	for name, condition := range normalized.Conditions {

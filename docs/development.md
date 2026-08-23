@@ -79,12 +79,39 @@ authorization model, creating either only when absent, so re-running it
 converges rather than duplicating. Run only one at a time: OpenFGA store names
 are not unique, and bootstrap fails closed if the `tflive` name is ambiguous.
 
+## The authorization model
+
+`openfga/authorization-model.fga` is the source of truth. Edit and review
+permission changes there — the DSL is the form in which a wrong permission is
+visible.
+
+`openfga/authorization-model.json` is generated from it and committed, because
+`cmd/openfga-provisioner` embeds the API wire format. Regenerate it in the same
+commit as any DSL change:
+
+```bash
+scripts/openfga-model.sh generate
+```
+
+`scripts/openfga-model.sh check` fails when the committed JSON is not a fresh
+transform of the DSL, and `go test ./openfga/...` runs that check. Both need the
+[`fga` CLI](https://github.com/openfga/cli) on `PATH`; without it the Go test
+skips rather than fails.
+
+The permission matrix is asserted in `openfga/authorization-model-tests.fga.yaml`
+against the generated JSON:
+
+```bash
+cd openfga && fga model test --tests authorization-model-tests.fga.yaml
+```
+
 ## Tests
 
 ```bash
 go test ./...
 gofmt -l cmd internal
 node scripts/verify-auth-compose.mjs
+scripts/openfga-model.sh check
 ```
 
 ```bash
