@@ -20,6 +20,24 @@ var (
 	ErrWriteUnconfirmed  = errors.New("authorization write unconfirmed")
 )
 
+// SubjectGrantLister reads the direct roles one subject holds on one object.
+//
+// It is deliberately separate from Authorizer: only reconciling handlers need
+// this narrow read, and widening Authorizer would force every implementation
+// to grow a method it never calls.
+type SubjectGrantLister interface {
+	ListSubjectGrants(context.Context, ListSubjectGrantsRequest) (ListGrantsResult, error)
+}
+
+// Authorizer is the provider-neutral authorization port.
+type Authorizer interface {
+	Check(context.Context, CheckRequest) (CheckResult, error)
+	BatchCheck(context.Context, BatchCheckRequest) (BatchCheckResult, error)
+	ListGrants(context.Context, ListGrantsRequest) (ListGrantsResult, error)
+	WriteRelationships(context.Context, Mutation) error
+	DeleteRelationships(context.Context, Mutation) error
+}
+
 // identifier is the {type, id} pair that both tuple slots share. It stores the
 // parts rather than the rendered "type:id" string, so a holder can recover the
 // bare id without string surgery on the rendered form.
@@ -366,24 +384,6 @@ type ListSubjectGrantsRequest struct {
 //	ListSubjectGrantsRequest{Object: stack:abc}.Valid()      → false  (no subject)
 func (request ListSubjectGrantsRequest) Valid() bool {
 	return request.Subject.Valid() && request.Object.Valid()
-}
-
-// SubjectGrantLister reads the direct roles one subject holds on one object.
-//
-// It is deliberately separate from Authorizer: only reconciling handlers need
-// this narrow read, and widening Authorizer would force every implementation
-// to grow a method it never calls.
-type SubjectGrantLister interface {
-	ListSubjectGrants(context.Context, ListSubjectGrantsRequest) (ListGrantsResult, error)
-}
-
-// Authorizer is the provider-neutral authorization port.
-type Authorizer interface {
-	Check(context.Context, CheckRequest) (CheckResult, error)
-	BatchCheck(context.Context, BatchCheckRequest) (BatchCheckResult, error)
-	ListGrants(context.Context, ListGrantsRequest) (ListGrantsResult, error)
-	WriteRelationships(context.Context, Mutation) error
-	DeleteRelationships(context.Context, Mutation) error
 }
 
 // HTTPStatus maps authorization dependency failures to stable API responses.
