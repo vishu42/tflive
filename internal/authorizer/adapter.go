@@ -1,4 +1,14 @@
-package openfga
+// Package authorizer implements the provider-neutral authz port on top of
+// OpenFGA.
+//
+// The split is deliberate. Package openfga knows OpenFGA's wire format and
+// nothing about this application's domain; this package knows both, and is the
+// only place the two meet. Everything that makes an authorization answer
+// trustworthy lives here rather than in the client: deciding what an absent
+// field means, matching batch answers back to the questions that produced
+// them, and classifying every failure so that no transport problem can be
+// mistaken for a grant.
+package authorizer
 
 import (
 	"context"
@@ -10,45 +20,40 @@ import (
 	"strings"
 
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/openfga"
 )
 
-// AuthorizationAdapter translates the provider-neutral authorization port to
-// OpenFGA's check endpoints.
-type AuthorizationAdapter struct {
-	client  *Client
+// Adapter translates the provider-neutral authorization port to OpenFGA.
+type Adapter struct {
+	client  *openfga.Client
 	storeID string
 	modelID string
 }
 
 const maxConfirmationChecks = 25
 
-// maxBatchChecks is OpenFGA's MaxChecksPerBatchCheck server default. Exceeding
-// it returns 400, which classify() maps to ErrMalformedResponse and the API
-// surfaces as a 503. The port owns this limit so no caller has to remember it.
-const maxBatchChecks = 50
-
-// NewAuthorizationAdapter returns an OpenFGA adapter configured to check the
-// exact verified store and authorization model.
-func NewAuthorizationAdapter(cfg Config) (*AuthorizationAdapter, error) {
+// New returns an OpenFGA adapter configured to check the exact verified store
+// and authorization model.
+func New(cfg openfga.Config) (*Adapter, error) {
 	if cfg.APIURL == nil {
 		return nil, fmt.Errorf("OpenFGA API URL is required")
 	}
 	if err := cfg.ValidateVerify(); err != nil {
 		return nil, fmt.Errorf("validate OpenFGA authorization config: %w", err)
 	}
-	return &AuthorizationAdapter{client: NewClient(cfg), storeID: cfg.StoreID, modelID: cfg.ModelID}, nil
+	return &Adapter{client: openfga.NewClient(cfg), storeID: cfg.StoreID, modelID: cfg.ModelID}, nil
 }
 
 // Check evaluates one derived permission against the configured OpenFGA model.
-func (adapter *AuthorizationAdapter) Check(ctx context.Context, request authz.CheckRequest) (authz.CheckResult, error) {
+func (adapter *Adapter) Check(ctx context.Context, request authz.CheckRequest) (authz.CheckResult, error) {
 	if !request.Valid() {
 		return authz.CheckResult{}, fmt.Errorf("%w: invalid authorization check", authz.ErrInvalidInput)
 	}
 
-	var response struct {
-		Allowed *bool `json:"allowed"`
-	}
-	err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "check"), nil, checkInput(adapter.modelID, request), &response, http.StatusOK)
+	response, err := adapter.client.Check(ctx, adapter.storeID, openfga.CheckRequest{
+		AuthorizationModelID: adapter.modelID,
+		TupleKey:             tuple(request),
+	})
 	if err != nil {
 		return authz.CheckResult{}, adapter.classify(err)
 	}
@@ -60,45 +65,32 @@ func (adapter *AuthorizationAdapter) Check(ctx context.Context, request authz.Ch
 
 // BatchCheck evaluates independently correlated permission checks and preserves
 // the caller's input ordering. It splits the request into upstream calls of at
-// most maxBatchChecks, so callers never have to know OpenFGA's limit.
+// most openfga.MaxChecksPerBatchCheck, so callers never have to know the limit.
 //
 //	 12 checks  → 1 upstream request,  12 results in input order
 //	 51 checks  → 2 upstream requests (50 + 1), 51 results in input order
 //	 52 checks  → 2 upstream requests (50 + 2)   [the 13-stack case, #220]
 //	  0 checks  → ErrInvalidInput (BatchCheckRequest.Valid rejects it)
 //	upstream 5xx → ErrUnavailable
-func (adapter *AuthorizationAdapter) BatchCheck(ctx context.Context, request authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
+func (adapter *Adapter) BatchCheck(ctx context.Context, request authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
 	if !request.Valid() {
 		return authz.BatchCheckResult{}, fmt.Errorf("%w: invalid authorization batch check", authz.ErrInvalidInput)
 	}
 
-	type batchCheck struct {
-		TupleKey      tupleKey `json:"tuple_key"`
-		CorrelationID string   `json:"correlation_id"`
-	}
-
 	result := authz.BatchCheckResult{Results: make([]authz.CheckResult, len(request.Checks))}
-	for start := 0; start < len(request.Checks); start += maxBatchChecks {
-		end := start + maxBatchChecks
-		if end > len(request.Checks) {
-			end = len(request.Checks)
-		}
+	for start := 0; start < len(request.Checks); start += openfga.MaxChecksPerBatchCheck {
+		end := min(start+openfga.MaxChecksPerBatchCheck, len(request.Checks))
 		chunk := request.Checks[start:end]
 
-		input := struct {
-			AuthorizationModelID string       `json:"authorization_model_id"`
-			Checks               []batchCheck `json:"checks"`
-		}{AuthorizationModelID: adapter.modelID, Checks: make([]batchCheck, len(chunk))}
+		input := openfga.BatchCheckRequest{
+			AuthorizationModelID: adapter.modelID,
+			Checks:               make([]openfga.BatchCheckItem, len(chunk)),
+		}
 		for index, check := range chunk {
-			input.Checks[index] = batchCheck{TupleKey: tuple(check), CorrelationID: strconv.Itoa(index)}
+			input.Checks[index] = openfga.BatchCheckItem{TupleKey: tuple(check), CorrelationID: strconv.Itoa(index)}
 		}
 
-		var response struct {
-			Result map[string]struct {
-				Allowed *bool `json:"allowed"`
-			} `json:"result"`
-		}
-		err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "batch-check"), nil, input, &response, http.StatusOK)
+		response, err := adapter.client.BatchCheck(ctx, adapter.storeID, input)
 		if err != nil {
 			return authz.BatchCheckResult{}, adapter.classify(err)
 		}
@@ -106,6 +98,8 @@ func (adapter *AuthorizationAdapter) BatchCheck(ctx context.Context, request aut
 			return authz.BatchCheckResult{}, fmt.Errorf("%w: batch check correlation results do not match requests", authz.ErrMalformedResponse)
 		}
 
+		// Driven by the input, not by ranging the response map: ranging would
+		// let OpenFGA's answers land against the wrong questions.
 		for index := range chunk {
 			correlationID := strconv.Itoa(index)
 			check, ok := response.Result[correlationID]
@@ -119,17 +113,9 @@ func (adapter *AuthorizationAdapter) BatchCheck(ctx context.Context, request aut
 }
 
 // ListGrants returns all direct role assignments for the requested object.
-func (adapter *AuthorizationAdapter) ListGrants(ctx context.Context, request authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
+func (adapter *Adapter) ListGrants(ctx context.Context, request authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
 	if !request.Valid() {
 		return authz.ListGrantsResult{}, fmt.Errorf("%w: invalid grants request", authz.ErrInvalidInput)
-	}
-
-	type readTuple struct {
-		Key *tupleKey `json:"key"`
-	}
-	type readResponse struct {
-		Tuples            *[]readTuple `json:"tuples"`
-		ContinuationToken string       `json:"continuation_token"`
 	}
 
 	result := authz.ListGrantsResult{}
@@ -137,17 +123,12 @@ func (adapter *AuthorizationAdapter) ListGrants(ctx context.Context, request aut
 	seenTokens := map[string]struct{}{}
 	continuationToken := ""
 	for {
-		input := struct {
-			TupleKey struct {
-				Object string `json:"object"`
-			} `json:"tuple_key"`
-			PageSize          int    `json:"page_size"`
-			ContinuationToken string `json:"continuation_token,omitempty"`
-		}{PageSize: 100, ContinuationToken: continuationToken}
-		input.TupleKey.Object = request.Object.String()
-
-		var response readResponse
-		if err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "read"), nil, input, &response, http.StatusOK); err != nil {
+		response, err := adapter.client.Read(ctx, adapter.storeID, openfga.ReadRequest{
+			TupleKey:          openfga.ReadFilter{Object: request.Object.String()},
+			PageSize:          100,
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
 			return authz.ListGrantsResult{}, adapter.classify(err)
 		}
 		if response.Tuples == nil {
@@ -168,7 +149,7 @@ func (adapter *AuthorizationAdapter) ListGrants(ctx context.Context, request aut
 		if response.ContinuationToken == "" {
 			break
 		}
-		if !safeOpaqueIdentifier(response.ContinuationToken) {
+		if !openfga.SafeOpaqueIdentifier(response.ContinuationToken) {
 			return authz.ListGrantsResult{}, fmt.Errorf("%w: read response continuation token is invalid", authz.ErrMalformedResponse)
 		}
 		if _, repeated := seenTokens[response.ContinuationToken]; repeated {
@@ -191,28 +172,16 @@ func (adapter *AuthorizationAdapter) ListGrants(ctx context.Context, request aut
 // Unlike ListGrants it filters the read by user as well as object, so a
 // reconciling handler can compute a delta without paging every grant on the
 // stack. A subject holds at most one tuple per role, so this never paginates.
-func (adapter *AuthorizationAdapter) ListSubjectGrants(ctx context.Context, request authz.ListSubjectGrantsRequest) (authz.ListGrantsResult, error) {
+func (adapter *Adapter) ListSubjectGrants(ctx context.Context, request authz.ListSubjectGrantsRequest) (authz.ListGrantsResult, error) {
 	if !request.Valid() {
 		return authz.ListGrantsResult{}, fmt.Errorf("%w: invalid subject grants request", authz.ErrInvalidInput)
 	}
 
-	type readTuple struct {
-		Key *tupleKey `json:"key"`
-	}
-	var response struct {
-		Tuples *[]readTuple `json:"tuples"`
-	}
-	input := struct {
-		TupleKey struct {
-			User   string `json:"user"`
-			Object string `json:"object"`
-		} `json:"tuple_key"`
-		PageSize int `json:"page_size"`
-	}{PageSize: 100}
-	input.TupleKey.User = request.Subject.String()
-	input.TupleKey.Object = request.Object.String()
-
-	if err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "read"), nil, input, &response, http.StatusOK); err != nil {
+	response, err := adapter.client.Read(ctx, adapter.storeID, openfga.ReadRequest{
+		TupleKey: openfga.ReadFilter{User: request.Subject.String(), Object: request.Object.String()},
+		PageSize: 100,
+	})
+	if err != nil {
 		return authz.ListGrantsResult{}, adapter.classify(err)
 	}
 	if response.Tuples == nil {
@@ -236,7 +205,7 @@ func (adapter *AuthorizationAdapter) ListSubjectGrants(ctx context.Context, requ
 // WriteRelationships grants direct roles. If OpenFGA reports a conflicting
 // write, it confirms the desired state before deciding whether the operation
 // can safely be treated as an idempotent success.
-func (adapter *AuthorizationAdapter) WriteRelationships(ctx context.Context, mutation authz.Mutation) error {
+func (adapter *Adapter) WriteRelationships(ctx context.Context, mutation authz.Mutation) error {
 	grants, err := validMutation(mutation)
 	if err != nil {
 		return err
@@ -265,7 +234,7 @@ func (adapter *AuthorizationAdapter) WriteRelationships(ctx context.Context, mut
 
 // DeleteRelationships revokes direct roles. If OpenFGA reports a conflicting
 // delete, it confirms the desired absence before reporting an error.
-func (adapter *AuthorizationAdapter) DeleteRelationships(ctx context.Context, mutation authz.Mutation) error {
+func (adapter *Adapter) DeleteRelationships(ctx context.Context, mutation authz.Mutation) error {
 	grants, err := validMutation(mutation)
 	if err != nil {
 		return err
@@ -297,12 +266,12 @@ func validMutation(mutation authz.Mutation) ([]authz.Grant, error) {
 		return nil, fmt.Errorf("%w: invalid relationship mutation", authz.ErrInvalidInput)
 	}
 	grants := mutation.Grants()
-	seen := make(map[tupleKey]struct{}, len(grants))
+	seen := make(map[openfga.TupleKey]struct{}, len(grants))
 	for _, grant := range grants {
 		if !grant.Valid() {
 			return nil, fmt.Errorf("%w: invalid relationship mutation grant", authz.ErrInvalidInput)
 		}
-		key := tupleKey{User: grant.Subject().String(), Relation: grant.Relation().String(), Object: grant.Object().String()}
+		key := tupleForGrant(grant)
 		if _, duplicate := seen[key]; duplicate {
 			return nil, fmt.Errorf("%w: duplicate relationship mutation grant", authz.ErrInvalidInput)
 		}
@@ -311,54 +280,34 @@ func validMutation(mutation authz.Mutation) ([]authz.Grant, error) {
 	return grants, nil
 }
 
-func (adapter *AuthorizationAdapter) write(ctx context.Context, writes, deletes []authz.Grant) error {
-	type tupleKeys struct {
-		TupleKeys []tupleKey `json:"tuple_keys"`
-	}
-	input := struct {
-		AuthorizationModelID string     `json:"authorization_model_id"`
-		Writes               *tupleKeys `json:"writes,omitempty"`
-		Deletes              *tupleKeys `json:"deletes,omitempty"`
-	}{AuthorizationModelID: adapter.modelID}
-	if len(writes) > 0 && len(deletes) == 0 {
-		input.Writes = &tupleKeys{TupleKeys: tuples(writes)}
-	} else if len(deletes) > 0 && len(writes) == 0 {
-		input.Deletes = &tupleKeys{TupleKeys: tuples(deletes)}
-	} else {
+func (adapter *Adapter) write(ctx context.Context, writes, deletes []authz.Grant) error {
+	request := openfga.WriteRequest{AuthorizationModelID: adapter.modelID}
+	switch {
+	case len(writes) > 0 && len(deletes) == 0:
+		request.Writes = &openfga.WriteTupleKeys{TupleKeys: tuples(writes)}
+	case len(deletes) > 0 && len(writes) == 0:
+		request.Deletes = &openfga.WriteTupleKeys{TupleKeys: tuples(deletes)}
+	default:
 		return fmt.Errorf("%w: relationship write must contain exactly one mutation direction", authz.ErrInvalidInput)
 	}
-	return adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "write"), nil, input, nil, http.StatusOK)
+	return adapter.client.Write(ctx, adapter.storeID, request)
 }
 
-func (adapter *AuthorizationAdapter) confirm(ctx context.Context, grants []authz.Grant, expected bool) (bool, error) {
-	type batchCheck struct {
-		TupleKey      tupleKey `json:"tuple_key"`
-		CorrelationID string   `json:"correlation_id"`
-	}
+func (adapter *Adapter) confirm(ctx context.Context, grants []authz.Grant, expected bool) (bool, error) {
 	for start := 0; start < len(grants); start += maxConfirmationChecks {
-		end := start + maxConfirmationChecks
-		if end > len(grants) {
-			end = len(grants)
-		}
-		input := struct {
-			AuthorizationModelID string       `json:"authorization_model_id"`
-			Checks               []batchCheck `json:"checks"`
-			Consistency          string       `json:"consistency"`
-		}{
+		end := min(start+maxConfirmationChecks, len(grants))
+		chunk := grants[start:end]
+
+		input := openfga.BatchCheckRequest{
 			AuthorizationModelID: adapter.modelID,
-			Checks:               make([]batchCheck, end-start),
-			Consistency:          "HIGHER_CONSISTENCY",
+			Checks:               make([]openfga.BatchCheckItem, len(chunk)),
+			Consistency:          openfga.ConsistencyHigherConsistency,
 		}
-		for index, grant := range grants[start:end] {
-			input.Checks[index] = batchCheck{TupleKey: tupleForGrant(grant), CorrelationID: strconv.Itoa(index)}
+		for index, grant := range chunk {
+			input.Checks[index] = openfga.BatchCheckItem{TupleKey: tupleForGrant(grant), CorrelationID: strconv.Itoa(index)}
 		}
 
-		var response struct {
-			Result map[string]struct {
-				Allowed *bool `json:"allowed"`
-			} `json:"result"`
-		}
-		err := adapter.client.doJSON(ctx, http.MethodPost, adapter.client.endpoint("stores", adapter.storeID, "batch-check"), nil, input, &response, http.StatusOK)
+		response, err := adapter.client.BatchCheck(ctx, adapter.storeID, input)
 		if err != nil {
 			return false, adapter.classify(err)
 		}
@@ -378,8 +327,8 @@ func (adapter *AuthorizationAdapter) confirm(ctx context.Context, grants []authz
 	return true, nil
 }
 
-func tuples(grants []authz.Grant) []tupleKey {
-	result := make([]tupleKey, len(grants))
+func tuples(grants []authz.Grant) []openfga.TupleKey {
+	result := make([]openfga.TupleKey, len(grants))
 	for index, grant := range grants {
 		result[index] = tupleForGrant(grant)
 	}
@@ -389,9 +338,9 @@ func tuples(grants []authz.Grant) []tupleKey {
 // tupleForGrant renders a Grant as OpenFGA's wire tuple.
 //
 //	NewGrant(user:alice, stack:abc, RelationOwner)
-//	  → tupleKey{User: "user:alice", Relation: "owner", Object: "stack:abc"}
-func tupleForGrant(grant authz.Grant) tupleKey {
-	return tupleKey{User: grant.Subject().String(), Relation: grant.Relation().String(), Object: grant.Object().String()}
+//	  → TupleKey{User: "user:alice", Relation: "owner", Object: "stack:abc"}
+func tupleForGrant(grant authz.Grant) openfga.TupleKey {
+	return openfga.TupleKey{User: grant.Subject().String(), Relation: grant.Relation().String(), Object: grant.Object().String()}
 }
 
 // grantFromReadTuple converts one tuple from a read response into a Grant,
@@ -402,7 +351,7 @@ func tupleForGrant(grant authz.Grant) tupleKey {
 //	{user:alice, can_view, stack:abc}, stack:abc   → Grant{}, error
 //	{user:alice, owner, stack:other}, stack:abc    → Grant{}, error  (wrong object)
 //	nil, stack:abc                                 → Grant{}, error
-func grantFromReadTuple(key *tupleKey, requestedObject authz.Object) (authz.Grant, error) {
+func grantFromReadTuple(key *openfga.TupleKey, requestedObject authz.Object) (authz.Grant, error) {
 	const subjectPrefix = "user:"
 	if key == nil || key.Object != requestedObject.String() || !strings.HasPrefix(key.User, subjectPrefix) {
 		return authz.Grant{}, fmt.Errorf("invalid tuple key")
@@ -421,40 +370,27 @@ func grantFromReadTuple(key *tupleKey, requestedObject authz.Object) (authz.Gran
 	return authz.NewGrant(subject, requestedObject, relation)
 }
 
-type tupleKey struct {
-	User     string `json:"user"`
-	Relation string `json:"relation"`
-	Object   string `json:"object"`
-}
-
 // tuple renders a CheckRequest as OpenFGA's wire tuple.
 //
 //	CheckRequest{user:alice, can_view, stack:abc}
-//	  → tupleKey{User: "user:alice", Relation: "can_view", Object: "stack:abc"}
-func tuple(request authz.CheckRequest) tupleKey {
-	return tupleKey{User: request.Subject.String(), Relation: request.Relation.String(), Object: request.Object.String()}
+//	  → TupleKey{User: "user:alice", Relation: "can_view", Object: "stack:abc"}
+func tuple(request authz.CheckRequest) openfga.TupleKey {
+	return openfga.TupleKey{User: request.Subject.String(), Relation: request.Relation.String(), Object: request.Object.String()}
 }
 
-func checkInput(modelID string, request authz.CheckRequest) any {
-	return struct {
-		AuthorizationModelID string   `json:"authorization_model_id"`
-		TupleKey             tupleKey `json:"tuple_key"`
-	}{AuthorizationModelID: modelID, TupleKey: tuple(request)}
-}
-
-func (adapter *AuthorizationAdapter) classify(err error) error {
+func (adapter *Adapter) classify(err error) error {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return fmt.Errorf("%w: %w", authz.ErrTimeout, err)
 	case errors.Is(err, context.Canceled):
 		return fmt.Errorf("authorization check canceled: %w", err)
-	case errors.Is(err, errMalformedHTTPResponse):
+	case errors.Is(err, openfga.ErrMalformedHTTPResponse):
 		return fmt.Errorf("%w: %v", authz.ErrMalformedResponse, err)
-	case errors.Is(err, errHTTPTransport), errors.Is(err, errHTTPBodyRead):
+	case errors.Is(err, openfga.ErrHTTPTransport), errors.Is(err, openfga.ErrHTTPBodyRead):
 		return fmt.Errorf("%w: OpenFGA request failed", authz.ErrUnavailable)
 	}
 
-	var statusError *HTTPStatusError
+	var statusError *openfga.HTTPStatusError
 	if errors.As(err, &statusError) {
 		if statusError.StatusCode == http.StatusTooManyRequests || statusError.StatusCode >= http.StatusInternalServerError {
 			return fmt.Errorf("%w: OpenFGA returned a retryable response", authz.ErrUnavailable)

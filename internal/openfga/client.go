@@ -16,10 +16,16 @@ import (
 
 const maxResponseBody = 64 << 10
 
+// Transport-level sentinels. Callers translating OpenFGA failures into their
+// own domain errors match on these rather than on error strings.
 var (
-	errMalformedHTTPResponse = fmt.Errorf("malformed HTTP response")
-	errHTTPTransport         = fmt.Errorf("OpenFGA HTTP transport failure")
-	errHTTPBodyRead          = fmt.Errorf("OpenFGA HTTP response body read failure")
+	// ErrMalformedHTTPResponse reports a response that was accepted by status
+	// but could not be trusted: wrong media type, oversized, or undecodable.
+	ErrMalformedHTTPResponse = fmt.Errorf("malformed HTTP response")
+	// ErrHTTPTransport reports a request that never produced a response.
+	ErrHTTPTransport = fmt.Errorf("OpenFGA HTTP transport failure")
+	// ErrHTTPBodyRead reports a response whose body could not be read.
+	ErrHTTPBodyRead = fmt.Errorf("OpenFGA HTTP response body read failure")
 )
 
 // HTTPStatusError reports a non-accepted OpenFGA HTTP response. Its body has
@@ -60,7 +66,7 @@ func NewClient(cfg Config) *Client {
 		baseURL: cfg.APIURL,
 		token:   cfg.APIToken,
 		timeout: timeout,
-		http:    &http.Client{Timeout: timeout},
+		http:    &http.Client{Timeout: timeout, Transport: cfg.Transport},
 	}
 }
 
@@ -81,7 +87,7 @@ func (client *Client) ListStores(ctx context.Context) ([]Store, error) {
 			return nil, fmt.Errorf("list OpenFGA stores: %w", err)
 		}
 		for _, store := range page.Stores {
-			if !safeOpaqueIdentifier(store.ID) || store.Name == "" {
+			if !SafeOpaqueIdentifier(store.ID) || store.Name == "" {
 				return nil, fmt.Errorf("list OpenFGA stores: response store has missing or unsafe id or missing name")
 			}
 			stores = append(stores, store)
@@ -103,7 +109,7 @@ func (client *Client) CreateStore(ctx context.Context, name string) (Store, erro
 	if err != nil {
 		return Store{}, fmt.Errorf("create OpenFGA store: %w", err)
 	}
-	if !safeOpaqueIdentifier(store.ID) || store.Name == "" {
+	if !SafeOpaqueIdentifier(store.ID) || store.Name == "" {
 		return Store{}, fmt.Errorf("create OpenFGA store: response has missing or unsafe id or missing name")
 	}
 	if store.Name != name {
@@ -118,7 +124,7 @@ func (client *Client) GetStore(ctx context.Context, storeID string) (Store, erro
 	if err != nil {
 		return Store{}, fmt.Errorf("get OpenFGA store %q: %w", storeID, err)
 	}
-	if !safeOpaqueIdentifier(store.ID) {
+	if !SafeOpaqueIdentifier(store.ID) {
 		return Store{}, fmt.Errorf("get OpenFGA store %q: response has missing or unsafe id", storeID)
 	}
 	if store.ID != storeID {
@@ -145,7 +151,7 @@ func (client *Client) ListAuthorizationModels(ctx context.Context, storeID strin
 			return nil, fmt.Errorf("list authorization models for store %q: %w", storeID, err)
 		}
 		for _, model := range page.Models {
-			if !safeOpaqueIdentifier(model.ID) {
+			if !SafeOpaqueIdentifier(model.ID) {
 				return nil, fmt.Errorf("list authorization models for store %q: response model has missing or unsafe id", storeID)
 			}
 			if _, err := CanonicalJSON(model); err != nil {
@@ -172,7 +178,7 @@ func (client *Client) GetAuthorizationModel(ctx context.Context, storeID, modelI
 	if err := client.doJSON(ctx, http.MethodGet, endpoint, nil, nil, &response, http.StatusOK); err != nil {
 		return AuthorizationModel{}, fmt.Errorf("get authorization model %q in store %q: %w", modelID, storeID, err)
 	}
-	if !safeOpaqueIdentifier(response.Model.ID) {
+	if !SafeOpaqueIdentifier(response.Model.ID) {
 		return AuthorizationModel{}, fmt.Errorf("get authorization model %q in store %q: response has missing or unsafe id", modelID, storeID)
 	}
 	if response.Model.ID != modelID {
@@ -196,7 +202,7 @@ func (client *Client) WriteAuthorizationModel(ctx context.Context, storeID strin
 	if err := client.doJSON(ctx, http.MethodPost, endpoint, nil, model, &response, http.StatusCreated); err != nil {
 		return ModelRecord{}, fmt.Errorf("write authorization model in store %q: %w", storeID, err)
 	}
-	if !safeOpaqueIdentifier(response.ID) {
+	if !SafeOpaqueIdentifier(response.ID) {
 		return ModelRecord{}, fmt.Errorf("write authorization model in store %q: response has missing or unsafe authorization_model_id", storeID)
 	}
 	model.ID = response.ID
@@ -247,12 +253,12 @@ func (client *Client) doJSON(ctx context.Context, method string, endpoint *url.U
 
 	response, err := client.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("%w: send request: %w", errHTTPTransport, err)
+		return fmt.Errorf("%w: send request: %w", ErrHTTPTransport, err)
 	}
 	defer response.Body.Close()
 	data, truncated, err := readBounded(response.Body)
 	if err != nil {
-		return fmt.Errorf("%w: read response: %w", errHTTPBodyRead, err)
+		return fmt.Errorf("%w: read response: %w", ErrHTTPBodyRead, err)
 	}
 	if !containsStatus(accepted, response.StatusCode) {
 		safe := redact(string(data), client.token)
@@ -266,15 +272,15 @@ func (client *Client) doJSON(ctx context.Context, method string, endpoint *url.U
 		return &HTTPStatusError{StatusCode: response.StatusCode, Status: response.Status, Body: strings.TrimSpace(safe)}
 	}
 	if truncated {
-		return fmt.Errorf("%w: response exceeds %s bytes", errMalformedHTTPResponse, strconv.Itoa(maxResponseBody))
+		return fmt.Errorf("%w: response exceeds %s bytes", ErrMalformedHTTPResponse, strconv.Itoa(maxResponseBody))
 	}
 	if output != nil {
 		mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 		if err != nil || mediaType != "application/json" {
-			return fmt.Errorf("%w: response content type must be application/json", errMalformedHTTPResponse)
+			return fmt.Errorf("%w: response content type must be application/json", ErrMalformedHTTPResponse)
 		}
 		if err := json.Unmarshal(data, output); err != nil {
-			return fmt.Errorf("%w: decode response: %w", errMalformedHTTPResponse, err)
+			return fmt.Errorf("%w: decode response: %w", ErrMalformedHTTPResponse, err)
 		}
 	}
 	return nil

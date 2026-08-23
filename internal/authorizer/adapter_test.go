@@ -1,4 +1,4 @@
-package openfga
+package authorizer
 
 import (
 	"context"
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/openfga"
 )
 
 func TestAuthorizationAdapterCheckUsesConfiguredModelAndReturnsDecision(t *testing.T) {
@@ -83,13 +84,10 @@ func TestAuthorizationAdapterCheckDistinguishesDenialAndFailures(t *testing.T) {
 }
 
 func TestAuthorizationAdapterCheckDeadlineMapsToTimeoutHTTPStatus(t *testing.T) {
-	adapter := adapterForResponse(t, http.StatusOK, "application/json", `{"allowed":true}`)
-	adapter.client.timeout = 10 * time.Millisecond
-	adapter.client.http.Timeout = adapter.client.timeout
-	adapter.client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	adapter := adapterForTransport(t, 10*time.Millisecond, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		<-request.Context().Done()
 		return nil, request.Context().Err()
-	})
+	}))
 
 	_, err := adapter.Check(context.Background(), viewCheck(t))
 	if !errors.Is(err, authz.ErrTimeout) {
@@ -127,8 +125,7 @@ func TestAuthorizationAdapterCheckClassifiesTransportAndBodyReadFailuresAsUnavai
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			adapter := adapterForResponse(t, http.StatusOK, "application/json", `{"allowed":true}`)
-			adapter.client.http.Transport = test.transport
+			adapter := adapterForTransport(t, time.Second, test.transport)
 
 			result, err := adapter.Check(context.Background(), viewCheck(t))
 			if !errors.Is(err, authz.ErrUnavailable) {
@@ -169,9 +166,9 @@ func TestAuthorizationAdapterCheckDoesNotLeakUpstreamHTTPResponse(t *testing.T) 
 }
 
 func TestNewAuthorizationAdapterRejectsNilAPIURL(t *testing.T) {
-	_, err := NewAuthorizationAdapter(Config{StoreID: "store-id", ModelID: "model-id"})
+	_, err := New(openfga.Config{StoreID: "store-id", ModelID: "model-id"})
 	if err == nil || !strings.Contains(err.Error(), "API URL") {
-		t.Fatalf("NewAuthorizationAdapter() error = %v, want API URL validation error", err)
+		t.Fatalf("New() error = %v, want API URL validation error", err)
 	}
 }
 
@@ -486,10 +483,10 @@ func assertRelationshipWrite(t *testing.T, r *http.Request, expectedWrite bool) 
 	var body struct {
 		AuthorizationModelID string `json:"authorization_model_id"`
 		Writes               *struct {
-			TupleKeys []tupleKey `json:"tuple_keys"`
+			TupleKeys []openfga.TupleKey `json:"tuple_keys"`
 		} `json:"writes"`
 		Deletes *struct {
-			TupleKeys []tupleKey `json:"tuple_keys"`
+			TupleKeys []openfga.TupleKey `json:"tuple_keys"`
 		} `json:"deletes"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -504,13 +501,13 @@ func assertRelationshipWrite(t *testing.T, r *http.Request, expectedWrite bool) 
 	if !expectedWrite && (body.Deletes == nil || body.Writes != nil) {
 		t.Fatalf("body = %#v", body)
 	}
-	var tuples []tupleKey
+	var tuples []openfga.TupleKey
 	if expectedWrite {
 		tuples = body.Writes.TupleKeys
 	} else {
 		tuples = body.Deletes.TupleKeys
 	}
-	if !reflect.DeepEqual(tuples, []tupleKey{{User: "user:alice", Relation: "owner", Object: "stack:one"}}) {
+	if !reflect.DeepEqual(tuples, []openfga.TupleKey{{User: "user:alice", Relation: "owner", Object: "stack:one"}}) {
 		t.Fatalf("tuple keys = %#v", tuples)
 	}
 }
@@ -524,14 +521,14 @@ func assertRelationshipConfirmation(t *testing.T, r *http.Request) {
 		AuthorizationModelID string `json:"authorization_model_id"`
 		Consistency          string `json:"consistency"`
 		Checks               []struct {
-			TupleKey      tupleKey `json:"tuple_key"`
-			CorrelationID string   `json:"correlation_id"`
+			TupleKey      openfga.TupleKey `json:"tuple_key"`
+			CorrelationID string           `json:"correlation_id"`
 		} `json:"checks"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body.AuthorizationModelID != "model-id" || body.Consistency != "HIGHER_CONSISTENCY" || len(body.Checks) != 1 || body.Checks[0].CorrelationID != "0" || body.Checks[0].TupleKey != (tupleKey{User: "user:alice", Relation: "owner", Object: "stack:one"}) {
+	if body.AuthorizationModelID != "model-id" || body.Consistency != "HIGHER_CONSISTENCY" || len(body.Checks) != 1 || body.Checks[0].CorrelationID != "0" || body.Checks[0].TupleKey != (openfga.TupleKey{User: "user:alice", Relation: "owner", Object: "stack:one"}) {
 		t.Fatalf("body = %#v", body)
 	}
 }
@@ -550,7 +547,7 @@ func mutationForGrant(t *testing.T, grant authz.Grant, confirm bool) authz.Mutat
 	return mutation
 }
 
-func testAuthorizationAdapter(t *testing.T, handler http.HandlerFunc) (*AuthorizationAdapter, *int) {
+func testAuthorizationAdapter(t *testing.T, handler http.HandlerFunc) (*Adapter, *int) {
 	t.Helper()
 	requests := new(int)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -562,14 +559,14 @@ func testAuthorizationAdapter(t *testing.T, handler http.HandlerFunc) (*Authoriz
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := NewAuthorizationAdapter(Config{APIURL: parsed, StoreID: "store-id", ModelID: "model-id", HTTPTimeout: time.Second})
+	adapter, err := New(openfga.Config{APIURL: parsed, StoreID: "store-id", ModelID: "model-id", HTTPTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return adapter, requests
 }
 
-func adapterForResponse(t *testing.T, status int, contentType, body string) *AuthorizationAdapter {
+func adapterForResponse(t *testing.T, status int, contentType, body string) *Adapter {
 	t.Helper()
 	adapter, _ := testAuthorizationAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentType)
@@ -579,10 +576,32 @@ func adapterForResponse(t *testing.T, status int, contentType, body string) *Aut
 	return adapter
 }
 
-func adapterForHandler(t *testing.T, handler http.HandlerFunc) *AuthorizationAdapter {
+func adapterForHandler(t *testing.T, handler http.HandlerFunc) *Adapter {
 	t.Helper()
 	adapter, _ := testAuthorizationAdapter(t, handler)
 	return adapter
+}
+
+// adapterForTransport builds an adapter whose requests are served by transport
+// instead of a live test server, so transport and body-read failures can be
+// simulated without reaching into the client.
+func adapterForTransport(t *testing.T, timeout time.Duration, transport http.RoundTripper) *Adapter {
+	t.Helper()
+	parsed, err := url.Parse("http://openfga.invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(openfga.Config{APIURL: parsed, StoreID: "store-id", ModelID: "model-id", HTTPTimeout: timeout, Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return adapter
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
 }
 
 type errorReader struct{}
@@ -779,8 +798,8 @@ func TestBatchCheckChunksAtFiftyAndPreservesOrder(t *testing.T) {
 	adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Checks []struct {
-				TupleKey      tupleKey `json:"tuple_key"`
-				CorrelationID string   `json:"correlation_id"`
+				TupleKey      openfga.TupleKey `json:"tuple_key"`
+				CorrelationID string           `json:"correlation_id"`
 			} `json:"checks"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

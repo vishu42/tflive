@@ -102,7 +102,7 @@ func TestNamedRelationValuesMatchTheirBucket(t *testing.T) {
 
 // Pins the literal wire string for each of the eight named relation
 // constants. RelationCanView and RelationCanOperate are already pinned by
-// wire assertions in internal/openfga's adapter tests, and all four grant
+// wire assertions in internal/authorizer's adapter tests, and all four grant
 // constants are additionally protected because mustGrantRelation panics at
 // init if its argument is not in grantableRelations — but RelationCanApprove
 // and RelationCanManageAccess are pinned by nothing else: a well-formed typo
