@@ -29,7 +29,7 @@ func TestLiveBootstrapVerifyAndDerivedWriteRejection(t *testing.T) {
 	cfg.StoreName = fmt.Sprintf("tflive-integration-%d", time.Now().UnixNano())
 	cfg.StoreID = ""
 	cfg.ModelID = ""
-	model, err := openfga.ParseAuthorizationModel(openfgamodel.AuthorizationModelJSON())
+	model, err := openfga.ParseAuthorizationModel(canonicalModelJSON(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,4 +141,15 @@ func liveEndpoint(base *url.URL, segments ...string) string {
 	clone.Path = path
 	clone.RawPath = rawPath
 	return clone.String()
+}
+
+// canonicalModelJSON is the embedded model in wire format, or a fatal test error
+// when the embedded DSL does not transform.
+func canonicalModelJSON(t *testing.T) []byte {
+	t.Helper()
+	data, err := openfgamodel.AuthorizationModelJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }

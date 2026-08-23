@@ -79,6 +79,28 @@ authorization model, creating either only when absent, so re-running it
 converges rather than duplicating. Run only one at a time: OpenFGA store names
 are not unique, and bootstrap fails closed if the `tflive` name is ambiguous.
 
+## The authorization model
+
+`openfga/authorization-model.fga` is the source of truth and the only form of
+the model in the repository. Edit and review permission changes there — the DSL
+is the form in which a wrong permission is visible.
+
+`cmd/openfga-provisioner` embeds the DSL and transforms it to OpenFGA's API wire
+format in process, so there is nothing to regenerate after a change and no
+generated artifact that can drift. A malformed DSL fails
+`go test ./openfga/...` rather than waiting for a provisioner run.
+
+The transform rejects a syntax error but not a reference to a relation that
+does not exist, so `define can_view: ownr` would transform cleanly and be
+refused by OpenFGA at write time. The permission matrix in
+`openfga/authorization-model-tests.fga.yaml` is what catches that, along with
+every permission that is merely wrong. Run it on any model change; it needs the
+[`fga` CLI](https://github.com/openfga/cli) on `PATH`:
+
+```bash
+cd openfga && fga model test --tests authorization-model-tests.fga.yaml
+```
+
 ## Tests
 
 ```bash

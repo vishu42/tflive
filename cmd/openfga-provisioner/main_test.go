@@ -18,7 +18,7 @@ func TestRunDefaultsToVerifyAndPrintsOnlyEnvironmentAssignments(t *testing.T) {
 	var operation string
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	err := run(context.Background(), nil, commandEnv(true), openfgamodel.AuthorizationModelJSON(), func(_ context.Context, got string, cfg openfga.Config, model openfga.AuthorizationModel) (openfga.Result, error) {
+	err := run(context.Background(), nil, commandEnv(true), canonicalModelJSON(t), func(_ context.Context, got string, cfg openfga.Config, model openfga.AuthorizationModel) (openfga.Result, error) {
 		operation = got
 		return openfga.Result{StoreID: cfg.StoreID, ModelID: cfg.ModelID}, nil
 	}, &stdout, &stderr)
@@ -40,7 +40,7 @@ func TestRunBootstrapDoesNotRequireIDs(t *testing.T) {
 	t.Parallel()
 
 	var stdout bytes.Buffer
-	err := run(context.Background(), []string{"bootstrap"}, commandEnv(false), openfgamodel.AuthorizationModelJSON(), func(_ context.Context, operation string, _ openfga.Config, _ openfga.AuthorizationModel) (openfga.Result, error) {
+	err := run(context.Background(), []string{"bootstrap"}, commandEnv(false), canonicalModelJSON(t), func(_ context.Context, operation string, _ openfga.Config, _ openfga.AuthorizationModel) (openfga.Result, error) {
 		if operation != "bootstrap" {
 			t.Fatalf("operation = %q", operation)
 		}
@@ -66,7 +66,7 @@ func TestRunRejectsUnknownOperationAndInvalidModel(t *testing.T) {
 		model []byte
 		want  string
 	}{
-		{args: []string{"destroy"}, model: openfgamodel.AuthorizationModelJSON(), want: "operation must be bootstrap or verify"},
+		{args: []string{"destroy"}, model: canonicalModelJSON(t), want: "operation must be bootstrap or verify"},
 		{args: []string{"verify"}, model: []byte("{"), want: "parse repository authorization model"},
 	} {
 		err := run(context.Background(), test.args, commandEnv(true), test.model, execute, &bytes.Buffer{}, &bytes.Buffer{})
@@ -91,7 +91,7 @@ func TestRunPreservesCancellationAndDeadlineIdentityWhileRedactingExecutionFailu
 			t.Parallel()
 
 			secretErr := fmt.Errorf("backend echoed secret-token: %w", test.cause)
-			err := run(context.Background(), []string{"bootstrap"}, commandEnv(false), openfgamodel.AuthorizationModelJSON(), func(context.Context, string, openfga.Config, openfga.AuthorizationModel) (openfga.Result, error) {
+			err := run(context.Background(), []string{"bootstrap"}, commandEnv(false), canonicalModelJSON(t), func(context.Context, string, openfga.Config, openfga.AuthorizationModel) (openfga.Result, error) {
 				return openfga.Result{}, secretErr
 			}, &bytes.Buffer{}, &bytes.Buffer{})
 			if !errors.Is(err, test.cause) {
@@ -107,7 +107,7 @@ func TestRunPreservesCancellationAndDeadlineIdentityWhileRedactingExecutionFailu
 func TestRunReportsEnvironmentOutputFailure(t *testing.T) {
 	t.Parallel()
 
-	err := run(context.Background(), []string{"bootstrap"}, commandEnv(false), openfgamodel.AuthorizationModelJSON(), func(context.Context, string, openfga.Config, openfga.AuthorizationModel) (openfga.Result, error) {
+	err := run(context.Background(), []string{"bootstrap"}, commandEnv(false), canonicalModelJSON(t), func(context.Context, string, openfga.Config, openfga.AuthorizationModel) (openfga.Result, error) {
 		return openfga.Result{StoreID: "store-id", ModelID: "model-id"}, nil
 	}, failingWriter{}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "write OpenFGA environment assignments") {
@@ -131,4 +131,15 @@ func commandEnv(withIDs bool) func(string) string {
 		values["OPENFGA_MODEL_ID"] = "model-id"
 	}
 	return func(name string) string { return values[name] }
+}
+
+// canonicalModelJSON is the embedded model in wire format, or a fatal test error
+// when the embedded DSL does not transform.
+func canonicalModelJSON(t *testing.T) []byte {
+	t.Helper()
+	data, err := openfgamodel.AuthorizationModelJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }

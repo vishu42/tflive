@@ -1,0 +1,16 @@
+model
+  schema 1.1
+
+type user
+
+type stack
+  relations
+    define owner: [user]
+    define operator: [user]
+    define approver: [user]
+    define viewer: [user]
+
+    define can_view: owner or operator or approver or viewer
+    define can_operate: owner or operator
+    define can_approve: owner or approver
+    define can_manage_access: owner
