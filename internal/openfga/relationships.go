@@ -34,7 +34,15 @@ type CheckResponse struct {
 	Allowed *bool `json:"allowed"`
 }
 
-// Check evaluates one tuple against the store's authorization model.
+// Check evaluates one tuple against the store's authorization model. It
+// reports what OpenFGA said and nothing more: a denial is a successful call
+// returning Allowed false, and an absent field is returned as a nil Allowed
+// for the caller to judge.
+//
+//	200 {"allowed":true}   → CheckResponse{Allowed: &true},  nil
+//	200 {"allowed":false}  → CheckResponse{Allowed: &false}, nil
+//	200 {}                 → CheckResponse{Allowed: nil},    nil  (caller decides)
+//	400 / 500 / dial error → CheckResponse{}, error
 func (client *Client) Check(ctx context.Context, storeID string, request CheckRequest) (CheckResponse, error) {
 	var response CheckResponse
 	endpoint := client.endpoint("stores", storeID, "check")
@@ -80,7 +88,18 @@ type BatchCheckResponse struct {
 	Result map[string]BatchCheckSingleResult `json:"result"`
 }
 
-// BatchCheck evaluates up to MaxChecksPerBatchCheck independent checks.
+// BatchCheck evaluates independent checks in one round trip and returns
+// OpenFGA's correlation-keyed answers verbatim.
+//
+// It does not split an oversized batch, reorder results, or verify that every
+// question was answered. A request over MaxChecksPerBatchCheck is rejected by
+// the server with 400; matching answers back to questions is the caller's job,
+// and ranging the returned map instead of indexing it by correlation ID would
+// attribute answers to the wrong subjects.
+//
+//	2 checks, both answered → Result{"0":…, "1":…}, nil
+//	2 checks, 1 answered    → Result{"0":…}, nil       (caller must notice)
+//	51 checks               → BatchCheckResponse{}, error (400, over the limit)
 func (client *Client) BatchCheck(ctx context.Context, storeID string, request BatchCheckRequest) (BatchCheckResponse, error) {
 	var response BatchCheckResponse
 	endpoint := client.endpoint("stores", storeID, "batch-check")
@@ -119,7 +138,17 @@ type ReadResponse struct {
 	ContinuationToken string       `json:"continuation_token"`
 }
 
-// Read returns one page of stored tuples matching the request's filter.
+// Read returns one page of stored tuples matching the request's filter. An
+// empty filter field matches any value, so the filter's narrowness decides
+// what comes back.
+//
+// It does not follow pagination: a non-empty ContinuationToken in the response
+// means more pages exist, and the caller must pass it back to get them.
+//
+//	filter {Object: "stack:one"}                  → every tuple on stack:one
+//	filter {User: "user:alice", Object: "stack:one"} → only alice's tuples there
+//	no more pages  → ReadResponse{Tuples: &[…], ContinuationToken: ""}
+//	more pages     → ReadResponse{Tuples: &[…], ContinuationToken: "…"}
 func (client *Client) Read(ctx context.Context, storeID string, request ReadRequest) (ReadResponse, error) {
 	var response ReadResponse
 	endpoint := client.endpoint("stores", storeID, "read")
@@ -142,9 +171,19 @@ type WriteRequest struct {
 	Deletes              *WriteTupleKeys `json:"deletes,omitempty"`
 }
 
-// Write applies one transactional tuple mutation. OpenFGA rejects a write that
-// adds an existing tuple or removes a missing one, so callers that need
-// idempotence must reconcile the rejection against observed state.
+// Write applies one transactional tuple mutation: all of it lands, or none of
+// it does.
+//
+// OpenFGA writes are not idempotent. Adding a tuple that exists, or removing
+// one that does not, is rejected -- so a caller that needs replay safety must
+// reconcile the rejection against observed state rather than treating it as
+// failure. A request carrying both directions, or neither, is also rejected.
+//
+//	{Writes: [tuple]}            → nil            (tuple added)
+//	{Deletes: [tuple]}           → nil            (tuple removed)
+//	{Writes: [existing tuple]}   → error (400)    (caller must reconcile)
+//	{Deletes: [missing tuple]}   → error (400)    (caller must reconcile)
+//	{Writes: […], Deletes: […]}  → error (400)
 func (client *Client) Write(ctx context.Context, storeID string, request WriteRequest) error {
 	endpoint := client.endpoint("stores", storeID, "write")
 	return client.doJSON(ctx, http.MethodPost, endpoint, nil, request, nil, http.StatusOK)

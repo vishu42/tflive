@@ -32,8 +32,15 @@ type Adapter struct {
 
 const maxConfirmationChecks = 25
 
-// New returns an OpenFGA adapter configured to check the exact verified store
-// and authorization model.
+// New returns an OpenFGA adapter pinned to one store and one authorization
+// model. Both IDs are required and validated here rather than per request: an
+// adapter that cannot name the exact model it checks against would silently
+// follow model changes, so it refuses to exist instead.
+//
+//	Config{APIURL, StoreID, ModelID} → *Adapter, nil
+//	Config{} with no APIURL          → nil, error
+//	Config with empty StoreID        → nil, error
+//	Config with empty ModelID        → nil, error
 func New(cfg openfga.Config) (*Adapter, error) {
 	if cfg.APIURL == nil {
 		return nil, fmt.Errorf("OpenFGA API URL is required")
@@ -45,6 +52,14 @@ func New(cfg openfga.Config) (*Adapter, error) {
 }
 
 // Check evaluates one derived permission against the configured OpenFGA model.
+// It answers only allowed or denied; every other outcome is an error, never a
+// decision, so a dependency failure can never read as a grant.
+//
+//	{alice, can_view, one}, OpenFGA allows  → CheckResult{Allowed: true}, nil
+//	{alice, can_view, one}, OpenFGA denies  → CheckResult{Allowed: false}, nil
+//	response omits "allowed"                → CheckResult{}, ErrMalformedResponse
+//	zero-value or invalid request           → CheckResult{}, ErrInvalidInput (no request sent)
+//	OpenFGA unreachable                     → CheckResult{}, ErrUnavailable
 func (adapter *Adapter) Check(ctx context.Context, request authz.CheckRequest) (authz.CheckResult, error) {
 	if !request.Valid() {
 		return authz.CheckResult{}, fmt.Errorf("%w: invalid authorization check", authz.ErrInvalidInput)
@@ -112,7 +127,25 @@ func (adapter *Adapter) BatchCheck(ctx context.Context, request authz.BatchCheck
 	return result, nil
 }
 
-// ListGrants returns all direct role assignments for the requested object.
+// ListGrants returns every direct role assignment on the requested object,
+// sorted by subject then relation, paging until OpenFGA stops returning a
+// continuation token.
+//
+// The read is filtered by object alone, so OpenFGA returns every tuple stored
+// against it -- not only grants. Each one is classified: a tuple that is
+// understood and simply is not access is skipped, and a tuple that cannot be
+// trusted fails the call. See grantFromReadTuple for which is which.
+//
+// Every example below is one ListGrants({Object: stack:one}) call, described
+// by what OpenFGA returned. The requested object is what "wrong object" is
+// measured against, so it is the whole reason two of these differ.
+//
+//	tuples [{alice, owner, one}]                      → [{alice, owner, one}], nil
+//	tuples [{platform:tflive, parent, one}]           → [], nil          (structural, skipped)
+//	tuples [{alice, owner, one}, {bob, viewer, one}]  → both, sorted by subject
+//	tuples [{alice, owner, other}]                    → ErrMalformedResponse  (wrong object)
+//	the same grant twice                              → ErrMalformedResponse
+//	a repeated continuation token                     → ErrMalformedResponse  (page loop)
 func (adapter *Adapter) ListGrants(ctx context.Context, request authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
 	if !request.Valid() {
 		return authz.ListGrantsResult{}, fmt.Errorf("%w: invalid grants request", authz.ErrInvalidInput)
@@ -136,6 +169,9 @@ func (adapter *Adapter) ListGrants(ctx context.Context, request authz.ListGrants
 		}
 		for _, tuple := range *response.Tuples {
 			grant, err := grantFromReadTuple(tuple.Key, request.Object)
+			if errors.Is(err, errNotAGrant) {
+				continue
+			}
 			if err != nil {
 				return authz.ListGrantsResult{}, fmt.Errorf("%w: read response contains invalid tuple", authz.ErrMalformedResponse)
 			}
@@ -172,6 +208,20 @@ func (adapter *Adapter) ListGrants(ctx context.Context, request authz.ListGrants
 // Unlike ListGrants it filters the read by user as well as object, so a
 // reconciling handler can compute a delta without paging every grant on the
 // stack. A subject holds at most one tuple per role, so this never paginates.
+//
+// Filtering by user is also why structural edges never reach it: a platform
+// subject cannot match a user filter. The not-a-grant skip is kept anyway so
+// both listers answer "who has access" by the same rule.
+//
+// Every example below is one ListSubjectGrants({Subject: user:alice, Object:
+// stack:one}) call, described by what OpenFGA returned. Both halves of that
+// request are what the last two rows are measured against.
+//
+//	tuples [{alice, owner, one}]   → [{alice, owner, one}], nil
+//	tuples []                      → [], nil
+//	tuples [{bob, owner, one}]     → ErrMalformedResponse  (another subject; filter not honored)
+//	tuples [{alice, owner, other}] → ErrMalformedResponse  (another object)
+//	OpenFGA unreachable            → ErrUnavailable
 func (adapter *Adapter) ListSubjectGrants(ctx context.Context, request authz.ListSubjectGrantsRequest) (authz.ListGrantsResult, error) {
 	if !request.Valid() {
 		return authz.ListGrantsResult{}, fmt.Errorf("%w: invalid subject grants request", authz.ErrInvalidInput)
@@ -191,6 +241,9 @@ func (adapter *Adapter) ListSubjectGrants(ctx context.Context, request authz.Lis
 	result := authz.ListGrantsResult{}
 	for _, tuple := range *response.Tuples {
 		grant, err := grantFromReadTuple(tuple.Key, request.Object)
+		if errors.Is(err, errNotAGrant) {
+			continue
+		}
 		if err != nil {
 			return authz.ListGrantsResult{}, fmt.Errorf("%w: read response contains invalid tuple", authz.ErrMalformedResponse)
 		}
@@ -202,9 +255,20 @@ func (adapter *Adapter) ListSubjectGrants(ctx context.Context, request authz.Lis
 	return result, nil
 }
 
-// WriteRelationships grants direct roles. If OpenFGA reports a conflicting
-// write, it confirms the desired state before deciding whether the operation
-// can safely be treated as an idempotent success.
+// WriteRelationships grants direct roles, making a non-idempotent OpenFGA
+// write safe to retry. An OpenFGA write that adds an existing tuple is
+// rejected, so a rejection is not taken at face value: the desired state is
+// re-read at higher consistency, and the operation succeeds only if the grants
+// are actually visible.
+//
+//	new grants, write accepted            → nil
+//	grants already held, write rejected   → nil    (confirmed present; replay is a no-op)
+//	write rejected, grants not visible    → ErrWriteUnconfirmed
+//	Confirm() set, grants not yet visible → ErrWriteUnconfirmed
+//	OpenFGA unreachable                   → ErrUnavailable
+//
+// ErrWriteUnconfirmed means "unknown", not "failed": the write may have landed,
+// so the caller may safely retry but must not report success.
 func (adapter *Adapter) WriteRelationships(ctx context.Context, mutation authz.Mutation) error {
 	grants, err := validMutation(mutation)
 	if err != nil {
@@ -232,8 +296,15 @@ func (adapter *Adapter) WriteRelationships(ctx context.Context, mutation authz.M
 	return nil
 }
 
-// DeleteRelationships revokes direct roles. If OpenFGA reports a conflicting
-// delete, it confirms the desired absence before reporting an error.
+// DeleteRelationships revokes direct roles, the mirror of WriteRelationships.
+// An OpenFGA delete of a missing tuple is rejected, so a rejection is checked
+// against observed state before it is believed.
+//
+//	held grants, delete accepted           → nil
+//	grants already absent, delete rejected → nil    (confirmed absent; replay is a no-op)
+//	delete rejected, grants still visible  → ErrWriteUnconfirmed
+//	Confirm() set, grants still visible    → ErrWriteUnconfirmed
+//	OpenFGA unreachable                    → ErrUnavailable
 func (adapter *Adapter) DeleteRelationships(ctx context.Context, mutation authz.Mutation) error {
 	grants, err := validMutation(mutation)
 	if err != nil {
@@ -261,6 +332,15 @@ func (adapter *Adapter) DeleteRelationships(ctx context.Context, mutation authz.
 	return nil
 }
 
+// validMutation re-checks a Mutation at the provider boundary and returns its
+// grants. authz.NewMutation already refused an empty or invalid one; the rule
+// added here is OpenFGA's, not the domain's: a write carrying the same tuple
+// twice is rejected by the server, so it is caught before the round trip.
+//
+//	Mutation{[{alice, owner, one}]}                    → [1 grant], nil
+//	Mutation{[{alice, owner, one}, {bob, owner, one}]} → [2 grants], nil
+//	Mutation{[{alice, owner, one}, {alice, owner, one}]} → nil, ErrInvalidInput  (duplicate)
+//	Mutation{}                                         → nil, ErrInvalidInput  (zero value)
 func validMutation(mutation authz.Mutation) ([]authz.Grant, error) {
 	if !mutation.Valid() {
 		return nil, fmt.Errorf("%w: invalid relationship mutation", authz.ErrInvalidInput)
@@ -280,7 +360,22 @@ func validMutation(mutation authz.Mutation) ([]authz.Grant, error) {
 	return grants, nil
 }
 
+// write issues one transactional tuple mutation in exactly one direction.
+// OpenFGA rejects a request carrying both writes and deletes, and rejects one
+// carrying neither, so that is refused here before the round trip rather than
+// surfacing as an opaque 400.
+//
+// It does not retry and does not interpret rejection: an OpenFGA write is not
+// idempotent, so adding a tuple that exists or removing one that does not is
+// an error the caller must reconcile against observed state. That is what
+// WriteRelationships and DeleteRelationships use confirm for.
+//
+//	write(ctx, [grant], nil)     → POST /write {writes:{tuple_keys:[…]}}
+//	write(ctx, nil, [grant])     → POST /write {deletes:{tuple_keys:[…]}}
+//	write(ctx, [grant], [grant]) → ErrInvalidInput, no request sent
+//	write(ctx, nil, nil)         → ErrInvalidInput, no request sent
 func (adapter *Adapter) write(ctx context.Context, writes, deletes []authz.Grant) error {
+
 	request := openfga.WriteRequest{AuthorizationModelID: adapter.modelID}
 	switch {
 	case len(writes) > 0 && len(deletes) == 0:
@@ -293,6 +388,21 @@ func (adapter *Adapter) write(ctx context.Context, writes, deletes []authz.Grant
 	return adapter.client.Write(ctx, adapter.storeID, request)
 }
 
+// confirm re-reads grants at HIGHER_CONSISTENCY and reports whether every one
+// of them matches expected. It is how a non-idempotent write is turned into a
+// safe one: a rejected write is only tolerated if the desired state is already
+// visible, and a mutation asking to be confirmed is only reported as success
+// once it is.
+//
+// It returns (false, nil) for "checked, and the state is not what you wanted"
+// and (false, err) for "could not find out". Those are different outcomes and
+// callers must not collapse them: the first is a definite no, the second is
+// ErrWriteUnconfirmed territory. Checks are chunked at maxConfirmationChecks.
+//
+//	confirm(ctx, [granted alice], true)   → true, nil
+//	confirm(ctx, [ungranted alice], true) → false, nil   (definite: not visible)
+//	confirm(ctx, [revoked alice], false)  → true, nil    (absence confirmed)
+//	OpenFGA 5xx                           → false, ErrUnavailable
 func (adapter *Adapter) confirm(ctx context.Context, grants []authz.Grant, expected bool) (bool, error) {
 	for start := 0; start < len(grants); start += maxConfirmationChecks {
 		end := min(start+maxConfirmationChecks, len(grants))
@@ -327,6 +437,11 @@ func (adapter *Adapter) confirm(ctx context.Context, grants []authz.Grant, expec
 	return true, nil
 }
 
+// tuples renders each Grant as OpenFGA's wire tuple, preserving order.
+//
+//	tuples([{alice, owner, one}, {bob, viewer, one}])
+//	  → [{user:alice, owner, stack:one}, {user:bob, viewer, stack:one}]
+//	tuples(nil) → []
 func tuples(grants []authz.Grant) []openfga.TupleKey {
 	result := make([]openfga.TupleKey, len(grants))
 	for index, grant := range grants {
@@ -343,31 +458,72 @@ func tupleForGrant(grant authz.Grant) openfga.TupleKey {
 	return openfga.TupleKey{User: grant.Subject().String(), Relation: grant.Relation().String(), Object: grant.Object().String()}
 }
 
+// A read filtered only by object returns every tuple stored against it, and
+// not all of them are grants. These sentinels separate the two reasons one
+// cannot become a Grant, because the callers must treat them differently.
+var (
+	// errNotAGrant reports a tuple that was understood and simply is not
+	// access: a structural edge such as {platform:tflive, parent, stack:X},
+	// or a derived relation. "Who has access to this stack" has a correct
+	// answer in the presence of such a tuple, so a lister skips it.
+	errNotAGrant = errors.New("tuple is not a grant")
+	// errMalformedTuple reports a tuple that could not be trusted at all: no
+	// key, an object other than the one asked about, or a subject that does
+	// not survive canonicalization. There is no safe answer to give when the
+	// provider returns one of these, so a lister fails closed.
+	errMalformedTuple = errors.New("tuple is malformed")
+)
+
 // grantFromReadTuple converts one tuple from a read response into a Grant,
-// refusing anything that is not a grant on the object that was asked about.
+// classifying anything that is not one as either not-a-grant or malformed.
 //
-//	{user:alice, owner, stack:abc}, stack:abc      → Grant{…}, nil
-//	{platform:tflive, parent, stack:abc}, stack:abc → Grant{}, error  (not a grant)
-//	{user:alice, can_view, stack:abc}, stack:abc   → Grant{}, error
-//	{user:alice, owner, stack:other}, stack:abc    → Grant{}, error  (wrong object)
-//	nil, stack:abc                                 → Grant{}, error
+//	{user:alice, owner, stack:abc}, stack:abc       → Grant{…}, nil
+//	{platform:tflive, parent, stack:abc}, stack:abc → errNotAGrant       (structural edge)
+//	{user:alice, can_view, stack:abc}, stack:abc    → errNotAGrant       (derived, not granted)
+//	{user:alice, owner, stack:other}, stack:abc     → errMalformedTuple  (wrong object)
+//	{user:al#ce, owner, stack:abc}, stack:abc       → errMalformedTuple  (unparseable subject)
+//	nil, stack:abc                                  → errMalformedTuple
 func grantFromReadTuple(key *openfga.TupleKey, requestedObject authz.Object) (authz.Grant, error) {
 	const subjectPrefix = "user:"
-	if key == nil || key.Object != requestedObject.String() || !strings.HasPrefix(key.User, subjectPrefix) {
-		return authz.Grant{}, fmt.Errorf("invalid tuple key")
+	if key == nil {
+		return authz.Grant{}, fmt.Errorf("%w: missing key", errMalformedTuple)
 	}
+	// A tuple for another object is an integrity failure, not a filtering
+	// question: we asked about one object and the provider answered about a
+	// different one. It must never be quietly dropped.
+	if key.Object != requestedObject.String() {
+		return authz.Grant{}, fmt.Errorf("%w: object is not the one requested", errMalformedTuple)
+	}
+	// A non-user subject is legitimate: #141 stores {platform:tflive, parent,
+	// stack:X} on every stack so admins inherit stack permissions. It is a
+	// structural edge, not access, so it is skipped rather than refused.
+	if !strings.HasPrefix(key.User, subjectPrefix) {
+		return authz.Grant{}, fmt.Errorf("%w: subject is not a user", errNotAGrant)
+	}
+	// Past the prefix, the subject must canonicalize back to exactly what was
+	// stored. A "user:"-prefixed value that does not is anomalous rather than
+	// merely uninteresting -- usersets and other types are caught above by
+	// their own prefix -- so this fails rather than skips.
 	subject, err := authz.SubjectFromOIDCSub(strings.TrimPrefix(key.User, subjectPrefix))
 	if err != nil || subject.String() != key.User {
-		return authz.Grant{}, fmt.Errorf("invalid tuple subject")
+		return authz.Grant{}, fmt.Errorf("%w: subject is not canonical", errMalformedTuple)
 	}
-	// GrantRelation, not NewRelation: ListGrants answers "who has access", and
-	// a structural edge such as parent is not access. Once #141 writes parent
-	// edges, this is what keeps them out of the grant list.
-	relation, err := authz.GrantRelation(key.Relation)
+	// The two failures here are genuinely different. A name that is not
+	// well-formed is corrupt; a well-formed name that is not grantable is a
+	// relation we understand and do not report as a grant -- "parent" and
+	// "root" are structural, "can_view" and friends are derived.
+	relation, err := authz.NewRelation(key.Relation)
 	if err != nil {
-		return authz.Grant{}, fmt.Errorf("invalid tuple relation")
+		return authz.Grant{}, fmt.Errorf("%w: relation name is invalid", errMalformedTuple)
 	}
-	return authz.NewGrant(subject, requestedObject, relation)
+	if !relation.Grantable() {
+		return authz.Grant{}, fmt.Errorf("%w: relation %q is not grantable", errNotAGrant, key.Relation)
+	}
+	grant, err := authz.NewGrant(subject, requestedObject, relation)
+	if err != nil {
+		return authz.Grant{}, fmt.Errorf("%w: %v", errMalformedTuple, err)
+	}
+	return grant, nil
 }
 
 // tuple renders a CheckRequest as OpenFGA's wire tuple.
@@ -378,6 +534,21 @@ func tuple(request authz.CheckRequest) openfga.TupleKey {
 	return openfga.TupleKey{User: request.Subject.String(), Relation: request.Relation.String(), Object: request.Object.String()}
 }
 
+// classify maps a transport or protocol failure onto the port's error
+// vocabulary. It is the single place a provider problem becomes a domain
+// error, and it exists so no failure mode can reach a caller as a decision.
+//
+// Every branch fails closed. The 4xx-to-ErrMalformedResponse mapping is
+// deliberate: a request this adapter built being rejected as invalid means the
+// adapter and the model disagree, which is a bug here, not a denial.
+//
+//	context deadline exceeded → ErrTimeout
+//	context canceled          → plain error (the caller went away; not a fault)
+//	bad media type, undecodable, oversized → ErrMalformedResponse
+//	dial failure, body read failure        → ErrUnavailable
+//	429, 500, 502, 503                     → ErrUnavailable  (retryable)
+//	400, 401, 403, 404                     → ErrMalformedResponse
+//	anything else             → returned unchanged
 func (adapter *Adapter) classify(err error) error {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):

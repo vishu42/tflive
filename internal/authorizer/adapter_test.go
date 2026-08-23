@@ -271,7 +271,7 @@ func TestAuthorizationAdapterListsOnlyDirectRoleGrantsAcrossPages(t *testing.T) 
 func TestAuthorizationAdapterRejectsMalformedGrantReadPages(t *testing.T) {
 	for _, body := range []string{
 		`{}`,
-		`{"tuples":[{"key":{"user":"user:alice","relation":"can_view","object":"stack:one"}}]}`,
+		`{"tuples":[{"key":{"user":"user:al#ce","relation":"owner","object":"stack:one"}}]}`,
 		`{"tuples":[{"key":{"user":"user:alice","relation":"owner","object":"stack:other"}}]}`,
 		`{"tuples":[{"key":{"user":"user:alice","relation":"owner","object":"stack:one"}},{"key":{"user":"user:alice","relation":"owner","object":"stack:one"}}]}`,
 	} {
@@ -670,48 +670,56 @@ func mustGrant(t *testing.T, subject, stack string, relation authz.Relation) aut
 	return grant
 }
 
-// Pins that a parent edge read back from OpenFGA is refused rather than
-// surfacing as a grant. Inert until #141 writes the first one.
-func TestListGrantsRejectsAStructuralTuple(t *testing.T) {
+// Pins that a tuple which is not a grant is skipped rather than failing the
+// call, while a tuple that cannot be trusted still fails it. #141 stores a
+// parent edge on every stack; before this distinction existed, one such edge
+// made ListGrants return ErrMalformedResponse for that stack, which broke
+// GrantStackOwner and with it stack creation.
+func TestListGrantsSkipsNonGrantsButFailsOnUntrustworthyTuples(t *testing.T) {
 	t.Parallel()
 
-	// Two distinct reasons a parent edge must never surface as a Grant. A
-	// platform subject is refused by the subject-prefix guard before
-	// GrantRelation is ever reached. A well-formed user subject reaches
-	// GrantRelation, which refuses "parent" directly — and even if it
-	// admitted it, authz.NewGrant's own Grantable() check would still
-	// refuse the resulting Grant, so this case is defended twice over.
-	// Both must independently produce ErrMalformedResponse out of
-	// ListGrants.
-	tests := []struct {
-		name string
-		body string
-	}{
-		{
-			name: "well-formed user subject carrying a structural relation is refused",
-			body: `{"tuples":[{"key":{"user":"user:alice","relation":"parent","object":"stack:one"}}],"continuation_token":""}`,
-		},
-		{
-			name: "platform subject relies on the subject-prefix guard",
-			body: `{"tuples":[{"key":{"user":"platform:tflive","relation":"parent","object":"stack:one"}}],"continuation_token":""}`,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
+	t.Run("structural and derived tuples are skipped, real grants survive", func(t *testing.T) {
+		t.Parallel()
 
-			adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				// A parent edge is a legal tuple on the wire; it is not a grant.
-				fmt.Fprint(w, test.body)
-			})
-
-			_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")})
-			if !errors.Is(err, authz.ErrMalformedResponse) {
-				t.Fatalf("ListGrants() error = %v, want ErrMalformedResponse", err)
-			}
+		adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			// Everything here is a legal tuple on the wire. Only one is a grant.
+			fmt.Fprint(w, `{"tuples":[`+
+				`{"key":{"user":"platform:tflive","relation":"parent","object":"stack:one"}},`+
+				`{"key":{"user":"user:alice","relation":"parent","object":"stack:one"}},`+
+				`{"key":{"user":"user:alice","relation":"can_view","object":"stack:one"}},`+
+				`{"key":{"user":"user:alice","relation":"owner","object":"stack:one"}}`+
+				`],"continuation_token":""}`)
 		})
-	}
+
+		result, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")})
+		if err != nil {
+			t.Fatalf("ListGrants() error = %v, want nil", err)
+		}
+		want := authz.ListGrantsResult{Grants: []authz.Grant{mustGrant(t, "alice", "one", authz.RelationOwner)}}
+		if !reflect.DeepEqual(result, want) {
+			t.Fatalf("ListGrants() = %#v, want only the owner grant", result)
+		}
+	})
+
+	// The other half of the distinction: skipping must not become a blanket
+	// tolerance. A tuple for an object we did not ask about means the provider
+	// answered a different question, and that must still fail closed.
+	t.Run("a tuple for another object still fails the call", func(t *testing.T) {
+		t.Parallel()
+
+		adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"tuples":[`+
+				`{"key":{"user":"platform:tflive","relation":"parent","object":"stack:one"}},`+
+				`{"key":{"user":"user:alice","relation":"owner","object":"stack:other"}}`+
+				`],"continuation_token":""}`)
+		})
+
+		if _, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")}); !errors.Is(err, authz.ErrMalformedResponse) {
+			t.Fatalf("ListGrants() error = %v, want ErrMalformedResponse", err)
+		}
+	})
 }
 
 func TestAuthorizationAdapterListSubjectGrantsFiltersByUserAndObject(t *testing.T) {
