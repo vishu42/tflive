@@ -210,7 +210,8 @@ flags are a behaviour change that needs its own justification.
 ## 6. Test strategy
 
 The mechanical churn is large and mostly uninteresting:
-`internal/openfga/authorization_adapter_test.go` (724 lines, stack-shaped),
+`internal/openfga/authorization_adapter_test.go` (724 lines, stack-shaped;
+now `internal/authorizer/adapter_test.go`),
 `internal/authz/authorization_test.go` (6 tests on the closed enums), and every
 `authz.Stack` / `authz.Permission` literal across `internal/app`,
 `internal/api`, and both `cmd` test files.
