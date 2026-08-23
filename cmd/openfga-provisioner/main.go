@@ -33,8 +33,14 @@ func (e sanitizedExecutionError) Is(target error) bool {
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Args[1:], os.Getenv, openfgamodel.AuthorizationModelJSON(), execute, os.Stdout, os.Stderr); err != nil {
-		log.New(os.Stderr, "", 0).Printf("OpenFGA provisioner failed: %v", err)
+	fail := log.New(os.Stderr, "", 0)
+	modelJSON, err := openfgamodel.AuthorizationModelJSON()
+	if err != nil {
+		fail.Printf("OpenFGA provisioner failed: %v", err)
+		os.Exit(1)
+	}
+	if err := run(ctx, os.Args[1:], os.Getenv, modelJSON, execute, os.Stdout, os.Stderr); err != nil {
+		fail.Printf("OpenFGA provisioner failed: %v", err)
 		os.Exit(1)
 	}
 }

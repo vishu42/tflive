@@ -1,5 +1,5 @@
 name: tflive stack authorization
-model_file: ./authorization-model.json
+model_file: ./authorization-model.fga
 tuples:
   - user: user:owner
     relation: owner

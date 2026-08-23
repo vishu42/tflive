@@ -38,11 +38,11 @@ func TestParseAuthorizationModelRejectsInvalidModels(t *testing.T) {
 func TestModelsEqualIgnoresNonSemanticOrderingAndIDs(t *testing.T) {
 	t.Parallel()
 
-	first, err := ParseAuthorizationModel(openfgamodel.AuthorizationModelJSON())
+	first, err := ParseAuthorizationModel(canonicalModelJSON(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := ParseAuthorizationModel(openfgamodel.AuthorizationModelJSON())
+	second, err := ParseAuthorizationModel(canonicalModelJSON(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,11 +61,11 @@ func TestModelsEqualIgnoresNonSemanticOrderingAndIDs(t *testing.T) {
 func TestModelsEqualDetectsPermissionRewriteChanges(t *testing.T) {
 	t.Parallel()
 
-	first, err := ParseAuthorizationModel(openfgamodel.AuthorizationModelJSON())
+	first, err := ParseAuthorizationModel(canonicalModelJSON(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := ParseAuthorizationModel(openfgamodel.AuthorizationModelJSON())
+	second, err := ParseAuthorizationModel(canonicalModelJSON(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestModelsEqualNormalizesComputedUsersetObject(t *testing.T) {
 func TestCanonicalModelAllowsDirectWritesOnlyToRoles(t *testing.T) {
 	t.Parallel()
 
-	model, err := ParseAuthorizationModel(openfgamodel.AuthorizationModelJSON())
+	model, err := ParseAuthorizationModel(canonicalModelJSON(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,11 +173,11 @@ func TestModelsEqualIgnoresEmptyRelationMetadata(t *testing.T) {
 	// The DSL transform emits an empty metadata entry for every computed
 	// relation; a hand-written model and some server responses omit them.
 	// The entry carries no information either way.
-	withEntries, err := ParseAuthorizationModel(openfgamodel.AuthorizationModelJSON())
+	withEntries, err := ParseAuthorizationModel(canonicalModelJSON(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	withoutEntries, err := ParseAuthorizationModel(openfgamodel.AuthorizationModelJSON())
+	withoutEntries, err := ParseAuthorizationModel(canonicalModelJSON(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,4 +202,15 @@ func TestModelsEqualIgnoresEmptyRelationMetadata(t *testing.T) {
 	if !equal {
 		t.Fatal("models differing only in empty relation metadata compared unequal")
 	}
+}
+
+// canonicalModelJSON is the embedded model in wire format, or a fatal test error
+// when the embedded DSL does not transform.
+func canonicalModelJSON(t *testing.T) []byte {
+	t.Helper()
+	data, err := openfgamodel.AuthorizationModelJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }

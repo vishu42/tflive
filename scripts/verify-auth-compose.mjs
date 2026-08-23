@@ -163,14 +163,14 @@ for (const name of [
 const provisionerDockerfile = resolve(root, "Dockerfile.keycloak-provisioner");
 assert.ok(existsSync(provisionerDockerfile), "missing provisioner Dockerfile");
 const provisionerImage = readFileSync(provisionerDockerfile, "utf8");
-assert.match(provisionerImage, /^FROM golang:1\.24\.1-alpine3\.21 AS build/m);
+assert.match(provisionerImage, /^FROM golang:1\.25\.14-alpine3\.23 AS build/m);
 assert.match(provisionerImage, /^FROM alpine:3\.21$/m);
 assert.match(provisionerImage, /^USER keycloak-provisioner$/m);
 
 const openfgaProvisionerDockerfile = resolve(root, "Dockerfile.openfga-provisioner");
 assert.ok(existsSync(openfgaProvisionerDockerfile), "missing OpenFGA provisioner Dockerfile");
 const openfgaProvisionerImage = readFileSync(openfgaProvisionerDockerfile, "utf8");
-assert.match(openfgaProvisionerImage, /^FROM golang:1\.24\.1-alpine3\.21 AS build/m);
+assert.match(openfgaProvisionerImage, /^FROM golang:1\.25\.14-alpine3\.23 AS build/m);
 const runtimeStageMarker = /^FROM alpine:3\.21$/m;
 assert.match(openfgaProvisionerImage, runtimeStageMarker);
 const [openfgaProvisionerBuildStage] = openfgaProvisionerImage.split(runtimeStageMarker);

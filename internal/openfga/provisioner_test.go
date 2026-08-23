@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	openfgamodel "github.com/vishu42/tflive/openfga"
 )
 
 func TestBootstrapIsRepeatableAndReturnsStableIDs(t *testing.T) {
@@ -258,7 +256,7 @@ func TestBootstrapPreservesCancellation(t *testing.T) {
 
 func desiredModel(t *testing.T) AuthorizationModel {
 	t.Helper()
-	model, err := ParseAuthorizationModel(openfgamodel.AuthorizationModelJSON())
+	model, err := ParseAuthorizationModel(canonicalModelJSON(t))
 	if err != nil {
 		t.Fatal(err)
 	}

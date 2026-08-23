@@ -81,25 +81,21 @@ are not unique, and bootstrap fails closed if the `tflive` name is ambiguous.
 
 ## The authorization model
 
-`openfga/authorization-model.fga` is the source of truth. Edit and review
-permission changes there — the DSL is the form in which a wrong permission is
-visible.
+`openfga/authorization-model.fga` is the source of truth and the only form of
+the model in the repository. Edit and review permission changes there — the DSL
+is the form in which a wrong permission is visible.
 
-`openfga/authorization-model.json` is generated from it and committed, because
-`cmd/openfga-provisioner` embeds the API wire format. Regenerate it in the same
-commit as any DSL change:
+`cmd/openfga-provisioner` embeds the DSL and transforms it to OpenFGA's API wire
+format in process, so there is nothing to regenerate after a change and no
+generated artifact that can drift. A malformed DSL fails
+`go test ./openfga/...` rather than waiting for a provisioner run.
 
-```bash
-scripts/openfga-model.sh generate
-```
-
-`scripts/openfga-model.sh check` fails when the committed JSON is not a fresh
-transform of the DSL, and `go test ./openfga/...` runs that check. Both need the
-[`fga` CLI](https://github.com/openfga/cli) on `PATH`; without it the Go test
-skips rather than fails.
-
-The permission matrix is asserted in `openfga/authorization-model-tests.fga.yaml`
-against the generated JSON:
+The transform rejects a syntax error but not a reference to a relation that
+does not exist, so `define can_view: ownr` would transform cleanly and be
+refused by OpenFGA at write time. The permission matrix in
+`openfga/authorization-model-tests.fga.yaml` is what catches that, along with
+every permission that is merely wrong. Run it on any model change; it needs the
+[`fga` CLI](https://github.com/openfga/cli) on `PATH`:
 
 ```bash
 cd openfga && fga model test --tests authorization-model-tests.fga.yaml
@@ -111,7 +107,6 @@ cd openfga && fga model test --tests authorization-model-tests.fga.yaml
 go test ./...
 gofmt -l cmd internal
 node scripts/verify-auth-compose.mjs
-scripts/openfga-model.sh check
 ```
 
 ```bash
