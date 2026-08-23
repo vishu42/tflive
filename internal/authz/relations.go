@@ -23,6 +23,24 @@ var grantableRelations = map[string]bool{
 	"viewer":   true,
 }
 
+// structuralRelations are the relations OpenFGA will actually store that are
+// not access. They exist to wire the model together -- `parent` links a stack
+// to the platform singleton so admins inherit stack permissions, `root` marks
+// the bootstrap identity -- and a reader listing "who has access" skips them.
+//
+// The distinction that matters here is storability, not grantability. A
+// derived relation such as can_view is also not grantable, but OpenFGA refuses
+// to store one at all: derived relations declare no directly_related_user_types
+// and the server rejects the write. So a stored can_view tuple cannot exist,
+// and a reader that is handed one is looking at a corrupt store or a response
+// from somewhere else -- it must fail rather than quietly skip.
+//
+// #141 introduces both of these. Neither may ever join grantableRelations.
+var structuralRelations = map[string]bool{
+	"parent": true,
+	"root":   true,
+}
+
 // Relation is a validated relation name. Its value is intentionally opaque so
 // callers cannot construct unchecked relations.
 type Relation struct {
@@ -93,6 +111,19 @@ func (relation Relation) Valid() bool {
 // the refusal this whole type exists for.
 func (relation Relation) Grantable() bool {
 	return grantableRelations[relation.value]
+}
+
+// Structural reports whether this is a stored relation that is not access. A
+// reader answering "who has access" skips these; it must not skip a relation
+// that is merely non-grantable, because that one cannot legitimately be stored.
+//
+//	NewRelation("parent") then .Structural()   → true   (stored, not access)
+//	NewRelation("root") then .Structural()     → true
+//	RelationOwner.Structural()                 → false  (stored, and it is access)
+//	RelationCanView.Structural()               → false  (never stored at all)
+//	Relation{}.Structural()                    → false
+func (relation Relation) Structural() bool {
+	return structuralRelations[relation.value]
 }
 
 // safeRelationName rejects names that would corrupt a tuple's encoding, using

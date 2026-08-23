@@ -132,9 +132,10 @@ func (adapter *Adapter) BatchCheck(ctx context.Context, request authz.BatchCheck
 // continuation token.
 //
 // The read is filtered by object alone, so OpenFGA returns every tuple stored
-// against it -- not only grants. Each one is classified: a tuple that is
-// understood and simply is not access is skipped, and a tuple that cannot be
-// trusted fails the call. See grantFromReadTuple for which is which.
+// against it -- not only grants. Each one is classified by whether it could
+// legitimately be there: a structural edge is real and is not access, so it is
+// skipped, while anything OpenFGA would never have stored means the store or
+// the response cannot be trusted, and fails the call. See grantFromReadTuple.
 //
 // Every example below is one ListGrants({Object: stack:one}) call, described
 // by what OpenFGA returned. The requested object is what "wrong object" is
@@ -142,6 +143,7 @@ func (adapter *Adapter) BatchCheck(ctx context.Context, request authz.BatchCheck
 //
 //	tuples [{alice, owner, one}]                      → [{alice, owner, one}], nil
 //	tuples [{platform:tflive, parent, one}]           → [], nil          (structural, skipped)
+//	tuples [{alice, can_view, one}]                   → ErrMalformedResponse  (unstorable)
 //	tuples [{alice, owner, one}, {bob, viewer, one}]  → both, sorted by subject
 //	tuples [{alice, owner, other}]                    → ErrMalformedResponse  (wrong object)
 //	the same grant twice                              → ErrMalformedResponse
@@ -209,9 +211,9 @@ func (adapter *Adapter) ListGrants(ctx context.Context, request authz.ListGrants
 // reconciling handler can compute a delta without paging every grant on the
 // stack. A subject holds at most one tuple per role, so this never paginates.
 //
-// Filtering by user is also why structural edges never reach it: a platform
-// subject cannot match a user filter. The not-a-grant skip is kept anyway so
-// both listers answer "who has access" by the same rule.
+// Filtering by user is also why structural edges rarely reach it: a platform
+// subject cannot match a user filter. The classification is applied anyway so
+// both listers answer "who has access" by exactly the same rule.
 //
 // Every example below is one ListSubjectGrants({Subject: user:alice, Object:
 // stack:one}) call, described by what OpenFGA returned. Both halves of that
@@ -462,15 +464,17 @@ func tupleForGrant(grant authz.Grant) openfga.TupleKey {
 // not all of them are grants. These sentinels separate the two reasons one
 // cannot become a Grant, because the callers must treat them differently.
 var (
-	// errNotAGrant reports a tuple that was understood and simply is not
-	// access: a structural edge such as {platform:tflive, parent, stack:X},
-	// or a derived relation. "Who has access to this stack" has a correct
-	// answer in the presence of such a tuple, so a lister skips it.
+	// errNotAGrant reports a tuple that legitimately exists and simply is not
+	// access -- a structural edge such as {platform:tflive, parent, stack:X}.
+	// "Who has access to this stack" still has a correct and complete answer
+	// with such a tuple present, so a lister skips it.
 	errNotAGrant = errors.New("tuple is not a grant")
 	// errMalformedTuple reports a tuple that could not be trusted at all: no
-	// key, an object other than the one asked about, or a subject that does
-	// not survive canonicalization. There is no safe answer to give when the
-	// provider returns one of these, so a lister fails closed.
+	// key, an object other than the one asked about, a subject that does not
+	// survive canonicalization, or a relation OpenFGA would never have stored.
+	// There is no safe answer to give when the provider returns one of these,
+	// so a lister fails closed rather than returning a shortened list that
+	// looks ordinary.
 	errMalformedTuple = errors.New("tuple is malformed")
 )
 
@@ -479,7 +483,9 @@ var (
 //
 //	{user:alice, owner, stack:abc}, stack:abc       → Grant{…}, nil
 //	{platform:tflive, parent, stack:abc}, stack:abc → errNotAGrant       (structural edge)
-//	{user:alice, can_view, stack:abc}, stack:abc    → errNotAGrant       (derived, not granted)
+//	{user:alice, root, stack:abc}, stack:abc        → errNotAGrant       (structural)
+//	{user:alice, can_view, stack:abc}, stack:abc    → errMalformedTuple  (derived; unstorable)
+//	{user:alice, nonsense, stack:abc}, stack:abc    → errMalformedTuple  (unknown; unstorable)
 //	{user:alice, owner, stack:other}, stack:abc     → errMalformedTuple  (wrong object)
 //	{user:al#ce, owner, stack:abc}, stack:abc       → errMalformedTuple  (unparseable subject)
 //	nil, stack:abc                                  → errMalformedTuple
@@ -508,16 +514,23 @@ func grantFromReadTuple(key *openfga.TupleKey, requestedObject authz.Object) (au
 	if err != nil || subject.String() != key.User {
 		return authz.Grant{}, fmt.Errorf("%w: subject is not canonical", errMalformedTuple)
 	}
-	// The two failures here are genuinely different. A name that is not
-	// well-formed is corrupt; a well-formed name that is not grantable is a
-	// relation we understand and do not report as a grant -- "parent" and
-	// "root" are structural, "can_view" and friends are derived.
 	relation, err := authz.NewRelation(key.Relation)
 	if err != nil {
 		return authz.Grant{}, fmt.Errorf("%w: relation name is invalid", errMalformedTuple)
 	}
+	// Storability, not grantability, is what separates these two. A structural
+	// relation is one OpenFGA stores and that is not access, so it legitimately
+	// sits on the object and is skipped.
+	if relation.Structural() {
+		return authz.Grant{}, fmt.Errorf("%w: relation %q is structural", errNotAGrant, key.Relation)
+	}
+	// Anything else non-grantable cannot legitimately be stored at all --
+	// a derived relation declares no directly_related_user_types and OpenFGA
+	// rejects the write, and an unknown relation does not exist on the type.
+	// Being handed one means the store is corrupt or this is not the store we
+	// think it is, so it fails rather than quietly shortening the answer.
 	if !relation.Grantable() {
-		return authz.Grant{}, fmt.Errorf("%w: relation %q is not grantable", errNotAGrant, key.Relation)
+		return authz.Grant{}, fmt.Errorf("%w: relation %q cannot be a stored grant", errMalformedTuple, key.Relation)
 	}
 	grant, err := authz.NewGrant(subject, requestedObject, relation)
 	if err != nil {

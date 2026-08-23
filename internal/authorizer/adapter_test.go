@@ -678,16 +678,16 @@ func mustGrant(t *testing.T, subject, stack string, relation authz.Relation) aut
 func TestListGrantsSkipsNonGrantsButFailsOnUntrustworthyTuples(t *testing.T) {
 	t.Parallel()
 
-	t.Run("structural and derived tuples are skipped, real grants survive", func(t *testing.T) {
+	t.Run("structural tuples are skipped, real grants survive", func(t *testing.T) {
 		t.Parallel()
 
 		adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			// Everything here is a legal tuple on the wire. Only one is a grant.
+			// Every tuple here is one OpenFGA will store. Only one is access.
 			fmt.Fprint(w, `{"tuples":[`+
 				`{"key":{"user":"platform:tflive","relation":"parent","object":"stack:one"}},`+
 				`{"key":{"user":"user:alice","relation":"parent","object":"stack:one"}},`+
-				`{"key":{"user":"user:alice","relation":"can_view","object":"stack:one"}},`+
+				`{"key":{"user":"user:alice","relation":"root","object":"stack:one"}},`+
 				`{"key":{"user":"user:alice","relation":"owner","object":"stack:one"}}`+
 				`],"continuation_token":""}`)
 		})
@@ -702,9 +702,29 @@ func TestListGrantsSkipsNonGrantsButFailsOnUntrustworthyTuples(t *testing.T) {
 		}
 	})
 
-	// The other half of the distinction: skipping must not become a blanket
-	// tolerance. A tuple for an object we did not ask about means the provider
-	// answered a different question, and that must still fail closed.
+	// The distinction is storability, not grantability. OpenFGA refuses to
+	// store a derived relation -- can_view declares no directly_related_user_
+	// types -- so being handed one means the store is corrupt or the response
+	// is not from the store we think it is. Skipping it would return an
+	// ordinary-looking list that is quietly missing whatever else went wrong.
+	t.Run("a relation OpenFGA would never store fails the call", func(t *testing.T) {
+		t.Parallel()
+
+		for _, relation := range []string{"can_view", "can_manage_access", "nonsense"} {
+			adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"tuples":[{"key":{"user":"user:alice","relation":%q,"object":"stack:one"}}],"continuation_token":""}`, relation)
+			})
+
+			if _, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")}); !errors.Is(err, authz.ErrMalformedResponse) {
+				t.Fatalf("ListGrants() with relation %q error = %v, want ErrMalformedResponse", relation, err)
+			}
+		}
+	})
+
+	// Skipping must not become a blanket tolerance. A tuple for an object we
+	// did not ask about means the provider answered a different question, and
+	// that must still fail closed.
 	t.Run("a tuple for another object still fails the call", func(t *testing.T) {
 		t.Parallel()
 
