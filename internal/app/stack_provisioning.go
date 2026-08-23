@@ -41,26 +41,26 @@ func (service *Service) GrantStackOwner(ctx context.Context, command GrantStackO
 	if service.Authorizer == nil {
 		return fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
 	}
-	stack, err := authz.StackFromID(string(command.StackID))
+	object, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
 	if err != nil {
 		return fmt.Errorf("grant stack owner: %w", err)
 	}
-	subject, err := authz.SubjectFromKeycloakSub(command.Subject)
+	subject, err := authz.SubjectFromOIDCSub(command.Subject)
 	if err != nil {
 		return fmt.Errorf("grant stack owner subject: %w", err)
 	}
 
-	current, err := service.listGrantsForStack(ctx, stack)
+	current, err := service.listGrantsForStack(ctx, object)
 	if err != nil {
 		return fmt.Errorf("read stack grants: %w", err)
 	}
 	for _, grant := range current.Grants {
-		if grant.Subject().String() == subject.String() && grant.Role() == authz.RoleOwner {
+		if grant.Subject().String() == subject.String() && grant.Relation() == authz.RelationOwner {
 			return nil
 		}
 	}
 
-	grant, err := authz.NewGrant(subject, stack, authz.RoleOwner)
+	grant, err := authz.NewGrant(subject, object, authz.RelationOwner)
 	if err != nil {
 		return fmt.Errorf("build owner grant: %w", err)
 	}

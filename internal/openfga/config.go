@@ -2,6 +2,7 @@ package openfga
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -20,6 +21,10 @@ type Config struct {
 	ModelID     string
 	APIToken    string
 	HTTPTimeout time.Duration
+	// Transport overrides the HTTP transport used for requests. LoadConfig
+	// never sets it; callers use it to install instrumentation, and tests use
+	// it to simulate transport and response-body failures.
+	Transport http.RoundTripper
 }
 
 func LoadConfig(getenv func(string) string) (Config, error) {
@@ -80,19 +85,22 @@ func (cfg Config) ValidateVerify() error {
 	if cfg.StoreID == "" {
 		return fmt.Errorf("OPENFGA_STORE_ID is required for verify")
 	}
-	if !safeOpaqueIdentifier(cfg.StoreID) {
+	if !SafeOpaqueIdentifier(cfg.StoreID) {
 		return fmt.Errorf("OPENFGA_STORE_ID must not contain whitespace or control characters")
 	}
 	if cfg.ModelID == "" {
 		return fmt.Errorf("OPENFGA_MODEL_ID is required for verify")
 	}
-	if !safeOpaqueIdentifier(cfg.ModelID) {
+	if !SafeOpaqueIdentifier(cfg.ModelID) {
 		return fmt.Errorf("OPENFGA_MODEL_ID must not contain whitespace or control characters")
 	}
 	return nil
 }
 
-func safeOpaqueIdentifier(value string) bool {
+// SafeOpaqueIdentifier reports whether value is usable as an OpenFGA store,
+// model, or continuation-token identifier: non-empty and free of whitespace
+// and control characters, so it cannot corrupt a URL path or a request body.
+func SafeOpaqueIdentifier(value string) bool {
 	return value != "" && strings.IndexFunc(value, func(character rune) bool {
 		return unicode.IsSpace(character) || unicode.IsControl(character)
 	}) == -1

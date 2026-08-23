@@ -469,9 +469,6 @@ func (testAuthorizer) Check(context.Context, authz.CheckRequest) (authz.CheckRes
 func (testAuthorizer) BatchCheck(context.Context, authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
 	return authz.BatchCheckResult{}, nil
 }
-func (testAuthorizer) ListAccessibleStacks(context.Context, authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
-	return authz.ListAccessibleStacksResult{}, nil
-}
 func (testAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
 	return authz.ListGrantsResult{}, nil
 }

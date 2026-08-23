@@ -10,6 +10,7 @@ import (
 	"github.com/vishu42/tflive/internal/activities"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/artifacts"
+	"github.com/vishu42/tflive/internal/authorizer"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/openfga"
@@ -135,7 +136,7 @@ func defaultWorkerDependencies() workerDependencies {
 			return temporal.NewDispatcher(temporalClient, taskQueue)
 		},
 		newAuthorizationAdapter: func(cfg config.OpenFGAConfig) (workerAuthorizer, error) {
-			return openfga.NewAuthorizationAdapter(openfga.Config{APIURL: cfg.APIURL, StoreID: cfg.StoreID, ModelID: cfg.ModelID, APIToken: cfg.APIToken.Value(), HTTPTimeout: cfg.RequestTimeout})
+			return authorizer.New(openfga.Config{APIURL: cfg.APIURL, StoreID: cfg.StoreID, ModelID: cfg.ModelID, APIToken: cfg.APIToken.Value(), HTTPTimeout: cfg.RequestTimeout})
 		},
 		newQueueController: func(store workerStore, authorizer workerAuthorizer, dispatcher app.WorkflowDispatcher) (queueController, error) {
 			registry, err := newQueueRegistry(store, authorizer, dispatcher)

@@ -8,6 +8,20 @@
 
 **Tech Stack:** Go 1.25, standard library `testing`, `net/http/httptest` for adapter tests. No new dependencies.
 
+> **Paths moved after this plan was executed.** `internal/openfga` was split so
+> the vendor package imports nothing from tflive. The step-by-step instructions
+> below name the files as they were at the time and are left unedited, being a
+> record of work already done. Current locations:
+>
+> | This plan says | Now |
+> |---|---|
+> | `internal/openfga/authorization_adapter.go` | `internal/authorizer/adapter.go` |
+> | `internal/openfga/authorization_adapter_test.go` | `internal/authorizer/adapter_test.go` |
+>
+> The OpenFGA client kept `internal/openfga` and gained typed relationship
+> methods (`Check`, `BatchCheck`, `Read`, `Write`); the adapter that implements
+> `authz.Authorizer` moved out to `internal/authorizer`.
+
 **Spec:** `docs/superpowers/specs/2026-08-22-authz-port-generalization-design.md`
 (Background reasoning, including the reversals: `docs/superpowers/specs/2026-08-22-authz-port-generalization-considerations.md`)
 

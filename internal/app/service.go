@@ -554,7 +554,7 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 	}
 	// Validate the identity now so a malformed subject fails the request rather
 	// than the handler, where it would retry forever.
-	if _, err := authz.SubjectFromKeycloakSub(principal.Subject); err != nil {
+	if _, err := authz.SubjectFromOIDCSub(principal.Subject); err != nil {
 		return traits.Stack{}, fmt.Errorf("create owner subject: %w", err)
 	}
 
@@ -577,7 +577,7 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		CreatedBy:            actor,
 		CreatedAt:            service.Clock.Now(),
 	}
-	if _, err := authz.StackFromID(string(stack.ID)); errors.Is(err, authz.ErrInvalidInput) {
+	if _, err := authz.ObjectFromID(authz.TypeStack, string(stack.ID)); errors.Is(err, authz.ErrInvalidInput) {
 		return traits.Stack{}, fmt.Errorf("%w: generated stack ID is invalid", authz.ErrMalformedResponse)
 	} else if err != nil {
 		return traits.Stack{}, fmt.Errorf("create owner stack: %w", err)
@@ -639,7 +639,7 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 		return traits.StackTemplate{}, err
 	}
 
-	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionOperate, ErrForbidden); err != nil {
+	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanOperate, ErrForbidden); err != nil {
 		service.auditError(ctx, traits.SecurityAuditEvent{
 			ActorSubject: string(actor),
 			Action:       traits.AuditActionFailedAccessAttempt,
@@ -703,7 +703,7 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 		return traits.TemplateRun{}, err
 	}
 
-	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionOperate, ErrForbidden)
+	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.RelationCanOperate, ErrForbidden)
 	if err != nil {
 		service.auditError(ctx, traits.SecurityAuditEvent{
 			ActorSubject: string(actor),
@@ -817,7 +817,7 @@ func (service *Service) CreateCredential(ctx context.Context, command CreateCred
 	switch command.Scope {
 	case traits.CredentialScopeStack:
 		stackID = command.StackID
-		if err := authorizeStack(ctx, service.Authorizer, stackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+		if err := authorizeStack(ctx, service.Authorizer, stackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
 			return CredentialMetadata{}, err
 		}
 	case traits.CredentialScopeStackTemplate:
@@ -827,7 +827,7 @@ func (service *Service) CreateCredential(ctx context.Context, command CreateCred
 			return CredentialMetadata{}, err
 		}
 		stackID = stackTemplate.StackID
-		if err := authorizeStack(ctx, service.Authorizer, stackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+		if err := authorizeStack(ctx, service.Authorizer, stackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
 			return CredentialMetadata{}, err
 		}
 	default:
@@ -870,10 +870,10 @@ func (service *Service) ListCredentials(ctx context.Context, command ListCredent
 		if err != nil {
 			return nil, err
 		}
-		if err := authorizeStack(ctx, service.Authorizer, stackTemplate.StackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+		if err := authorizeStack(ctx, service.Authorizer, stackTemplate.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
 			return nil, err
 		}
-	} else if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+	} else if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
 		return nil, err
 	}
 	credentials, err := service.Credentials.ListCredentials(ctx, command.TenantID, command.Scope, ownerID)
@@ -910,7 +910,7 @@ func (service *Service) DeleteCredential(ctx context.Context, command DeleteCred
 	} else {
 		return fmt.Errorf("%w: credential scope is required", ErrInvalidCommand)
 	}
-	if err := authorizeStack(ctx, service.Authorizer, stackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+	if err := authorizeStack(ctx, service.Authorizer, stackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
 		return err
 	}
 	scope := traits.CredentialScopeStack
@@ -959,7 +959,7 @@ func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command U
 		return traits.StackTemplate{}, err
 	}
 
-	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionOperate, ErrForbidden)
+	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.RelationCanOperate, ErrForbidden)
 	if err != nil {
 		service.auditError(ctx, traits.SecurityAuditEvent{
 			ActorSubject: string(actor),
@@ -1003,7 +1003,7 @@ func (service *Service) UpgradeStackTemplate(ctx context.Context, command Upgrad
 		return traits.StackTemplate{}, err
 	}
 
-	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionOperate, ErrForbidden)
+	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.RelationCanOperate, ErrForbidden)
 	if err != nil {
 		service.auditError(ctx, traits.SecurityAuditEvent{
 			ActorSubject: string(actor),
@@ -1086,7 +1086,7 @@ func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (
 	if err := validateGetStackCommand(command); err != nil {
 		return StackView{}, err
 	}
-	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionView, ErrNotFound); err != nil {
+	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanView, ErrNotFound); err != nil {
 		if !service.creatorMayViewProvisioningStack(ctx, command, err) {
 			return StackView{}, err
 		}
@@ -1243,22 +1243,22 @@ func (service *Service) ListStackGrants(ctx context.Context, command ListStackGr
 	if _, err := requireAuthorizer(ctx, service.Authorizer); err != nil {
 		return ListStackGrantsResult{}, err
 	}
-	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
 		return ListStackGrantsResult{}, err
 	}
-	stack, err := authz.StackFromID(string(command.StackID))
+	object, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
 	if err != nil {
 		return ListStackGrantsResult{}, fmt.Errorf("list grants stack: %w", err)
 	}
-	result, err := service.Authorizer.ListGrants(ctx, authz.ListGrantsRequest{Stack: stack})
+	result, err := service.Authorizer.ListGrants(ctx, authz.ListGrantsRequest{Object: object})
 	if err != nil {
 		return ListStackGrantsResult{}, err
 	}
 
 	grants := make([]GrantView, 0, len(result.Grants))
 	for _, grant := range result.Grants {
-		userSub := strings.TrimPrefix(grant.Subject().String(), "user:")
-		role := grant.Role().String()
+		userSub := grant.Subject().ID()
+		role := grant.Relation().String()
 		gv := GrantView{UserSub: userSub, Role: role}
 
 		if service.UserDirectory != nil {
@@ -1284,8 +1284,16 @@ func displayNameFromUser(user DirectoryUser) string {
 	return user.Username
 }
 
-func (service *Service) listGrantsForStack(ctx context.Context, stack authz.Stack) (authz.ListGrantsResult, error) {
-	return service.Authorizer.ListGrants(ctx, authz.ListGrantsRequest{Stack: stack})
+// listGrantsForStack reads every direct role assignment on one stack. The
+// adapter rejects the entire read response — rather than filtering out the
+// offending tuple — if it contains a structural tuple such as a parent edge,
+// since those are not grants.
+//
+//	stack:abc with alice=owner, bob=viewer
+//	  → ListGrantsResult{Grants: [{user:alice, owner}, {user:bob, viewer}]}, nil
+//	stack:abc with no grants  → ListGrantsResult{}, nil
+func (service *Service) listGrantsForStack(ctx context.Context, object authz.Object) (authz.ListGrantsResult, error) {
+	return service.Authorizer.ListGrants(ctx, authz.ListGrantsRequest{Object: object})
 }
 
 func (service *Service) AssignStackRole(ctx context.Context, command AssignStackRoleCommand) (GrantView, error) {
@@ -1293,13 +1301,13 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 	if err != nil {
 		return GrantView{}, err
 	}
-	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
 		return GrantView{}, err
 	}
 
 	// Reject an unknown role here rather than letting the handler retry it
 	// forever against a payload it can never parse.
-	if _, err := authz.RoleFromDirectRelation(command.Role); err != nil {
+	if _, err := authz.GrantRelation(command.Role); err != nil {
 		return GrantView{}, fmt.Errorf("%w: %v", ErrInvalidCommand, err)
 	}
 
@@ -1314,16 +1322,16 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 		}
 	}
 
-	stack, err := authz.StackFromID(string(command.StackID))
+	object, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
 	if err != nil {
 		return GrantView{}, fmt.Errorf("assign role stack: %w", err)
 	}
-	subject, err := authz.SubjectFromKeycloakSub(command.UserSub)
+	subject, err := authz.SubjectFromOIDCSub(command.UserSub)
 	if err != nil {
 		return GrantView{}, fmt.Errorf("%w: invalid user sub", ErrInvalidCommand)
 	}
 
-	currentGrants, err := service.listGrantsForStack(ctx, stack)
+	currentGrants, err := service.listGrantsForStack(ctx, object)
 	if err != nil {
 		return GrantView{}, err
 	}
@@ -1331,7 +1339,7 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 	var currentRole string
 	for _, g := range currentGrants.Grants {
 		if g.Subject().String() == subject.String() {
-			currentRole = g.Role().String()
+			currentRole = g.Relation().String()
 			break
 		}
 	}
@@ -1339,7 +1347,7 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 	if currentRole == "owner" && command.Role != "owner" {
 		ownerCount := 0
 		for _, g := range currentGrants.Grants {
-			if g.Role() == authz.RoleOwner {
+			if g.Relation() == authz.RelationOwner {
 				ownerCount++
 			}
 		}
@@ -1391,23 +1399,23 @@ func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStack
 	if err != nil {
 		return err
 	}
-	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.PermissionManageAccess, ErrForbidden); err != nil {
+	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
 		return err
 	}
 
-	stack, err := authz.StackFromID(string(command.StackID))
+	object, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
 	if err != nil {
 		return fmt.Errorf("revoke role stack: %w", err)
 	}
 	if service.Work == nil {
 		return fmt.Errorf("%w: unit of work not configured", authz.ErrUnavailable)
 	}
-	subject, err := authz.SubjectFromKeycloakSub(command.UserSub)
+	subject, err := authz.SubjectFromOIDCSub(command.UserSub)
 	if err != nil {
 		return fmt.Errorf("%w: invalid user sub", ErrInvalidCommand)
 	}
 
-	currentGrants, err := service.listGrantsForStack(ctx, stack)
+	currentGrants, err := service.listGrantsForStack(ctx, object)
 	if err != nil {
 		return err
 	}
@@ -1415,11 +1423,11 @@ func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStack
 	var targetRole string
 	ownerCount := 0
 	for _, g := range currentGrants.Grants {
-		if g.Role() == authz.RoleOwner {
+		if g.Relation() == authz.RelationOwner {
 			ownerCount++
 		}
 		if g.Subject().String() == subject.String() {
-			targetRole = g.Role().String()
+			targetRole = g.Relation().String()
 		}
 	}
 
@@ -1473,7 +1481,7 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 		return err
 	}
 
-	_, err = service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionApprove, ErrForbidden)
+	_, err = service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.RelationCanApprove, ErrForbidden)
 	if err != nil {
 		return err
 	}
@@ -1531,7 +1539,7 @@ func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand)
 		return err
 	}
 
-	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionOperate, ErrForbidden); err != nil {
+	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.RelationCanOperate, ErrForbidden); err != nil {
 		return err
 	}
 	cancellation := traits.TemplateRunCancellation{
@@ -1577,7 +1585,7 @@ func (service *Service) GetTemplateRun(ctx context.Context, command GetTemplateR
 		return traits.TemplateRun{}, err
 	}
 
-	run, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionView, ErrNotFound)
+	run, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.RelationCanView, ErrNotFound)
 	if err != nil {
 		return traits.TemplateRun{}, fmt.Errorf("get template run: %w", err)
 	}
@@ -1592,7 +1600,7 @@ func (service *Service) ListTemplateRuns(ctx context.Context, command ListTempla
 		return nil, err
 	}
 
-	if _, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.PermissionView, ErrNotFound); err != nil {
+	if _, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.RelationCanView, ErrNotFound); err != nil {
 		return nil, fmt.Errorf("list template runs: %w", err)
 	}
 
@@ -1613,7 +1621,7 @@ func (service *Service) GetTemplateRunLog(ctx context.Context, command GetTempla
 		return nil, err
 	}
 
-	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionView, ErrNotFound); err != nil {
+	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.RelationCanView, ErrNotFound); err != nil {
 		return nil, err
 	}
 	log, err := service.TemplateRunLogMetadata.GetTemplateRunLog(ctx, command.TenantID, command.RunID, command.Phase)
@@ -1641,7 +1649,7 @@ func (service *Service) ListTemplateRunLogs(ctx context.Context, command ListTem
 		return nil, err
 	}
 
-	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.PermissionView, ErrNotFound); err != nil {
+	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.RelationCanView, ErrNotFound); err != nil {
 		return nil, err
 	}
 

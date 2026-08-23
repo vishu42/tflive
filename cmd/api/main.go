@@ -16,6 +16,7 @@ import (
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/artifacts"
 	"github.com/vishu42/tflive/internal/authn"
+	"github.com/vishu42/tflive/internal/authorizer"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/keycloak"
@@ -112,7 +113,7 @@ func defaultAPIDependencies() apiDependencies {
 		newVerifier: func(ctx context.Context, cfg authn.OIDCVerifierConfig) (tokenVerifier, error) {
 			return authn.NewOIDCVerifier(ctx, cfg)
 		},
-		newAuthorizer:  func(cfg openfga.Config) (authz.Authorizer, error) { return openfga.NewAuthorizationAdapter(cfg) },
+		newAuthorizer:  func(cfg openfga.Config) (authz.Authorizer, error) { return authorizer.New(cfg) },
 		listenAndServe: listenAndServe,
 	}
 }

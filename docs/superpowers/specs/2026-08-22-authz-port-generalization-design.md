@@ -102,18 +102,29 @@ func (object Object) Valid() bool
 ```
 
 ```go
-// Subject is an Object in the tuple's user slot.
+// Subject is the tuple's user slot: who is acting.
 type Subject struct {
-	object Object
-	// A future `relation string` field carries usersets ("group:eng#member")
-	// with no restructuring. Out of scope — decision 10.
+	identifier // shared {objectType, id}; Object embeds the same
 }
 
 func SubjectFromOIDCSub(sub string) (Subject, error) // user:<sub>
 func (subject Subject) Type() ObjectType
+func (subject Subject) ID() string
 func (subject Subject) String() string
 func (subject Subject) Valid() bool
 ```
+
+> **Superseded as built.** `Subject` was specified above as wrapping `Object`,
+> so that a future `relation` field could carry usersets ("group:eng#member")
+> without restructuring. As implemented they are siblings over a shared
+> unexported `identifier`, because siblings give the same extension path —
+> `Subject` gains the field, `Object` is untouched — without the cost the
+> wrapping carried: `Subject.Valid()` delegated to `Object.Valid()`, so nothing
+> stopped a resource type occupying the user slot. `Subject.Valid()` now checks
+> a `subjectTypes` allowlist, which is the constraint the separate type exists
+> to carry. `identifier` also stores `{objectType, id}` rather than the rendered
+> `"type:id"`, which is what makes `ID()` possible and removed a
+> `strings.TrimPrefix(…, "user:")` from `internal/app`.
 
 The opaque unexported field is the whole enforcement mechanism, and it is worth
 one line: with `type Object string`, `Object("garbage")` compiles and validation
@@ -255,10 +266,35 @@ translation left to get wrong.
 | `ListAccessibleStacks` (:99–146) | deleted |
 | `BatchCheck` (:57) | chunks at 50 — §5 |
 
-`grantFromReadTuple` parsing through `GrantRelation` means a stored `parent`
-tuple read back by `ListGrants` is rejected as an invalid tuple rather than
-surfacing as a grant. That is correct — `ListGrants` answers "who has access,"
-and a parent edge is not access — and it starts mattering at #141.
+`grantFromReadTuple` refusing a structural relation means a stored `parent`
+tuple read back by `ListGrants` never surfaces as a grant. That is correct —
+`ListGrants` answers "who has access," and a parent edge is not access — and it
+starts mattering at #141.
+
+> **Superseded as built.** The wording above did not distinguish *skip the
+> tuple* from *fail the whole call*, and as first written it did the latter:
+> one `parent` edge made `ListGrants` return `ErrMalformedResponse` for that
+> stack. Since #141 writes such an edge on every stack, and `GrantStackOwner`
+> reads grants before writing to stay idempotent on replay, that would have
+> hung stack creation rather than merely breaking the grants list.
+>
+> As built, `grantFromReadTuple` classifies rather than refuses, and the test is
+> storability, not grantability:
+>
+> - **skipped** — a relation OpenFGA stores that is not access (`parent`,
+>   `root`), or a non-`user:` subject. The tuple legitimately exists; "who has
+>   access" is still completely answered without it.
+> - **fails the call** — a nil key, an object other than the one requested, a
+>   non-canonical subject, or a relation OpenFGA would never have stored
+>   (`can_view` and the other derived relations declare no
+>   `directly_related_user_types`, so the write is rejected). Being handed one
+>   of these means the store or the response cannot be trusted, and skipping it
+>   would return an ordinary-looking list with the anomaly silently removed.
+>
+> The distinction matters because the grants list is not only displayed:
+> `authz.grant_handler` computes deletes from it, and `AssignStackRole` and
+> `RevokeStackRole` diff against it. A silently shortened list is a wrong
+> premise for a mutation.
 
 ## 5. Chunking — the live 13-stack bug ([#220](https://github.com/vishu42/tflive/issues/220))
 

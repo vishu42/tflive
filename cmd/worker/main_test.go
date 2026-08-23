@@ -499,9 +499,6 @@ func (*recordingWorkerAuthorizer) Check(context.Context, authz.CheckRequest) (au
 func (*recordingWorkerAuthorizer) BatchCheck(context.Context, authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
 	return authz.BatchCheckResult{}, nil
 }
-func (*recordingWorkerAuthorizer) ListAccessibleStacks(context.Context, authz.ListAccessibleStacksRequest) (authz.ListAccessibleStacksResult, error) {
-	return authz.ListAccessibleStacksResult{}, nil
-}
 func (*recordingWorkerAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
 	return authz.ListGrantsResult{}, nil
 }

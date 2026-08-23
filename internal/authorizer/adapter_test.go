@@ -1,4 +1,4 @@
-package openfga
+package authorizer
 
 import (
 	"context"
@@ -6,15 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/bits"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/openfga"
 )
 
 func TestAuthorizationAdapterCheckUsesConfiguredModelAndReturnsDecision(t *testing.T) {
@@ -80,13 +84,10 @@ func TestAuthorizationAdapterCheckDistinguishesDenialAndFailures(t *testing.T) {
 }
 
 func TestAuthorizationAdapterCheckDeadlineMapsToTimeoutHTTPStatus(t *testing.T) {
-	adapter := adapterForResponse(t, http.StatusOK, "application/json", `{"allowed":true}`)
-	adapter.client.timeout = 10 * time.Millisecond
-	adapter.client.http.Timeout = adapter.client.timeout
-	adapter.client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	adapter := adapterForTransport(t, 10*time.Millisecond, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		<-request.Context().Done()
 		return nil, request.Context().Err()
-	})
+	}))
 
 	_, err := adapter.Check(context.Background(), viewCheck(t))
 	if !errors.Is(err, authz.ErrTimeout) {
@@ -124,8 +125,7 @@ func TestAuthorizationAdapterCheckClassifiesTransportAndBodyReadFailuresAsUnavai
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			adapter := adapterForResponse(t, http.StatusOK, "application/json", `{"allowed":true}`)
-			adapter.client.http.Transport = test.transport
+			adapter := adapterForTransport(t, time.Second, test.transport)
 
 			result, err := adapter.Check(context.Background(), viewCheck(t))
 			if !errors.Is(err, authz.ErrUnavailable) {
@@ -166,9 +166,9 @@ func TestAuthorizationAdapterCheckDoesNotLeakUpstreamHTTPResponse(t *testing.T) 
 }
 
 func TestNewAuthorizationAdapterRejectsNilAPIURL(t *testing.T) {
-	_, err := NewAuthorizationAdapter(Config{StoreID: "store-id", ModelID: "model-id"})
+	_, err := New(openfga.Config{StoreID: "store-id", ModelID: "model-id"})
 	if err == nil || !strings.Contains(err.Error(), "API URL") {
-		t.Fatalf("NewAuthorizationAdapter() error = %v, want API URL validation error", err)
+		t.Fatalf("New() error = %v, want API URL validation error", err)
 	}
 }
 
@@ -222,44 +222,6 @@ func TestAuthorizationAdapterRejectsInvalidRequests(t *testing.T) {
 	}
 }
 
-func TestAuthorizationAdapterListAccessibleStacksWithConfiguredModel(t *testing.T) {
-	adapter, requests := testAuthorizationAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/stores/store-id/list-objects" {
-			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
-		}
-		var body struct {
-			AuthorizationModelID string `json:"authorization_model_id"`
-			Type                 string `json:"type"`
-			Relation             string `json:"relation"`
-			User                 string `json:"user"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		if body.AuthorizationModelID != "model-id" || body.Type != "stack" || body.Relation != "can_view" || body.User != "user:alice" {
-			t.Fatalf("body = %#v", body)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"objects":["stack:one","stack:two"]}`)
-	})
-
-	result, err := adapter.ListAccessibleStacks(context.Background(), authz.ListAccessibleStacksRequest{Subject: mustSubject(t, "alice"), Permission: authz.PermissionView})
-	want := authz.ListAccessibleStacksResult{Stacks: []authz.Stack{mustStack(t, "one"), mustStack(t, "two")}}
-	if err != nil || !reflect.DeepEqual(result, want) || *requests != 1 {
-		t.Fatalf("ListAccessibleStacks() = %#v, %v", result, err)
-	}
-}
-
-func TestAuthorizationAdapterRejectsInvalidListObjects(t *testing.T) {
-	for _, body := range []string{`{"objects":["stack:"]}`, `{"objects":["user:alice"]}`, `{"objects":["stack:one","stack:one"]}`, `{`, `{}`} {
-		adapter := adapterForResponse(t, http.StatusOK, "application/json", body)
-		_, err := adapter.ListAccessibleStacks(context.Background(), authz.ListAccessibleStacksRequest{Subject: mustSubject(t, "alice"), Permission: authz.PermissionView})
-		if !errors.Is(err, authz.ErrMalformedResponse) {
-			t.Fatalf("body %q error = %v", body, err)
-		}
-	}
-}
-
 func TestAuthorizationAdapterListsOnlyDirectRoleGrantsAcrossPages(t *testing.T) {
 	var requests *int
 	adapter, requests := testAuthorizationAdapter(t, func(w http.ResponseWriter, r *http.Request) {
@@ -296,10 +258,10 @@ func TestAuthorizationAdapterListsOnlyDirectRoleGrantsAcrossPages(t *testing.T) 
 		}
 	})
 
-	result, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Stack: mustStack(t, "one")})
+	result, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")})
 	want := authz.ListGrantsResult{Grants: []authz.Grant{
-		mustGrant(t, "alice", "one", authz.RoleOwner),
-		mustGrant(t, "bob", "one", authz.RoleViewer),
+		mustGrant(t, "alice", "one", authz.RelationOwner),
+		mustGrant(t, "bob", "one", authz.RelationViewer),
 	}}
 	if err != nil || !reflect.DeepEqual(result, want) || *requests != 2 {
 		t.Fatalf("ListGrants() = %#v, %v", result, err)
@@ -309,12 +271,12 @@ func TestAuthorizationAdapterListsOnlyDirectRoleGrantsAcrossPages(t *testing.T) 
 func TestAuthorizationAdapterRejectsMalformedGrantReadPages(t *testing.T) {
 	for _, body := range []string{
 		`{}`,
-		`{"tuples":[{"key":{"user":"user:alice","relation":"can_view","object":"stack:one"}}]}`,
+		`{"tuples":[{"key":{"user":"user:al#ce","relation":"owner","object":"stack:one"}}]}`,
 		`{"tuples":[{"key":{"user":"user:alice","relation":"owner","object":"stack:other"}}]}`,
 		`{"tuples":[{"key":{"user":"user:alice","relation":"owner","object":"stack:one"}},{"key":{"user":"user:alice","relation":"owner","object":"stack:one"}}]}`,
 	} {
 		adapter := adapterForResponse(t, http.StatusOK, "application/json", body)
-		_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Stack: mustStack(t, "one")})
+		_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")})
 		if !errors.Is(err, authz.ErrMalformedResponse) {
 			t.Fatalf("body %q error = %v", body, err)
 		}
@@ -338,7 +300,7 @@ func TestAuthorizationAdapterRejectsRepeatedGrantReadTokens(t *testing.T) {
 		}
 	})
 
-	_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Stack: mustStack(t, "one")})
+	_, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")})
 	if !errors.Is(err, authz.ErrMalformedResponse) {
 		t.Fatalf("ListGrants() error = %v", err)
 	}
@@ -411,7 +373,7 @@ func TestAuthorizationAdapterBoundsConfirmationBatchChecks(t *testing.T) {
 	const maxChecksPerRequest = 25
 	grants := make([]authz.Grant, maxChecksPerRequest+1)
 	for index := range grants {
-		grants[index] = mustGrant(t, fmt.Sprintf("user-%d", index), "one", authz.RoleOwner)
+		grants[index] = mustGrant(t, fmt.Sprintf("user-%d", index), "one", authz.RelationOwner)
 	}
 	mutation, err := authz.NewMutation(grants, true)
 	if err != nil {
@@ -521,10 +483,10 @@ func assertRelationshipWrite(t *testing.T, r *http.Request, expectedWrite bool) 
 	var body struct {
 		AuthorizationModelID string `json:"authorization_model_id"`
 		Writes               *struct {
-			TupleKeys []tupleKey `json:"tuple_keys"`
+			TupleKeys []openfga.TupleKey `json:"tuple_keys"`
 		} `json:"writes"`
 		Deletes *struct {
-			TupleKeys []tupleKey `json:"tuple_keys"`
+			TupleKeys []openfga.TupleKey `json:"tuple_keys"`
 		} `json:"deletes"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -539,13 +501,13 @@ func assertRelationshipWrite(t *testing.T, r *http.Request, expectedWrite bool) 
 	if !expectedWrite && (body.Deletes == nil || body.Writes != nil) {
 		t.Fatalf("body = %#v", body)
 	}
-	var tuples []tupleKey
+	var tuples []openfga.TupleKey
 	if expectedWrite {
 		tuples = body.Writes.TupleKeys
 	} else {
 		tuples = body.Deletes.TupleKeys
 	}
-	if !reflect.DeepEqual(tuples, []tupleKey{{User: "user:alice", Relation: "owner", Object: "stack:one"}}) {
+	if !reflect.DeepEqual(tuples, []openfga.TupleKey{{User: "user:alice", Relation: "owner", Object: "stack:one"}}) {
 		t.Fatalf("tuple keys = %#v", tuples)
 	}
 }
@@ -559,21 +521,21 @@ func assertRelationshipConfirmation(t *testing.T, r *http.Request) {
 		AuthorizationModelID string `json:"authorization_model_id"`
 		Consistency          string `json:"consistency"`
 		Checks               []struct {
-			TupleKey      tupleKey `json:"tuple_key"`
-			CorrelationID string   `json:"correlation_id"`
+			TupleKey      openfga.TupleKey `json:"tuple_key"`
+			CorrelationID string           `json:"correlation_id"`
 		} `json:"checks"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body.AuthorizationModelID != "model-id" || body.Consistency != "HIGHER_CONSISTENCY" || len(body.Checks) != 1 || body.Checks[0].CorrelationID != "0" || body.Checks[0].TupleKey != (tupleKey{User: "user:alice", Relation: "owner", Object: "stack:one"}) {
+	if body.AuthorizationModelID != "model-id" || body.Consistency != "HIGHER_CONSISTENCY" || len(body.Checks) != 1 || body.Checks[0].CorrelationID != "0" || body.Checks[0].TupleKey != (openfga.TupleKey{User: "user:alice", Relation: "owner", Object: "stack:one"}) {
 		t.Fatalf("body = %#v", body)
 	}
 }
 
 func ownerGrant(t *testing.T) authz.Grant {
 	t.Helper()
-	return mustGrant(t, "alice", "one", authz.RoleOwner)
+	return mustGrant(t, "alice", "one", authz.RelationOwner)
 }
 
 func mutationForGrant(t *testing.T, grant authz.Grant, confirm bool) authz.Mutation {
@@ -585,7 +547,7 @@ func mutationForGrant(t *testing.T, grant authz.Grant, confirm bool) authz.Mutat
 	return mutation
 }
 
-func testAuthorizationAdapter(t *testing.T, handler http.HandlerFunc) (*AuthorizationAdapter, *int) {
+func testAuthorizationAdapter(t *testing.T, handler http.HandlerFunc) (*Adapter, *int) {
 	t.Helper()
 	requests := new(int)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -597,14 +559,14 @@ func testAuthorizationAdapter(t *testing.T, handler http.HandlerFunc) (*Authoriz
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := NewAuthorizationAdapter(Config{APIURL: parsed, StoreID: "store-id", ModelID: "model-id", HTTPTimeout: time.Second})
+	adapter, err := New(openfga.Config{APIURL: parsed, StoreID: "store-id", ModelID: "model-id", HTTPTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return adapter, requests
 }
 
-func adapterForResponse(t *testing.T, status int, contentType, body string) *AuthorizationAdapter {
+func adapterForResponse(t *testing.T, status int, contentType, body string) *Adapter {
 	t.Helper()
 	adapter, _ := testAuthorizationAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentType)
@@ -614,10 +576,32 @@ func adapterForResponse(t *testing.T, status int, contentType, body string) *Aut
 	return adapter
 }
 
-func adapterForHandler(t *testing.T, handler http.HandlerFunc) *AuthorizationAdapter {
+func adapterForHandler(t *testing.T, handler http.HandlerFunc) *Adapter {
 	t.Helper()
 	adapter, _ := testAuthorizationAdapter(t, handler)
 	return adapter
+}
+
+// adapterForTransport builds an adapter whose requests are served by transport
+// instead of a live test server, so transport and body-read failures can be
+// simulated without reaching into the client.
+func adapterForTransport(t *testing.T, timeout time.Duration, transport http.RoundTripper) *Adapter {
+	t.Helper()
+	parsed, err := url.Parse("http://openfga.invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(openfga.Config{APIURL: parsed, StoreID: "store-id", ModelID: "model-id", HTTPTimeout: timeout, Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return adapter
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
 }
 
 type errorReader struct{}
@@ -628,49 +612,134 @@ func (errorReader) Read([]byte) (int, error) {
 
 func viewCheck(t *testing.T) authz.CheckRequest {
 	t.Helper()
-	user, err := authz.SubjectFromKeycloakSub("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	stack, err := authz.StackFromID("one")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return authz.CheckRequest{Subject: user, Stack: stack, Permission: authz.PermissionView}
+	return authz.CheckRequest{Subject: mustSubject(t, "alice"), Object: mustStack(t, "one"), Relation: authz.RelationCanView}
 }
 
 func operateCheck(t *testing.T) authz.CheckRequest {
 	t.Helper()
 	check := viewCheck(t)
-	check.Permission = authz.PermissionOperate
+	check.Relation = authz.RelationCanOperate
 	return check
 }
 
+// mustSubject builds a Subject or fails the test.
+//
+//	mustSubject(t, "alice")  → Subject{"user:alice"}
+//	mustSubject(t, "a*b")    → t.Fatal
 func mustSubject(t *testing.T, sub string) authz.Subject {
 	t.Helper()
-	subject, err := authz.SubjectFromKeycloakSub(sub)
+	subject, err := authz.SubjectFromOIDCSub(sub)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return subject
 }
 
-func mustStack(t *testing.T, id string) authz.Stack {
+// mustObject builds an Object of any type, or fails the test.
+//
+//	mustObject(t, authz.TypeStack, "one")  → Object{"stack:one"}
+//	mustObject(t, authz.TypeUser, "alice") → Object{"user:alice"}
+func mustObject(t *testing.T, objectType authz.ObjectType, id string) authz.Object {
 	t.Helper()
-	stack, err := authz.StackFromID(id)
+	object, err := authz.ObjectFromID(objectType, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return stack
+	return object
 }
 
-func mustGrant(t *testing.T, subject, stack string, role authz.Role) authz.Grant {
+// mustStack is mustObject fixed to TypeStack, which most tests want.
+//
+//	mustStack(t, "one")  → Object{"stack:one"}
+func mustStack(t *testing.T, id string) authz.Object {
 	t.Helper()
-	grant, err := authz.NewGrant(mustSubject(t, subject), mustStack(t, stack), role)
+	return mustObject(t, authz.TypeStack, id)
+}
+
+// mustGrant builds a Grant from bare IDs, or fails the test.
+//
+//	mustGrant(t, "alice", "one", authz.RelationOwner)
+//	  → Grant{user:alice, stack:one, owner}
+//	mustGrant(t, "alice", "one", authz.RelationCanView)  → t.Fatal (not grantable)
+func mustGrant(t *testing.T, subject, stack string, relation authz.Relation) authz.Grant {
+	t.Helper()
+	grant, err := authz.NewGrant(mustSubject(t, subject), mustStack(t, stack), relation)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return grant
+}
+
+// Pins that a tuple which is not a grant is skipped rather than failing the
+// call, while a tuple that cannot be trusted still fails it. #141 stores a
+// parent edge on every stack; before this distinction existed, one such edge
+// made ListGrants return ErrMalformedResponse for that stack, which broke
+// GrantStackOwner and with it stack creation.
+func TestListGrantsSkipsNonGrantsButFailsOnUntrustworthyTuples(t *testing.T) {
+	t.Parallel()
+
+	t.Run("structural tuples are skipped, real grants survive", func(t *testing.T) {
+		t.Parallel()
+
+		adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			// Every tuple here is one OpenFGA will store. Only one is access.
+			fmt.Fprint(w, `{"tuples":[`+
+				`{"key":{"user":"platform:tflive","relation":"parent","object":"stack:one"}},`+
+				`{"key":{"user":"user:alice","relation":"parent","object":"stack:one"}},`+
+				`{"key":{"user":"user:alice","relation":"root","object":"stack:one"}},`+
+				`{"key":{"user":"user:alice","relation":"owner","object":"stack:one"}}`+
+				`],"continuation_token":""}`)
+		})
+
+		result, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")})
+		if err != nil {
+			t.Fatalf("ListGrants() error = %v, want nil", err)
+		}
+		want := authz.ListGrantsResult{Grants: []authz.Grant{mustGrant(t, "alice", "one", authz.RelationOwner)}}
+		if !reflect.DeepEqual(result, want) {
+			t.Fatalf("ListGrants() = %#v, want only the owner grant", result)
+		}
+	})
+
+	// The distinction is storability, not grantability. OpenFGA refuses to
+	// store a derived relation -- can_view declares no directly_related_user_
+	// types -- so being handed one means the store is corrupt or the response
+	// is not from the store we think it is. Skipping it would return an
+	// ordinary-looking list that is quietly missing whatever else went wrong.
+	t.Run("a relation OpenFGA would never store fails the call", func(t *testing.T) {
+		t.Parallel()
+
+		for _, relation := range []string{"can_view", "can_manage_access", "nonsense"} {
+			adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"tuples":[{"key":{"user":"user:alice","relation":%q,"object":"stack:one"}}],"continuation_token":""}`, relation)
+			})
+
+			if _, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")}); !errors.Is(err, authz.ErrMalformedResponse) {
+				t.Fatalf("ListGrants() with relation %q error = %v, want ErrMalformedResponse", relation, err)
+			}
+		}
+	})
+
+	// Skipping must not become a blanket tolerance. A tuple for an object we
+	// did not ask about means the provider answered a different question, and
+	// that must still fail closed.
+	t.Run("a tuple for another object still fails the call", func(t *testing.T) {
+		t.Parallel()
+
+		adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"tuples":[`+
+				`{"key":{"user":"platform:tflive","relation":"parent","object":"stack:one"}},`+
+				`{"key":{"user":"user:alice","relation":"owner","object":"stack:other"}}`+
+				`],"continuation_token":""}`)
+		})
+
+		if _, err := adapter.ListGrants(context.Background(), authz.ListGrantsRequest{Object: mustStack(t, "one")}); !errors.Is(err, authz.ErrMalformedResponse) {
+			t.Fatalf("ListGrants() error = %v, want ErrMalformedResponse", err)
+		}
+	})
 }
 
 func TestAuthorizationAdapterListSubjectGrantsFiltersByUserAndObject(t *testing.T) {
@@ -697,9 +766,9 @@ func TestAuthorizationAdapterListSubjectGrantsFiltersByUserAndObject(t *testing.
 
 	result, err := adapter.ListSubjectGrants(context.Background(), authz.ListSubjectGrantsRequest{
 		Subject: mustSubject(t, "alice"),
-		Stack:   mustStack(t, "one"),
+		Object:  mustStack(t, "one"),
 	})
-	want := authz.ListGrantsResult{Grants: []authz.Grant{mustGrant(t, "alice", "one", authz.RoleOwner)}}
+	want := authz.ListGrantsResult{Grants: []authz.Grant{mustGrant(t, "alice", "one", authz.RelationOwner)}}
 	if err != nil || !reflect.DeepEqual(result, want) || *requests != 1 {
 		t.Fatalf("ListSubjectGrants() = %#v, %v (requests %d)", result, err, *requests)
 	}
@@ -713,12 +782,164 @@ func TestAuthorizationAdapterListSubjectGrantsRejectsOtherSubjectsAndInvalidRequ
 
 	if _, err := adapter.ListSubjectGrants(context.Background(), authz.ListSubjectGrantsRequest{
 		Subject: mustSubject(t, "alice"),
-		Stack:   mustStack(t, "one"),
+		Object:  mustStack(t, "one"),
 	}); !errors.Is(err, authz.ErrMalformedResponse) {
 		t.Fatalf("ListSubjectGrants() error = %v, want ErrMalformedResponse", err)
 	}
 
 	if _, err := adapter.ListSubjectGrants(context.Background(), authz.ListSubjectGrantsRequest{}); !errors.Is(err, authz.ErrInvalidInput) {
 		t.Fatalf("ListSubjectGrants() error = %v, want ErrInvalidInput", err)
+	}
+}
+
+// batchCheckWantAllowed returns the deterministic decision the fake
+// batch-check handler in TestBatchCheckChunksAtFiftyAndPreservesOrder
+// answers for check index, and what the test asserts the merged result
+// holds at that index. It follows the parity of index's population count
+// (the Thue-Morse sequence) rather than any fixed-period pattern like
+// index%10, because a period that divides the 50-check chunk size would go
+// unnoticed by a merge bug that misaligns a chunk boundary by exactly that
+// period — the old %10 pattern could not distinguish index i from i+10,
+// i+20, ... within the first, 50-wide chunk.
+//
+//	batchCheckWantAllowed(0)   → false  (popcount 0, even)
+//	batchCheckWantAllowed(1)   → true   (popcount 1, odd)
+//	batchCheckWantAllowed(50)  → true   (popcount 3, odd; the lone check in the second chunk)
+func batchCheckWantAllowed(index int) bool {
+	return bits.OnesCount(uint(index))%2 == 1
+}
+
+// Pins #220. Ordering is asserted as well as chunking, because a merge that
+// loses the caller's positions silently returns another stack's answer. The
+// expected pattern (batchCheckWantAllowed) is per-index rather than
+// periodic so a merge offset wrong by any multiple of the chunk size's
+// divisors cannot alias with the correct answer. The batch sizes are
+// asserted exactly ([50, 1]), not just bounded by 50, so a chunker that
+// split unevenly would also be caught.
+func TestBatchCheckChunksAtFiftyAndPreservesOrder(t *testing.T) {
+	t.Parallel()
+
+	const total = 51
+	var mu sync.Mutex
+	var batchSizes []int
+
+	adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Checks []struct {
+				TupleKey      openfga.TupleKey `json:"tuple_key"`
+				CorrelationID string           `json:"correlation_id"`
+			} `json:"checks"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode batch-check body: %v", err)
+		}
+		mu.Lock()
+		batchSizes = append(batchSizes, len(body.Checks))
+		mu.Unlock()
+
+		// Each check's object encodes its own index (mustStack(t,
+		// fmt.Sprintf("stack-%d", i)) below), so the handler recovers that
+		// index and answers via batchCheckWantAllowed — the same function
+		// the assertion below uses, so a misordered merge produces a
+		// visibly wrong result rather than a coincidentally passing one.
+		results := map[string]any{}
+		for _, check := range body.Checks {
+			suffix := strings.TrimPrefix(check.TupleKey.Object, "stack:stack-")
+			index, err := strconv.Atoi(suffix)
+			if err != nil {
+				t.Errorf("object %q does not encode a check index: %v", check.TupleKey.Object, err)
+				continue
+			}
+			results[check.CorrelationID] = map[string]any{"allowed": batchCheckWantAllowed(index)}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": results})
+	})
+
+	checks := make([]authz.CheckRequest, total)
+	for i := range checks {
+		checks[i] = authz.CheckRequest{
+			Subject:  mustSubject(t, "alice"),
+			Relation: authz.RelationCanView,
+			Object:   mustStack(t, fmt.Sprintf("stack-%d", i)),
+		}
+	}
+
+	result, err := adapter.BatchCheck(context.Background(), authz.BatchCheckRequest{Checks: checks})
+	if err != nil {
+		t.Fatalf("BatchCheck() error = %v", err)
+	}
+	if len(result.Results) != total {
+		t.Fatalf("len(Results) = %d, want %d", len(result.Results), total)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []int{50, 1}; !reflect.DeepEqual(batchSizes, want) {
+		t.Fatalf("upstream batch sizes = %v, want %v", batchSizes, want)
+	}
+
+	for i, decision := range result.Results {
+		wantAllowed := batchCheckWantAllowed(i)
+		if decision.Allowed != wantAllowed {
+			t.Fatalf("Results[%d].Allowed = %t, want %t (ordering lost across chunks)", i, decision.Allowed, wantAllowed)
+		}
+	}
+}
+
+// Pins that a chunk failing after an earlier chunk already succeeded returns
+// ErrUnavailable and the zero BatchCheckResult — not the `result` variable
+// partially filled by the chunk(s) that did succeed. Every error return in
+// BatchCheck already says authz.BatchCheckResult{}, never `result`, but the
+// only multi-chunk test before this one was the happy path, so a change that
+// swapped one of those returns to `result` would have shipped undetected.
+func TestBatchCheckReturnsZeroResultWhenALaterChunkFails(t *testing.T) {
+	t.Parallel()
+
+	const total = 51
+	var mu sync.Mutex
+	requestCount := 0
+
+	adapter := adapterForHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requestCount++
+		n := requestCount
+		mu.Unlock()
+
+		if n == 1 {
+			var body struct {
+				Checks []struct {
+					CorrelationID string `json:"correlation_id"`
+				} `json:"checks"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode batch-check body: %v", err)
+			}
+			results := map[string]any{}
+			for _, check := range body.Checks {
+				results[check.CorrelationID] = map[string]any{"allowed": true}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": results})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	checks := make([]authz.CheckRequest, total)
+	for i := range checks {
+		checks[i] = authz.CheckRequest{
+			Subject:  mustSubject(t, "alice"),
+			Relation: authz.RelationCanView,
+			Object:   mustStack(t, fmt.Sprintf("stack-%d", i)),
+		}
+	}
+
+	result, err := adapter.BatchCheck(context.Background(), authz.BatchCheckRequest{Checks: checks})
+	if !errors.Is(err, authz.ErrUnavailable) {
+		t.Fatalf("BatchCheck() error = %v, want ErrUnavailable", err)
+	}
+	if !reflect.DeepEqual(result, authz.BatchCheckResult{}) {
+		t.Fatalf("BatchCheck() result = %#v, want the zero value, not the first chunk's partial results", result)
 	}
 }
