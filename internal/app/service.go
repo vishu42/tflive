@@ -1257,7 +1257,7 @@ func (service *Service) ListStackGrants(ctx context.Context, command ListStackGr
 
 	grants := make([]GrantView, 0, len(result.Grants))
 	for _, grant := range result.Grants {
-		userSub := strings.TrimPrefix(grant.Subject().String(), "user:")
+		userSub := grant.Subject().ID()
 		role := grant.Relation().String()
 		gv := GrantView{UserSub: userSub, Role: role}
 

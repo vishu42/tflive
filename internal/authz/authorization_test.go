@@ -94,6 +94,44 @@ func TestSubjectFromOIDCSubIsAUserObject(t *testing.T) {
 	}
 }
 
+// Pins that a resource type cannot occupy the tuple's user slot. This is the
+// constraint Subject exists to carry: while Subject wrapped Object, Valid()
+// delegated to Object.Valid() and a stack passed as an actor. It cannot be
+// reached through SubjectFromOIDCSub, so it is built by literal here on
+// purpose -- the point is that the type refuses it however it was assembled.
+func TestSubjectRejectsANonActorType(t *testing.T) {
+	stackAsSubject := Subject{identifier: identifier{objectType: TypeStack, id: "abc"}}
+	if stackAsSubject.Valid() {
+		t.Fatal("a stack must not validate as a subject")
+	}
+	// The same identifier is a perfectly good object; only the slot differs.
+	if !(Object{identifier: identifier{objectType: TypeStack, id: "abc"}}).Valid() {
+		t.Fatal("stack:abc must still be a valid object")
+	}
+}
+
+// Pins that the bare identifier survives construction, so callers recover the
+// raw OIDC "sub" through ID() rather than by stripping a prefix off String().
+func TestIdentifierKeepsItsBareID(t *testing.T) {
+	subject, err := SubjectFromOIDCSub("kc-sub-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subject.ID() != "kc-sub-123" {
+		t.Fatalf("Subject.ID() = %q, want %q", subject.ID(), "kc-sub-123")
+	}
+	object, err := ObjectFromID(TypeStack, "abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if object.ID() != "abc123" {
+		t.Fatalf("Object.ID() = %q, want %q", object.ID(), "abc123")
+	}
+	if (Object{}).ID() != "" {
+		t.Fatal("zero Object must have an empty ID")
+	}
+}
+
 // Pins that a struct literal cannot bypass SubjectFromOIDCSub's validation.
 func TestZeroSubjectIsInvalid(t *testing.T) {
 	if (Subject{}).Valid() {

@@ -20,59 +20,71 @@ var (
 	ErrWriteUnconfirmed  = errors.New("authorization write unconfirmed")
 )
 
-// Subject is an Object in the tuple's user slot. It wraps Object because on the
-// wire both slots hold "type:id"; a future relation field carries usersets
-// ("group:eng#member") with no restructuring.
-type Subject struct {
-	object Object
+// identifier is the {type, id} pair that both tuple slots share. It stores the
+// parts rather than the rendered "type:id" string, so a holder can recover the
+// bare id without string surgery on the rendered form.
+//
+// Object and Subject embed it as siblings rather than one wrapping the other.
+// They are the same shape but not the same thing: an object is a resource, a
+// subject is who acts on one, and only a subject may later carry a userset
+// relation ("group:eng#member") that is never legal in the object slot.
+type identifier struct {
+	objectType ObjectType
+	id         string
 }
 
-// SubjectFromOIDCSub returns the canonical authorization identifier for sub,
-// the "sub" claim of a verified ID token. This is the one identifier tflive
-// does not originate, so the character rules matter most here.
-//
-//	SubjectFromOIDCSub("00u1b2c3")      → Subject{"user:00u1b2c3"}, nil
-//	SubjectFromOIDCSub("kc-sub-123")    → Subject{"user:kc-sub-123"}, nil
-//	SubjectFromOIDCSub("alice#member")  → Subject{}, ErrInvalidInput  (userset)
-//	SubjectFromOIDCSub("*")             → Subject{}, ErrInvalidInput  (everyone)
-func SubjectFromOIDCSub(sub string) (Subject, error) {
-	object, err := ObjectFromID(TypeUser, sub)
-	if err != nil {
-		return Subject{}, err
+// newIdentifier validates both halves and refuses anything that could change a
+// tuple's meaning rather than merely be malformed. ':' would forge the type
+// prefix, '#' would make the value a userset reference, and '*' would make it
+// the typed wildcard that matches every user. objectType gets the same check as
+// id: callers pass it as an exported ObjectType value, not always an in-package
+// literal, so it must not be able to smuggle a separator into the rendered form.
+func newIdentifier(objectType ObjectType, id string) (identifier, error) {
+	if objectType == "" || !safeTupleToken(string(objectType)) {
+		return identifier{}, fmt.Errorf("%w: invalid object type", ErrInvalidInput)
 	}
-	return Subject{object: object}, nil
+	if !safeTupleToken(id) {
+		return identifier{}, fmt.Errorf("%w: invalid %s identifier", ErrInvalidInput, objectType)
+	}
+	return identifier{objectType: objectType, id: id}, nil
 }
 
-// Type returns the subject's object type. Always TypeUser today, because
-// SubjectFromOIDCSub is the only constructor and it always builds one; that is
-// a fact about today's one call site, not something this method enforces.
-// #141 adds platform subjects for the parent edge without changing Type.
+// Type returns the declared type.
 //
-//	SubjectFromOIDCSub("alice") then .Type()  → TypeUser
-//	Subject{}.Type()                          → ""
-func (subject Subject) Type() ObjectType {
-	return subject.object.Type()
+//	ObjectFromID(TypeStack, "abc").Type()  → TypeStack
+//	Object{}.Type()                        → ""
+func (ident identifier) Type() ObjectType {
+	return ident.objectType
 }
 
-// String renders the canonical authorization identifier for a provider adapter.
+// ID returns the bare identifier, without the type prefix. It is the value the
+// caller originally supplied, so code needing the raw OIDC "sub" back does not
+// have to strip a prefix off String().
 //
-//	SubjectFromOIDCSub("alice") then .String()  → "user:alice"
-//	Subject{}.String()                          → ""
-func (subject Subject) String() string {
-	return subject.object.String()
+//	SubjectFromOIDCSub("alice").ID()    → "alice"
+//	ObjectFromID(TypeStack, "abc").ID() → "abc"
+//	Object{}.ID()                       → ""
+func (ident identifier) ID() string {
+	return ident.id
 }
 
-// Valid reports whether the subject is a canonical, validated authorization
-// ID for its wrapped object type — whatever that type is. It does not assert
-// TypeUser: Subject wraps a general Object precisely so #141 can put
-// platform:tflive in the user slot without restructuring, and today's single
-// constructor (SubjectFromOIDCSub) is what keeps every Subject a user in
-// practice, not this method.
+// String renders the canonical "type:id" form a provider adapter puts on the
+// wire.
 //
-//	SubjectFromOIDCSub("alice") then .Valid()  → true
-//	Subject{}.Valid()                          → false
-func (subject Subject) Valid() bool {
-	return subject.object.Valid()
+//	ObjectFromID(TypeStack, "abc").String()  → "stack:abc"
+//	SubjectFromOIDCSub("alice").String()     → "user:alice"
+//	Object{}.String()                        → ""
+func (ident identifier) String() string {
+	if ident.objectType == "" {
+		return ""
+	}
+	return string(ident.objectType) + ":" + ident.id
+}
+
+// valid reports whether both halves are still ones newIdentifier would accept.
+// The zero value is never valid, so a struct literal cannot bypass validation.
+func (ident identifier) valid() bool {
+	return ident.objectType != "" && safeTupleToken(string(ident.objectType)) && safeTupleToken(ident.id)
 }
 
 // ObjectType is an object type declared in the authorization model. It is not
@@ -85,83 +97,82 @@ const (
 	TypeStack ObjectType = "stack"
 )
 
-// Object is a validated {type, id} in canonical "type:id" form. Its value is
-// intentionally opaque so callers cannot construct unchecked IDs.
+// Subject is the tuple's user slot: who is acting.
+type Subject struct {
+	identifier
+}
+
+// subjectTypes are the object types allowed in a tuple's user slot. This is the
+// constraint Subject exists to carry and Object must not: a stack is a resource
+// and can never be an actor, so it must never reach the user slot.
+//
+// #141 adds a platform type here for the parent edge. It must not add TypeStack.
+var subjectTypes = map[ObjectType]bool{
+	TypeUser: true,
+}
+
+// SubjectFromOIDCSub returns the canonical authorization identifier for sub,
+// the "sub" claim of a verified ID token. This is the one identifier tflive
+// does not originate, so the character rules matter most here.
+//
+//	SubjectFromOIDCSub("00u1b2c3")      → Subject{"user:00u1b2c3"}, nil
+//	SubjectFromOIDCSub("kc-sub-123")    → Subject{"user:kc-sub-123"}, nil
+//	SubjectFromOIDCSub("alice#member")  → Subject{}, ErrInvalidInput  (userset)
+//	SubjectFromOIDCSub("*")             → Subject{}, ErrInvalidInput  (everyone)
+func SubjectFromOIDCSub(sub string) (Subject, error) {
+	ident, err := newIdentifier(TypeUser, sub)
+	if err != nil {
+		return Subject{}, err
+	}
+	return Subject{identifier: ident}, nil
+}
+
+// Valid reports whether the subject is a canonical identifier whose type may
+// occupy a tuple's user slot. Unlike Object.Valid it checks the type against
+// subjectTypes, which is the whole reason Subject is its own type rather than
+// an alias for Object.
+//
+//	SubjectFromOIDCSub("alice").Valid()  → true
+//	Subject{}.Valid()                    → false
+func (subject Subject) Valid() bool {
+	return subject.valid() && subjectTypes[subject.objectType]
+}
+
+// Object is the tuple's object slot: the resource being acted on.
 type Object struct {
-	objectType ObjectType
-	value      string
+	identifier
 }
 
 // ObjectFromID returns the canonical authorization identifier for id. The id
 // must be a bare identifier: it is the caller's raw value, never an
-// already-prefixed one. objectType gets the same structural character check
-// as id: callers pass it as an exported ObjectType value, not always an
-// in-package literal, so it must not be able to smuggle a ':', '#', or '*'
-// into the rendered tuple.
+// already-prefixed one.
 //
-//	ObjectFromID(TypeStack, "abc123")            → Object{"stack:abc123"}, nil
-//	ObjectFromID(TypeUser, "00u1b2c3")           → Object{"user:00u1b2c3"}, nil
-//	ObjectFromID(TypeStack, "stack:abc")         → Object{}, ErrInvalidInput  (already prefixed)
-//	ObjectFromID(TypeUser, "al*ce")              → Object{}, ErrInvalidInput  (wildcard char)
-//	ObjectFromID(TypeUser, "")                   → Object{}, ErrInvalidInput
+//	ObjectFromID(TypeStack, "abc123")             → Object{"stack:abc123"}, nil
+//	ObjectFromID(TypeUser, "00u1b2c3")            → Object{"user:00u1b2c3"}, nil
+//	ObjectFromID(TypeStack, "stack:abc")          → Object{}, ErrInvalidInput  (already prefixed)
+//	ObjectFromID(TypeUser, "al*ce")               → Object{}, ErrInvalidInput  (wildcard char)
+//	ObjectFromID(TypeUser, "")                    → Object{}, ErrInvalidInput
 //	ObjectFromID(ObjectType("stack:evil"), "abc") → Object{}, ErrInvalidInput  (type forges a prefix)
 func ObjectFromID(objectType ObjectType, id string) (Object, error) {
-	if objectType == "" || !safeTupleToken(string(objectType)) {
-		return Object{}, fmt.Errorf("%w: invalid object type", ErrInvalidInput)
-	}
-	value, err := canonicalIdentifier(string(objectType), id)
+	ident, err := newIdentifier(objectType, id)
 	if err != nil {
 		return Object{}, err
 	}
-	return Object{objectType: objectType, value: value}, nil
+	return Object{identifier: ident}, nil
 }
 
-// Type returns the object's declared type.
+// Valid reports whether the object is a canonical, validated identifier. Any
+// declared type may be an object, so unlike Subject.Valid there is no type
+// allowlist here.
 //
-//	ObjectFromID(TypeStack, "abc").Type()  → TypeStack
-//	Object{}.Type()                        → ""
-func (object Object) Type() ObjectType {
-	return object.objectType
-}
-
-// String renders the canonical authorization identifier for a provider adapter.
-//
-//	ObjectFromID(TypeStack, "abc").String()  → "stack:abc"
-//	Object{}.String()                        → ""
-func (object Object) String() string {
-	return object.value
-}
-
-// Valid reports whether the object is a canonical, validated authorization ID.
-// The zero Object is never valid, so a struct literal cannot bypass the
-// constructor.
-//
-//	ObjectFromID(TypeStack, "abc") then .Valid()  → true
-//	Object{}.Valid()                              → false
+//	ObjectFromID(TypeStack, "abc").Valid()  → true
+//	Object{}.Valid()                        → false
 func (object Object) Valid() bool {
-	return object.objectType != "" && validCanonicalIdentifier(string(object.objectType), object.value)
-}
-
-// canonicalIdentifier renders "kind:value" after refusing any value that could
-// change a tuple's meaning rather than merely be malformed. ':' would forge the
-// type prefix, '#' would make the value a userset reference, and '*' would make
-// it the typed wildcard that matches every user.
-//
-//	canonicalIdentifier("user", "kc-sub-1")      → "user:kc-sub-1", nil
-//	canonicalIdentifier("stack", "abc123")       → "stack:abc123", nil
-//	canonicalIdentifier("user", "alice#member")  → "", ErrInvalidInput
-//	canonicalIdentifier("user", "*")             → "", ErrInvalidInput
-//	canonicalIdentifier("user", "a b")           → "", ErrInvalidInput
-func canonicalIdentifier(kind, value string) (string, error) {
-	if !safeTupleToken(value) {
-		return "", fmt.Errorf("%w: invalid %s identifier", ErrInvalidInput, kind)
-	}
-	return kind + ":" + value, nil
+	return object.valid()
 }
 
 // safeTupleToken reports whether token can appear in a tuple without changing
-// its meaning. ':' would forge a type prefix, '#' would make a userset
-// reference, and '*' would make the typed wildcard that matches every user.
+// its meaning.
 //
 //	safeTupleToken("can_view")  → true
 //	safeTupleToken("a#b")       → false
@@ -174,15 +185,6 @@ func safeTupleToken(token string) bool {
 		return false
 	}
 	return true
-}
-
-func validCanonicalIdentifier(kind, value string) bool {
-	prefix := kind + ":"
-	if !strings.HasPrefix(value, prefix) {
-		return false
-	}
-	_, err := canonicalIdentifier(kind, strings.TrimPrefix(value, prefix))
-	return err == nil
 }
 
 // CheckRequest asks whether Subject has Relation on Object.
