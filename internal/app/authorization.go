@@ -18,7 +18,19 @@ func requirePrincipal(ctx context.Context) (authn.Principal, error) {
 	return principal, nil
 }
 
-func requireAuthorizer(ctx context.Context, authorizer authz.Authorizer) (authn.Principal, error) {
+// requirePrincipalAndAuthorizer checks both preconditions of an authorization
+// decision and returns the principal the caller will ask about. It decides
+// nothing itself.
+//
+// The order is deliberate: authentication is checked before configuration, so
+// an anonymous caller never learns the deployment is misconfigured. A nil
+// authorizer is ErrUnavailable rather than ErrForbidden, because "I cannot
+// tell" and "you may not" are different answers and only one of them is true.
+//
+//	authenticated, authorizer wired  → principal, nil
+//	no principal, or empty Subject   → ErrUnauthenticated       (even if unwired)
+//	authenticated, authorizer nil    → authz.ErrUnavailable
+func requirePrincipalAndAuthorizer(ctx context.Context, authorizer authz.Authorizer) (authn.Principal, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
 		return authn.Principal{}, err
@@ -55,7 +67,7 @@ func authorizePlatform(ctx context.Context, authorizer authz.Authorizer, relatio
 // checkPlatform is authorizePlatform for callers that branch on the answer
 // rather than refusing, which is the administrator list bypass below.
 func checkPlatform(ctx context.Context, authorizer authz.Authorizer, relation authz.Relation) (bool, error) {
-	principal, err := requireAuthorizer(ctx, authorizer)
+	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
 	if err != nil {
 		return false, err
 	}
@@ -88,7 +100,7 @@ func checkPlatform(ctx context.Context, authorizer authz.Authorizer, relation au
 //	stackID = "bad:id"                                         → denied
 //	OpenFGA unreachable                                        → authz.ErrUnavailable
 func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID, relation authz.Relation, denied error) error {
-	principal, err := requireAuthorizer(ctx, authorizer)
+	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
 	if err != nil {
 		return err
 	}
@@ -114,7 +126,7 @@ func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID tr
 }
 
 func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repository StackRepository, tenantID traits.TenantID) ([]traits.Stack, error) {
-	principal, err := requireAuthorizer(ctx, authorizer)
+	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +208,7 @@ func stackPageOrderBefore(left, right traits.Stack) bool {
 func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID, relation authz.Relation, denied error) (traits.StackTemplate, error) {
 	// Fails an unauthenticated or unconfigured request before the repository
 	// read; authorizeStack below re-derives the principal for the Check.
-	if _, err := requireAuthorizer(ctx, service.Authorizer); err != nil {
+	if _, err := requirePrincipalAndAuthorizer(ctx, service.Authorizer); err != nil {
 		return traits.StackTemplate{}, err
 	}
 	stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, tenantID, stackTemplateID)
@@ -230,7 +242,7 @@ type PlatformCapabilities struct {
 // reachable before any tuple exists, and a principal that holds nothing is a
 // legitimate answer rather than a failure.
 func ResolvePlatformCapabilities(ctx context.Context, authorizer authz.Authorizer) (PlatformCapabilities, error) {
-	principal, err := requireAuthorizer(ctx, authorizer)
+	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
 	if err != nil {
 		return PlatformCapabilities{}, err
 	}
@@ -264,7 +276,7 @@ type StackCapabilities struct {
 }
 
 func ResolveStackCapabilities(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID) (StackCapabilities, error) {
-	principal, err := requireAuthorizer(ctx, authorizer)
+	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
 	if err != nil {
 		return StackCapabilities{}, err
 	}
@@ -303,7 +315,7 @@ func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer,
 	if len(stacks) == 0 {
 		return map[traits.StackID]StackCapabilities{}, nil
 	}
-	principal, err := requireAuthorizer(ctx, authorizer)
+	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +372,7 @@ func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer,
 }
 
 func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, relation authz.Relation, denied error) (traits.TemplateRun, error) {
-	if _, err := requireAuthorizer(ctx, service.Authorizer); err != nil {
+	if _, err := requirePrincipalAndAuthorizer(ctx, service.Authorizer); err != nil {
 		return traits.TemplateRun{}, err
 	}
 	run, err := service.TemplateRuns.GetTemplateRun(ctx, tenantID, runID)

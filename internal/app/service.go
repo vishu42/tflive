@@ -1236,7 +1236,7 @@ func (service *Service) GetTemplateRevisionVariables(ctx context.Context, comman
 }
 
 func (service *Service) ListStackGrants(ctx context.Context, command ListStackGrantsCommand) (ListStackGrantsResult, error) {
-	if _, err := requireAuthorizer(ctx, service.Authorizer); err != nil {
+	if _, err := requirePrincipalAndAuthorizer(ctx, service.Authorizer); err != nil {
 		return ListStackGrantsResult{}, err
 	}
 	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
