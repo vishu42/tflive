@@ -29,7 +29,6 @@ type VerifiedToken struct {
 	Name              string
 	PreferredUsername string
 	Email             string
-	RealmRoles        []string
 }
 
 type Verifier interface {

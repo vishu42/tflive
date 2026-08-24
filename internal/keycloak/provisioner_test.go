@@ -31,7 +31,9 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 	if got, want := backend.createdRealms, 1; got != want {
 		t.Fatalf("created realms = %d, want %d", got, want)
 	}
-	if got, want := backend.createdRoles, 2; got != want {
+	// Keycloak is identity-only: no global realm roles are provisioned, because
+	// the platform tiers they carried are OpenFGA tuples now.
+	if got, want := backend.createdRoles, 0; got != want {
 		t.Fatalf("created roles = %d, want %d", got, want)
 	}
 	if got, want := backend.createdClients, 3; got != want {
@@ -55,11 +57,13 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 	if !realm.Enabled || realm.AccessTokenLifespan != 300 || realm.SSLRequired != "external" || realm.RegistrationAllowed {
 		t.Fatalf("realm spec = %#v", realm)
 	}
-	if got, want := backend.roles["platform-admin"].Description, platformAdminDescription; got != want {
-		t.Fatalf("platform-admin description = %q, want %q", got, want)
+	for _, role := range []string{"platform-admin", "stack-creator"} {
+		if _, provisioned := backend.roles[role]; provisioned {
+			t.Fatalf("realm role %s was provisioned; authorization is OpenFGA's now", role)
+		}
 	}
-	if got, want := backend.roles["stack-creator"].Description, stackCreatorDescription; got != want {
-		t.Fatalf("stack-creator description = %q, want %q", got, want)
+	if len(backend.realmRoleMappings) != 0 {
+		t.Fatalf("realm role mappings = %#v, want none", backend.realmRoleMappings)
 	}
 
 	web := backend.clients[cfg.WebClientID]
@@ -86,15 +90,10 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 		t.Fatalf("web default scopes = %#v", backend.defaultScopes[cfg.WebClientID])
 	}
 
-	// The seeded administrator must carry every role the product's own
-	// permission checks read, not only platform-admin: /v1/me projects
-	// canCreateStack from stack-creator alone, so an admin without it cannot
-	// reach the create-stack affordance the API would have allowed.
-	for _, role := range []string{"platform-admin", "stack-creator"} {
-		if !backend.realmRoleMappings[cfg.PlatformAdminUsername][role] {
-			t.Fatalf("platform user realm roles = %#v, missing %q", backend.realmRoleMappings[cfg.PlatformAdminUsername], role)
-		}
-	}
+	// The seeded administrator carries no global realm role at all. Its
+	// platform tier is a tuple #212 writes; the realm-management roles below
+	// are different -- they are Keycloak's own, and the directory reads need
+	// them.
 	wantAdminRoles := []string{"manage-users", "query-users", "view-realm", "view-users"}
 	for _, role := range wantAdminRoles {
 		if !backend.clientRoleMappings[cfg.PlatformAdminUsername]["realm-management"][role] {
@@ -144,9 +143,9 @@ func TestProvisionWithBackendRejectsInvalidEffectiveToken(t *testing.T) {
 		token   ExampleAccessToken
 		wantErr string
 	}{
-		{name: "missing API audience", token: ExampleAccessToken{Audience: []string{"account"}, RealmRoles: []string{"platform-admin"}}, wantErr: "missing audience tflive-api"},
-		{name: "missing platform role", token: ExampleAccessToken{Audience: []string{"tflive-api"}, RealmRoles: []string{"default-roles-tflive"}}, wantErr: "missing realm role platform-admin"},
-		{name: "missing stack creator role", token: ExampleAccessToken{Audience: []string{"tflive-api"}, RealmRoles: []string{"platform-admin"}}, wantErr: "missing realm role stack-creator"},
+		// The audience is all the effective token is checked for now. A realm
+		// role in it decides nothing, so its absence is not an error.
+		{name: "missing API audience", token: ExampleAccessToken{Audience: []string{"account"}}, wantErr: "missing audience tflive-api"},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -294,16 +293,6 @@ func (f *fakeProvisionBackend) EnsureUser(_ context.Context, _ string, spec User
 	}
 	f.users[spec.Username] = spec
 	return ResourceRef{ID: "user-" + spec.Username, Name: spec.Username}, nil
-}
-
-func (f *fakeProvisionBackend) EnsureRealmRoleMapping(_ context.Context, _ string, user ResourceRef, roles []ResourceRef) error {
-	if f.realmRoleMappings[user.Name] == nil {
-		f.realmRoleMappings[user.Name] = map[string]bool{}
-	}
-	for _, role := range roles {
-		f.realmRoleMappings[user.Name][role.Name] = true
-	}
-	return nil
 }
 
 func (f *fakeProvisionBackend) ClientRole(_ context.Context, _ string, _ ResourceRef, roleName string) (ResourceRef, error) {

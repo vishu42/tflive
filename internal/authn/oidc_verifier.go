@@ -141,17 +141,11 @@ func (v *OIDCVerifier) validatedToken(payload []byte) (VerifiedToken, error) {
 	if !ok {
 		return VerifiedToken{}, ErrInvalidToken
 	}
-	roles, ok := realmRoles(token)
-	if !ok {
-		return VerifiedToken{}, ErrInvalidToken
-	}
-
 	return VerifiedToken{
 		Subject:           subject,
 		Name:              name,
 		PreferredUsername: preferredUsername,
 		Email:             email,
-		RealmRoles:        roles,
 	}, nil
 }
 
@@ -168,36 +162,4 @@ func optionalStringClaim(token jwt.Token, name string) (string, bool) {
 		return "", false
 	}
 	return value, true
-}
-
-func realmRoles(token jwt.Token) ([]string, bool) {
-	if !token.Has("realm_access") {
-		return nil, true
-	}
-
-	var value any
-	if err := token.Get("realm_access", &value); err != nil {
-		return nil, false
-	}
-	realmAccess, ok := value.(map[string]any)
-	if !ok {
-		return nil, false
-	}
-	rolesValue, present := realmAccess["roles"]
-	if !present {
-		return nil, true
-	}
-	values, ok := rolesValue.([]any)
-	if !ok {
-		return nil, false
-	}
-	roles := make([]string, len(values))
-	for index, value := range values {
-		role, ok := value.(string)
-		if !ok {
-			return nil, false
-		}
-		roles[index] = role
-	}
-	return roles, true
 }

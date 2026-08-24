@@ -111,9 +111,16 @@ func (ident identifier) valid() bool {
 type ObjectType string
 
 const (
-	TypeUser  ObjectType = "user"
-	TypeStack ObjectType = "stack"
+	TypeUser     ObjectType = "user"
+	TypeStack    ObjectType = "stack"
+	TypePlatform ObjectType = "platform"
 )
+
+// PlatformID is the id of the platform singleton. Every global authorization
+// question is asked about this one object, so the value is fixed here rather
+// than configured: a second platform object would not fail, it would silently
+// partition every global grant.
+const PlatformID = "tflive"
 
 // Subject is the tuple's user slot: who is acting.
 type Subject struct {
@@ -124,9 +131,43 @@ type Subject struct {
 // constraint Subject exists to carry and Object must not: a stack is a resource
 // and can never be an actor, so it must never reach the user slot.
 //
-// #141 adds a platform type here for the parent edge. It must not add TypeStack.
+// The platform singleton is here for the parent edge, whose tuple puts it in
+// the user slot: {platform:tflive, parent, stack:X}. TypeStack must never join
+// it.
 var subjectTypes = map[ObjectType]bool{
-	TypeUser: true,
+	TypeUser:     true,
+	TypePlatform: true,
+}
+
+// Platform is the singleton every global capability is checked against, and
+// PlatformSubject is that same singleton in the user slot, where the parent
+// edge puts it. Both are built from PlatformID, which safeTupleToken accepts,
+// so no call site has to handle a construction error that cannot happen.
+var (
+	Platform        = mustObject(TypePlatform, PlatformID)
+	PlatformSubject = mustSubject(TypePlatform, PlatformID)
+)
+
+// mustObject and mustSubject build the package-level singletons above. They
+// panic at init, which for a constant id can only be a typo in this file.
+func mustObject(objectType ObjectType, id string) Object {
+	object, err := ObjectFromID(objectType, id)
+	if err != nil {
+		panic(fmt.Sprintf("authz: invalid object %s:%s: %v", objectType, id, err))
+	}
+	return object
+}
+
+func mustSubject(objectType ObjectType, id string) Subject {
+	ident, err := newIdentifier(objectType, id)
+	if err != nil {
+		panic(fmt.Sprintf("authz: invalid subject %s:%s: %v", objectType, id, err))
+	}
+	subject := Subject{identifier: ident}
+	if !subject.Valid() {
+		panic(fmt.Sprintf("authz: %s may not occupy the user slot", objectType))
+	}
+	return subject
 }
 
 // SubjectFromOIDCSub returns the canonical authorization identifier for sub,
@@ -275,6 +316,16 @@ type Grant struct {
 	subject  Subject
 	object   Object
 	relation Relation
+	// structural marks the edge as stored-but-not-access. Only
+	// NewStructuralRelationship sets it, so a grant built the ordinary way can
+	// never carry a structural relation past Valid.
+	structural bool
+}
+
+// Structural reports whether the grant is a stored edge that is not access. A
+// reader answering "who has access" skips these.
+func (grant Grant) Structural() bool {
+	return grant.structural
 }
 
 // NewGrant returns a validated direct role assignment. It refuses any relation
@@ -323,7 +374,35 @@ func (grant Grant) Relation() Relation {
 //	NewGrant(user:alice, stack:abc, RelationOwner) then .Valid()  → true
 //	Grant{}.Valid()                                               → false
 func (grant Grant) Valid() bool {
-	return grant.subject.Valid() && grant.object.Valid() && grant.relation.Grantable()
+	if !grant.subject.Valid() || !grant.object.Valid() {
+		return false
+	}
+	if grant.structural {
+		return grant.relation.Structural()
+	}
+	return grant.relation.Grantable()
+}
+
+// NewStructuralRelationship builds a stored edge that is not access: today only
+// {platform:tflive, parent, stack:X}, the edge that carries administrator
+// inheritance onto a stack.
+//
+// It is a separate door from NewGrant on purpose. Grant.Valid requires a
+// grantable relation, and that refusal is the only thing standing between a
+// grant endpoint and this tuple, so the provisioning path gets its own
+// constructor rather than the refusal being relaxed for everyone.
+//
+//	NewStructuralRelationship(platform:tflive, stack:abc, RelationParent) → ok
+//	NewStructuralRelationship(user:alice, stack:abc, RelationOwner)       → ErrInvalidInput
+func NewStructuralRelationship(subject Subject, object Object, relation Relation) (Grant, error) {
+	if !relation.Structural() {
+		return Grant{}, fmt.Errorf("%w: %s is not a structural relation", ErrInvalidInput, relation)
+	}
+	grant := Grant{subject: subject, object: object, relation: relation, structural: true}
+	if !grant.Valid() {
+		return Grant{}, fmt.Errorf("%w: invalid structural relationship", ErrInvalidInput)
+	}
+	return grant, nil
 }
 
 // Mutation changes a set of direct role assignments. Confirmation requests

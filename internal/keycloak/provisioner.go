@@ -7,11 +7,9 @@ import (
 )
 
 const (
-	platformAdminDescription = "Administer tflive and bypass ordinary stack checks except security invariants"
-	stackCreatorDescription  = "Create tflive stacks and become their initial owner"
-	directoryReaderClientID  = "tflive-directory-reader"
-	audienceScopeName        = "tflive-api-audience"
-	audienceMapperName       = "tflive-api-audience"
+	directoryReaderClientID = "tflive-directory-reader"
+	audienceScopeName       = "tflive-api-audience"
+	audienceMapperName      = "tflive-api-audience"
 )
 
 var directoryReaderRealmManagementRoles = []string{
@@ -115,7 +113,6 @@ type provisionBackend interface {
 	EnsureProtocolMapper(context.Context, string, ResourceRef, ProtocolMapperSpec) error
 	EnsureDefaultClientScope(context.Context, string, ResourceRef, ResourceRef) error
 	EnsureUser(context.Context, string, UserSpec) (ResourceRef, error)
-	EnsureRealmRoleMapping(context.Context, string, ResourceRef, []ResourceRef) error
 	ClientRole(context.Context, string, ResourceRef, string) (ResourceRef, error)
 	EnsureClientRoleMapping(context.Context, string, ResourceRef, ResourceRef, []ResourceRef) error
 	EnsureClientScopeMapping(context.Context, string, ResourceRef, ResourceRef, []ResourceRef) error
@@ -136,23 +133,6 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 	}
 	if err := backend.EnsureRealm(ctx, realmSpec); err != nil {
 		return Result{}, fmt.Errorf("ensure realm %s: %w", cfg.Realm, err)
-	}
-
-	platformRole, err := backend.EnsureRole(ctx, cfg.Realm, RoleSpec{
-		Name:        "platform-admin",
-		Description: platformAdminDescription,
-		Composite:   false,
-	})
-	if err != nil {
-		return Result{}, fmt.Errorf("ensure realm role platform-admin: %w", err)
-	}
-	stackCreatorRole, err := backend.EnsureRole(ctx, cfg.Realm, RoleSpec{
-		Name:        "stack-creator",
-		Description: stackCreatorDescription,
-		Composite:   false,
-	})
-	if err != nil {
-		return Result{}, fmt.Errorf("ensure realm role stack-creator: %w", err)
 	}
 
 	if _, err := backend.EnsureClient(ctx, cfg.Realm, ClientSpec{
@@ -245,14 +225,11 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 	if err != nil {
 		return Result{}, fmt.Errorf("ensure bootstrap platform administrator: %w", err)
 	}
-	// The seeded administrator gets every global role the product reads, not
-	// just platform-admin. Permission checks are not uniform: /v1/me projects
-	// canCreateStack from stack-creator alone, so an admin holding only
-	// platform-admin cannot reach affordances the API would have allowed.
-	// Roles for users created later are their creator's responsibility.
-	if err := backend.EnsureRealmRoleMapping(ctx, cfg.Realm, platformUser, []ResourceRef{platformRole, stackCreatorRole}); err != nil {
-		return Result{}, fmt.Errorf("assign global realm roles: %w", err)
-	}
+	// No global realm roles are assigned. Keycloak is identity-only: the
+	// platform tiers that platform-admin and stack-creator used to carry are
+	// OpenFGA tuples on platform:tflive now, seeded by #212. Leaving the roles
+	// here would be worse than redundant -- a stale claim nothing reads looks
+	// like access that was granted.
 
 	realmManagement, err := backend.LookupClient(ctx, cfg.Realm, "realm-management")
 	if err != nil {
@@ -318,12 +295,6 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 	if !containsString(exampleToken.Audience, cfg.APIClientID) {
 		return Result{}, fmt.Errorf("effective access token is missing audience %s", cfg.APIClientID)
 	}
-	for _, role := range []string{"platform-admin", "stack-creator"} {
-		if !containsString(exampleToken.RealmRoles, role) {
-			return Result{}, fmt.Errorf("effective access token is missing realm role %s", role)
-		}
-	}
-
 	return Result{
 		Realm:                       cfg.Realm,
 		WebClientID:                 cfg.WebClientID,

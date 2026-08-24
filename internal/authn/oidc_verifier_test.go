@@ -239,7 +239,7 @@ func TestOIDCVerifierVerifiesValidAccessTokenAndExtractsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
-	want := VerifiedToken{Subject: "user-123", Name: "Ada Lovelace", PreferredUsername: "ada", Email: "ada@example.test", RealmRoles: []string{"platform-admin"}}
+	want := VerifiedToken{Subject: "user-123", Name: "Ada Lovelace", PreferredUsername: "ada", Email: "ada@example.test"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Verify() = %#v, want %#v", got, want)
 	}
@@ -664,14 +664,6 @@ func TestOIDCVerifierRejectsInvalidTokens(t *testing.T) {
 				})
 			},
 		},
-		{
-			name: "malformed roles",
-			raw: func(t *testing.T, s *oidcTestServer) string {
-				return s.sign(t, "key-a", func(tok jwt.Token) {
-					_ = tok.Set("realm_access", map[string]any{"roles": []any{"platform-admin", 1}})
-				})
-			},
-		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			s := newOIDCTestServer(t)
@@ -871,6 +863,18 @@ func TestOIDCVerifierAcceptsProviderTokenShapes(t *testing.T) {
 			want: VerifiedToken{Subject: "user-123", Name: "Ada Lovelace", PreferredUsername: "ada", Email: "ada@example.test"},
 		},
 		{
+			// realm_access is malformed on purpose: authorization is OpenFGA's,
+			// so the claim is not read and cannot fail verification.
+			name: "Keycloak shaped token with a malformed realm_access",
+			mutate: func(tok jwt.Token) {
+				_ = tok.Set("name", "Ada Lovelace")
+				_ = tok.Set("preferred_username", "ada")
+				_ = tok.Set("email", "ada@example.test")
+				_ = tok.Set("realm_access", map[string]any{"roles": []any{"platform-admin", 1}})
+			},
+			want: VerifiedToken{Subject: "user-123", Name: "Ada Lovelace", PreferredUsername: "ada", Email: "ada@example.test"},
+		},
+		{
 			name: "Keycloak shaped token with typ Bearer and realm_access",
 			mutate: func(tok jwt.Token) {
 				_ = tok.Set("typ", "Bearer")
@@ -879,7 +883,7 @@ func TestOIDCVerifierAcceptsProviderTokenShapes(t *testing.T) {
 				_ = tok.Set("email", "ada@example.test")
 				_ = tok.Set("realm_access", map[string]any{"roles": []string{"platform-admin"}})
 			},
-			want: VerifiedToken{Subject: "user-123", Name: "Ada Lovelace", PreferredUsername: "ada", Email: "ada@example.test", RealmRoles: []string{"platform-admin"}},
+			want: VerifiedToken{Subject: "user-123", Name: "Ada Lovelace", PreferredUsername: "ada", Email: "ada@example.test"},
 		},
 		{
 			name: "Keycloak shaped ID token with typ ID",

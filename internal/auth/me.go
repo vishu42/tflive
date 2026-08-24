@@ -14,34 +14,23 @@ type MeResponse struct {
 	TenantID           string             `json:"tenantID"`
 }
 
-// GlobalCapabilities encodes coarse-grained permissions derived
-// from the principal's Keycloak realm roles.
+// GlobalCapabilities encodes coarse-grained permissions answered by OpenFGA.
+// The JSON names predate the move off Keycloak realm roles and are kept: they
+// are the web client's contract, and only the source of the answers changed.
 type GlobalCapabilities struct {
 	IsPlatformAdmin bool `json:"isPlatformAdmin"`
 	CanCreateStack  bool `json:"canCreateStack"`
 }
 
-// MeFromPrincipal maps the authenticated principal to a MeResponse,
-// deriving global capabilities from realm roles.
-func MeFromPrincipal(principal authn.Principal, tenantID traits.TenantID) MeResponse {
+// MeFromPrincipal maps the authenticated principal and its resolved platform
+// capabilities to a MeResponse. The capabilities are passed in rather than
+// derived here, because answering them is an OpenFGA call the app layer owns.
+func MeFromPrincipal(principal authn.Principal, tenantID traits.TenantID, capabilities GlobalCapabilities) MeResponse {
 	return MeResponse{
 		Sub:                principal.Subject,
 		DisplayName:        principal.Name,
 		Email:              principal.Email,
-		GlobalCapabilities: capabilitiesFromRoles(principal.RealmRoles),
+		GlobalCapabilities: capabilities,
 		TenantID:           string(tenantID),
 	}
-}
-
-func capabilitiesFromRoles(roles []string) GlobalCapabilities {
-	var caps GlobalCapabilities
-	for _, role := range roles {
-		if role == "platform-admin" {
-			caps.IsPlatformAdmin = true
-		}
-		if role == "stack-creator" {
-			caps.CanCreateStack = true
-		}
-	}
-	return caps
 }

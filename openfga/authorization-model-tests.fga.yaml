@@ -13,8 +13,27 @@ tuples:
   - user: user:viewer
     relation: viewer
     object: stack:example
+  - user: platform:tflive
+    relation: parent
+    object: stack:example
+  - user: user:root
+    relation: root
+    object: platform:tflive
+  - user: user:admin
+    relation: admin
+    object: platform:tflive
+  - user: user:editor
+    relation: editor
+    object: platform:tflive
+  - user: user:platform-viewer
+    relation: viewer
+    object: platform:tflive
+  # stack:orphan deliberately has no parent tuple.
+  - user: user:owner
+    relation: owner
+    object: stack:orphan
 tests:
-  - name: every role permission combination
+  - name: every stack role permission combination
     check:
       - user: user:owner
         object: stack:example
@@ -51,3 +70,104 @@ tests:
           can_operate: false
           can_approve: false
           can_manage_access: false
+
+  - name: every platform role capability
+    check:
+      - user: user:root
+        object: platform:tflive
+        assertions:
+          can_administer: true
+          can_edit: true
+          can_view: true
+          can_create_stack: true
+          can_publish_template: true
+          can_read_template: true
+      - user: user:admin
+        object: platform:tflive
+        assertions:
+          can_administer: true
+          can_edit: true
+          can_view: true
+          can_create_stack: true
+          can_publish_template: true
+          can_read_template: true
+      - user: user:editor
+        object: platform:tflive
+        assertions:
+          can_administer: false
+          can_edit: true
+          can_view: true
+          can_create_stack: true
+          can_publish_template: true
+          can_read_template: true
+      - user: user:platform-viewer
+        object: platform:tflive
+        assertions:
+          can_administer: false
+          can_edit: false
+          can_view: true
+          can_create_stack: false
+          # A platform viewer may read the catalog but never publish to it.
+          can_publish_template: false
+          can_read_template: true
+      - user: user:unrelated
+        object: platform:tflive
+        assertions:
+          can_administer: false
+          can_edit: false
+          can_view: false
+          can_create_stack: false
+          can_publish_template: false
+          can_read_template: false
+
+  # Platform tiers reach stacks monotonically: administrators get everything,
+  # editors and viewers get read-only, and neither may operate or approve.
+  - name: platform roles reaching a stack through its parent
+    check:
+      - user: user:root
+        object: stack:example
+        assertions:
+          can_view: true
+          can_operate: true
+          can_approve: true
+          can_manage_access: true
+      - user: user:admin
+        object: stack:example
+        assertions:
+          can_view: true
+          can_operate: true
+          can_approve: true
+          can_manage_access: true
+      - user: user:editor
+        object: stack:example
+        assertions:
+          can_view: true
+          can_operate: false
+          can_approve: false
+          can_manage_access: false
+      - user: user:platform-viewer
+        object: stack:example
+        assertions:
+          can_view: true
+          can_operate: false
+          can_approve: false
+          can_manage_access: false
+
+  # A stack whose parent tuple was never written is unreachable by every
+  # platform role. Stack creation must write parent alongside owner.
+  - name: a stack missing its parent tuple is invisible to the platform
+    check:
+      - user: user:admin
+        object: stack:orphan
+        assertions:
+          can_view: false
+          can_manage_access: false
+      - user: user:platform-viewer
+        object: stack:orphan
+        assertions:
+          can_view: false
+      - user: user:owner
+        object: stack:orphan
+        assertions:
+          can_view: true
+          can_manage_access: true

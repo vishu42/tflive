@@ -50,15 +50,6 @@ func authenticatedActor(ctx context.Context) (traits.UserID, error) {
 // ErrForbidden indicates an authenticated actor lacks permission for an operation.
 var ErrForbidden = errors.New("forbidden")
 
-func canCreateStack(principal authn.Principal) bool {
-	for _, role := range principal.RealmRoles {
-		if role == "platform-admin" || role == "stack-creator" {
-			return true
-		}
-	}
-	return false
-}
-
 // StackRepository persists and reads tenant-owned stacks.
 type StackPageCursor struct {
 	CreatedAt time.Time
@@ -481,7 +472,7 @@ type GetTemplateRevisionVariablesCommand struct {
 
 // RegisterTemplate creates a pending registration attempt and dispatches its sync workflow.
 func (service *Service) RegisterTemplate(ctx context.Context, command RegisterTemplateCommand) (traits.TemplateRegistration, error) {
-	if err := requireTemplateCatalogAccess(ctx); err != nil {
+	if err := authorizePlatform(ctx, service.Authorizer, authz.RelationCanPublishTemplate); err != nil {
 		return traits.TemplateRegistration{}, err
 	}
 	actor, err := authenticatedActor(ctx)
@@ -539,8 +530,8 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 	if !ok || principal.Subject == "" {
 		return traits.Stack{}, ErrUnauthenticated
 	}
-	if !canCreateStack(principal) {
-		return traits.Stack{}, ErrForbidden
+	if err := authorizePlatform(ctx, service.Authorizer, authz.RelationCanCreateStack); err != nil {
+		return traits.Stack{}, err
 	}
 	actor := traits.UserID(principal.Subject)
 	if err := validateCreateStackCommand(command); err != nil {
@@ -1148,7 +1139,7 @@ func (service *Service) ListTemplateRevisions(ctx context.Context, command ListT
 	if err := validateListTemplateRevisionsCommand(command); err != nil {
 		return nil, err
 	}
-	if err := requireTemplateCatalogAccess(ctx); err != nil {
+	if err := authorizePlatform(ctx, service.Authorizer, authz.RelationCanReadTemplate); err != nil {
 		return nil, err
 	}
 
@@ -1167,7 +1158,7 @@ func (service *Service) GetTemplateRegistration(ctx context.Context, command Get
 	if err := validateGetTemplateRegistrationCommand(command); err != nil {
 		return traits.TemplateRegistration{}, err
 	}
-	if err := requireTemplateCatalogAccess(ctx); err != nil {
+	if err := authorizePlatform(ctx, service.Authorizer, authz.RelationCanReadTemplate); err != nil {
 		return traits.TemplateRegistration{}, err
 	}
 
@@ -1179,14 +1170,19 @@ func (service *Service) GetTemplateRegistration(ctx context.Context, command Get
 	return registration, nil
 }
 
+// PlatformCapabilities answers the global half of GET /v1/me from OpenFGA.
+func (service *Service) PlatformCapabilities(ctx context.Context) (PlatformCapabilities, error) {
+	return ResolvePlatformCapabilities(ctx, service.Authorizer)
+}
+
 // SearchUsers queries the user directory for realm users matching the given criteria.
 func (service *Service) SearchUsers(ctx context.Context, command SearchUsersCommand) ([]DirectoryUser, error) {
 	principal, ok := authn.PrincipalFromContext(ctx)
 	if !ok || principal.Subject == "" {
 		return nil, ErrUnauthenticated
 	}
-	if !isPlatformAdmin(principal) {
-		return nil, ErrForbidden
+	if err := authorizePlatform(ctx, service.Authorizer, authz.RelationCanAdminister); err != nil {
+		return nil, err
 	}
 	if err := validateSearchUsersCommand(command); err != nil {
 		return nil, err
@@ -1224,7 +1220,7 @@ func (service *Service) GetTemplateRevisionVariables(ctx context.Context, comman
 	if err := validateGetTemplateRevisionVariablesCommand(command); err != nil {
 		return nil, err
 	}
-	if err := requireTemplateCatalogAccess(ctx); err != nil {
+	if err := authorizePlatform(ctx, service.Authorizer, authz.RelationCanReadTemplate); err != nil {
 		return nil, err
 	}
 

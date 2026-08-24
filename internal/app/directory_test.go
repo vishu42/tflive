@@ -5,22 +5,17 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
+// The tier now lives in OpenFGA, not in the token: testPlatformAuthorizer
+// makes admin-subject an administrator and user-subject an editor.
 func contextWithPlatformAdmin() context.Context {
-	return authn.ContextWithPrincipal(context.Background(), authn.Principal{
-		Subject:    "admin-subject",
-		RealmRoles: []string{"platform-admin"},
-	})
+	return platformContext("admin-subject")
 }
 
 func contextWithOrdinaryUser() context.Context {
-	return authn.ContextWithPrincipal(context.Background(), authn.Principal{
-		Subject:    "user-subject",
-		RealmRoles: []string{"stack-creator"},
-	})
+	return platformContext("user-subject")
 }
 
 type fakeUserDirectory struct {
@@ -66,6 +61,7 @@ func TestSearchUsersReturnsResults(t *testing.T) {
 	}
 	service := NewService(Service{
 		UserDirectory: &fakeUserDirectory{users: expected},
+		Authorizer:    testPlatformAuthorizer(),
 	})
 
 	users, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
@@ -90,6 +86,7 @@ func TestSearchUsersRequiresPlatformAdmin(t *testing.T) {
 
 	service := NewService(Service{
 		UserDirectory: &fakeUserDirectory{users: []DirectoryUser{}},
+		Authorizer:    testPlatformAuthorizer(),
 	})
 
 	_, err := service.SearchUsers(contextWithOrdinaryUser(), SearchUsersCommand{
@@ -108,6 +105,7 @@ func TestSearchUsersRequiresAuthentication(t *testing.T) {
 
 	service := NewService(Service{
 		UserDirectory: &fakeUserDirectory{users: []DirectoryUser{}},
+		Authorizer:    testPlatformAuthorizer(),
 	})
 
 	_, err := service.SearchUsers(context.Background(), SearchUsersCommand{
@@ -126,6 +124,7 @@ func TestSearchUsersRejectsEmptyQuery(t *testing.T) {
 
 	service := NewService(Service{
 		UserDirectory: &fakeUserDirectory{users: []DirectoryUser{}},
+		Authorizer:    testPlatformAuthorizer(),
 	})
 
 	_, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
@@ -158,6 +157,7 @@ func TestSearchUsersRejectsInvalidPagination(t *testing.T) {
 
 			service := NewService(Service{
 				UserDirectory: &fakeUserDirectory{users: []DirectoryUser{}},
+				Authorizer:    testPlatformAuthorizer(),
 			})
 
 			_, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
@@ -178,6 +178,7 @@ func TestSearchUsersDirectoryUnavailable(t *testing.T) {
 
 	service := NewService(Service{
 		UserDirectory: nil,
+		Authorizer:    testPlatformAuthorizer(),
 	})
 
 	_, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
@@ -197,6 +198,7 @@ func TestSearchUsersDirectoryError(t *testing.T) {
 	directoryErr := errors.New("keycloak connection refused")
 	service := NewService(Service{
 		UserDirectory: &fakeErrorDirectory{err: directoryErr},
+		Authorizer:    testPlatformAuthorizer(),
 	})
 
 	_, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
@@ -215,6 +217,7 @@ func TestSearchUsersEmptyResults(t *testing.T) {
 
 	service := NewService(Service{
 		UserDirectory: &fakeUserDirectory{users: nil},
+		Authorizer:    testPlatformAuthorizer(),
 	})
 
 	users, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{

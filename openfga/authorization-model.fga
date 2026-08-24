@@ -3,14 +3,34 @@ model
 
 type user
 
+type platform
+  relations
+    define root: [user]
+    define admin: [user]
+    define editor: [user]
+    define viewer: [user]
+
+    # Tiers. Internal plumbing: the one place the ordering is expressed, so no
+    # capability below has to repeat it. Routes do not check these.
+    define can_administer: admin or root
+    define can_edit: can_administer or editor
+    define can_view: can_edit or viewer
+
+    # Capabilities. What routes check. Each one gates a real route; retiring a
+    # route retires its capability.
+    define can_create_stack: can_edit
+    define can_publish_template: can_edit
+    define can_read_template: can_view
+
 type stack
   relations
     define owner: [user]
     define operator: [user]
     define approver: [user]
     define viewer: [user]
+    define parent: [platform]
 
-    define can_view: owner or operator or approver or viewer
-    define can_operate: owner or operator
-    define can_approve: owner or approver
-    define can_manage_access: owner
+    define can_manage_access: owner or can_administer from parent
+    define can_approve: can_manage_access or approver
+    define can_operate: can_manage_access or operator
+    define can_view: can_operate or can_approve or viewer or can_view from parent

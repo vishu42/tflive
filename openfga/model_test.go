@@ -42,22 +42,35 @@ func TestEmbeddedDSLTransformsToExpectedModel(t *testing.T) {
 	if _, ok := relations["user"]; !ok {
 		t.Fatal("model is missing the user type")
 	}
-	stack, ok := relations["stack"]
-	if !ok {
-		t.Fatal("model is missing the stack type")
+	expected := map[string][]string{
+		"platform": {
+			"root", "admin", "editor", "viewer",
+			"can_administer", "can_edit", "can_view",
+			"can_create_stack", "can_publish_template", "can_read_template",
+		},
+		"stack": {
+			"owner", "operator", "approver", "viewer", "parent",
+			"can_view", "can_operate", "can_approve", "can_manage_access",
+		},
 	}
-	want := map[string]bool{
-		"owner": true, "operator": true, "approver": true, "viewer": true,
-		"can_view": true, "can_operate": true, "can_approve": true, "can_manage_access": true,
-	}
-	for _, name := range stack {
-		if !want[name] {
-			t.Fatalf("stack has unexpected relation %q", name)
+	for typeName, names := range expected {
+		actual, ok := relations[typeName]
+		if !ok {
+			t.Fatalf("model is missing the %s type", typeName)
 		}
-		delete(want, name)
-	}
-	if len(want) != 0 {
-		t.Fatalf("stack is missing relations %v", want)
+		want := map[string]bool{}
+		for _, name := range names {
+			want[name] = true
+		}
+		for _, name := range actual {
+			if !want[name] {
+				t.Fatalf("%s has unexpected relation %q", typeName, name)
+			}
+			delete(want, name)
+		}
+		if len(want) != 0 {
+			t.Fatalf("%s is missing relations %v", typeName, want)
+		}
 	}
 }
 

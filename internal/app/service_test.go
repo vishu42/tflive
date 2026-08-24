@@ -17,9 +17,7 @@ import (
 const keycloakSubject = "6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91"
 
 func authenticatedContext() context.Context {
-	return authn.ContextWithPrincipal(context.Background(), authn.Principal{
-		Subject: keycloakSubject, RealmRoles: []string{"platform-admin"},
-	})
+	return authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject})
 }
 
 func TestActorMutationsRejectMissingPrincipal(t *testing.T) {
@@ -89,7 +87,7 @@ func TestCreateStackDerivesSlugAndPersistsStack(t *testing.T) {
 	service := NewService(Service{
 		Stacks:     stacks,
 		Work:       newRecordingWork(stacks),
-		Authorizer: &recordingAuthorizer{},
+		Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
 		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
 		Clock:      fixedClock{now: now},
 	})
@@ -133,7 +131,7 @@ func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
 	t.Parallel()
 
 	stacks := &recordingStackRepository{createErr: ErrDuplicateStackSlug}
-	authorizer := &recordingAuthorizer{}
+	authorizer := &recordingAuthorizer{tiers: testPlatformAuthorizer()}
 	service := NewService(Service{
 		Stacks:     stacks,
 		Work:       newRecordingWork(stacks),
@@ -159,9 +157,10 @@ func TestCreateStackRejectsInvalidTagKey(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Stacks:   &recordingStackRepository{},
-		Work:     newRecordingWork(&recordingStackRepository{}),
-		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
+		Authorizer: testPlatformAuthorizer(),
+		Stacks:     &recordingStackRepository{},
+		Work:       newRecordingWork(&recordingStackRepository{}),
+		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
 	})
 
 	_, err := service.CreateStack(authenticatedContext(), CreateStackCommand{
@@ -180,9 +179,10 @@ func TestCreateStackRejectsEmptyDefaultCredentialID(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Stacks:   &recordingStackRepository{},
-		Work:     newRecordingWork(&recordingStackRepository{}),
-		StackIDs: fixedStackIDGenerator{id: traits.StackID("stack_123")},
+		Authorizer: testPlatformAuthorizer(),
+		Stacks:     &recordingStackRepository{},
+		Work:       newRecordingWork(&recordingStackRepository{}),
+		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
 	})
 
 	_, err := service.CreateStack(authenticatedContext(), CreateStackCommand{
@@ -338,7 +338,7 @@ func TestListStacksPassesTenantAndNormalizesNilStacks(t *testing.T) {
 
 	stacks := &recordingStackRepository{list: nil}
 	service := NewService(Service{Stacks: stacks, Authorizer: &permissionAuthorizer{}})
-	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject, RealmRoles: []string{"platform-admin"}})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject})
 
 	got, err := service.ListStacks(ctx, ListStacksCommand{
 		TenantID: traits.TenantID("tenant_123"),
@@ -362,7 +362,7 @@ func TestListTemplateRevisionsPassesTenantAndNormalizesNilTemplateRevisions(t *t
 	t.Parallel()
 
 	templates := &recordingTemplateRepository{templates: nil}
-	service := NewService(Service{TemplateRevisions: templates})
+	service := NewService(Service{TemplateRevisions: templates, Authorizer: testPlatformAuthorizer()})
 
 	got, err := service.ListTemplateRevisions(authenticatedContext(), ListTemplateRevisionsCommand{
 		TenantID: traits.TenantID("tenant_123"),
@@ -1143,6 +1143,7 @@ func TestRegisterTemplateCreatesPendingRegistrationAndDispatchesWorkflow(t *test
 	work := &recordingUnitOfWork{templateRegistrations: registrations}
 
 	service := NewService(Service{
+		Authorizer:            testPlatformAuthorizer(),
 		Work:                  work,
 		TemplateRegistrations: registrations,
 		RegistrationIDs:       fixedTemplateRegistrationIDGenerator{id: traits.TemplateRegistrationID("template_registration_123")},
@@ -1184,6 +1185,7 @@ func TestRegisterTemplateRejectsMissingSourceRef(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
+		Authorizer:            testPlatformAuthorizer(),
 		TemplateRegistrations: &recordingTemplateRegistrationRepository{},
 	})
 
@@ -1205,6 +1207,7 @@ func TestRegisterTemplateDoesNotDispatchWhenPersistenceFails(t *testing.T) {
 	registrations := &recordingTemplateRegistrationRepository{createErr: persistErr}
 	work := &recordingUnitOfWork{templateRegistrations: registrations}
 	service := NewService(Service{
+		Authorizer:            testPlatformAuthorizer(),
 		Work:                  work,
 		TemplateRegistrations: registrations,
 		RegistrationIDs:       fixedTemplateRegistrationIDGenerator{id: traits.TemplateRegistrationID("template_registration_123")},
@@ -1343,9 +1346,7 @@ func TestApproveRunAllowsSelfApproval(t *testing.T) {
 func TestApproveRunSelfApprovalWorksForPlatformAdmins(t *testing.T) {
 	t.Parallel()
 
-	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{
-		Subject: keycloakSubject, RealmRoles: []string{"platform-admin"},
-	})
+	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject})
 	runs := &recordingTemplateRunRepository{run: traits.TemplateRun{
 		ID:              "run_123",
 		TenantID:        "tenant_123",
@@ -1638,7 +1639,7 @@ func TestGetTemplateRegistrationReturnsTenantScopedRegistration(t *testing.T) {
 			Status:   traits.TemplateRegistrationCompleted,
 		},
 	}
-	service := NewService(Service{TemplateRegistrations: registrations})
+	service := NewService(Service{TemplateRegistrations: registrations, Authorizer: testPlatformAuthorizer()})
 
 	registration, err := service.GetTemplateRegistration(authenticatedContext(), GetTemplateRegistrationCommand{
 		TenantID:       traits.TenantID("tenant_123"),
@@ -1669,7 +1670,7 @@ func TestGetTemplateRevisionVariablesReturnsTenantScopedVariables(t *testing.T) 
 			},
 		},
 	}
-	service := NewService(Service{TemplateRevisions: templates})
+	service := NewService(Service{TemplateRevisions: templates, Authorizer: testPlatformAuthorizer()})
 
 	variables, err := service.GetTemplateRevisionVariables(authenticatedContext(), GetTemplateRevisionVariablesCommand{
 		TenantID:           traits.TenantID("tenant_123"),
@@ -1933,7 +1934,7 @@ func TestCreateStackAuditsOwnerGrant(t *testing.T) {
 	service := NewService(Service{
 		Stacks:     &recordingStackRepository{},
 		Work:       work,
-		Authorizer: &recordingAuthorizer{},
+		Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
 		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
 		Clock:      fixedClock{now: now},
 	})
@@ -1981,7 +1982,7 @@ func TestCreateStackAuditWriteFailureDoesNotBlockMutation(t *testing.T) {
 	service := NewService(Service{
 		Stacks:     &recordingStackRepository{},
 		Work:       newRecordingWork(&recordingStackRepository{}),
-		Authorizer: &recordingAuthorizer{},
+		Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
 		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
 		Clock:      fixedClock{now: time.Now()},
 		Audit:      failingAuditRepository{},
@@ -2007,7 +2008,7 @@ func TestCreateStackWithNilAuditRepositoryDoesNotPanic(t *testing.T) {
 	service := NewService(Service{
 		Stacks:     &recordingStackRepository{},
 		Work:       newRecordingWork(&recordingStackRepository{}),
-		Authorizer: &recordingAuthorizer{},
+		Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
 		StackIDs:   fixedStackIDGenerator{id: traits.StackID("stack_123")},
 		Clock:      fixedClock{now: time.Now()},
 		Audit:      nil,
@@ -2062,7 +2063,7 @@ func TestAddTemplateToStackAuditsAuthorizationDenial(t *testing.T) {
 	})
 
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{
-		Subject: keycloakSubject, RealmRoles: []string{"stack-creator"},
+		Subject: keycloakSubject,
 	})
 
 	_, err := service.AddTemplateToStack(ctx, AddTemplateToStackCommand{
@@ -2563,6 +2564,7 @@ func TestRegisterTemplatePairsRegistrationWithSyncIntentInTransaction(t *testing
 	registrations := &recordingTemplateRegistrationRepository{}
 	work := &recordingUnitOfWork{templateRegistrations: registrations}
 	service := NewService(Service{
+		Authorizer:            testPlatformAuthorizer(),
 		Work:                  work,
 		TemplateRegistrations: registrations,
 		RegistrationIDs:       fixedTemplateRegistrationIDGenerator{id: "registration_123"},
@@ -2700,16 +2702,13 @@ func TestCancelRunPairsCancellationWithSignalIntentInTransaction(t *testing.T) {
 }
 
 func adminContext() context.Context {
-	return authn.ContextWithPrincipal(context.Background(), authn.Principal{
-		Subject:    "admin_123",
-		RealmRoles: []string{"platform-admin"},
-	})
+	return authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "admin_123"})
 }
 
 func TestAssignStackRoleEnqueuesDesiredRoleWithoutCallingOpenFGA(t *testing.T) {
 	t.Parallel()
 
-	authorizer := &recordingAuthorizer{}
+	authorizer := &recordingAuthorizer{tiers: testPlatformAuthorizer()}
 	work := newRecordingWork(nil)
 	service := NewService(Service{Work: work, Authorizer: authorizer, Clock: fixedClock{now: time.Now()}})
 
@@ -2762,7 +2761,7 @@ func TestAssignStackRoleEnqueuesMatchingRole(t *testing.T) {
 		t.Fatalf("NewGrant: %v", err)
 	}
 
-	authorizer := &recordingAuthorizer{grants: []authz.Grant{existing}}
+	authorizer := &recordingAuthorizer{grants: []authz.Grant{existing}, tiers: testPlatformAuthorizer()}
 	work := newRecordingWork(nil)
 	service := NewService(Service{Work: work, Authorizer: authorizer, Clock: fixedClock{now: time.Now()}})
 
@@ -2803,7 +2802,7 @@ func TestRevokeStackRoleEnqueuesEmptyRole(t *testing.T) {
 		t.Fatalf("NewGrant: %v", err)
 	}
 
-	authorizer := &recordingAuthorizer{grants: []authz.Grant{existing}}
+	authorizer := &recordingAuthorizer{grants: []authz.Grant{existing}, tiers: testPlatformAuthorizer()}
 	work := newRecordingWork(nil)
 	service := NewService(Service{Work: work, Authorizer: authorizer, Clock: fixedClock{now: time.Now()}})
 
@@ -2836,7 +2835,7 @@ func TestRevokeStackRoleEnqueuesEmptyRoleWhenGrantIsAbsent(t *testing.T) {
 	work := newRecordingWork(nil)
 	service := NewService(Service{
 		Work:       work,
-		Authorizer: &recordingAuthorizer{},
+		Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
 		Clock:      fixedClock{now: time.Now()},
 	})
 
@@ -2863,7 +2862,7 @@ func TestRevokeStackRoleEnqueuesEmptyRoleWhenGrantIsAbsent(t *testing.T) {
 func TestAssignStackRoleWithoutUnitOfWorkFails(t *testing.T) {
 	t.Parallel()
 
-	service := NewService(Service{Authorizer: &recordingAuthorizer{}, Clock: fixedClock{now: time.Now()}})
+	service := NewService(Service{Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()}, Clock: fixedClock{now: time.Now()}})
 
 	_, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
 		TenantID: traits.TenantID("tenant_123"),

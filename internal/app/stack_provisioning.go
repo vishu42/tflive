@@ -64,7 +64,16 @@ func (service *Service) GrantStackOwner(ctx context.Context, command GrantStackO
 	if err != nil {
 		return fmt.Errorf("build owner grant: %w", err)
 	}
-	mutation, err := authz.NewMutation([]authz.Grant{grant}, true)
+	// The parent edge rides in the same mutation as the owner grant, because a
+	// stack that has one without the other is broken either way: without owner
+	// its creator cannot reach it, and without parent no platform administrator
+	// can. OpenFGA applies a write transactionally, so both land or neither
+	// does -- which is also why the owner check above is enough to skip both.
+	parent, err := authz.NewStructuralRelationship(authz.PlatformSubject, object, authz.RelationParent)
+	if err != nil {
+		return fmt.Errorf("build stack parent edge: %w", err)
+	}
+	mutation, err := authz.NewMutation([]authz.Grant{grant, parent}, true)
 	if err != nil {
 		return fmt.Errorf("build owner mutation: %w", err)
 	}

@@ -134,7 +134,15 @@ func (server *Server) handleMe(response http.ResponseWriter, request *http.Reque
 		writeError(response, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
-	writeJSON(response, http.StatusOK, auth.MeFromPrincipal(principal, server.tenantID))
+	capabilities, err := server.service.PlatformCapabilities(request.Context())
+	if err != nil {
+		writeAppError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, auth.MeFromPrincipal(principal, server.tenantID, auth.GlobalCapabilities{
+		IsPlatformAdmin: capabilities.IsPlatformAdmin,
+		CanCreateStack:  capabilities.CanCreateStack,
+	}))
 }
 
 func (server *Server) handleTenantRoute(pattern string, handler http.HandlerFunc) {
