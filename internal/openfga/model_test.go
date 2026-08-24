@@ -150,18 +150,40 @@ func TestCanonicalModelAllowsDirectWritesOnlyToRoles(t *testing.T) {
 		t.Fatal("canonical model is missing stack type")
 	}
 
-	directRoles := map[string]bool{
-		"owner": true, "operator": true, "approver": true, "viewer": true,
+	// parent is the one structural exception: directly assignable like a role,
+	// but its direct type is the platform singleton rather than a user. It is
+	// what carries administrator inheritance onto a stack, so it has to be
+	// writable -- which is exactly why authz.grantableRelations excludes it.
+	assertDirectTypes(t, "stack", stack, map[string]string{
+		"owner": "user", "operator": "user", "approver": "user", "viewer": "user",
+		"parent": "platform",
+	})
+
+	platform, ok := model.TypeDefinition("platform")
+	if !ok {
+		t.Fatal("canonical model is missing platform type")
 	}
-	for relation := range stack.Relations {
-		metadata := stack.Metadata.Relations[relation]
-		hasDirectType := len(metadata.DirectlyRelatedUserTypes) != 0
-		if hasDirectType != directRoles[relation] {
-			t.Fatalf("relation %s direct assignment = %v", relation, hasDirectType)
+	// Every platform tier is a direct user grant; every capability derives.
+	assertDirectTypes(t, "platform", platform, map[string]string{
+		"root": "user", "admin": "user", "editor": "user", "viewer": "user",
+	})
+}
+
+// assertDirectTypes pins which relations of a type are directly writable and
+// what may occupy the user slot of each. A relation absent from want must
+// derive, which is what stops a client writing a permission straight in.
+func assertDirectTypes(t *testing.T, typeName string, definition TypeDefinition, want map[string]string) {
+	t.Helper()
+
+	for relation := range definition.Relations {
+		metadata := definition.Metadata.Relations[relation]
+		wantType, direct := want[relation]
+		if hasDirectType := len(metadata.DirectlyRelatedUserTypes) != 0; hasDirectType != direct {
+			t.Fatalf("%s relation %s direct assignment = %v, want %v", typeName, relation, hasDirectType, direct)
 		}
 		for _, related := range metadata.DirectlyRelatedUserTypes {
-			if related.Type != "user" || related.Relation != "" || related.Wildcard != nil {
-				t.Fatalf("relation %s has unsafe direct type %#v", relation, related)
+			if related.Type != wantType || related.Relation != "" || related.Wildcard != nil {
+				t.Fatalf("%s relation %s has unsafe direct type %#v", typeName, relation, related)
 			}
 		}
 	}

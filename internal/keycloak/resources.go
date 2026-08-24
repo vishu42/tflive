@@ -280,18 +280,6 @@ func (c *Client) findUser(ctx context.Context, realm, username string) (Resource
 	return ref, true, err
 }
 
-func (c *Client) EnsureRealmRoleMapping(ctx context.Context, realm string, user ResourceRef, roles []ResourceRef) error {
-	return c.doJSON(
-		ctx,
-		http.MethodPost,
-		[]string{"admin", "realms", realm, "users", user.ID, "role-mappings", "realm"},
-		nil,
-		rolePayload(roles),
-		[]int{http.StatusNoContent},
-		nil,
-	)
-}
-
 func (c *Client) ClientRole(ctx context.Context, realm string, client ResourceRef, roleName string) (ResourceRef, error) {
 	resource := map[string]any{}
 	if err := c.doJSON(

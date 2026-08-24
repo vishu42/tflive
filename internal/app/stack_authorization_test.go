@@ -33,10 +33,10 @@ func TestCreateStackEnqueuesProvisioningInsteadOfCallingOpenFGA(t *testing.T) {
 	t.Parallel()
 
 	stacks := &authorizationStackRepository{}
-	authorizer := &recordingAuthorizer{}
+	authorizer := &recordingAuthorizer{tiers: newPlatformAuthorizer(platformEditor("user_123"))}
 	work := newRecordingWork(stacks)
 	service := NewService(Service{Stacks: stacks, Work: work, Authorizer: authorizer, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
-	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123", RealmRoles: []string{"stack-creator"}})
+	ctx := platformContext("user_123")
 
 	stack, err := service.CreateStack(ctx, CreateStackCommand{TenantID: "tenant_123", Name: "Acme"})
 	if err != nil {
@@ -77,8 +77,8 @@ func TestCreateStackAllowsPlatformAdmin(t *testing.T) {
 
 	stacks := &authorizationStackRepository{}
 	work := newRecordingWork(stacks)
-	service := NewService(Service{Stacks: stacks, Work: work, Authorizer: &recordingAuthorizer{}, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
-	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123", RealmRoles: []string{"platform-admin"}})
+	service := NewService(Service{Stacks: stacks, Work: work, Authorizer: &recordingAuthorizer{tiers: newPlatformAuthorizer(platformAdmin("user_123"))}, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
+	ctx := platformContext("user_123")
 
 	if _, err := service.CreateStack(ctx, CreateStackCommand{TenantID: "tenant_123", Name: "Acme"}); err != nil {
 		t.Fatalf("CreateStack() error = %v", err)
@@ -97,8 +97,8 @@ func TestCreateStackPersistsNothingWhenUnitOfWorkFails(t *testing.T) {
 	stacks := &authorizationStackRepository{}
 	work := newRecordingWork(stacks)
 	work.err = authz.ErrUnavailable
-	service := NewService(Service{Stacks: stacks, Work: work, Authorizer: &recordingAuthorizer{}, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
-	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123", RealmRoles: []string{"stack-creator"}})
+	service := NewService(Service{Stacks: stacks, Work: work, Authorizer: &recordingAuthorizer{tiers: newPlatformAuthorizer(platformEditor("user_123"))}, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
+	ctx := platformContext("user_123")
 
 	_, err := service.CreateStack(ctx, CreateStackCommand{TenantID: "tenant_123", Name: "Acme"})
 	if !errors.Is(err, authz.ErrUnavailable) {
@@ -115,7 +115,7 @@ func TestCreateStackRejectsInvalidOpenFGASubjectBeforePersistence(t *testing.T) 
 	stacks := &authorizationStackRepository{}
 	work := newRecordingWork(stacks)
 	service := NewService(Service{Stacks: stacks, Work: work, Authorizer: &recordingAuthorizer{}, StackIDs: fixedStackIDGenerator{id: "stack_123"}, Clock: fixedClock{now: time.Now()}})
-	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user:bad", RealmRoles: []string{"stack-creator"}})
+	ctx := platformContext("user:bad")
 
 	_, err := service.CreateStack(ctx, CreateStackCommand{TenantID: "tenant_123", Name: "Acme"})
 	if !errors.Is(err, authz.ErrInvalidInput) {
@@ -157,13 +157,23 @@ type recordingAuthorizer struct {
 	mutation authz.Mutation
 	writeErr error
 	grants   []authz.Grant
+	// tiers answers the read side, so a test states which platform
+	// capabilities its principal holds. Nil grants none, which is what an
+	// unseeded subject is -- and what the "requires creator" case needs.
+	tiers *platformAuthorizer
 }
 
-func (authorizer *recordingAuthorizer) Check(context.Context, authz.CheckRequest) (authz.CheckResult, error) {
-	return authz.CheckResult{}, nil
+func (authorizer *recordingAuthorizer) Check(ctx context.Context, request authz.CheckRequest) (authz.CheckResult, error) {
+	if authorizer.tiers == nil {
+		return authz.CheckResult{}, nil
+	}
+	return authorizer.tiers.Check(ctx, request)
 }
-func (authorizer *recordingAuthorizer) BatchCheck(context.Context, authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
-	return authz.BatchCheckResult{}, nil
+func (authorizer *recordingAuthorizer) BatchCheck(ctx context.Context, request authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
+	if authorizer.tiers == nil {
+		return authz.BatchCheckResult{}, nil
+	}
+	return authorizer.tiers.BatchCheck(ctx, request)
 }
 func (authorizer *recordingAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
 	return authz.ListGrantsResult{Grants: authorizer.grants}, nil

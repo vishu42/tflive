@@ -110,6 +110,26 @@ func TestSubjectRejectsANonActorType(t *testing.T) {
 	}
 }
 
+// The platform singleton is the one object every global capability is checked
+// against, so a drifted id would not fail loudly -- it would answer every
+// global question against an empty object. This pins both slots it occupies.
+func TestPlatformSingletonIsFixedAndMayAct(t *testing.T) {
+	if Platform.String() != "platform:tflive" {
+		t.Fatalf("Platform = %q, want platform:tflive", Platform.String())
+	}
+	if !Platform.Valid() {
+		t.Fatal("the platform singleton must be a valid object")
+	}
+	// The parent edge puts the platform in the user slot, so unlike a stack it
+	// must validate as a subject.
+	if PlatformSubject.String() != "platform:tflive" {
+		t.Fatalf("PlatformSubject = %q, want platform:tflive", PlatformSubject.String())
+	}
+	if !PlatformSubject.Valid() {
+		t.Fatal("the platform singleton must be able to occupy the user slot")
+	}
+}
+
 // Pins that the bare identifier survives construction, so callers recover the
 // raw OIDC "sub" through ID() rather than by stripping a prefix off String().
 func TestIdentifierKeepsItsBareID(t *testing.T) {

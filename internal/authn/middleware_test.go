@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"testing"
 )
 
@@ -21,7 +20,7 @@ func (verifier *middlewareVerifier) Verify(_ context.Context, raw string) (Verif
 }
 
 func TestRequireAuthentication(t *testing.T) {
-	valid := VerifiedToken{Subject: "user-123", Name: "Ada", PreferredUsername: "ada", Email: "ada@example.test", RealmRoles: []string{"stack-creator", "ignored", "platform-admin", "stack-creator"}}
+	valid := VerifiedToken{Subject: "user-123", Name: "Ada", PreferredUsername: "ada", Email: "ada@example.test"}
 
 	for _, test := range []struct {
 		name          string
@@ -45,7 +44,7 @@ func TestRequireAuthentication(t *testing.T) {
 				called = true
 				if request.URL.Path == "/v1/stacks" {
 					principal, ok := PrincipalFromContext(request.Context())
-					if !ok || principal.Subject != valid.Subject || principal.Name != valid.Name || principal.PreferredUsername != valid.PreferredUsername || principal.Email != valid.Email || !slices.Equal(principal.RealmRoles, []string{"platform-admin", "stack-creator"}) {
+					if !ok || principal.Subject != valid.Subject || principal.Name != valid.Name || principal.PreferredUsername != valid.PreferredUsername || principal.Email != valid.Email {
 						t.Fatalf("principal = %#v, ok = %t", principal, ok)
 					}
 				}
@@ -68,22 +67,17 @@ func TestRequireAuthentication(t *testing.T) {
 	}
 }
 
-func TestNormalizedGlobalRoles(t *testing.T) {
-	got := normalizedGlobalRoles([]string{"stack-creator", "ignored", "platform-admin", "stack-creator"})
-	if !slices.Equal(got, []string{"platform-admin", "stack-creator"}) {
-		t.Fatalf("roles = %#v", got)
-	}
-}
-
-func TestPrincipalFromContextCopiesRoles(t *testing.T) {
-	ctx := ContextWithPrincipal(context.Background(), Principal{Subject: "user-123", RealmRoles: []string{"admin"}})
+// The principal is all value types now, so a reader cannot reach through it to
+// mutate what the next reader sees. It used to carry a role slice that could be.
+func TestPrincipalFromContextIsNotMutableByAReader(t *testing.T) {
+	ctx := ContextWithPrincipal(context.Background(), Principal{Subject: "user-123", Name: "Ada"})
 	principal, ok := PrincipalFromContext(ctx)
 	if !ok {
 		t.Fatal("principal is missing")
 	}
-	principal.RealmRoles[0] = "mutated"
+	principal.Name = "mutated"
 	second, ok := PrincipalFromContext(ctx)
-	if !ok || second.RealmRoles[0] != "admin" {
+	if !ok || second.Name != "Ada" {
 		t.Fatalf("principal after mutation = %#v, ok = %t", second, ok)
 	}
 }

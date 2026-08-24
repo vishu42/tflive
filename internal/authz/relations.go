@@ -15,12 +15,17 @@ import "fmt"
 // refuses those: they declare no directly_related_user_types at all. They are
 // excluded here for readability, not for safety.
 //
-// #141 adds "admin" and "stack_creator". It must NOT add "parent" or "root".
+// "admin" and "editor" are the platform tiers. "viewer" is shared: it is a
+// stack role and a platform tier, and OpenFGA validates the relation against
+// the object's type, so one entry covers both. "parent" and "root" must NEVER
+// join this list.
 var grantableRelations = map[string]bool{
 	"owner":    true,
 	"operator": true,
 	"approver": true,
 	"viewer":   true,
+	"admin":    true,
+	"editor":   true,
 }
 
 // structuralRelations are the relations OpenFGA will actually store that are
@@ -35,7 +40,7 @@ var grantableRelations = map[string]bool{
 // and a reader that is handed one is looking at a corrupt store or a response
 // from somewhere else -- it must fail rather than quietly skip.
 //
-// #141 introduces both of these. Neither may ever join grantableRelations.
+// Neither may ever join grantableRelations.
 var structuralRelations = map[string]bool{
 	"parent": true,
 	"root":   true,
@@ -144,10 +149,25 @@ var (
 	RelationApprover = mustGrantRelation("approver")
 	RelationViewer   = mustGrantRelation("viewer")
 
+	// Platform tiers. RelationViewer above is the third of them.
+	RelationAdmin  = mustGrantRelation("admin")
+	RelationEditor = mustGrantRelation("editor")
+
+	// Structural: stored, but not access, so never grantable.
+	RelationParent = mustRelation("parent")
+	RelationRoot   = mustRelation("root")
+
 	RelationCanView         = mustRelation("can_view")
 	RelationCanOperate      = mustRelation("can_operate")
 	RelationCanApprove      = mustRelation("can_approve")
 	RelationCanManageAccess = mustRelation("can_manage_access")
+
+	// Platform capabilities. Each gates a route; the tiers they derive from
+	// live in the model, not here, so re-tiering one never touches Go.
+	RelationCanAdminister      = mustRelation("can_administer")
+	RelationCanCreateStack     = mustRelation("can_create_stack")
+	RelationCanReadTemplate    = mustRelation("can_read_template")
+	RelationCanPublishTemplate = mustRelation("can_publish_template")
 )
 
 // mustRelation is NewRelation for the package-level table above. It panics on

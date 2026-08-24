@@ -15,13 +15,11 @@ func TestGrantRelationRefusesNonGrantableRelations(t *testing.T) {
 	}
 }
 
-// Pins the allowlist's contents, including its size: an added key (a
-// premature "admin", say) is invisible to a test that only checks the four
-// known names work, so this also asserts set equality against
-// grantableRelations directly. #141 extends this with admin and
-// stack_creator, and must update the "want" set below when it does.
-func TestGrantRelationAcceptsTheFourStackRoles(t *testing.T) {
-	names := []string{"owner", "operator", "approver", "viewer"}
+// Pins the allowlist's contents, including its size: an added key (a stray
+// "parent", say) is invisible to a test that only checks the known names work,
+// so this also asserts set equality against grantableRelations directly.
+func TestGrantRelationAcceptsTheStackRolesAndPlatformTiers(t *testing.T) {
+	names := []string{"owner", "operator", "approver", "viewer", "admin", "editor"}
 	for _, name := range names {
 		relation, err := GrantRelation(name)
 		if err != nil {
@@ -49,7 +47,7 @@ func TestGrantRelationAcceptsTheFourStackRoles(t *testing.T) {
 // Checking is a different question from writing, and OpenFGA answers it for any
 // relation. NewRelation must therefore admit what GrantRelation refuses.
 func TestNewRelationAdmitsRelationsThatCannotBeGranted(t *testing.T) {
-	for _, name := range []string{"can_view", "parent", "admin"} {
+	for _, name := range []string{"can_view", "parent", "root", "can_administer"} {
 		relation, err := NewRelation(name)
 		if err != nil {
 			t.Fatalf("NewRelation(%q) error = %v", name, err)
