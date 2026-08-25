@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/vishu42/tflive/internal/secrets"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -23,7 +24,11 @@ type SecurityConfig struct {
 	Mode     RuntimeMode
 	TenantID traits.TenantID
 	OIDC     OIDCConfig
-	OpenFGA  OpenFGAConfig
+
+	PublicURL            *url.URL
+	SessionEncryptionKey Secret
+
+	OpenFGA OpenFGAConfig
 
 	KeycloakAdminURL            *url.URL
 	KeycloakRealm               string
@@ -33,8 +38,9 @@ type SecurityConfig struct {
 }
 
 type OIDCConfig struct {
-	IssuerURL *url.URL
-	Audience  string
+	IssuerURL    *url.URL
+	ClientID     string
+	ClientSecret Secret
 }
 
 type OpenFGAConfig struct {
@@ -86,11 +92,14 @@ func (cfg OpenFGAConfig) GoString() string {
 
 func (cfg SecurityConfig) String() string {
 	return fmt.Sprintf(
-		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v Audience:%q} OpenFGA:%s KeycloakAdminURL:%v KeycloakRealm:%q DirectoryReaderClientID:%q DirectoryReaderClientSecret:%s DirectoryReaderHTTPTimeout:%s}",
+		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v ClientID:%q ClientSecret:%s} PublicURL:%v SessionEncryptionKey:%s OpenFGA:%s KeycloakAdminURL:%v KeycloakRealm:%q DirectoryReaderClientID:%q DirectoryReaderClientSecret:%s DirectoryReaderHTTPTimeout:%s}",
 		cfg.Mode,
 		cfg.TenantID,
 		cfg.OIDC.IssuerURL,
-		cfg.OIDC.Audience,
+		cfg.OIDC.ClientID,
+		cfg.OIDC.ClientSecret,
+		cfg.PublicURL,
+		cfg.SessionEncryptionKey,
 		cfg.OpenFGA,
 		cfg.KeycloakAdminURL,
 		cfg.KeycloakRealm,
@@ -124,12 +133,33 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 	if err != nil {
 		return SecurityConfig{}, err
 	}
-	audience := strings.TrimSpace(getenv("OIDC_AUDIENCE"))
-	if audience == "" {
-		return SecurityConfig{}, authConfigError("OIDC_AUDIENCE is required")
+	if strings.TrimSpace(getenv("OIDC_AUDIENCE")) != "" {
+		return SecurityConfig{}, authConfigError("OIDC_AUDIENCE is retired: set OIDC_CLIENT_ID to the OAuth client ID instead")
 	}
-	if !safeOpaqueValue(audience) {
-		return SecurityConfig{}, authConfigError("OIDC_AUDIENCE must not contain whitespace or control characters")
+	clientID := strings.TrimSpace(getenv("OIDC_CLIENT_ID"))
+	if clientID == "" {
+		return SecurityConfig{}, authConfigError("OIDC_CLIENT_ID is required")
+	}
+	if !safeOpaqueValue(clientID) {
+		return SecurityConfig{}, authConfigError("OIDC_CLIENT_ID must not contain whitespace or control characters")
+	}
+	clientSecret := newSecret(strings.TrimSpace(getenv("OIDC_CLIENT_SECRET")))
+	if clientSecret.Empty() {
+		return SecurityConfig{}, authConfigError("OIDC_CLIENT_SECRET is required")
+	}
+
+	publicURL, err := parseConfigURL("TFLIVE_PUBLIC_URL", getenv("TFLIVE_PUBLIC_URL"))
+	if err != nil {
+		return SecurityConfig{}, err
+	}
+	publicURL.Path = strings.TrimRight(publicURL.Path, "/")
+
+	sessionKey := newSecret(strings.TrimSpace(getenv("SESSION_ENCRYPTION_KEY")))
+	if sessionKey.Empty() {
+		return SecurityConfig{}, authConfigError("SESSION_ENCRYPTION_KEY is required")
+	}
+	if _, err := secrets.NewCipher(sessionKey.Value()); err != nil {
+		return SecurityConfig{}, authConfigError("SESSION_ENCRYPTION_KEY must be a 32-byte raw, base64, or hex key")
 	}
 
 	openFGA, err := loadOpenFGAConfig(getenv)
@@ -142,6 +172,9 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 	if mode == RuntimeProduction {
 		if issuerURL.Scheme != "https" {
 			return SecurityConfig{}, authConfigError("OIDC_ISSUER_URL must use HTTPS in production")
+		}
+		if publicURL.Scheme != "https" {
+			return SecurityConfig{}, authConfigError("TFLIVE_PUBLIC_URL must use HTTPS in production")
 		}
 		if openFGA.APIToken.Empty() {
 			return SecurityConfig{}, authConfigError("OPENFGA_API_TOKEN is required in production")
@@ -178,9 +211,14 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 		Mode:     mode,
 		TenantID: traits.TenantID(tenantID),
 		OIDC: OIDCConfig{
-			IssuerURL: issuerURL,
-			Audience:  audience,
+			IssuerURL:    issuerURL,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
 		},
+
+		PublicURL:            publicURL,
+		SessionEncryptionKey: sessionKey,
+
 		OpenFGA: openFGA,
 
 		KeycloakAdminURL:            keycloakAdminURL,

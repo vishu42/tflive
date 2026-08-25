@@ -20,6 +20,7 @@ import (
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/queue"
+	"github.com/vishu42/tflive/internal/secrets"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -227,7 +228,7 @@ func TestRunConstructsAndClosesOIDCVerifier(t *testing.T) {
 	if err := runWithDependencies(context.Background(), apiTestEnv, deps.apiDependencies); err != nil {
 		t.Fatalf("runWithDependencies() error = %v", err)
 	}
-	if got.IssuerURL == nil || got.IssuerURL.String() != apiTestEnv("OIDC_ISSUER_URL") || got.Audience != apiTestEnv("OIDC_AUDIENCE") {
+	if got.IssuerURL == nil || got.IssuerURL.String() != apiTestEnv("OIDC_ISSUER_URL") || got.Audience != apiTestEnv("OIDC_CLIENT_ID") {
 		t.Fatalf("OIDC verifier config = %#v", got)
 	}
 	if !verifier.closed {
@@ -370,8 +371,11 @@ func apiTestValues() map[string]string {
 		"ARTIFACT_STORE_FILESYSTEM_ROOT": "/var/lib/tflive/artifacts",
 		"TFLIVE_ENVIRONMENT":             "development",
 		"TFLIVE_TENANT_ID":               "tenant_123",
+		"TFLIVE_PUBLIC_URL":              "http://localhost:5173",
 		"OIDC_ISSUER_URL":                "http://localhost:8082/realms/tflive",
-		"OIDC_AUDIENCE":                  "tflive-api",
+		"OIDC_CLIENT_ID":                 "tflive-api",
+		"OIDC_CLIENT_SECRET":             "oidc-client-secret",
+		"SESSION_ENCRYPTION_KEY":         "01234567890123456789012345678901",
 		"OPENFGA_API_URL":                "http://localhost:8080",
 		"OPENFGA_STORE_ID":               "store-id",
 		"OPENFGA_MODEL_ID":               "model-id",
@@ -393,6 +397,7 @@ type recordingAPIDependencies struct {
 	pool                *recordingPostgresPool
 	store               *recordingStore
 	queueSpecs          *queue.SpecRegistry
+	credentialCipher    *secrets.Cipher
 	artifactStoreConfig config.ArtifactStoreConfig
 	logReader           recordingTemplateRunLogReader
 	service             app.Service
@@ -424,11 +429,12 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 			deps.migrated = true
 			return nil
 		},
-		newStore: func(pool postgresPool, specs *queue.SpecRegistry) (appRepositories, error) {
+		newStore: func(pool postgresPool, specs *queue.SpecRegistry, cipher *secrets.Cipher) (appRepositories, error) {
 			if pool != deps.pool {
 				t.Fatalf("newStore pool = %p, want %p", pool, deps.pool)
 			}
 			deps.queueSpecs = specs
+			deps.credentialCipher = cipher
 			return deps.store, nil
 		},
 		newLogReader: func(cfg config.ArtifactStoreConfig) (app.TemplateRunLogReader, error) {

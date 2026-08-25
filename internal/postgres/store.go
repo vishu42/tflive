@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"errors"
-	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/app"
@@ -29,17 +28,20 @@ func WithQueueSpecs(specs *queue.SpecRegistry) Option {
 	return func(store *Store) { store.queueSpecs = specs }
 }
 
-// NewStore creates a repository store and loads the process-wide credential encryption key.
+// NewStore creates a repository store. The credential cipher is injected by the
+// caller from internal/config; the store reads no environment of its own.
 func NewStore(pool *pgxpool.Pool, options ...Option) *Store {
-	var cipher *secrets.Cipher
-	if rawKey := os.Getenv("CREDENTIAL_ENCRYPTION_KEY"); rawKey != "" {
-		cipher, _ = secrets.NewCipher(rawKey)
-	}
-	store := &Store{pool: pool, credentialCipher: cipher}
+	store := &Store{pool: pool}
 	for _, option := range options {
 		option(store)
 	}
 	return store
+}
+
+// WithCredentialCipher supplies the process-wide credential encryption cipher.
+// Without it, Encrypt and Decrypt return app.ErrCredentialEncryptionUnavailable.
+func WithCredentialCipher(cipher *secrets.Cipher) Option {
+	return func(store *Store) { store.credentialCipher = cipher }
 }
 
 // Encrypt protects a credential value with the configured application cipher before persistence.

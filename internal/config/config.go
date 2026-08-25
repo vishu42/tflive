@@ -16,25 +16,27 @@ const (
 var ErrInvalidConfig = errors.New("invalid config")
 
 type APIConfig struct {
-	DatabaseURL       string
-	HTTPAddress       string
-	TemporalAddress   string
-	TemporalNamespace string
-	TemporalTaskQueue string
-	WorkerRunRoot     string
-	ArtifactStore     ArtifactStoreConfig
-	Security          SecurityConfig
-	Debug             bool
+	DatabaseURL             string
+	HTTPAddress             string
+	TemporalAddress         string
+	TemporalNamespace       string
+	TemporalTaskQueue       string
+	WorkerRunRoot           string
+	ArtifactStore           ArtifactStoreConfig
+	Security                SecurityConfig
+	CredentialEncryptionKey Secret
+	Debug                   bool
 }
 
 type WorkerConfig struct {
-	DatabaseURL       string
-	TemporalAddress   string
-	TemporalNamespace string
-	TemporalTaskQueue string
-	WorkerRunRoot     string
-	ArtifactStore     ArtifactStoreConfig
-	OpenFGA           OpenFGAConfig
+	DatabaseURL             string
+	TemporalAddress         string
+	TemporalNamespace       string
+	TemporalTaskQueue       string
+	WorkerRunRoot           string
+	ArtifactStore           ArtifactStoreConfig
+	OpenFGA                 OpenFGAConfig
+	CredentialEncryptionKey Secret
 }
 
 type ArtifactStoreKind string
@@ -90,6 +92,7 @@ func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
 	}
 
 	cfg.Debug = parseBool(getenv("TFLIVE_DEBUG"))
+	cfg.CredentialEncryptionKey = newSecret(strings.TrimSpace(getenv("CREDENTIAL_ENCRYPTION_KEY")))
 
 	if cfg.DatabaseURL == "" {
 		return APIConfig{}, fmt.Errorf("%w: DATABASE_URL is required", ErrInvalidConfig)
@@ -126,6 +129,7 @@ func LoadWorkerConfig(getenv func(string) string) (WorkerConfig, error) {
 	if cfg.WorkerRunRoot == "" {
 		cfg.WorkerRunRoot = DefaultWorkerRunRoot
 	}
+	cfg.CredentialEncryptionKey = newSecret(strings.TrimSpace(getenv("CREDENTIAL_ENCRYPTION_KEY")))
 
 	if cfg.TemporalAddress == "" {
 		return WorkerConfig{}, fmt.Errorf("%w: TEMPORAL_ADDRESS is required", ErrInvalidConfig)
