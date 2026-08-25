@@ -102,19 +102,24 @@ func TestRequireAuthenticationDoesNotLeakVerifierErrors(t *testing.T) {
 func TestRequireAuthenticationAcceptsSessionCookie(t *testing.T) {
 	valid := VerifiedToken{Subject: "user-123", Name: "Ada"}
 
+	// hasCookie is separate from cookie's zero value on purpose: "empty cookie"
+	// needs to send a cookie whose value is "" (the shape a real client sends
+	// after logout clears it), which collapses into "neither" if injection is
+	// keyed on cookie != "" instead of a dedicated flag.
 	for _, test := range []struct {
 		name          string
 		authorization string
 		cookie        string
+		hasCookie     bool
 		status        int
 		wantRaw       string
 	}{
-		{name: "cookie only", cookie: "cookie-token", status: http.StatusOK, wantRaw: "cookie-token"},
+		{name: "cookie only", cookie: "cookie-token", hasCookie: true, status: http.StatusOK, wantRaw: "cookie-token"},
 		{name: "header only", authorization: "Bearer header-token", status: http.StatusOK, wantRaw: "header-token"},
-		{name: "header wins over cookie", authorization: "Bearer header-token", cookie: "cookie-token", status: http.StatusOK, wantRaw: "header-token"},
-		{name: "empty cookie", cookie: "", status: http.StatusUnauthorized},
+		{name: "header wins over cookie", authorization: "Bearer header-token", cookie: "cookie-token", hasCookie: true, status: http.StatusOK, wantRaw: "header-token"},
+		{name: "empty cookie", cookie: "", hasCookie: true, status: http.StatusUnauthorized},
 		{name: "neither", status: http.StatusUnauthorized},
-		{name: "malformed header falls back to cookie", authorization: "Basic ignored", cookie: "cookie-token", status: http.StatusOK, wantRaw: "cookie-token"},
+		{name: "malformed header falls back to cookie", authorization: "Basic ignored", cookie: "cookie-token", hasCookie: true, status: http.StatusOK, wantRaw: "cookie-token"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			verifier := &middlewareVerifier{token: valid}
@@ -125,7 +130,7 @@ func TestRequireAuthenticationAcceptsSessionCookie(t *testing.T) {
 			if test.authorization != "" {
 				request.Header.Set("Authorization", test.authorization)
 			}
-			if test.cookie != "" {
+			if test.hasCookie {
 				request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: test.cookie})
 			}
 			response := httptest.NewRecorder()
