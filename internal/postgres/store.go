@@ -6,15 +6,15 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/app"
-	"github.com/vishu42/tflive/internal/credentials"
 	"github.com/vishu42/tflive/internal/queue"
+	"github.com/vishu42/tflive/internal/secrets"
 )
 
 var ErrNotFound = errors.New("postgres: not found")
 
 type Store struct {
 	pool             *pgxpool.Pool
-	credentialCipher *credentials.Cipher
+	credentialCipher *secrets.Cipher
 	queueSpecs       *queue.SpecRegistry
 }
 
@@ -31,9 +31,9 @@ func WithQueueSpecs(specs *queue.SpecRegistry) Option {
 
 // NewStore creates a repository store and loads the process-wide credential encryption key.
 func NewStore(pool *pgxpool.Pool, options ...Option) *Store {
-	var cipher *credentials.Cipher
+	var cipher *secrets.Cipher
 	if rawKey := os.Getenv("CREDENTIAL_ENCRYPTION_KEY"); rawKey != "" {
-		cipher, _ = credentials.NewCipher(rawKey)
+		cipher, _ = secrets.NewCipher(rawKey)
 	}
 	store := &Store{pool: pool, credentialCipher: cipher}
 	for _, option := range options {
