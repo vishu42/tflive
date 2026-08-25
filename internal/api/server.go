@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/queue"
+	"github.com/vishu42/tflive/internal/secrets"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -23,6 +25,7 @@ type Server struct {
 	service  *app.Service
 	tenantID traits.TenantID
 	queue    queue.Reader
+	auth     AuthConfig
 	mux      *http.ServeMux
 	handler  http.Handler
 	debug    bool
@@ -36,6 +39,31 @@ func WithQueueReader(reader queue.Reader) ServerOption {
 	return func(server *Server) { server.queue = reader }
 }
 
+// AuthFlow is the subset of the OIDC flow the handlers use. *authn.Flow
+// satisfies it; the interface exists so handler tests need no live IdP.
+type AuthFlow interface {
+	AuthorizationURL(state, nonce, codeVerifier string) (string, error)
+	Exchange(ctx context.Context, code, codeVerifier string) (string, error)
+	EndSessionURL(idTokenHint, postLogoutRedirectURI string) string
+}
+
+// AuthConfig carries what the browser login routes need.
+type AuthConfig struct {
+	Flow     AuthFlow
+	Verifier authn.Verifier
+	Sealer   *secrets.Cipher
+	// PublicURL is the origin the browser reaches, with no trailing slash. It
+	// is configured rather than derived from Host or X-Forwarded-Proto, which
+	// a caller can spoof.
+	PublicURL     string
+	SecureCookies bool
+}
+
+// WithAuth enables the browser login routes.
+func WithAuth(cfg AuthConfig) ServerOption {
+	return func(server *Server) { server.auth = cfg }
+}
+
 func NewServer(service *app.Service, tenantID traits.TenantID, options ...ServerOption) *Server {
 	server := &Server{
 		service:  service,
@@ -44,6 +72,14 @@ func NewServer(service *app.Service, tenantID traits.TenantID, options ...Server
 	}
 	for _, option := range options {
 		option(server)
+	}
+
+	// Browser login routes. Registered only when auth is configured, so an
+	// unauthenticated test server does not expose a half-wired flow.
+	if server.auth.Flow != nil {
+		server.mux.HandleFunc("GET /v1/auth/login", server.handleAuthLogin)
+		server.mux.HandleFunc("GET /v1/auth/callback", server.handleAuthCallback)
+		server.mux.HandleFunc("POST /v1/auth/logout", server.handleAuthLogout)
 	}
 
 	// Health routes.
@@ -122,7 +158,9 @@ func NewServer(service *app.Service, tenantID traits.TenantID, options ...Server
 func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier, tenantID traits.TenantID, debug bool, options ...ServerOption) *Server {
 	server := NewServer(service, tenantID, options...)
 	server.debug = debug
-	server.handler = authn.RequireAuthentication(verifier, "/healthz")(server.mux)
+	server.handler = authn.RequireAuthentication(verifier,
+		"/healthz", "/v1/auth/login", "/v1/auth/callback", "/v1/auth/logout",
+	)(server.mux)
 	return server
 }
 

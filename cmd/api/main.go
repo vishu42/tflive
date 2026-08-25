@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,6 +48,7 @@ type appRepositories interface {
 
 type tokenVerifier interface {
 	authn.Verifier
+	authn.EndpointSource
 	Close(context.Context) error
 }
 
@@ -138,6 +140,22 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 	}
 	defer verifier.Close(context.Background())
 
+	sessionSealer, err := secrets.NewCipher(cfg.Security.SessionEncryptionKey.Value())
+	if err != nil {
+		return fmt.Errorf("create session sealer: %w", err)
+	}
+	publicURL := strings.TrimRight(cfg.Security.PublicURL.String(), "/")
+	flow, err := authn.NewFlow(authn.FlowConfig{
+		ClientID:     cfg.Security.OIDC.ClientID,
+		ClientSecret: cfg.Security.OIDC.ClientSecret.Value(),
+		RedirectURI:  publicURL + "/v1/auth/callback",
+		Endpoints:    verifier,
+		HTTPClient:   &http.Client{Timeout: 10 * time.Second},
+	})
+	if err != nil {
+		return fmt.Errorf("create oidc flow: %w", err)
+	}
+
 	authorizer, err := deps.newAuthorizer(openfga.Config{
 		APIURL: cfg.Security.OpenFGA.APIURL, StoreID: cfg.Security.OpenFGA.StoreID,
 		ModelID: cfg.Security.OpenFGA.ModelID, APIToken: cfg.Security.OpenFGA.APIToken.Value(),
@@ -216,7 +234,16 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire service: %w", err)
 	}
 
-	handler := api.NewAuthenticatedServer(service, verifier, cfg.Security.TenantID, cfg.Debug, api.WithQueueReader(store))
+	handler := api.NewAuthenticatedServer(service, verifier, cfg.Security.TenantID, cfg.Debug,
+		api.WithQueueReader(store),
+		api.WithAuth(api.AuthConfig{
+			Flow:          flow,
+			Verifier:      verifier,
+			Sealer:        sessionSealer,
+			PublicURL:     publicURL,
+			SecureCookies: cfg.Security.Mode == config.RuntimeProduction,
+		}),
+	)
 	if err := deps.listenAndServe(ctx, cfg.HTTPAddress, handler); err != nil {
 		return fmt.Errorf("listen and serve api: %w", err)
 	}
