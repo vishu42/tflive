@@ -25,7 +25,7 @@ func RequireAuthentication(verifier Verifier, publicPaths ...string) func(http.H
 				next.ServeHTTP(response, request)
 				return
 			}
-			raw, ok := bearerToken(request.Header.Get("Authorization"))
+			raw, ok := credential(request)
 			if !ok {
 				writeUnauthorized(response)
 				return
@@ -42,6 +42,20 @@ func RequireAuthentication(verifier Verifier, publicPaths ...string) func(http.H
 			next.ServeHTTP(response, request.WithContext(ContextWithPrincipal(request.Context(), principalFromVerifiedToken(verified))))
 		})
 	}
+}
+
+// credential reads the caller's token from the Authorization header, falling
+// back to the session cookie. The header wins so a CLI or service caller is
+// never overridden by a stale browser cookie on the same connection.
+func credential(request *http.Request) (string, bool) {
+	if raw, ok := bearerToken(request.Header.Get("Authorization")); ok {
+		return raw, true
+	}
+	cookie, err := request.Cookie(SessionCookieName)
+	if err != nil || cookie.Value == "" {
+		return "", false
+	}
+	return cookie.Value, true
 }
 
 func bearerToken(header string) (string, bool) {

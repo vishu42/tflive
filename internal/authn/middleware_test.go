@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 type middlewareVerifier struct {
@@ -20,7 +21,8 @@ func (verifier *middlewareVerifier) Verify(_ context.Context, raw string) (Verif
 }
 
 func TestRequireAuthentication(t *testing.T) {
-	valid := VerifiedToken{Subject: "user-123", Name: "Ada", PreferredUsername: "ada", Email: "ada@example.test"}
+	expiresAt := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	valid := VerifiedToken{Subject: "user-123", Name: "Ada", PreferredUsername: "ada", Email: "ada@example.test", ExpiresAt: expiresAt}
 
 	for _, test := range []struct {
 		name          string
@@ -44,7 +46,7 @@ func TestRequireAuthentication(t *testing.T) {
 				called = true
 				if request.URL.Path == "/v1/stacks" {
 					principal, ok := PrincipalFromContext(request.Context())
-					if !ok || principal.Subject != valid.Subject || principal.Name != valid.Name || principal.PreferredUsername != valid.PreferredUsername || principal.Email != valid.Email {
+					if !ok || principal.Subject != valid.Subject || principal.Name != valid.Name || principal.PreferredUsername != valid.PreferredUsername || principal.Email != valid.Email || !principal.ExpiresAt.Equal(valid.ExpiresAt) {
 						t.Fatalf("principal = %#v, ok = %t", principal, ok)
 					}
 				}
@@ -94,5 +96,61 @@ func TestRequireAuthenticationDoesNotLeakVerifierErrors(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized || response.Body.String() != `{"code":"unauthorized"}` {
 		t.Fatalf("response = %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestRequireAuthenticationAcceptsSessionCookie(t *testing.T) {
+	valid := VerifiedToken{Subject: "user-123", Name: "Ada"}
+
+	for _, test := range []struct {
+		name          string
+		authorization string
+		cookie        string
+		status        int
+		wantRaw       string
+	}{
+		{name: "cookie only", cookie: "cookie-token", status: http.StatusOK, wantRaw: "cookie-token"},
+		{name: "header only", authorization: "Bearer header-token", status: http.StatusOK, wantRaw: "header-token"},
+		{name: "header wins over cookie", authorization: "Bearer header-token", cookie: "cookie-token", status: http.StatusOK, wantRaw: "header-token"},
+		{name: "empty cookie", cookie: "", status: http.StatusUnauthorized},
+		{name: "neither", status: http.StatusUnauthorized},
+		{name: "malformed header falls back to cookie", authorization: "Basic ignored", cookie: "cookie-token", status: http.StatusOK, wantRaw: "cookie-token"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			verifier := &middlewareVerifier{token: valid}
+			handler := RequireAuthentication(verifier, "/healthz")(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				response.WriteHeader(http.StatusOK)
+			}))
+			request := httptest.NewRequest(http.MethodGet, "/v1/stacks", nil)
+			if test.authorization != "" {
+				request.Header.Set("Authorization", test.authorization)
+			}
+			if test.cookie != "" {
+				request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: test.cookie})
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d", response.Code, test.status)
+			}
+			if verifier.raw != test.wantRaw {
+				t.Fatalf("verified raw = %q, want %q", verifier.raw, test.wantRaw)
+			}
+		})
+	}
+}
+
+func TestRequireAuthenticationIgnoresOtherCookies(t *testing.T) {
+	verifier := &middlewareVerifier{token: VerifiedToken{Subject: "user-123"}}
+	handler := RequireAuthentication(verifier)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("protected handler was called")
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/v1/stacks", nil)
+	request.AddCookie(&http.Cookie{Name: "some_other_cookie", Value: "value"})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", response.Code)
 	}
 }
