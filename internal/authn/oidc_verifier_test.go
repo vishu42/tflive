@@ -29,16 +29,20 @@ type oidcTestServer struct {
 	issuer          string
 	issuerPathToken string
 
-	mu                sync.Mutex
-	keys              map[string]*rsa.PrivateKey
-	published         []string
-	discoveryIssuer   string
-	unavailableBody   string
-	discoveryBody     string
-	jwksBody          string
-	discoveryRequests int
-	jwksRequests      int
-	clock             time.Time
+	mu                    sync.Mutex
+	keys                  map[string]*rsa.PrivateKey
+	published             []string
+	discoveryIssuer       string
+	unavailableBody       string
+	discoveryBody         string
+	jwksBody              string
+	authorizationEndpoint string
+	tokenEndpoint         string
+	endSessionEndpoint    string
+	omitEndpoints         bool
+	discoveryRequests     int
+	jwksRequests          int
+	clock                 time.Time
 }
 
 func newOIDCTestServer(t *testing.T) *oidcTestServer {
@@ -52,6 +56,9 @@ func newOIDCTestServer(t *testing.T) *oidcTestServer {
 	s.server = httptest.NewServer(http.HandlerFunc(s.serveHTTP))
 	s.issuer = s.server.URL + "/" + s.issuerPathToken
 	s.discoveryIssuer = s.issuer
+	s.authorizationEndpoint = s.server.URL + "/authorize"
+	s.tokenEndpoint = s.server.URL + "/token"
+	s.endSessionEndpoint = s.server.URL + "/logout"
 	t.Cleanup(s.server.Close)
 
 	return s
@@ -148,6 +155,10 @@ func (s *oidcTestServer) serveDiscovery(writer http.ResponseWriter) {
 	unavailableBody := s.unavailableBody
 	discoveryBody := s.discoveryBody
 	issuer := s.discoveryIssuer
+	authorizationEndpoint := s.authorizationEndpoint
+	tokenEndpoint := s.tokenEndpoint
+	endSessionEndpoint := s.endSessionEndpoint
+	omitEndpoints := s.omitEndpoints
 	s.mu.Unlock()
 
 	if unavailableBody != "" {
@@ -160,14 +171,21 @@ func (s *oidcTestServer) serveDiscovery(writer http.ResponseWriter) {
 		return
 	}
 
+	type document struct {
+		Issuer                string `json:"issuer"`
+		JWKSURI               string `json:"jwks_uri"`
+		AuthorizationEndpoint string `json:"authorization_endpoint,omitempty"`
+		TokenEndpoint         string `json:"token_endpoint,omitempty"`
+		EndSessionEndpoint    string `json:"end_session_endpoint,omitempty"`
+	}
+	doc := document{Issuer: issuer, JWKSURI: s.server.URL + "/jwks"}
+	if !omitEndpoints {
+		doc.AuthorizationEndpoint = authorizationEndpoint
+		doc.TokenEndpoint = tokenEndpoint
+		doc.EndSessionEndpoint = endSessionEndpoint
+	}
 	writer.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(writer).Encode(struct {
-		Issuer  string `json:"issuer"`
-		JWKSURI string `json:"jwks_uri"`
-	}{
-		Issuer:  issuer,
-		JWKSURI: s.server.URL + "/jwks",
-	}); err != nil {
+	if err := json.NewEncoder(writer).Encode(doc); err != nil {
 		s.t.Errorf("Encode discovery document: %v", err)
 	}
 }
@@ -242,6 +260,60 @@ func TestOIDCVerifierVerifiesValidAccessTokenAndExtractsIdentity(t *testing.T) {
 	want := VerifiedToken{Subject: "user-123", Name: "Ada Lovelace", PreferredUsername: "ada", Email: "ada@example.test"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Verify() = %#v, want %#v", got, want)
+	}
+}
+
+func TestOIDCVerifierExposesDiscoveredEndpoints(t *testing.T) {
+	server := newOIDCTestServer(t)
+	server.addRSAKey(t, "kid-1")
+	server.publish("kid-1")
+
+	verifier, err := NewOIDCVerifier(context.Background(), server.config(time.Now()))
+	if err != nil {
+		t.Fatalf("NewOIDCVerifier returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = verifier.Close(context.Background()) })
+
+	endpoints := verifier.Endpoints()
+	if endpoints.Authorization != server.authorizationEndpoint {
+		t.Fatalf("Authorization = %q, want %q", endpoints.Authorization, server.authorizationEndpoint)
+	}
+	if endpoints.Token != server.tokenEndpoint {
+		t.Fatalf("Token = %q, want %q", endpoints.Token, server.tokenEndpoint)
+	}
+	if endpoints.EndSession != server.endSessionEndpoint {
+		t.Fatalf("EndSession = %q, want %q", endpoints.EndSession, server.endSessionEndpoint)
+	}
+}
+
+func TestOIDCVerifierRejectsDiscoveryMissingFlowEndpoints(t *testing.T) {
+	// Without an authorization or token endpoint the API cannot run the flow at
+	// all, so failing at construction beats failing on the first login.
+	server := newOIDCTestServer(t)
+	server.addRSAKey(t, "kid-1")
+	server.publish("kid-1")
+	server.omitEndpoints = true
+
+	if _, err := NewOIDCVerifier(context.Background(), server.config(time.Now())); !errors.Is(err, ErrVerifierUnavailable) {
+		t.Fatalf("NewOIDCVerifier error = %v, want ErrVerifierUnavailable", err)
+	}
+}
+
+func TestOIDCVerifierAcceptsProviderWithoutEndSessionEndpoint(t *testing.T) {
+	// end_session_endpoint is optional; logout degrades to clearing our cookie.
+	server := newOIDCTestServer(t)
+	server.addRSAKey(t, "kid-1")
+	server.publish("kid-1")
+	server.endSessionEndpoint = ""
+
+	verifier, err := NewOIDCVerifier(context.Background(), server.config(time.Now()))
+	if err != nil {
+		t.Fatalf("NewOIDCVerifier returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = verifier.Close(context.Background()) })
+
+	if endpoints := verifier.Endpoints(); endpoints.EndSession != "" {
+		t.Fatalf("EndSession = %q, want empty", endpoints.EndSession)
 	}
 }
 

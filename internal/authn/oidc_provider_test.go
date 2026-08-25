@@ -156,8 +156,10 @@ func TestNewOIDCVerifierAllowsProviderResponseAtSizeLimit(t *testing.T) {
 	s.publish("key-a")
 
 	discovery, err := json.Marshal(discoveryDocument{
-		Issuer:  s.issuer,
-		JWKSURI: s.server.URL + "/jwks",
+		Issuer:                s.issuer,
+		JWKSURI:               s.server.URL + "/jwks",
+		AuthorizationEndpoint: s.authorizationEndpoint,
+		TokenEndpoint:         s.tokenEndpoint,
 	})
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
