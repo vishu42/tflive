@@ -1,6 +1,9 @@
 package secrets
 
-import "testing"
+import (
+	"encoding/base64"
+	"testing"
+)
 
 func TestCipherEncryptDecryptRoundTrip(t *testing.T) {
 	// Verify that encryption is reversible while the stored representation is not plaintext.
@@ -64,9 +67,16 @@ func TestCipherRejectsTamperedCiphertext(t *testing.T) {
 		t.Fatalf("Encrypt returned error: %v", err)
 	}
 
-	tampered := []byte(ciphertext)
-	tampered[len(tampered)-1] ^= 'A'
-	if _, err := cipher.Decrypt(string(tampered)); err == nil {
+	// Flip a bit inside the ciphertext body, not at the base64 tail: the final
+	// character can encode as few as two significant bits, so editing it may
+	// land entirely in discarded padding and escape detection. Any bit flip in
+	// GCM ciphertext or tag fails authentication, so this is deterministic.
+	raw, err := base64.RawURLEncoding.DecodeString(ciphertext)
+	if err != nil {
+		t.Fatalf("DecodeString returned error: %v", err)
+	}
+	raw[len(raw)/2] ^= 0x01
+	if _, err := cipher.Decrypt(base64.RawURLEncoding.EncodeToString(raw)); err == nil {
 		t.Fatal("Decrypt accepted tampered ciphertext")
 	}
 }
