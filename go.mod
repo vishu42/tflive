@@ -14,6 +14,7 @@ require (
 	github.com/zclconf/go-cty v1.16.3
 	go.temporal.io/api v1.62.12
 	go.temporal.io/sdk v1.45.0
+	golang.org/x/oauth2 v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
