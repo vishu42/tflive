@@ -141,11 +141,21 @@ func (v *OIDCVerifier) validatedToken(payload []byte) (VerifiedToken, error) {
 	if !ok {
 		return VerifiedToken{}, ErrInvalidToken
 	}
+	nonce, ok := optionalStringClaim(token, "nonce")
+	if !ok {
+		return VerifiedToken{}, ErrInvalidToken
+	}
+	expiresAt, ok := token.Expiration()
+	if !ok {
+		return VerifiedToken{}, ErrInvalidToken
+	}
 	return VerifiedToken{
 		Subject:           subject,
 		Name:              name,
 		PreferredUsername: preferredUsername,
 		Email:             email,
+		Nonce:             nonce,
+		ExpiresAt:         expiresAt,
 	}, nil
 }
 

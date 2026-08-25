@@ -241,7 +241,8 @@ func TestOIDCVerifierVerifiesValidAccessTokenAndExtractsIdentity(t *testing.T) {
 	s := newOIDCTestServer(t)
 	s.addRSAKey(t, "key-a")
 	s.publish("key-a")
-	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	now := time.Now()
+	v, err := NewOIDCVerifier(context.Background(), s.config(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,9 +258,70 @@ func TestOIDCVerifierVerifiesValidAccessTokenAndExtractsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
-	want := VerifiedToken{Subject: "user-123", Name: "Ada Lovelace", PreferredUsername: "ada", Email: "ada@example.test"}
+	want := VerifiedToken{
+		Subject:           "user-123",
+		Name:              "Ada Lovelace",
+		PreferredUsername: "ada",
+		Email:             "ada@example.test",
+		ExpiresAt:         now.Add(time.Hour).Truncate(time.Second).UTC(),
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Verify() = %#v, want %#v", got, want)
+	}
+}
+
+func TestOIDCVerifierExtractsNonceAndExpiry(t *testing.T) {
+	server := newOIDCTestServer(t)
+	server.addRSAKey(t, "kid-1")
+	server.publish("kid-1")
+	now := time.Now()
+	expiry := now.Add(time.Hour).Truncate(time.Second)
+
+	verifier, err := NewOIDCVerifier(context.Background(), server.config(now))
+	if err != nil {
+		t.Fatalf("NewOIDCVerifier returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = verifier.Close(context.Background()) })
+
+	raw := server.sign(t, "kid-1", func(tok jwt.Token) {
+		_ = tok.Set(jwt.ExpirationKey, expiry)
+		_ = tok.Set("nonce", "nonce-value")
+	})
+
+	verified, err := verifier.Verify(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Verify returned error: %v", err)
+	}
+	if verified.Nonce != "nonce-value" {
+		t.Fatalf("Nonce = %q, want nonce-value", verified.Nonce)
+	}
+	if !verified.ExpiresAt.Equal(expiry) {
+		t.Fatalf("ExpiresAt = %v, want %v", verified.ExpiresAt, expiry)
+	}
+}
+
+func TestOIDCVerifierAcceptsTokenWithoutNonce(t *testing.T) {
+	// nonce is optional in the code flow. An absent claim is a valid token, not
+	// a malformed one; the callback is what decides whether it needed to match.
+	server := newOIDCTestServer(t)
+	server.addRSAKey(t, "kid-1")
+	server.publish("kid-1")
+	now := time.Now()
+
+	verifier, err := NewOIDCVerifier(context.Background(), server.config(now))
+	if err != nil {
+		t.Fatalf("NewOIDCVerifier returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = verifier.Close(context.Background()) })
+
+	raw := server.sign(t, "kid-1", nil)
+
+	verified, err := verifier.Verify(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Verify returned error: %v", err)
+	}
+	if verified.Nonce != "" {
+		t.Fatalf("Nonce = %q, want empty", verified.Nonce)
 	}
 }
 
@@ -977,7 +1039,8 @@ func TestOIDCVerifierAcceptsProviderTokenShapes(t *testing.T) {
 			s := newOIDCTestServer(t)
 			s.addRSAKey(t, "key-a")
 			s.publish("key-a")
-			v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+			now := time.Now()
+			v, err := NewOIDCVerifier(context.Background(), s.config(now))
 			if err != nil {
 				t.Fatalf("NewOIDCVerifier() error = %v", err)
 			}
@@ -987,8 +1050,10 @@ func TestOIDCVerifierAcceptsProviderTokenShapes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Verify() error = %v", err)
 			}
-			if !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("Verify() = %#v, want %#v", got, test.want)
+			want := test.want
+			want.ExpiresAt = now.Add(time.Hour).Truncate(time.Second).UTC()
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("Verify() = %#v, want %#v", got, want)
 			}
 		})
 	}
