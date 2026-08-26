@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet } from "react-router-dom";
 import { useIsMutating } from "@tanstack/react-query";
 import { ApiRequestError, loginURL, logout as postLogout } from "../api/client";
 import { AuthContext } from "./AuthContext";
@@ -13,7 +13,6 @@ const REAUTH_LEAD_MS = 60_000;
 const REAUTH_RETRY_MS = 5_000;
 
 export default function SessionProvider() {
-  const location = useLocation();
   const [status, setStatus] = useState<"loading" | "error">("loading");
   const { data: me, error: meError, isLoading } = useMeQuery();
   const pendingMutations = useIsMutating();

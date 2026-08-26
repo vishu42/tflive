@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addTemplateToStack,
@@ -9,6 +10,7 @@ import {
   listStacks,
   listTemplateRevisions,
   listTemplateRuns,
+  logout,
   registerTemplate,
   startTemplateRun,
   updateStackTemplateConfig,
@@ -279,6 +281,34 @@ describe("api client — session cookie auth", () => {
     }
 
     expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks%3Fselected%3Dst_1");
+  });
+});
+
+describe("api client — logout()", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+  });
+
+  // Regression guard for the fix two tasks prior: the /v1/auth/logout 303's
+  // Location header carries the raw ID token as id_token_hint. A Location
+  // header is not script-readable, but a fetch response body is — so
+  // logout() must drive a real browser navigation via a form POST, never
+  // fetch(), or a future edit reintroduces that credential leak silently.
+  it("logs out via a real form POST, never fetch, so the id_token_hint in the 303 Location never reaches script", () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    // jsdom does not implement real form submission and logs a "not
+    // implemented" error if left unstubbed.
+    const submitMock = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+
+    logout();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const form = document.body.querySelector("form");
+    expect(form).not.toBeNull();
+    expect(form?.method).toBe("post");
+    expect(form?.getAttribute("action")).toBe("/v1/auth/logout");
+    expect(submitMock).toHaveBeenCalledTimes(1);
   });
 });
 
