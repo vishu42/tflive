@@ -2,7 +2,6 @@ package keycloak
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -320,32 +319,6 @@ func (c *Client) EnsureClientScopeMapping(ctx context.Context, realm string, cli
 	)
 }
 
-func (c *Client) ExampleAccessToken(ctx context.Context, realm string, client, user ResourceRef) (ExampleAccessToken, error) {
-	var response struct {
-		Audience    json.RawMessage `json:"aud"`
-		RealmAccess struct {
-			Roles []string `json:"roles"`
-		} `json:"realm_access"`
-	}
-	query := url.Values{"userId": {user.ID}}
-	if err := c.doJSON(
-		ctx,
-		http.MethodGet,
-		[]string{"admin", "realms", realm, "clients", client.ID, "evaluate-scopes", "generate-example-access-token"},
-		query,
-		nil,
-		[]int{http.StatusOK},
-		&response,
-	); err != nil {
-		return ExampleAccessToken{}, err
-	}
-	audience, err := parseAudience(response.Audience)
-	if err != nil {
-		return ExampleAccessToken{}, err
-	}
-	return ExampleAccessToken{Audience: audience, RealmRoles: response.RealmAccess.Roles}, nil
-}
-
 func applyRealmSpec(resource map[string]any, spec RealmSpec) map[string]any {
 	resource["realm"] = spec.Name
 	resource["enabled"] = spec.Enabled
@@ -446,19 +419,4 @@ func rolePayload(roles []ResourceRef) []map[string]string {
 		payload = append(payload, map[string]string{"id": role.ID, "name": role.Name})
 	}
 	return payload
-}
-
-func parseAudience(raw json.RawMessage) ([]string, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
-	}
-	var single string
-	if err := json.Unmarshal(raw, &single); err == nil {
-		return []string{single}, nil
-	}
-	var multiple []string
-	if err := json.Unmarshal(raw, &multiple); err != nil {
-		return nil, fmt.Errorf("decode example access-token audience: %w", err)
-	}
-	return multiple, nil
 }

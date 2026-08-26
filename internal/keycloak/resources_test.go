@@ -197,45 +197,6 @@ func TestEnsureUserSetsPasswordOnlyWhenCreatingUser(t *testing.T) {
 	}
 }
 
-func TestExampleAccessTokenParsesStringAndArrayAudiences(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		aud  any
-		want []string
-	}{
-		{name: "string", aud: "tflive-api", want: []string{"tflive-api"}},
-		{name: "array", aud: []string{"account", "tflive-api"}, want: []string{"account", "tflive-api"}},
-	}
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				writeTestJSON(t, w, http.StatusOK, map[string]any{
-					"aud":          tt.aud,
-					"realm_access": map[string]any{"roles": []string{"platform-admin"}},
-				})
-			}))
-			defer server.Close()
-
-			client := authenticatedClientForServer(t, server.URL)
-			token, err := client.ExampleAccessToken(
-				context.Background(), "tflive",
-				ResourceRef{ID: "web-uuid", Name: "tflive-web"},
-				ResourceRef{ID: "user-uuid", Name: "tflive-platform-admin"},
-			)
-			if err != nil {
-				t.Fatalf("ExampleAccessToken() error = %v", err)
-			}
-			if !equalStrings(token.Audience, tt.want) || !equalStrings(token.RealmRoles, []string{"platform-admin"}) {
-				t.Fatalf("token = %#v", token)
-			}
-		})
-	}
-}
-
 func authenticatedClientForServer(t *testing.T, serverURL string) *Client {
 	t.Helper()
 	client := NewClient(configForServer(t, serverURL))

@@ -45,7 +45,6 @@ func TestRunLogsOnlyNonSensitiveResultIdentifiers(t *testing.T) {
 	err := run(context.Background(), commandTestEnv(), func(_ context.Context, cfg keycloak.Config) (keycloak.Result, error) {
 		return keycloak.Result{
 			Realm:                   cfg.Realm,
-			WebClientID:             cfg.WebClientID,
 			APIClientID:             cfg.APIClientID,
 			PlatformAdminUsername:   cfg.PlatformAdminUsername,
 			DirectoryReaderClientID: "tflive-directory-reader",
@@ -56,7 +55,7 @@ func TestRunLogsOnlyNonSensitiveResultIdentifiers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
-	for _, want := range []string{"tflive", "tflive-web", "tflive-api", "tflive-platform-admin", "tflive-directory-reader"} {
+	for _, want := range []string{"tflive", "tflive-api", "tflive-platform-admin", "tflive-directory-reader"} {
 		if !strings.Contains(logLine, want) {
 			t.Fatalf("log = %q, missing %q", logLine, want)
 		}
@@ -86,8 +85,8 @@ func commandTestEnv() func(string) string {
 		"KEYCLOAK_ADMIN_URL":                      "http://keycloak:8080",
 		"KEYCLOAK_ADMIN_USERNAME":                 "tflive-admin",
 		"KEYCLOAK_ADMIN_PASSWORD":                 "master-local-only-secret",
-		"KEYCLOAK_WEB_REDIRECT_URIS":              "http://localhost:5173/",
-		"KEYCLOAK_WEB_ORIGINS":                    "http://localhost:5173",
+		"TFLIVE_PUBLIC_URL":                       "http://localhost:5173/",
+		"OIDC_CLIENT_SECRET":                      "oidc-client-secret",
 		"KEYCLOAK_PLATFORM_ADMIN_USERNAME":        "tflive-platform-admin",
 		"KEYCLOAK_PLATFORM_ADMIN_PASSWORD":        "platform-local-only-secret",
 		"KEYCLOAK_PLATFORM_ADMIN_EMAIL":           "tflive-platform-admin@local.test",
