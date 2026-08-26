@@ -51,7 +51,8 @@ for (const [name, value] of Object.entries({
   TFLIVE_ENVIRONMENT: "development",
   TFLIVE_TENANT_ID: "tenant_123",
   OIDC_ISSUER_URL: "http://keycloak.localhost:8082/realms/tflive",
-  OIDC_AUDIENCE: "tflive-api",
+  TFLIVE_PUBLIC_URL: "http://localhost:5173",
+  OIDC_CLIENT_ID: "tflive-api",
   OPENFGA_API_URL: "http://localhost:8083",
   OPENFGA_STORE_ID: "",
   OPENFGA_MODEL_ID: "",
@@ -100,13 +101,38 @@ assert.ok(
   "keycloak needs the keycloak.localhost alias so one issuer string resolves from both sides",
 );
 assert.equal(
-  keycloakProvision.environment?.KEYCLOAK_WEB_REDIRECT_URIS,
-  "http://localhost:5173/auth/callback,http://127.0.0.1:5173/auth/callback",
+  keycloakProvision.environment?.TFLIVE_PUBLIC_URL,
+  envValue("TFLIVE_PUBLIC_URL"),
+  "keycloak-provision must derive the client's redirect and post-logout URIs from the same TFLIVE_PUBLIC_URL as the API",
 );
 assert.equal(
-  keycloakProvision.environment?.KEYCLOAK_WEB_ORIGINS,
-  "http://localhost:5173,http://127.0.0.1:5173",
+  keycloakProvision.environment?.OIDC_CLIENT_SECRET,
+  envValue("OIDC_CLIENT_SECRET"),
+  "keycloak-provision must register the same client secret the API authenticates with",
 );
+
+// TFLIVE_PUBLIC_URL is the one value all three parties to the OIDC handshake
+// must agree on: the API derives its redirect and post-logout URIs from it,
+// and the Keycloak provisioner registers those same URIs on the client. A
+// stale default in any one of these three spots would only surface at login
+// time as invalid_redirect_uri, so pin every "${TFLIVE_PUBLIC_URL:-...}"
+// default in both Compose files to the .env.example value.
+const publicURLDefaults = [
+  ...source.matchAll(/\$\{TFLIVE_PUBLIC_URL:-([^}]*)\}/g),
+].map((match) => match[1]);
+assert.equal(
+  publicURLDefaults.length,
+  3,
+  "expected TFLIVE_PUBLIC_URL to default in keycloak-provision, api, and worker",
+);
+for (const value of publicURLDefaults) {
+  assert.equal(
+    value,
+    envValue("TFLIVE_PUBLIC_URL"),
+    "every TFLIVE_PUBLIC_URL default in Compose must match .env.example, or the derived redirect URI can drift from what Keycloak has registered",
+  );
+}
+
 assert.equal(openfgaMigrate.depends_on?.postgres?.condition, "service_healthy");
 assert.equal(openfga.depends_on?.["openfga-migrate"]?.condition, "service_completed_successfully");
 assert.ok(openfga.healthcheck?.test?.join(" ").includes("grpc_health_probe"));
@@ -139,6 +165,8 @@ assert.ok(hasVolume(postgres, "postgres-data"));
 assert.ok(config.volumes?.["postgres-data"]);
 
 for (const name of [
+  "OIDC_CLIENT_SECRET",
+  "SESSION_ENCRYPTION_KEY",
   "KEYCLOAK_DB_NAME",
   "KEYCLOAK_DB_USER",
   "KEYCLOAK_DB_PASSWORD",
