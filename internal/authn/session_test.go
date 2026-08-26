@@ -2,8 +2,11 @@ package authn
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/vishu42/tflive/internal/secrets"
 )
@@ -35,8 +38,55 @@ func TestTransactionSealRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenTransaction returned error: %v", err)
 	}
+	want.IssuedAt = got.IssuedAt // stamped by SealTransaction, not caller-supplied
 	if got != want {
 		t.Fatalf("transaction = %#v, want %#v", got, want)
+	}
+	if since := time.Since(time.Unix(got.IssuedAt, 0)); since < 0 || since > time.Minute {
+		t.Fatalf("IssuedAt = %v, want close to now", time.Unix(got.IssuedAt, 0))
+	}
+}
+
+func TestOpenTransactionRejectsExpiredTransaction(t *testing.T) {
+	// SealTransaction always stamps IssuedAt with time.Now(), so an expired
+	// transaction is built directly rather than through SealTransaction — this
+	// is what a transaction sealed long ago and replayed now looks like.
+	cipher := testCipher(t)
+	transaction := Transaction{
+		State:    "state-1",
+		IssuedAt: time.Now().Add(-(transactionMaxAge + 1) * time.Second).Unix(),
+	}
+	sealed := sealTransactionAt(t, cipher, transaction)
+
+	if _, err := OpenTransaction(cipher, sealed); !errors.Is(err, ErrTransactionExpired) {
+		t.Fatalf("OpenTransaction error = %v, want ErrTransactionExpired", err)
+	}
+}
+
+// sealTransactionAt seals a transaction with the IssuedAt already set on it,
+// bypassing SealTransaction's own timestamping. Production code has no such
+// path; this exists so the test can forge an old transaction.
+func sealTransactionAt(t *testing.T, cipher *secrets.Cipher, transaction Transaction) string {
+	t.Helper()
+	encoded, err := json.Marshal(transaction)
+	if err != nil {
+		t.Fatalf("json.Marshal returned error: %v", err)
+	}
+	sealed, err := cipher.Encrypt(string(encoded))
+	if err != nil {
+		t.Fatalf("Encrypt returned error: %v", err)
+	}
+	return sealed
+}
+
+func TestOpenTransactionAcceptsFreshTransaction(t *testing.T) {
+	cipher := testCipher(t)
+	sealed, err := SealTransaction(cipher, Transaction{State: "state-1"})
+	if err != nil {
+		t.Fatalf("SealTransaction returned error: %v", err)
+	}
+	if _, err := OpenTransaction(cipher, sealed); err != nil {
+		t.Fatalf("OpenTransaction returned error: %v, want a fresh transaction to be accepted", err)
 	}
 }
 

@@ -2,10 +2,12 @@ package authn
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"path"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/vishu42/tflive/internal/secrets"
@@ -19,7 +21,11 @@ const (
 	// TransactionCookieName holds the in-flight login, sealed. state is only
 	// meaningful if the browser cannot forge it.
 	TransactionCookieName = "tflive_auth_tx"
-	// transactionMaxAge bounds how long a login may sit half-finished.
+	// transactionMaxAge bounds how long a login may sit half-finished. It is
+	// enforced twice: as the transaction cookie's Max-Age, and independently
+	// against the IssuedAt sealed into the transaction itself, since a cookie's
+	// Max-Age is a client-side hint the browser is trusted to honour, not a
+	// guarantee OpenTransaction can rely on.
 	transactionMaxAge = 600
 	// transactionCookiePath scopes the transaction cookie to the routes that
 	// read it, so it is not attached to every API call.
@@ -32,10 +38,20 @@ type Transaction struct {
 	Nonce        string `json:"nonce"`
 	CodeVerifier string `json:"code_verifier"`
 	ReturnTo     string `json:"return_to"`
+	// IssuedAt is Unix seconds, set by SealTransaction. OpenTransaction rejects
+	// a transaction older than transactionMaxAge, so a login cannot be
+	// resumed from an arbitrarily old sealed cookie.
+	IssuedAt int64 `json:"issued_at"`
 }
 
-// SealTransaction encrypts a transaction for storage in a cookie.
+// ErrTransactionExpired means a sealed transaction authenticated and decoded
+// cleanly but is older than transactionMaxAge.
+var ErrTransactionExpired = errors.New("login transaction expired")
+
+// SealTransaction encrypts a transaction for storage in a cookie. IssuedAt is
+// stamped here, overwriting whatever the caller set.
 func SealTransaction(cipher *secrets.Cipher, transaction Transaction) (string, error) {
+	transaction.IssuedAt = time.Now().Unix()
 	encoded, err := json.Marshal(transaction)
 	if err != nil {
 		return "", err
@@ -44,7 +60,8 @@ func SealTransaction(cipher *secrets.Cipher, transaction Transaction) (string, e
 }
 
 // OpenTransaction authenticates and decodes a sealed transaction. Any failure
-// means the value was forged, truncated, or sealed under a different key.
+// means the value was forged, truncated, sealed under a different key, or
+// sealed too long ago to still represent a login in progress.
 func OpenTransaction(cipher *secrets.Cipher, sealed string) (Transaction, error) {
 	plaintext, err := cipher.Decrypt(sealed)
 	if err != nil {
@@ -53,6 +70,10 @@ func OpenTransaction(cipher *secrets.Cipher, sealed string) (Transaction, error)
 	var transaction Transaction
 	if err := json.Unmarshal([]byte(plaintext), &transaction); err != nil {
 		return Transaction{}, err
+	}
+	age := time.Now().Unix() - transaction.IssuedAt
+	if age > transactionMaxAge {
+		return Transaction{}, ErrTransactionExpired
 	}
 	return transaction, nil
 }
