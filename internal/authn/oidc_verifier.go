@@ -125,6 +125,18 @@ func (v *OIDCVerifier) validatedToken(payload []byte) (VerifiedToken, error) {
 		return VerifiedToken{}, ErrInvalidToken
 	}
 
+	// OIDC Core 1.0 §3.1.3.7 steps 4-5: when the ID token's aud carries more
+	// than one value, azp must be present and must equal our client ID.
+	// jwt.WithAudience above only asserts aud *contains* the client ID, which
+	// is not sufficient on its own once a mapper (ours or a stale one left
+	// behind by another IdP client) can push extra audiences into the token.
+	if audiences, ok := token.Audience(); ok && len(audiences) > 1 {
+		azp, ok := optionalStringClaim(token, "azp")
+		if !ok || azp != v.cfg.Audience {
+			return VerifiedToken{}, ErrInvalidToken
+		}
+	}
+
 	subject, ok := token.Subject()
 	if !ok || subject == "" {
 		return VerifiedToken{}, ErrInvalidToken

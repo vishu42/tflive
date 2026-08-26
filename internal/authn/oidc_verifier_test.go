@@ -424,6 +424,96 @@ func TestOIDCVerifierVerifiesStringAudience(t *testing.T) {
 	}
 }
 
+// OIDC Core 1.0 §3.1.3.7 steps 4-5: when aud carries more than one value, azp
+// must be present and equal our client ID. A single-audience token has no
+// such requirement, so an absent azp there is fine.
+func TestOIDCVerifierAcceptsSingleAudienceTokenWithoutAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience"})
+	})
+	got, err := v.Verify(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if got.Subject != "user-123" {
+		t.Fatalf("Verify().Subject = %q, want user-123", got.Subject)
+	}
+}
+
+func TestOIDCVerifierAcceptsMultiAudienceTokenWithMatchingAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience", "other-client"})
+		_ = tok.Set("azp", "test-audience")
+	})
+	got, err := v.Verify(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if got.Subject != "user-123" {
+		t.Fatalf("Verify().Subject = %q, want user-123", got.Subject)
+	}
+}
+
+// The exploitable path: an ID token minted by the same issuer for a different
+// client, with our client ID pushed into aud by a stray audience mapper. If
+// azp names that other client, this must not authenticate as us.
+func TestOIDCVerifierRejectsMultiAudienceTokenWithWrongAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience", "other-client"})
+		_ = tok.Set("azp", "other-client")
+	})
+	_, err = v.Verify(context.Background(), raw)
+	if !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("Verify() error = %v, want ErrInvalidToken", err)
+	}
+}
+
+func TestOIDCVerifierRejectsMultiAudienceTokenWithAbsentAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience", "other-client"})
+	})
+	_, err = v.Verify(context.Background(), raw)
+	if !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("Verify() error = %v, want ErrInvalidToken", err)
+	}
+}
+
 func TestOIDCVerifierUsesCachedKeyWithoutRepeatedJWKSFetch(t *testing.T) {
 	s := newOIDCTestServer(t)
 	s.addRSAKey(t, "key-a")
