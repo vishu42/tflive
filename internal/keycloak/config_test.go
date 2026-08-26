@@ -202,15 +202,3 @@ func validConfigEnv() map[string]string {
 func mapEnv(values map[string]string) func(string) string {
 	return func(name string) string { return values[name] }
 }
-
-func equalStrings(got, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
-}

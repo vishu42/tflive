@@ -55,20 +55,6 @@ type ClientSpec struct {
 	Attributes                   map[string]string
 }
 
-type ClientScopeSpec struct {
-	Name       string
-	Protocol   string
-	Attributes map[string]string
-}
-
-type ProtocolMapperSpec struct {
-	Name            string
-	Protocol        string
-	ProtocolMapper  string
-	ConsentRequired bool
-	Config          map[string]string
-}
-
 type UserSpec struct {
 	Username      string
 	Password      string
@@ -99,10 +85,6 @@ type provisionBackend interface {
 	EnsureRole(context.Context, string, RoleSpec) (ResourceRef, error)
 	EnsureClient(context.Context, string, ClientSpec) (ResourceRef, error)
 	LookupClient(context.Context, string, string) (ResourceRef, error)
-	EnsureClientScope(context.Context, string, ClientScopeSpec) (ResourceRef, error)
-	LookupClientScope(context.Context, string, string) (ResourceRef, error)
-	EnsureProtocolMapper(context.Context, string, ResourceRef, ProtocolMapperSpec) error
-	EnsureDefaultClientScope(context.Context, string, ResourceRef, ResourceRef) error
 	EnsureUser(context.Context, string, UserSpec) (ResourceRef, error)
 	ClientRole(context.Context, string, ResourceRef, string) (ResourceRef, error)
 	EnsureClientRoleMapping(context.Context, string, ResourceRef, ResourceRef, []ResourceRef) error

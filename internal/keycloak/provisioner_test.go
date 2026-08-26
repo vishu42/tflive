@@ -36,17 +36,12 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 	if got, want := backend.createdRoles, 0; got != want {
 		t.Fatalf("created roles = %d, want %d", got, want)
 	}
-	if got, want := backend.createdClients, 2; got != want {
-		t.Fatalf("created clients = %d, want %d", got, want)
-	}
 	// No audience scope, no protocol mapper: this task's whole point is that
 	// an ID token's aud is the client ID by construction, so the workaround
-	// that forced an aud into an access token is gone.
-	if got, want := backend.createdScopes, 0; got != want {
-		t.Fatalf("created scopes = %d, want %d", got, want)
-	}
-	if got, want := backend.createdMappers, 0; got != want {
-		t.Fatalf("created mappers = %d, want %d", got, want)
+	// that forced an aud into an access token is gone. The backend has no way
+	// to create either any more -- provisionBackend no longer has the methods.
+	if got, want := backend.createdClients, 2; got != want {
+		t.Fatalf("created clients = %d, want %d", got, want)
 	}
 	if got, want := backend.createdUsers, 2; got != want {
 		t.Fatalf("created users = %d, want %d", got, want)
@@ -157,21 +152,6 @@ func TestProvisionCreatesOneConfidentialClient(t *testing.T) {
 	}
 }
 
-func TestProvisionNoLongerCreatesTheAudienceScope(t *testing.T) {
-	t.Parallel()
-
-	// The audience mapper existed to force a resource identifier into an access
-	// token's aud. An ID token's aud is the client ID by construction.
-	cfg := configForServer(t, "http://keycloak.example.test")
-	backend := newFakeProvisionBackend()
-	if _, err := provisionWithBackend(context.Background(), cfg, backend); err != nil {
-		t.Fatalf("provisionWithBackend returned error: %v", err)
-	}
-	if _, exists := backend.scopes["tflive-api-audience"]; exists {
-		t.Fatal("the audience client scope still exists")
-	}
-}
-
 func TestProvisionWithBackendRequiresKeycloakBuiltins(t *testing.T) {
 	t.Parallel()
 
@@ -202,10 +182,7 @@ type fakeProvisionBackend struct {
 	realms              map[string]RealmSpec
 	roles               map[string]RoleSpec
 	clients             map[string]ClientSpec
-	scopes              map[string]ClientScopeSpec
-	mappers             map[string]ProtocolMapperSpec
 	users               map[string]UserSpec
-	defaultScopes       map[string]map[string]bool
 	realmRoleMappings   map[string]map[string]bool
 	clientRoleMappings  map[string]map[string]map[string]bool
 	clientScopeMappings map[string]map[string]map[string]bool
@@ -213,8 +190,6 @@ type fakeProvisionBackend struct {
 	createdRealms  int
 	createdRoles   int
 	createdClients int
-	createdScopes  int
-	createdMappers int
 	createdUsers   int
 }
 
@@ -222,9 +197,7 @@ func newFakeProvisionBackend() *fakeProvisionBackend {
 	return &fakeProvisionBackend{
 		realms: map[string]RealmSpec{}, roles: map[string]RoleSpec{},
 		clients: map[string]ClientSpec{"realm-management": {ClientID: "realm-management"}},
-		scopes:  map[string]ClientScopeSpec{"roles": {Name: "roles", Protocol: "openid-connect"}},
-		mappers: map[string]ProtocolMapperSpec{}, users: map[string]UserSpec{},
-		defaultScopes: map[string]map[string]bool{}, realmRoleMappings: map[string]map[string]bool{},
+		users:   map[string]UserSpec{}, realmRoleMappings: map[string]map[string]bool{},
 		clientRoleMappings:  map[string]map[string]map[string]bool{},
 		clientScopeMappings: map[string]map[string]map[string]bool{},
 	}
@@ -259,38 +232,6 @@ func (f *fakeProvisionBackend) LookupClient(_ context.Context, _ string, clientI
 		return ResourceRef{}, fmt.Errorf("required client %s was not found", clientID)
 	}
 	return ResourceRef{ID: "client-" + clientID, Name: clientID}, nil
-}
-
-func (f *fakeProvisionBackend) EnsureClientScope(_ context.Context, _ string, spec ClientScopeSpec) (ResourceRef, error) {
-	if _, ok := f.scopes[spec.Name]; !ok {
-		f.createdScopes++
-	}
-	f.scopes[spec.Name] = spec
-	return ResourceRef{ID: "scope-" + spec.Name, Name: spec.Name}, nil
-}
-
-func (f *fakeProvisionBackend) LookupClientScope(_ context.Context, _ string, name string) (ResourceRef, error) {
-	if _, ok := f.scopes[name]; !ok {
-		return ResourceRef{}, fmt.Errorf("required client scope %s was not found", name)
-	}
-	return ResourceRef{ID: "scope-" + name, Name: name}, nil
-}
-
-func (f *fakeProvisionBackend) EnsureProtocolMapper(_ context.Context, _ string, scope ResourceRef, spec ProtocolMapperSpec) error {
-	key := scope.Name + "/" + spec.Name
-	if _, ok := f.mappers[key]; !ok {
-		f.createdMappers++
-	}
-	f.mappers[key] = spec
-	return nil
-}
-
-func (f *fakeProvisionBackend) EnsureDefaultClientScope(_ context.Context, _ string, client, scope ResourceRef) error {
-	if f.defaultScopes[client.Name] == nil {
-		f.defaultScopes[client.Name] = map[string]bool{}
-	}
-	f.defaultScopes[client.Name][scope.Name] = true
-	return nil
 }
 
 func (f *fakeProvisionBackend) EnsureUser(_ context.Context, _ string, spec UserSpec) (ResourceRef, error) {

@@ -121,98 +121,6 @@ func (c *Client) findClient(ctx context.Context, realm, clientID string) (Resour
 	return ref, true, err
 }
 
-func (c *Client) EnsureClientScope(ctx context.Context, realm string, spec ClientScopeSpec) (ResourceRef, error) {
-	ref, found, err := c.findClientScope(ctx, realm, spec.Name)
-	if err != nil {
-		return ResourceRef{}, err
-	}
-	if !found {
-		create := applyClientScopeSpec(map[string]any{}, spec)
-		if err := c.doJSON(ctx, http.MethodPost, []string{"admin", "realms", realm, "client-scopes"}, nil, create, []int{http.StatusCreated}, nil); err != nil {
-			return ResourceRef{}, err
-		}
-		ref, found, err = c.findClientScope(ctx, realm, spec.Name)
-		if err != nil {
-			return ResourceRef{}, err
-		}
-		if !found {
-			return ResourceRef{}, fmt.Errorf("client scope %s was not visible after creation", spec.Name)
-		}
-	}
-
-	resource := map[string]any{}
-	segments := []string{"admin", "realms", realm, "client-scopes", ref.ID}
-	if err := c.doJSON(ctx, http.MethodGet, segments, nil, nil, []int{http.StatusOK}, &resource); err != nil {
-		return ResourceRef{}, err
-	}
-	resource = applyClientScopeSpec(resource, spec)
-	if err := c.doJSON(ctx, http.MethodPut, segments, nil, resource, []int{http.StatusNoContent}, nil); err != nil {
-		return ResourceRef{}, err
-	}
-	return ref, nil
-}
-
-func (c *Client) LookupClientScope(ctx context.Context, realm, name string) (ResourceRef, error) {
-	ref, found, err := c.findClientScope(ctx, realm, name)
-	if err != nil {
-		return ResourceRef{}, err
-	}
-	if !found {
-		return ResourceRef{}, fmt.Errorf("required client scope %s was not found", name)
-	}
-	return ref, nil
-}
-
-func (c *Client) findClientScope(ctx context.Context, realm, name string) (ResourceRef, bool, error) {
-	var resources []map[string]any
-	if err := c.doJSON(ctx, http.MethodGet, []string{"admin", "realms", realm, "client-scopes"}, nil, nil, []int{http.StatusOK}, &resources); err != nil {
-		return ResourceRef{}, false, err
-	}
-	matches := filterResources(resources, "name", name)
-	if len(matches) > 1 {
-		return ResourceRef{}, false, fmt.Errorf("multiple client scopes named %s", name)
-	}
-	if len(matches) == 0 {
-		return ResourceRef{}, false, nil
-	}
-	ref, err := refFromResource(matches[0], name)
-	return ref, true, err
-}
-
-func (c *Client) EnsureProtocolMapper(ctx context.Context, realm string, scope ResourceRef, spec ProtocolMapperSpec) error {
-	base := []string{"admin", "realms", realm, "client-scopes", scope.ID, "protocol-mappers", "models"}
-	var resources []map[string]any
-	if err := c.doJSON(ctx, http.MethodGet, base, nil, nil, []int{http.StatusOK}, &resources); err != nil {
-		return err
-	}
-	matches := filterResources(resources, "name", spec.Name)
-	if len(matches) > 1 {
-		return fmt.Errorf("multiple protocol mappers named %s", spec.Name)
-	}
-	payload := protocolMapperResource(spec)
-	if len(matches) == 0 {
-		return c.doJSON(ctx, http.MethodPost, base, nil, payload, []int{http.StatusCreated}, nil)
-	}
-	mapperRef, err := refFromResource(matches[0], spec.Name)
-	if err != nil {
-		return err
-	}
-	payload["id"] = mapperRef.ID
-	return c.doJSON(ctx, http.MethodPut, append(base, mapperRef.ID), nil, payload, []int{http.StatusNoContent}, nil)
-}
-
-func (c *Client) EnsureDefaultClientScope(ctx context.Context, realm string, client, scope ResourceRef) error {
-	return c.doJSON(
-		ctx,
-		http.MethodPut,
-		[]string{"admin", "realms", realm, "clients", client.ID, "default-client-scopes", scope.ID},
-		nil,
-		nil,
-		[]int{http.StatusNoContent},
-		nil,
-	)
-}
-
 func (c *Client) EnsureUser(ctx context.Context, realm string, spec UserSpec) (ResourceRef, error) {
 	ref, found, err := c.findUser(ctx, realm, spec.Username)
 	if err != nil {
@@ -355,23 +263,6 @@ func applyClientSpec(resource map[string]any, spec ClientSpec) map[string]any {
 		resource["secret"] = spec.Secret
 	}
 	return resource
-}
-
-func applyClientScopeSpec(resource map[string]any, spec ClientScopeSpec) map[string]any {
-	resource["name"] = spec.Name
-	resource["protocol"] = spec.Protocol
-	setOwnedAttributes(resource, spec.Attributes)
-	return resource
-}
-
-func protocolMapperResource(spec ProtocolMapperSpec) map[string]any {
-	return map[string]any{
-		"name":            spec.Name,
-		"protocol":        spec.Protocol,
-		"protocolMapper":  spec.ProtocolMapper,
-		"consentRequired": spec.ConsentRequired,
-		"config":          spec.Config,
-	}
 }
 
 func setOwnedAttributes(resource map[string]any, owned map[string]string) {
