@@ -63,6 +63,7 @@ describe("TemplateRegistryScreen", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("shows a loading state while the template revisions query is pending", () => {
@@ -204,6 +205,10 @@ describe("TemplateRegistryScreen", () => {
   });
 
   it("renders the generic error state when the API returns 401", async () => {
+    // The 401 drives client.ts's fetchWithAuth to navigate via
+    // globalThis.location.assign; stub it so jsdom does not attempt (and
+    // warn about) a real navigation.
+    vi.stubGlobal("location", { ...window.location, assign: vi.fn() });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({ error: "unauthorized", message: "unauthorized" }, 401)
     );

@@ -17,6 +17,7 @@ function wrapper({ children }: { children: React.ReactNode }) {
 describe("useMeQuery", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("returns MeResponse data on success", async () => {
@@ -47,6 +48,10 @@ describe("useMeQuery", () => {
   });
 
   it("returns error on 401 response", async () => {
+    // The 401 drives client.ts's fetchWithAuth to navigate via
+    // globalThis.location.assign; stub it so jsdom does not attempt (and
+    // warn about) a real navigation.
+    vi.stubGlobal("location", { ...window.location, assign: vi.fn() });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({ error: "unauthorized", message: "authentication required" }),

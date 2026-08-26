@@ -142,6 +142,7 @@ describe("StackTemplateScreen", () => {
     cleanup();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
   it("shows a loading state while the installed template's variables are pending", () => {
@@ -460,6 +461,10 @@ describe("StackTemplateScreen", () => {
   });
 
   it("renders the generic error state when the API returns 401", async () => {
+    // A 401 drives client.ts's fetchWithAuth to navigate via
+    // globalThis.location.assign; stub it so jsdom does not attempt (and
+    // warn about) a real navigation.
+    vi.stubGlobal("location", { ...window.location, assign: vi.fn() });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ error: "unauthorized", message: "unauthorized" }), {
         status: 401,
