@@ -67,6 +67,14 @@ explicit, guarded action.
 
 Requires Docker. No Go or Node toolchain.
 
+> [!NOTE]
+> **Upgrading an existing local stack?** Run
+> `docker compose -f docker-compose.yaml -f docker-compose.app.yaml down -v`
+> before starting it back up. The provisioner no longer creates the
+> `tflive-web` public client or its audience mapper, but an existing Keycloak
+> volume keeps them from before — and the stale public client can still mint
+> browser-held access tokens, which is the posture this change exists to end.
+
 **1. Start the infrastructure and provision it.**
 
 ```bash
@@ -102,6 +110,11 @@ First run builds from source, so it takes a few minutes. Later runs are cached.
 
 **4. Open http://localhost:5173** and sign in with the platform administrator
 credentials from `.env.example`.
+
+> [!IMPORTANT]
+> Use `localhost`, not `127.0.0.1`. The redirect URI is derived from a single
+> `TFLIVE_PUBLIC_URL`, so only that exact origin is registered with Keycloak —
+> `127.0.0.1` fails sign-in with "Invalid parameter: redirect_uri".
 
 ### Stopping it
 
