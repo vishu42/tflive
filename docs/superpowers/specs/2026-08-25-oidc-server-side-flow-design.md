@@ -397,7 +397,12 @@ re-auth with fake timers: it fires at `sessionExpiresAt` minus sixty seconds; it
 a mutation is in flight and fires once that settles; a `sessionExpiresAt` already in the past
 navigates immediately rather than scheduling a negative timeout.
 
-**Manual.** `docker compose up`, log in through Keycloak, confirm `tflive_session` is
+**Manual — NOT YET PERFORMED.** Docker was unavailable in the environment where this was
+built, so everything below is verified statically and by the automated suites only. Nothing
+here confirms the stack boots or that login and logout work end to end. Run it before
+trusting the branch.
+
+`docker compose up`, log in through Keycloak, confirm `tflive_session` is
 httpOnly in devtools and that no token is reachable from `document.cookie` or any JS store.
 Drop `AccessTokenLifespan` to 60 temporarily and confirm the warm re-auth round trip is
 silent — no login form, route preserved, React Query state refetched.
