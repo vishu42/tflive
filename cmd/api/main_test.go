@@ -216,6 +216,61 @@ func TestRunWiresConfiguredTenantBoundary(t *testing.T) {
 	}
 }
 
+// TestRunGatesSecureCookiesOnRuntimeMode asserts the one cookie attribute
+// whose regression is invisible in dev and serious in production: a session
+// cookie sent over plaintext. AuthConfig.SecureCookies is unexported outside
+// internal/api, so this observes it the way a browser would — through the
+// Secure flag on the Set-Cookie the login route actually issues — rather than
+// reaching into the server's internals.
+func TestRunGatesSecureCookiesOnRuntimeMode(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name       string
+		production bool
+	}{
+		{name: "development", production: false},
+		{name: "production", production: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			values := apiTestValues()
+			if test.production {
+				values["TFLIVE_ENVIRONMENT"] = "production"
+				values["OIDC_ISSUER_URL"] = "https://id.example.com/realms/tflive"
+				values["TFLIVE_PUBLIC_URL"] = "https://app.example.com"
+				values["OPENFGA_API_URL"] = "https://openfga.example.com"
+				values["OPENFGA_API_TOKEN"] = "openfga-token"
+				values["KEYCLOAK_DIRECTORY_READER_CLIENT_ID"] = "directory-reader"
+				values["KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET"] = "directory-reader-secret"
+			}
+
+			deps := newRecordingAPIDependencies(t)
+			if err := runWithDependencies(context.Background(), apiTestGetenv(values), deps.apiDependencies); err != nil {
+				t.Fatalf("runWithDependencies returned error: %v", err)
+			}
+
+			request := httptest.NewRequest(http.MethodGet, "/v1/auth/login", nil)
+			response := httptest.NewRecorder()
+			deps.serverHandler.ServeHTTP(response, request)
+
+			var transactionCookie *http.Cookie
+			for _, cookie := range response.Result().Cookies() {
+				if cookie.Name == authn.TransactionCookieName {
+					transactionCookie = cookie
+				}
+			}
+			if transactionCookie == nil {
+				t.Fatalf("no %s cookie in response; headers = %v", authn.TransactionCookieName, response.Header())
+			}
+			if transactionCookie.Secure != test.production {
+				t.Fatalf("transaction cookie Secure = %v, want %v for production=%v", transactionCookie.Secure, test.production, test.production)
+			}
+		})
+	}
+}
+
 func TestRunConstructsAndClosesOIDCVerifier(t *testing.T) {
 	deps := newRecordingAPIDependencies(t)
 	verifier := &recordingTokenVerifier{}
