@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -243,6 +242,12 @@ func TestAuthCallbackFailuresAreIndistinguishable(t *testing.T) {
 			if cookieByName(response, authn.SessionCookieName) != nil {
 				t.Fatal("a failed callback set a session cookie")
 			}
+			// A failure leaving the transaction cookie live allows replay
+			// within its 600-second Max-Age.
+			clearedTx := cookieByName(response, authn.TransactionCookieName)
+			if clearedTx == nil || clearedTx.MaxAge != -1 {
+				t.Fatalf("transaction cookie = %#v, want cleared on failure", clearedTx)
+			}
 			bodies = append(bodies, response.Body.String())
 		})
 	}
@@ -256,7 +261,7 @@ func TestAuthCallbackFailuresAreIndistinguishable(t *testing.T) {
 	}
 }
 
-func TestAuthLogoutClearsCookieAndReturnsIdPLogoutURL(t *testing.T) {
+func TestAuthLogoutClearsCookieAndRedirectsToIdP(t *testing.T) {
 	flow := &stubFlow{endSessionURL: "https://idp.test/logout?id_token_hint=raw.id.token"}
 	server := newAuthTestServer(t, flow, stubVerifier{})
 
@@ -265,8 +270,11 @@ func TestAuthLogoutClearsCookieAndReturnsIdPLogoutURL(t *testing.T) {
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", response.Code)
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", response.Code)
+	}
+	if location := response.Header().Get("Location"); location != flow.endSessionURL {
+		t.Fatalf("Location = %q", location)
 	}
 	cleared := cookieByName(response, authn.SessionCookieName)
 	if cleared == nil || cleared.Value != "" || cleared.MaxAge != -1 {
@@ -275,18 +283,15 @@ func TestAuthLogoutClearsCookieAndReturnsIdPLogoutURL(t *testing.T) {
 	if flow.gotIDTokenHint != "raw.id.token" {
 		t.Fatalf("id_token_hint = %q", flow.gotIDTokenHint)
 	}
-	var body struct {
-		LogoutURL *string `json:"logoutURL"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
-	if body.LogoutURL == nil || *body.LogoutURL != flow.endSessionURL {
-		t.Fatalf("logoutURL = %v", body.LogoutURL)
+	// The ID token may appear only in the Location header. A response body
+	// carrying it would be readable by any script on the origin, which is
+	// exactly what HttpOnly exists to prevent.
+	if body := response.Body.String(); strings.Contains(body, "raw.id.token") {
+		t.Fatal("logout response body carries the ID token")
 	}
 }
 
-func TestAuthLogoutWithoutProviderSupportReturnsNull(t *testing.T) {
+func TestAuthLogoutWithoutProviderSupportRedirectsHome(t *testing.T) {
 	server := newAuthTestServer(t, &stubFlow{}, stubVerifier{})
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
@@ -294,14 +299,11 @@ func TestAuthLogoutWithoutProviderSupportReturnsNull(t *testing.T) {
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
-	var body struct {
-		LogoutURL *string `json:"logoutURL"`
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", response.Code)
 	}
-	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
-	if body.LogoutURL != nil {
-		t.Fatalf("logoutURL = %v, want null", *body.LogoutURL)
+	if location := response.Header().Get("Location"); location != "http://localhost:5173/" {
+		t.Fatalf("Location = %q", location)
 	}
 }
 

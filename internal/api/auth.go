@@ -16,10 +16,6 @@ import (
 const authFailureBody = `<!doctype html><meta charset="utf-8"><title>Sign-in failed</title>` +
 	`<p>Sign-in could not be completed. <a href="/v1/auth/login">Try again</a>.</p>`
 
-type logoutResponse struct {
-	LogoutURL *string `json:"logoutURL"`
-}
-
 // handleAuthLogin starts the flow. It makes no network call: the authorization
 // endpoint comes from discovery the verifier already cached.
 func (server *Server) handleAuthLogin(response http.ResponseWriter, request *http.Request) {
@@ -106,9 +102,15 @@ func (server *Server) handleAuthCallback(response http.ResponseWriter, request *
 	http.Redirect(response, request, authn.SafeReturnTo(transaction.ReturnTo), http.StatusFound)
 }
 
-// handleAuthLogout clears our session and reports where to end the IdP's.
-// Without the second half, logging out and back in silently returns the same
-// user, because the provider's SSO session still stands.
+// handleAuthLogout clears our session and sends the browser on to end the
+// IdP's. Without that second half, logging out and back in silently returns
+// the same user, because the provider's SSO session still stands.
+//
+// It redirects rather than returning the URL in a body: that URL carries the
+// raw ID token as id_token_hint, a body would be readable by any script on the
+// origin, and the middleware accepts that token as a bearer credential. A
+// Location header on a 303 is not script-readable, and http.Redirect writes no
+// body for a POST.
 func (server *Server) handleAuthLogout(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 
@@ -118,13 +120,13 @@ func (server *Server) handleAuthLogout(response http.ResponseWriter, request *ht
 	}
 	http.SetCookie(response, authn.ClearedSessionCookie(server.auth.SecureCookies))
 
-	body := logoutResponse{}
+	destination := server.auth.PublicURL + "/"
 	if idTokenHint != "" {
 		if logoutURL := server.auth.Flow.EndSessionURL(idTokenHint, server.auth.PublicURL+"/"); logoutURL != "" {
-			body.LogoutURL = &logoutURL
+			destination = logoutURL
 		}
 	}
-	writeJSON(response, http.StatusOK, body)
+	http.Redirect(response, request, destination, http.StatusSeeOther)
 }
 
 func (server *Server) writeAuthFailure(response http.ResponseWriter) {
