@@ -13,6 +13,8 @@ export interface Me {
     isPlatformAdmin: boolean;
     canCreateStack: boolean;
   };
+  /** RFC 3339. When the session's ID token expires. */
+  sessionExpiresAt?: string;
 }
 
 // Attached to every stack resource (list + detail) as `effectiveCapabilities`.

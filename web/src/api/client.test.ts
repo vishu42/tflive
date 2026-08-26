@@ -240,73 +240,45 @@ describe("api client", () => {
     }
   });
 });
-import { getUserManager } from "../auth/userManager";
 
-const mockUserManager = {
-  getUser: vi.fn(),
-  signinSilent: vi.fn(),
-  signinRedirect: vi.fn(),
-};
+describe("api client — session cookie auth", () => {
+  const assign = vi.fn();
 
-vi.mock("../auth/userManager", () => ({
-  getUserManager: () => mockUserManager,
-}));
-
-describe("api client — auth header injection", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it("adds Authorization header with current access token", async () => {
+  it("sends requests with same-origin credentials and no bearer header", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([{ id: "stack_1" }]));
-    const user = { access_token: "test-token-abc", expires_at: Date.now() / 1000 + 300 };
-    vi.mocked(getUserManager().getUser).mockResolvedValue(user as never);
 
     await listStacks("tenant_123");
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/v1/tenants/tenant_123/stacks",
-      expect.objectContaining({
-        headers: expect.any(Headers),
-      })
+      expect.objectContaining({ credentials: "same-origin" })
     );
-    const callHeaders = fetchMock.mock.calls[0][1]?.headers as Headers;
-    expect(callHeaders.get("authorization")).toBe("Bearer test-token-abc");
-  });
-
-  it("skips auth header when no user is available", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([{ id: "stack_1" }]));
-    vi.mocked(getUserManager().getUser).mockResolvedValue(null);
-
-    await listStacks("tenant_123");
-
     const callHeaders = fetchMock.mock.calls[0][1]?.headers as Headers;
     expect(callHeaders.get("authorization")).toBeNull();
   });
 
-  it("refreshes token and retries when API returns 401", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "unauthorized", message: "expired" }), {
+  it("navigates to the login route on a 401, never fetches it", async () => {
+    vi.stubGlobal("location", { assign, pathname: "/stacks", search: "?selected=st_1" });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "unauthorized", message: "expired" }), {
         status: 401,
-        headers: { "content-type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response(null, { status: 401 })) // second attempt (the retry)
-      .mockResolvedValueOnce(jsonResponse([{ id: "stack_2" }])); // after redirect would happen
+        headers: { "content-type": "application/json" }
+      })
+    );
 
-    const user = { access_token: "old-token", expires_at: Date.now() / 1000 + 300, refresh_token: "rt-1" };
-    vi.mocked(getUserManager().getUser).mockResolvedValue(user as never);
-
-    const refreshedUser = { access_token: "new-token", expires_at: Date.now() / 1000 + 300 };
-    vi.mocked(getUserManager().signinSilent).mockResolvedValue(refreshedUser as never);
-
-    // On 401, the client will: refresh -> retry. We expect at least the refresh call.
     try {
       await listStacks("tenant_123");
     } catch {
-      // expected: the retry also fails in this test because the third mock is irrelevant to the retry URL
+      // A 401 still throws ApiRequestError for the caller; the navigation
+      // above is what actually recovers the session.
     }
 
-    expect(getUserManager().signinSilent).toHaveBeenCalled();
+    expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks%3Fselected%3Dst_1");
   });
 });
 

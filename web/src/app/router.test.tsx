@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../auth/AuthContext";
 import type { AuthContextValue } from "../auth/AuthContext";
 
-vi.mock("../auth/OidcAuthProvider");
+vi.mock("../auth/SessionProvider");
 
 function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
   return {
@@ -50,9 +50,8 @@ describe("routeConfig", () => {
     const { queryKeys } = await import("../api/queryKeys");
 
     // /stacks/new now renders the real CreateStackScreen (Task 2 of
-    // create-stack-ui), and /auth/callback renders the real CallbackPage.
-    // No reserved screens remain that are reachable purely via global
-    // capabilities — the rest require a stack scoped query.
+    // create-stack-ui). No reserved screens remain that are reachable purely
+    // via global capabilities — the rest require a stack scoped query.
     {
       const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/new"] });
       const markup = renderToStaticMarkup(
