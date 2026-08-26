@@ -24,6 +24,7 @@ func (server *Server) handleAuthLogin(response http.ResponseWriter, request *htt
 	state, stateErr := randomToken()
 	nonce, nonceErr := randomToken()
 	if stateErr != nil || nonceErr != nil {
+		log.Printf("auth login: failed to generate state/nonce token: state error = %v, nonce error = %v", stateErr, nonceErr)
 		server.writeAuthFailure(response)
 		return
 	}
@@ -36,11 +37,13 @@ func (server *Server) handleAuthLogin(response http.ResponseWriter, request *htt
 
 	sealed, err := authn.SealTransaction(server.auth.Sealer, transaction)
 	if err != nil {
+		log.Printf("auth login: failed to seal transaction cookie: %v", err)
 		server.writeAuthFailure(response)
 		return
 	}
 	authorizationURL, err := server.auth.Flow.AuthorizationURL(transaction.State, transaction.Nonce, transaction.CodeVerifier)
 	if err != nil {
+		log.Printf("auth login: failed to build authorization URL: %v", err)
 		server.writeAuthFailure(response)
 		return
 	}
@@ -59,40 +62,48 @@ func (server *Server) handleAuthCallback(response http.ResponseWriter, request *
 
 	query := request.URL.Query()
 	if query.Get("error") != "" {
+		log.Printf("auth callback: idp returned error=%q error_description=%q", query.Get("error"), query.Get("error_description"))
 		server.writeAuthFailure(response)
 		return
 	}
 	cookie, err := request.Cookie(authn.TransactionCookieName)
 	if err != nil || cookie.Value == "" {
+		log.Printf("auth callback: missing or unreadable transaction cookie: %v", err)
 		server.writeAuthFailure(response)
 		return
 	}
 	transaction, err := authn.OpenTransaction(server.auth.Sealer, cookie.Value)
 	if err != nil {
+		log.Printf("auth callback: failed to open transaction cookie: %v", err)
 		server.writeAuthFailure(response)
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(transaction.State), []byte(query.Get("state"))) != 1 {
+		log.Printf("auth callback: state mismatch")
 		server.writeAuthFailure(response)
 		return
 	}
 	code := query.Get("code")
 	if code == "" {
+		log.Printf("auth callback: no authorization code in callback")
 		server.writeAuthFailure(response)
 		return
 	}
 
 	rawIDToken, err := server.auth.Flow.Exchange(request.Context(), code, transaction.CodeVerifier)
 	if err != nil {
+		log.Printf("auth callback: token exchange failed: %v", err)
 		server.writeAuthFailure(response)
 		return
 	}
 	verified, err := server.auth.Verifier.Verify(request.Context(), rawIDToken)
 	if err != nil {
+		log.Printf("auth callback: id token verification failed: %v", err)
 		server.writeAuthFailure(response)
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(verified.Nonce), []byte(transaction.Nonce)) != 1 {
+		log.Printf("auth callback: nonce mismatch")
 		server.writeAuthFailure(response)
 		return
 	}

@@ -2,6 +2,7 @@ package authn
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -32,9 +33,11 @@ func RequireAuthentication(verifier Verifier, publicPaths ...string) func(http.H
 			}
 			verified, err := verifier.Verify(request.Context(), raw)
 			if err != nil {
-				if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrVerifierUnavailable) {
-					writeUnauthorized(response)
-					return
+				// ErrVerifierUnavailable means the IdP is unreachable — every
+				// request fails the same 401 an invalid token would, so
+				// without this log an outage is a silent 401 storm.
+				if errors.Is(err, ErrVerifierUnavailable) {
+					log.Printf("authn middleware: token verifier unavailable: %v", err)
 				}
 				writeUnauthorized(response)
 				return

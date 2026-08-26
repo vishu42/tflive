@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"testing"
 
@@ -181,6 +182,7 @@ func TestAuthCallbackFailuresAreIndistinguishable(t *testing.T) {
 	good := authn.Transaction{State: "state-1", Nonce: "nonce-1", CodeVerifier: "verifier-1", ReturnTo: "/stacks"}
 
 	var bodies []string
+	var headers []string
 	for _, test := range []struct {
 		name     string
 		flow     *stubFlow
@@ -249,6 +251,7 @@ func TestAuthCallbackFailuresAreIndistinguishable(t *testing.T) {
 				t.Fatalf("transaction cookie = %#v, want cleared on failure", clearedTx)
 			}
 			bodies = append(bodies, response.Body.String())
+			headers = append(headers, normalizedHeaderDump(response.Header()))
 		})
 	}
 
@@ -259,6 +262,38 @@ func TestAuthCallbackFailuresAreIndistinguishable(t *testing.T) {
 			t.Fatalf("failure bodies differ:\n%q\n%q", bodies[0], bodies[i])
 		}
 	}
+	// Bodies are not the only oracle: a future divergent Set-Cookie,
+	// WWW-Authenticate, or X-Reason would leak the same information through a
+	// header instead, and only comparing bodies would stay green.
+	for i := 1; i < len(headers); i++ {
+		if headers[i] != headers[0] {
+			t.Fatalf("failure headers differ:\n%s\n---\n%s", headers[0], headers[i])
+		}
+	}
+}
+
+// normalizedHeaderDump renders response headers deterministically: sorted
+// keys, and sorted values within a key, so every Set-Cookie is included and
+// header order (which carries no meaning) cannot cause a false mismatch.
+func normalizedHeaderDump(header http.Header) string {
+	keys := make([]string, 0, len(header))
+	for key := range header {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var dump strings.Builder
+	for _, key := range keys {
+		values := append([]string(nil), header[key]...)
+		sort.Strings(values)
+		for _, value := range values {
+			dump.WriteString(key)
+			dump.WriteString(": ")
+			dump.WriteString(value)
+			dump.WriteString("\n")
+		}
+	}
+	return dump.String()
 }
 
 func TestAuthLogoutClearsCookieAndRedirectsToIdP(t *testing.T) {
