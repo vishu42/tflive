@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"time"
+
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/traits"
 )
@@ -12,6 +14,11 @@ type MeResponse struct {
 	Email              string             `json:"email,omitempty"`
 	GlobalCapabilities GlobalCapabilities `json:"globalCapabilities"`
 	TenantID           string             `json:"tenantID"`
+	// SessionExpiresAt is when the ID token backing this session expires, in
+	// RFC 3339. It lets the web client re-authenticate at a quiet moment
+	// instead of being interrupted by a 401. It is not a control: the API
+	// rejects an expired token regardless of what the browser believes.
+	SessionExpiresAt string `json:"sessionExpiresAt,omitempty"`
 }
 
 // GlobalCapabilities encodes coarse-grained permissions answered by OpenFGA.
@@ -26,11 +33,17 @@ type GlobalCapabilities struct {
 // capabilities to a MeResponse. The capabilities are passed in rather than
 // derived here, because answering them is an OpenFGA call the app layer owns.
 func MeFromPrincipal(principal authn.Principal, tenantID traits.TenantID, capabilities GlobalCapabilities) MeResponse {
+	sessionExpiresAt := ""
+	if !principal.ExpiresAt.IsZero() {
+		sessionExpiresAt = principal.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+
 	return MeResponse{
 		Sub:                principal.Subject,
 		DisplayName:        principal.Name,
 		Email:              principal.Email,
 		GlobalCapabilities: capabilities,
 		TenantID:           string(tenantID),
+		SessionExpiresAt:   sessionExpiresAt,
 	}
 }
