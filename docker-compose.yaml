@@ -75,10 +75,12 @@ services:
       KEYCLOAK_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-tflive-admin}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD:-tflive-admin-local-only}
       KEYCLOAK_REALM: tflive
-      KEYCLOAK_WEB_CLIENT_ID: tflive-web
       KEYCLOAK_API_CLIENT_ID: tflive-api
-      KEYCLOAK_WEB_REDIRECT_URIS: ${KEYCLOAK_WEB_REDIRECT_URIS:-http://localhost:5173/auth/callback,http://127.0.0.1:5173/auth/callback}
-      KEYCLOAK_WEB_ORIGINS: ${KEYCLOAK_WEB_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      # The provisioner derives the confidential client's redirect and
+      # post-logout URIs from TFLIVE_PUBLIC_URL, and registers this exact
+      # secret on the client, so the API and the IdP always agree.
+      TFLIVE_PUBLIC_URL: ${TFLIVE_PUBLIC_URL:-http://localhost:5173}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-tflive-api-local-only}
       KEYCLOAK_PLATFORM_ADMIN_USERNAME: ${KEYCLOAK_PLATFORM_ADMIN_USERNAME:-tflive-platform-admin}
       KEYCLOAK_PLATFORM_ADMIN_PASSWORD: ${KEYCLOAK_PLATFORM_ADMIN_PASSWORD:-tflive-platform-admin-local-only}
       KEYCLOAK_PLATFORM_ADMIN_EMAIL: ${KEYCLOAK_PLATFORM_ADMIN_EMAIL:-tflive-platform-admin@local.test}

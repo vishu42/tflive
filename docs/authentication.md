@@ -10,7 +10,7 @@ trust model and authorization invariants remain in the
 Docker Compose runs Keycloak 26.6.3 at `http://keycloak.localhost:8082` and executes the
 `keycloak-provision` one-shot service after Keycloak reports healthy. The
 service reconciles named resources through the Keycloak Admin REST API and
-exits non-zero if any operation or effective-token postcondition fails.
+exits non-zero if any operation fails.
 
 The local issuer is:
 
@@ -18,49 +18,46 @@ The local issuer is:
 http://keycloak.localhost:8082/realms/tflive
 ```
 
-The realm has a 300-second access-token lifespan, is enabled, does not permit
+The realm has a one-hour access-token lifespan, is enabled, does not permit
 self-registration, and uses Keycloak's `external` SSL policy. Local loopback
 HTTP exists only for development; production uses one canonical HTTPS issuer.
+An hour is also the whole browser session: see "Browser Session" below for why
+there is no refresh, and why an hour rather than Keycloak's five-minute
+default or a full day.
 
 ## OIDC Clients and Claims
 
 | Resource | Configuration |
 |---|---|
-| `tflive-web` | Public OpenID Connect client; Authorization Code flow enabled; PKCE S256 required; implicit, password, device, CIBA, service-account, and standard token-exchange grants disabled |
-| `tflive-api` | Bearer-only OpenID Connect client used as the API audience |
-| `tflive-api-audience` | Default client scope on `tflive-web` with a hardcoded `tflive-api` access-token audience mapper |
-| `roles` | Built-in default client scope explicitly linked to `tflive-web`; realm roles remain in `realm_access.roles` |
+| `tflive-api` | Confidential OpenID Connect client; Authorization Code flow with PKCE S256; implicit, password, device, CIBA, service-account, and standard token-exchange grants disabled |
 
-The local browser allowlist contains exact entries only:
+There is one client, not two. The API is the only OIDC client and the only
+party that ever talks to Keycloak: `/v1/auth/login`, `/v1/auth/callback`, and
+`/v1/auth/logout` on the API run the entire authorization-code exchange
+server-side, holding the client secret, and the browser receives nothing but
+an httpOnly session cookie (see "Browser Session" below). An earlier revision
+of this design split a public `tflive-web` browser client from a bearer-only
+`tflive-api` audience client; both the second client and the client scope and
+mapper it needed are gone along with it.
+
+The client's one registered redirect URI is derived, never configured
+separately:
 
 ```text
 Redirect URIs:
-  http://localhost:5173/auth/callback
-  http://127.0.0.1:5173/auth/callback
-
-Web origins:
-  http://localhost:5173
-  http://127.0.0.1:5173
+  <TFLIVE_PUBLIC_URL>/v1/auth/callback
 ```
 
-Wildcard redirects and origins are rejected by provisioner configuration
-validation. Plain HTTP browser endpoints are accepted only for loopback hosts.
-User information, queries, and fragments are also rejected in configured URLs.
+`WebOrigins` is empty and stays empty: the browser only ever calls the API's
+own origin, so no CORS configuration exists anywhere in `internal/api`.
 
-An access token for the initial platform administrator is verified during every
-provisioning run to contain:
-
-```json
-{
-  "aud": ["tflive-api"],
-  "realm_access": {
-    "roles": ["platform-admin"]
-  }
-}
-```
-
-Keycloak can serialize a single audience as either a string or an array. tflive
-provisioning accepts both representations when enforcing the postcondition.
+The API verifies **ID tokens**, not access tokens, and checks `aud` against
+`OIDC_CLIENT_ID`. An ID token's `aud` is the client ID by construction, which
+is the whole reason ID tokens replaced access tokens here: forcing a resource
+identifier into an access token's `aud` used to require a dedicated client
+scope and protocol mapper on Keycloak, and on Okta a custom authorization
+server, which is a paid add-on. Verifying the ID token instead means the
+audience is already correct and nothing needs to mint it.
 
 ## Global Roles
 
@@ -108,10 +105,9 @@ system and must not reuse the examples.
 | `KEYCLOAK_ADMIN_USERNAME` | Yes | Master bootstrap administrator username |
 | `KEYCLOAK_ADMIN_PASSWORD` | Yes | Master bootstrap administrator password |
 | `KEYCLOAK_REALM` | No | Product realm; defaults to `tflive` |
-| `KEYCLOAK_WEB_CLIENT_ID` | No | Browser client; defaults to `tflive-web` |
-| `KEYCLOAK_API_CLIENT_ID` | No | API audience client; defaults to `tflive-api` |
-| `KEYCLOAK_WEB_REDIRECT_URIS` | No | Comma-separated exact redirects |
-| `KEYCLOAK_WEB_ORIGINS` | No | Comma-separated exact browser origins |
+| `KEYCLOAK_API_CLIENT_ID` | No | The confidential client's ID; defaults to `tflive-api` |
+| `TFLIVE_PUBLIC_URL` | No | Origin the browser reaches; the provisioner derives the client's redirect URI (`<TFLIVE_PUBLIC_URL>/v1/auth/callback`) and post-logout redirect URI from it |
+| `OIDC_CLIENT_SECRET` | Yes | Secret registered on the confidential client; must match what the API is configured with |
 | `KEYCLOAK_PLATFORM_ADMIN_USERNAME` | Yes | Initial tflive platform administrator username |
 | `KEYCLOAK_PLATFORM_ADMIN_PASSWORD` | Yes | Initial password, used only when creating the user |
 | `KEYCLOAK_PLATFORM_ADMIN_EMAIL` | No | Required trusted bootstrap profile email |
@@ -133,7 +129,10 @@ connects to Postgres or Temporal or starts its HTTP listener.
 | `TFLIVE_TENANT_ID` | No | Required single configured tenant identifier |
 | `VITE_TFLIVE_TENANT_ID` | No | Frontend build-time tenant context; must exactly match `TFLIVE_TENANT_ID`; local development falls back to `tenant_123` |
 | `OIDC_ISSUER_URL` | No | Required exact Keycloak issuer URL |
-| `OIDC_AUDIENCE` | No | Required access-token audience; local value is `tflive-api` |
+| `OIDC_CLIENT_ID` | No | Required OAuth client ID; also the ID token audience the verifier checks against |
+| `OIDC_CLIENT_SECRET` | Yes | Required; the API is a confidential client and authenticates as one when it exchanges a code |
+| `TFLIVE_PUBLIC_URL` | No | Required; the origin the browser reaches. The API derives its own OIDC redirect URI (`<TFLIVE_PUBLIC_URL>/v1/auth/callback`) and post-logout redirect URI from it — never from `Host` or `X-Forwarded-Proto`, which an attacker can set |
+| `SESSION_ENCRYPTION_KEY` | Yes | Required 32-byte key (raw, base64, or hex) that seals the short-lived login transaction cookie (`state`, `nonce`, PKCE verifier, `return_to`) |
 | `OPENFGA_API_URL` | No | Required OpenFGA API base URL |
 | `OPENFGA_STORE_ID` | No | Required exact store ID emitted by bootstrap |
 | `OPENFGA_MODEL_ID` | No | Required exact immutable model ID emitted by bootstrap |
@@ -163,12 +162,24 @@ exact assignments printed by the serialized bootstrap command into runtime
 configuration before starting the API. Keycloak bootstrap passwords and
 provisioner administrator tokens are not API runtime credentials.
 
-## API Access-Token Verification
+`OIDC_AUDIENCE` is retired: it named a resource identifier that used to be
+forced into an access token's `aud`, and that concept does not exist for the
+ID token the API verifies now. Setting it is a hard startup error rather than
+a silently ignored or aliased variable — this codebase carries no
+compatibility shims, and a config file that still names the old variable
+should fail loudly rather than start with a meaning it no longer has. Set
+`OIDC_CLIENT_ID` instead.
 
-The API accepts compact bearer access tokens for the configured issuer and
-`OIDC_AUDIENCE`. It does not accept ID tokens or opaque tokens. Signature,
-issuer, audience, expiry, optional not-before (when present), subject, and
-bearer type checks complete before identity data is returned.
+## API Token Verification
+
+The API accepts compact **ID tokens** — not access tokens, and not opaque
+tokens — for the configured issuer and `OIDC_CLIENT_ID`. Signature, issuer,
+audience, expiry (with a small acceptable clock skew), and subject checks
+complete before identity data is returned. During the login callback the
+handler additionally compares the token's `nonce` claim against the one it
+sealed into the transaction cookie; PKCE plus a confidential client already
+closes code injection, so this is defence in depth rather than the
+load-bearing control.
 
 Keycloak discovery and JWKS signing keys are cached. A new or replaced signing
 key triggers one bounded refresh, so routine key rotation does not require an
@@ -176,20 +187,99 @@ API restart. A fresh cached key continues to work through a short Keycloak
 outage. If the verifier cannot fetch required public keys, it fails closed and
 exposes no token or provider-response detail.
 
-AUTH-007 middleware owns HTTP status mapping and bearer-header parsing.
+AUTH-007 middleware owns HTTP status mapping and credential parsing.
 
 ## API Request Authentication
 
-All `/v1` API routes require an `Authorization: Bearer <access-token>` header.
-`/healthz` remains public for liveness probes. Missing, malformed, invalid, or
-temporarily unverifiable credentials receive `401` with the stable JSON body
-`{"code":"unauthorized"}`; tokens, claims, and verifier details are never
-written to logs or responses.
+Every `/v1` route accepts a credential two ways: an `Authorization: Bearer
+<id-token>` header, or the `tflive_session` cookie the browser was handed at
+login. The middleware tries the header first and falls back to the cookie —
+never the reverse — so a CLI or service-to-service caller presenting its own
+token on a request that happens to also carry a browser cookie is never
+silently overridden by that stale cookie. Both paths feed the same
+`Verifier.Verify` and produce the same `authn.Principal`; there is no second,
+cookie-specific code path for identity.
 
-After verification, the request context contains an `authn.Principal` with the
-immutable subject, safe display claims, and normalized realm roles. Handlers and
-application services obtain it with `authn.PrincipalFromContext` rather than
-parsing HTTP headers or access tokens.
+`/healthz` and the three `/v1/auth/*` routes below remain public. Missing,
+malformed, invalid, or temporarily unverifiable credentials receive `401`
+with the stable JSON body `{"code":"unauthorized"}`; tokens, claims, and
+verifier details are never written to logs or responses.
+
+After verification, the request context contains an `authn.Principal` with
+the immutable subject and safe display claims — `Name`, `PreferredUsername`,
+`Email`, and the session's `ExpiresAt`. It carries no role claim: OpenFGA is
+the sole authorization source, so nothing from the token feeds an access
+decision. Handlers and application services obtain it with
+`authn.PrincipalFromContext` rather than parsing HTTP headers or tokens.
+
+## Browser Session
+
+The browser never speaks OIDC. Three API routes run the entire
+authorization-code flow on its behalf:
+
+| Route | Purpose |
+|---|---|
+| `GET /v1/auth/login` | Starts the flow: generates `state`, `nonce`, and a PKCE verifier, seals them into the transaction cookie, and redirects to the IdP |
+| `GET /v1/auth/callback` | Redeems the code on the back channel, verifies the resulting ID token, and hands the browser the session cookie |
+| `POST /v1/auth/logout` | Clears the session cookie and redirects to the IdP's RP-initiated logout |
+
+Two cookies carry the flow:
+
+| | `tflive_session` | `tflive_auth_tx` |
+|---|---|---|
+| Contents | the IdP's raw ID token | sealed `{state, nonce, code_verifier, return_to}` |
+| Path | `/` | `/v1/auth` |
+| Max-Age | none (session cookie) | 600s |
+| `HttpOnly` | yes | yes |
+| `SameSite` | `Lax` | `Lax` |
+| `Secure` | production only | production only |
+
+Both are `SameSite=Lax`, not `Strict`. The IdP's callback to
+`/v1/auth/callback` is a cross-site top-level GET — the browser is navigating
+back from `keycloak.localhost`, not from tflive's own origin — and `Strict`
+would withhold the transaction cookie on exactly that request, breaking every
+login. It would look like a random state-mismatch failure rather than an
+obviously misconfigured cookie.
+
+`Lax` still stops CSRF on every mutating route in this API, because `Lax`
+withholds the cookie from a cross-site request unless it is a top-level GET
+navigation. A forged cross-site form or script can `POST`, `PATCH`, or
+`DELETE` all it wants; the browser will not attach `tflive_session` to any of
+it, so the request arrives unauthenticated. This holds only because every
+mutating route in the API is `POST`, `PATCH`, or `DELETE` — a mutating `GET`
+would defeat it, so there is not one, and there is no separate CSRF token.
+
+`tflive_session` is not encrypted. It is the IdP's own signed ID token:
+tampering is caught by the same `Verify` the middleware already runs, and its
+claims are the user's own. The transaction cookie **is** sealed with AEAD
+(`SESSION_ENCRYPTION_KEY`), because `state` is only meaningful if the browser
+cannot forge it — an attacker who can set a cookie can set a query parameter
+too, and unsealed state would let login-CSRF back in.
+
+**There is no refresh token, on purpose.** Session length is exactly the IdP's
+ID token lifetime (one hour locally). When the token expires, the browser
+navigates back through `/v1/auth/login`; because the user still holds a live
+SSO session at the IdP, Keycloak recognizes it and redirects straight back
+with a fresh code — no password, no MFA prompt, a few hundred milliseconds.
+`/v1/me` reports `sessionExpiresAt` so the SPA can make this trip
+*proactively*, shortly before expiry and only when nothing is in flight,
+rather than being surprised by a `401` mid-action. The reactive `401` path
+remains the backstop. Storing and rotating a refresh token was evaluated and
+rejected: correct handling needs a transactional store with row locking to
+survive concurrent requests racing a single-use refresh token, the new
+cookie has nowhere reliable to ride out on a streaming log response, and
+`offline_access` means three different things across Keycloak, Okta, and
+Google. The full reasoning, including the ArgoCD comparison that shaped it,
+is in the [design doc](superpowers/specs/2026-08-25-oidc-server-side-flow-design.md).
+
+Logout redirects rather than returning the IdP's logout URL in a JSON body.
+That URL carries the raw ID token as `id_token_hint`, and a JSON body would
+be readable by any script on the origin — handing an XSS exactly the
+credential `HttpOnly` exists to hide, and one the authentication middleware
+would accept as a bearer credential. A `Location` header on a `303` is not
+script-readable. The route is `POST`, not `GET`, so a cross-site image tag
+cannot trigger it — though `SameSite=Lax` would already make such a request
+arrive without the session cookie regardless.
 
 ## Operation and Reruns
 
@@ -199,7 +289,7 @@ Start or reconcile the realm with:
 docker compose --env-file .env up --build keycloak-provision
 ```
 
-A successful run exits `0` after checking the effective access token. Re-run
+A successful run exits `0` once every resource is reconciled. Re-run
 the same command after configuration changes. The provisioner looks up realms,
 clients, roles, scopes, mappers, and users by their immutable names, creates
 missing resources, and repairs fields owned by tflive without discarding

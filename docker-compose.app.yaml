@@ -32,7 +32,10 @@ services:
       TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3}
       OIDC_ISSUER_URL: http://keycloak.localhost:8082/realms/tflive
-      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-tflive-api}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-tflive-api}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-tflive-api-local-only}
+      TFLIVE_PUBLIC_URL: ${TFLIVE_PUBLIC_URL:-http://localhost:5173}
+      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:-b6f1d2c4a8e0937516243b8c5d7e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0}
       OPENFGA_API_URL: http://openfga:8080
       # Recorded from the provisioning phase. See "Pinning the OpenFGA
       # identifiers" in README.md.
@@ -65,7 +68,10 @@ services:
       TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3}
       OIDC_ISSUER_URL: http://keycloak.localhost:8082/realms/tflive
-      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-tflive-api}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-tflive-api}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-tflive-api-local-only}
+      TFLIVE_PUBLIC_URL: ${TFLIVE_PUBLIC_URL:-http://localhost:5173}
+      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:-b6f1d2c4a8e0937516243b8c5d7e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0}
       OPENFGA_API_URL: http://openfga:8080
       # Recorded from the provisioning phase. See "Pinning the OpenFGA
       # identifiers" in README.md.
