@@ -45,6 +45,12 @@ export default function TemplateRegistrationScreen() {
   const settled = registrationStatus !== null && isTerminalRegistrationStatus(registrationStatus);
   const busy = registerTemplateMutation.isPending || (registrationID !== "" && !settled);
 
+  // Read by SessionProvider's proactive re-auth timer: it defers navigating
+  // away while a `[data-unsaved='true']` element is mounted, so a half-filled
+  // registration form is never wiped out by a background sign-in redirect.
+  const hasUnsavedRegistration =
+    repoOwner !== "hashicorp" || repoName !== "" || sourceRef !== "main" || rootPath !== ".";
+
   async function handleRegister(event: FormEvent) {
     event.preventDefault();
     setErrorMessage("");
@@ -65,7 +71,7 @@ export default function TemplateRegistrationScreen() {
   }
 
   return (
-    <section className="template-registration-screen">
+    <section className="template-registration-screen" data-unsaved={hasUnsavedRegistration ? "true" : undefined}>
       {/* Title above the card, not inside it — see CreateStackScreen. */}
       <header className="page-header">
         <Link to="/templates" className="muted back-link" data-testid="template-registration-back">

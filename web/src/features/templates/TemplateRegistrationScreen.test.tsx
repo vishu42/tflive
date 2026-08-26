@@ -81,6 +81,14 @@ describe("TemplateRegistrationScreen", () => {
     expect(screen.getByRole("button", { name: /Register/ })).toBeTruthy();
   });
 
+  it("marks itself unsaved once the repository field is edited, so SessionProvider's proactive re-auth defers", () => {
+    renderScreen(testQueryClient());
+
+    expect(document.querySelector("[data-unsaved='true']")).toBeNull();
+    fireEvent.change(screen.getByLabelText(/Repository/), { target: { value: "terraform-aws-eks" } });
+    expect(document.querySelector("[data-unsaved='true']")).not.toBeNull();
+  });
+
   it("posts the form values and redirects to the list with the new revision selected", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       if (init?.method === "POST") {

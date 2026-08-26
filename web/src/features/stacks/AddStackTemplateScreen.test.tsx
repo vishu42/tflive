@@ -87,6 +87,7 @@ describe("AddStackTemplateScreen", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("groups selectable revisions by repository", () => {
@@ -115,6 +116,19 @@ describe("AddStackTemplateScreen", () => {
 
     expect(screen.getByTestId("add-stack-template-variables")).toBeTruthy();
     expect((screen.getByLabelText(/region/) as HTMLInputElement).value).toBe("");
+  });
+
+  it("marks itself unsaved once a variable value is typed, so SessionProvider's proactive re-auth defers", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [templateRevision()]);
+    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_1"), [variable()]);
+
+    renderScreen(queryClient);
+    fireEvent.click(screen.getByTestId("add-template-choice-rev_1"));
+
+    expect(document.querySelector("[data-unsaved='true']")).toBeNull();
+    fireEvent.change(screen.getByLabelText(/region/), { target: { value: "eu-west-1" } });
+    expect(document.querySelector("[data-unsaved='true']")).not.toBeNull();
   });
 
   it("does not allow choosing a revision that is not active", () => {
@@ -224,6 +238,11 @@ describe("AddStackTemplateScreen", () => {
     // as the empty message — telling the user this template declares no
     // variables when in truth we could not find out. Install must not be
     // offered against a config we cannot build.
+    //
+    // The 401 also drives client.ts's fetchWithAuth to navigate via
+    // globalThis.location.assign; stub it so jsdom does not attempt (and
+    // warn about) a real navigation.
+    vi.stubGlobal("location", { ...window.location, assign: vi.fn() });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ error: "unauthorized", message: "unauthorized" }), {
         status: 401,

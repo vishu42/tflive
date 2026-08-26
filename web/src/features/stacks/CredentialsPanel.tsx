@@ -37,8 +37,15 @@ export default function CredentialsPanel({ title, subtitle, credentials, loading
     }
   }
 
+  // Read by SessionProvider's proactive re-auth timer: it defers navigating
+  // away while a `[data-unsaved='true']` element is mounted. A half-typed
+  // credential secret is the worst instance of the loss this guard exists to
+  // prevent — the value never reaches the server until Add is clicked, so
+  // losing it means retyping a password from scratch.
+  const hasUnsavedCredential = name !== "" || value !== "";
+
   return (
-    <section className="panel credentials-panel">
+    <section className="panel credentials-panel" data-unsaved={hasUnsavedCredential ? "true" : undefined}>
       <h2>{title}</h2>
       {subtitle && <p className="muted">{subtitle}</p>}
       <p className="muted">Values are write-only and injected only when Terraform runs. Use TF_VAR_NAME for Terraform variables; provider credentials keep their provider-specific names.</p>

@@ -90,6 +90,14 @@ describe("CreateStackScreen", () => {
     expect((button as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("marks itself unsaved once a name is typed, so SessionProvider's proactive re-auth defers", () => {
+    renderScreen();
+
+    expect(document.querySelector("[data-unsaved='true']")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "My Stack" } });
+    expect(document.querySelector("[data-unsaved='true']")).not.toBeNull();
+  });
+
   it("creates the stack and navigates to its detail page on success", async () => {
     const created = stack();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(created));
