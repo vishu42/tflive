@@ -253,12 +253,25 @@ cookie, a state mismatch, a failed exchange, and a failed verification all rende
 HTML error page with no detail — the browser is the wrong place to explain why authentication
 failed, and the distinction is an oracle.
 
-**`POST /v1/auth/logout`** — clears the session cookie and returns
-`{"logoutURL": "..."}` when the provider advertises an `end_session_endpoint`, built with
-`id_token_hint` and `post_logout_redirect_uri`; `{"logoutURL": null}` otherwise. The SPA
-navigates to it, or to `/v1/auth/login` when null. POST rather than GET so a cross-site image
-tag cannot log the user out; `SameSite=Lax` withholds the cookie from cross-site POST anyway,
-so the request would be a no-op regardless.
+**`POST /v1/auth/logout`** — clears the session cookie and responds `303 See Other` to the
+provider's `end_session_endpoint`, built with `id_token_hint` and `post_logout_redirect_uri`,
+falling back to `${TFLIVE_PUBLIC_URL}/` when the provider advertises none.
+
+**It redirects rather than returning that URL in a body, and that is the security-relevant
+part.** The URL carries the raw ID token as `id_token_hint`. A JSON body would be readable by
+any script on the origin — handing an XSS the exact credential `HttpOnly` exists to hide, and
+one the authn middleware accepts as a bearer token. A `Location` on a 303 is not
+script-readable: `fetch` with `redirect: "manual"` yields an opaque response exposing no
+headers, and `redirect: "follow"` dies at the cross-origin boundary with no CORS. Go's
+`http.Redirect` writes a body only for GET, so a POST 303 carries none.
+
+Dropping `id_token_hint` would also close the leak, and it is the wrong trade: Keycloak then
+renders a logout confirmation page, and a user who does not complete it leaves the IdP session
+standing — precisely the failure RP-initiated logout exists to prevent.
+
+POST rather than GET so a cross-site image tag cannot log the user out; `SameSite=Lax`
+withholds the cookie from cross-site POST anyway, so such a request would be a no-op
+regardless. A same-origin form POST carries it normally.
 
 **`GET /v1/me`** — unchanged in purpose, one field added. `MeResponse`
 (`internal/auth/me.go`) gains `sessionExpiresAt`, an RFC 3339 timestamp taken from the
@@ -345,8 +358,9 @@ Net deletion. `oidc-client-ts` leaves `package.json`.
 - **`client.ts`**: `authHeaders()` and the 401 silent-renew retry ladder are deleted. Requests
   carry `credentials: "same-origin"`. A 401 navigates to
   `/v1/auth/login?return_to=<current path and query>`.
-- **`logout()`** posts to `/v1/auth/logout` and navigates to the returned `logoutURL`, or to
-  `/v1/auth/login` when it is null.
+- **`logout()`** submits a hidden form POST to `/v1/auth/logout` and lets the browser follow
+  the 303. It must not use `fetch`: the redirect target carries the ID token as
+  `id_token_hint`, and the entire point is that script never reads it.
 - **A timer is not a security control.** Nothing in the SPA enforces expiry; the API rejects
   an expired token regardless of what the browser believes. The schedule exists purely to
   pick a convenient moment, so clock skew or a suspended laptop degrades to the reactive 401

@@ -86,7 +86,10 @@ Create `internal/secrets/cipher_test.go`:
 ```go
 package secrets
 
-import "testing"
+import (
+	"encoding/base64"
+	"testing"
+)
 
 func TestCipherEncryptDecryptRoundTrip(t *testing.T) {
 	// Verify that encryption is reversible while the stored representation is not plaintext.
@@ -150,9 +153,16 @@ func TestCipherRejectsTamperedCiphertext(t *testing.T) {
 		t.Fatalf("Encrypt returned error: %v", err)
 	}
 
-	tampered := []byte(ciphertext)
-	tampered[len(tampered)-1] ^= 'A'
-	if _, err := cipher.Decrypt(string(tampered)); err == nil {
+	// Flip a bit inside the ciphertext body, not at the base64 tail: the final
+	// character can encode as few as two significant bits, so editing it may
+	// land entirely in discarded padding and escape detection. Any bit flip in
+	// GCM ciphertext or tag fails authentication, so this is deterministic.
+	raw, err := base64.RawURLEncoding.DecodeString(ciphertext)
+	if err != nil {
+		t.Fatalf("DecodeString returned error: %v", err)
+	}
+	raw[len(raw)/2] ^= 0x01
+	if _, err := cipher.Decrypt(base64.RawURLEncoding.EncodeToString(raw)); err == nil {
 		t.Fatal("Decrypt accepted tampered ciphertext")
 	}
 }
@@ -898,6 +908,7 @@ Create `internal/authn/session_test.go`:
 package authn
 
 import (
+	"encoding/base64"
 	"net/http"
 	"testing"
 
@@ -953,9 +964,14 @@ func TestOpenTransactionRejectsTampering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SealTransaction returned error: %v", err)
 	}
-	tampered := []byte(sealed)
-	tampered[len(tampered)-1] ^= 'A'
-	if _, err := OpenTransaction(cipher, string(tampered)); err == nil {
+	// Flip a bit inside the sealed body rather than at the base64 tail, which
+	// can encode only padding. Any bit flip in GCM ciphertext or tag fails.
+	raw, err := base64.RawURLEncoding.DecodeString(sealed)
+	if err != nil {
+		t.Fatalf("DecodeString returned error: %v", err)
+	}
+	raw[len(raw)/2] ^= 0x01
+	if _, err := OpenTransaction(cipher, base64.RawURLEncoding.EncodeToString(raw)); err == nil {
 		t.Fatal("OpenTransaction accepted a tampered value")
 	}
 }
@@ -1572,19 +1588,24 @@ Append to `internal/authn/middleware_test.go`:
 func TestRequireAuthenticationAcceptsSessionCookie(t *testing.T) {
 	valid := VerifiedToken{Subject: "user-123", Name: "Ada"}
 
+	// hasCookie is separate from cookie so the empty-value row actually sends
+	// `tflive_session=`. Gating injection on `cookie != ""` would make that row
+	// byte-identical to "neither" and leave the empty-value guard untested — a
+	// real client sends exactly that after the cookie is cleared.
 	for _, test := range []struct {
 		name          string
 		authorization string
 		cookie        string
+		hasCookie     bool
 		status        int
 		wantRaw       string
 	}{
-		{name: "cookie only", cookie: "cookie-token", status: http.StatusOK, wantRaw: "cookie-token"},
+		{name: "cookie only", cookie: "cookie-token", hasCookie: true, status: http.StatusOK, wantRaw: "cookie-token"},
 		{name: "header only", authorization: "Bearer header-token", status: http.StatusOK, wantRaw: "header-token"},
-		{name: "header wins over cookie", authorization: "Bearer header-token", cookie: "cookie-token", status: http.StatusOK, wantRaw: "header-token"},
-		{name: "empty cookie", cookie: "", status: http.StatusUnauthorized},
+		{name: "header wins over cookie", authorization: "Bearer header-token", cookie: "cookie-token", hasCookie: true, status: http.StatusOK, wantRaw: "header-token"},
+		{name: "empty cookie", cookie: "", hasCookie: true, status: http.StatusUnauthorized},
 		{name: "neither", status: http.StatusUnauthorized},
-		{name: "malformed header falls back to cookie", authorization: "Basic ignored", cookie: "cookie-token", status: http.StatusOK, wantRaw: "cookie-token"},
+		{name: "malformed header falls back to cookie", authorization: "Basic ignored", cookie: "cookie-token", hasCookie: true, status: http.StatusOK, wantRaw: "cookie-token"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			verifier := &middlewareVerifier{token: valid}
@@ -1595,7 +1616,7 @@ func TestRequireAuthenticationAcceptsSessionCookie(t *testing.T) {
 			if test.authorization != "" {
 				request.Header.Set("Authorization", test.authorization)
 			}
-			if test.cookie != "" {
+			if test.hasCookie {
 				request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: test.cookie})
 			}
 			response := httptest.NewRecorder()
@@ -1932,6 +1953,12 @@ func TestAuthCallbackFailuresAreIndistinguishable(t *testing.T) {
 			if cookieByName(response, authn.SessionCookieName) != nil {
 				t.Fatal("a failed callback set a session cookie")
 			}
+			// A failure leaving the transaction cookie live allows replay
+			// within its 600-second Max-Age.
+			clearedTx := cookieByName(response, authn.TransactionCookieName)
+			if clearedTx == nil || clearedTx.MaxAge != -1 {
+				t.Fatalf("transaction cookie = %#v, want cleared on failure", clearedTx)
+			}
 			bodies = append(bodies, response.Body.String())
 		})
 	}
@@ -1945,7 +1972,7 @@ func TestAuthCallbackFailuresAreIndistinguishable(t *testing.T) {
 	}
 }
 
-func TestAuthLogoutClearsCookieAndReturnsIdPLogoutURL(t *testing.T) {
+func TestAuthLogoutClearsCookieAndRedirectsToIdP(t *testing.T) {
 	flow := &stubFlow{endSessionURL: "https://idp.test/logout?id_token_hint=raw.id.token"}
 	server := newAuthTestServer(t, flow, stubVerifier{})
 
@@ -1954,8 +1981,11 @@ func TestAuthLogoutClearsCookieAndReturnsIdPLogoutURL(t *testing.T) {
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", response.Code)
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", response.Code)
+	}
+	if location := response.Header().Get("Location"); location != flow.endSessionURL {
+		t.Fatalf("Location = %q", location)
 	}
 	cleared := cookieByName(response, authn.SessionCookieName)
 	if cleared == nil || cleared.Value != "" || cleared.MaxAge != -1 {
@@ -1964,18 +1994,15 @@ func TestAuthLogoutClearsCookieAndReturnsIdPLogoutURL(t *testing.T) {
 	if flow.gotIDTokenHint != "raw.id.token" {
 		t.Fatalf("id_token_hint = %q", flow.gotIDTokenHint)
 	}
-	var body struct {
-		LogoutURL *string `json:"logoutURL"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
-	if body.LogoutURL == nil || *body.LogoutURL != flow.endSessionURL {
-		t.Fatalf("logoutURL = %v", body.LogoutURL)
+	// The ID token may appear only in the Location header. A response body
+	// carrying it would be readable by any script on the origin, which is
+	// exactly what HttpOnly exists to prevent.
+	if body := response.Body.String(); strings.Contains(body, "raw.id.token") {
+		t.Fatal("logout response body carries the ID token")
 	}
 }
 
-func TestAuthLogoutWithoutProviderSupportReturnsNull(t *testing.T) {
+func TestAuthLogoutWithoutProviderSupportRedirectsHome(t *testing.T) {
 	server := newAuthTestServer(t, &stubFlow{}, stubVerifier{})
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
@@ -1983,14 +2010,11 @@ func TestAuthLogoutWithoutProviderSupportReturnsNull(t *testing.T) {
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
-	var body struct {
-		LogoutURL *string `json:"logoutURL"`
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", response.Code)
 	}
-	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
-	if body.LogoutURL != nil {
-		t.Fatalf("logoutURL = %v, want null", *body.LogoutURL)
+	if location := response.Header().Get("Location"); location != "http://localhost:5173/" {
+		t.Fatalf("Location = %q", location)
 	}
 }
 
@@ -2091,10 +2115,6 @@ import (
 const authFailureBody = `<!doctype html><meta charset="utf-8"><title>Sign-in failed</title>` +
 	`<p>Sign-in could not be completed. <a href="/v1/auth/login">Try again</a>.</p>`
 
-type logoutResponse struct {
-	LogoutURL *string `json:"logoutURL"`
-}
-
 // handleAuthLogin starts the flow. It makes no network call: the authorization
 // endpoint comes from discovery the verifier already cached.
 func (server *Server) handleAuthLogin(response http.ResponseWriter, request *http.Request) {
@@ -2181,9 +2201,15 @@ func (server *Server) handleAuthCallback(response http.ResponseWriter, request *
 	http.Redirect(response, request, authn.SafeReturnTo(transaction.ReturnTo), http.StatusFound)
 }
 
-// handleAuthLogout clears our session and reports where to end the IdP's.
-// Without the second half, logging out and back in silently returns the same
-// user, because the provider's SSO session still stands.
+// handleAuthLogout clears our session and sends the browser on to end the
+// IdP's. Without that second half, logging out and back in silently returns
+// the same user, because the provider's SSO session still stands.
+//
+// It redirects rather than returning the URL in a body: that URL carries the
+// raw ID token as id_token_hint, a body would be readable by any script on the
+// origin, and the middleware accepts that token as a bearer credential. A
+// Location header on a 303 is not script-readable, and http.Redirect writes no
+// body for a POST.
 func (server *Server) handleAuthLogout(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 
@@ -2193,13 +2219,13 @@ func (server *Server) handleAuthLogout(response http.ResponseWriter, request *ht
 	}
 	http.SetCookie(response, authn.ClearedSessionCookie(server.auth.SecureCookies))
 
-	body := logoutResponse{}
+	destination := server.auth.PublicURL + "/"
 	if idTokenHint != "" {
 		if logoutURL := server.auth.Flow.EndSessionURL(idTokenHint, server.auth.PublicURL+"/"); logoutURL != "" {
-			body.LogoutURL = &logoutURL
+			destination = logoutURL
 		}
 	}
-	writeJSON(response, http.StatusOK, body)
+	http.Redirect(response, request, destination, http.StatusSeeOther)
 }
 
 func (server *Server) writeAuthFailure(response http.ResponseWriter) {
@@ -2767,10 +2793,16 @@ async function fetchWithAuth(path: string, init: RequestInit): Promise<Response>
   return response;
 }
 
-export async function logout(): Promise<void> {
-  const response = await fetch("/v1/auth/logout", { method: "POST", credentials: "same-origin" });
-  const body = response.ok ? ((await response.json()) as { logoutURL: string | null }) : { logoutURL: null };
-  globalThis.location.assign(body.logoutURL ?? loginURL());
+export function logout(): void {
+  // A real form POST, never fetch. The response is a 303 whose Location carries
+  // the ID token as id_token_hint; a navigation lets the browser follow it
+  // without script ever reading that header. POST rather than a link so a
+  // cross-site image tag cannot log the user out.
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = "/v1/auth/logout";
+  document.body.appendChild(form);
+  form.submit();
 }
 ```
 
@@ -2813,7 +2845,7 @@ export default function SessionProvider() {
   }, []);
 
   const logout = useCallback(() => {
-    void postLogout();
+    postLogout();
   }, []);
 
   useEffect(() => {
