@@ -1,6 +1,5 @@
-import { createBrowserRouter, createMemoryRouter } from "react-router-dom";
+import { createBrowserRouter, createMemoryRouter, redirect } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
-import App from "../App";
 import AppShell from "./AppShell";
 import NotFound from "./NotFound";
 import RoutePlaceholder from "./RoutePlaceholder";
@@ -37,8 +36,13 @@ const devRoutes: RouteObject[] = import.meta.env.DEV
     ]
   : [];
 
-// The legacy console renders unchanged at "/" until the feature screens
-// fully replace it; routes still rendering RoutePlaceholder are reserved
+// "/" is not a screen — the design spec's route map has no row for it — but
+// it is where a bare sign-in and a manually typed origin both land, so it has
+// to send the visitor somewhere. This is a loader redirect rather than a
+// <Navigate> element so react-router resolves it before rendering anything:
+// the shell never flashes an empty index.
+//
+// Routes still rendering RoutePlaceholder are reserved
 // slots for upcoming tickets. Routes with a capability in the parent spec's
 // route map are wrapped in a <RequireCapability mode="route"> layout route —
 // see docs/superpowers/specs/2026-07-19-capability-gating-primitives-design.md.
@@ -51,7 +55,7 @@ export const routeConfig: RouteObject[] = [
       {
         element: <AppShell />,
         children: [
-          { index: true, element: <App /> },
+          { index: true, loader: () => redirect("/stacks") },
           { path: "stacks", element: <StacksListScreen /> },
           {
             path: "stacks/new",

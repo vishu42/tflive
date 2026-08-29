@@ -258,15 +258,6 @@ textarea {
   }
 }
 
-.eyebrow {
-  margin: 0 0 var(--space-3);
-  color: var(--color-muted-fg);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-}
-
 /* ---- Messaging ---- */
 .alert {
   display: flex;
