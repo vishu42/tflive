@@ -1,9 +1,4 @@
 /* ---- Application frame ---- */
-.app-shell {
-  min-height: 100vh;
-  padding: var(--space-6);
-}
-
 .app-frame {
   min-height: 100vh;
 }
@@ -116,32 +111,6 @@
   width: min(1280px, 100%);
   margin: 0 auto;
   padding: var(--space-6) var(--space-4);
-}
-
-/* The legacy console still carries its own standalone shell padding; zero it
-   out when nested inside the router frame so "/" doesn't double-pad. */
-.app-frame-content .app-shell {
-  min-height: 0;
-  padding: 0;
-}
-
-.workspace {
-  width: min(1280px, 100%);
-  margin: 0 auto;
-}
-
-.workspace-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--space-6);
-  margin-bottom: var(--space-6);
-}
-
-.runtime-fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(140px, 1fr));
-  gap: var(--space-3);
 }
 
 .runtime-field {
@@ -413,7 +382,6 @@
 
 .button-row,
 .phase-row,
-.run-tabs,
 .stack-detail-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -421,7 +389,6 @@
   margin-bottom: var(--space-6);
 }
 
-.run-tabs button,
 .phase-row button,
 .stack-detail-tabs a {
   position: relative;
@@ -439,7 +406,6 @@
   transition: all var(--duration-fast) var(--ease-out);
 }
 
-.run-tabs button:hover,
 .phase-row button:hover,
 .stack-detail-tabs a:hover {
   color: var(--color-fg);
@@ -447,13 +413,11 @@
   text-decoration: none;
 }
 
-.run-tabs button.active,
 .phase-row button.active,
 .stack-detail-tabs a.active {
   color: var(--color-accent);
 }
 
-.run-tabs button.active::after,
 .phase-row button.active::after,
 .stack-detail-tabs a.active::after {
   content: "";
@@ -739,30 +703,10 @@
   padding-top: var(--space-4);
 }
 
-.stack-template-list-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
 .stack-template-list h3 {
   margin: 0;
   font-size: var(--text-sm);
   font-weight: 600;
-}
-
-.stack-template-list-header span {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: var(--space-6);
-  border-radius: var(--radius-full);
-  padding: var(--space-1) var(--space-2);
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
 }
 
 .stack-template-items {
@@ -832,27 +776,6 @@
 }
 
 /* ---- Metadata grids ---- */
-.revision-grid {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--space-2) var(--space-4);
-  margin: 0;
-}
-
-.revision-grid dt {
-  color: var(--color-muted-fg);
-  font-size: var(--text-sm);
-}
-
-.revision-grid dd {
-  min-width: 0;
-  margin: 0;
-  color: var(--color-fg);
-  overflow-wrap: anywhere;
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-}
-
 /* ---- Log panel. Deliberately carries no texture: patterning behind a
    monospace log stream measurably hurts scanning for errors. ---- */
 .log-panel pre {
@@ -899,10 +822,6 @@
 }
 
 @media (max-width: 760px) {
-  .app-shell {
-    padding: var(--space-4);
-  }
-
   .app-frame-header {
     padding: var(--space-3) var(--space-4);
   }
@@ -915,11 +834,6 @@
     padding: var(--space-6) var(--space-4);
   }
 
-  .app-frame-content .app-shell {
-    padding: 0;
-  }
-
-  .workspace-header,
   .stacks-list-header,
   .templates-list-header {
     align-items: stretch;
@@ -933,18 +847,14 @@
     gap: var(--space-2);
   }
 
-  .runtime-fields {
-    grid-template-columns: 1fr;
-  }
-
   .credential-form,
   .credential-row {
     grid-template-columns: 1fr;
   }
 
-  /* Bare h1 is included deliberately: several screens (the legacy console,
-     CreateStackScreen, and the error states of the stacks and templates
-     screens) render an h1 outside .page-header, and the pre-restyle
+  /* Bare h1 is included deliberately: several screens (CreateStackScreen
+     and the error states of the stacks and templates screens) render an h1
+     outside .page-header, and the pre-restyle
      stylesheet shrank every h1 at this breakpoint. Scoping only to
      .page-header would leave those at 2.5rem on a phone. */
   h1,

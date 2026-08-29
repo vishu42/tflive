@@ -1,13 +1,4 @@
 import type { TemplateRevision } from "../../api/types";
-import { findSelectedID, nextSelectedID } from "../../shared/listSelection";
-
-export function nextSelectedTemplateRevisionID(templateRevisions: TemplateRevision[], selectedTemplateRevisionID: string): string {
-  return nextSelectedID(templateRevisions, selectedTemplateRevisionID);
-}
-
-export function findSelectedTemplateRevision(templateRevisions: TemplateRevision[], selectedTemplateRevisionID: string): TemplateRevision | null {
-  return findSelectedID(templateRevisions, selectedTemplateRevisionID);
-}
 
 export interface TemplateRepositoryGroup {
   /** "owner/name" — stable within a tenant, so it doubles as the React key. */

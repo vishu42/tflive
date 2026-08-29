@@ -23,23 +23,18 @@ describe("routeConfig", () => {
     vi.resetModules();
   });
 
-  it("renders the existing workflow console unchanged at the index route", async () => {
+  // "/" is not a screen. The design spec's route map has no row for it, but
+  // a bare sign-in lands there, so it must redirect rather than render. The
+  // redirect is a loader, so it resolves during router initialization —
+  // before any element renders — which is what this asserts.
+  it("redirects the index route to /stacks without rendering a screen", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
 
-    const queryClient = new QueryClient();
-
     const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/"] });
-    const markup = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <AuthContext.Provider value={authValue()}>
-          <RouterProvider router={testRouter} />
-        </AuthContext.Provider>
-      </QueryClientProvider>
-    );
+    await vi.waitFor(() => expect(testRouter.state.initialized).toBe(true));
 
-    expect(markup).toContain("Terraform workflow console");
-    expect(markup).toContain('data-testid="tenant-context"');
+    expect(testRouter.state.location.pathname).toBe("/stacks");
   });
 
   it("renders a placeholder for every reserved screen a signed-in operator can reach", async () => {
