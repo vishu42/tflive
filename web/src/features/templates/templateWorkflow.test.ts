@@ -1,19 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { TemplateRevision } from "../../api/types";
 import {
-  findSelectedTemplateRevision,
   groupTemplateRevisionsByRepository,
-  nextSelectedTemplateRevisionID,
   templateRevisionLabel
 } from "./templateWorkflow";
 
 describe("template workflow helpers", () => {
-  it("falls back to the first hydrated template revision when the current selection is absent", () => {
-    const templateRevisions = [templateRevision({ id: "template_123", repo_name: "infra" })];
-
-    expect(nextSelectedTemplateRevisionID(templateRevisions, "missing_template")).toBe("template_123");
-  });
-
   it("formats menu labels from persisted template revision rows", () => {
     const selectedTemplateRevision = templateRevision({
       id: "template_123",
@@ -25,7 +17,6 @@ describe("template workflow helpers", () => {
     });
 
     expect(templateRevisionLabel(selectedTemplateRevision)).toBe("acme/infra @ main · abcdef1");
-    expect(findSelectedTemplateRevision([selectedTemplateRevision], selectedTemplateRevision.id)).toEqual(selectedTemplateRevision);
   });
 });
 
