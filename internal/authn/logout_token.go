@@ -63,9 +63,13 @@ func (v *OIDCVerifier) VerifyLogoutToken(ctx context.Context, raw string) (Logou
 	}
 
 	// §2.4: iat is required, and a logout notification is only meaningful
-	// while it is fresh.
+	// while it is fresh. The lower bound catches a stale token; the upper
+	// bound catches one dated into the future by more than ordinary clock
+	// skew, using the same clockSkew tolerance jwt.WithAcceptableSkew already
+	// applies to the rest of this parse.
 	issuedAt, ok := token.IssuedAt()
-	if !ok || v.cfg.Clock().Sub(issuedAt) > logoutTokenMaxAge {
+	now := v.cfg.Clock()
+	if !ok || now.Sub(issuedAt) > logoutTokenMaxAge || issuedAt.Sub(now) > clockSkew {
 		return LogoutToken{}, ErrInvalidLogoutToken
 	}
 

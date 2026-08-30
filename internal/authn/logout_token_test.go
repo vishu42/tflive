@@ -5,6 +5,9 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +29,25 @@ func TestVerifyLogoutTokenAcceptsAWellFormedToken(t *testing.T) {
 	}
 	if got.Subject != "user-1" || got.SessionID != "idp-sid-1" {
 		t.Fatalf("got %+v, want sub=user-1 sid=idp-sid-1", got)
+	}
+}
+
+// A provider is not required to send sid at all — optionalStringClaim's
+// absent-vs-wrong-type distinction exists precisely so this still verifies,
+// with SessionID left empty rather than the whole token rejected.
+func TestVerifyLogoutTokenAcceptsTokenWithoutSid(t *testing.T) {
+	verifier := newTestVerifier(t)
+	raw := signLogoutToken(t, map[string]any{
+		"sub":    "user-1",
+		"events": map[string]any{backchannelLogoutEvent: map[string]any{}},
+	})
+
+	got, err := verifier.VerifyLogoutToken(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("VerifyLogoutToken: %v", err)
+	}
+	if got.Subject != "user-1" || got.SessionID != "" {
+		t.Fatalf("got %+v, want sub=user-1 sid=empty", got)
 	}
 }
 
@@ -54,13 +76,24 @@ func TestVerifyLogoutTokenRejections(t *testing.T) {
 			"sub": "user-1", "sid": "idp-sid-1", "events": validEvents,
 			"iat": time.Now().Add(-10 * time.Minute).Unix(),
 		},
+		"future iat": {
+			// Not itself a forgery vector — verifiedPayload has already checked
+			// the signature by this point — but the freshness bound should be
+			// symmetric rather than only ever looking backward.
+			"sub": "user-1", "sid": "idp-sid-1", "events": validEvents,
+			"iat": time.Now().Add(10 * time.Minute).Unix(),
+		},
 	}
 
 	for name, claims := range tests {
 		t.Run(name, func(t *testing.T) {
 			raw := signLogoutToken(t, claims)
-			if _, err := verifier.VerifyLogoutToken(context.Background(), raw); err == nil {
-				t.Fatal("want an error, got none")
+			_, err := verifier.VerifyLogoutToken(context.Background(), raw)
+			// Every post-signature rejection must collapse to the one opaque
+			// sentinel: this endpoint is reachable by an attacker, and leaking
+			// the underlying jwt.Parse error would hand them a probe.
+			if !errors.Is(err, ErrInvalidLogoutToken) {
+				t.Fatalf("VerifyLogoutToken() error = %v, want ErrInvalidLogoutToken", err)
 			}
 		})
 	}
@@ -86,12 +119,20 @@ type logoutFixture struct {
 	foreignKey *rsa.PrivateKey
 }
 
-// activeLogoutFixture backs signLogoutToken and signLogoutTokenWithForeignKey,
+// logoutFixtures backs signLogoutToken and signLogoutTokenWithForeignKey,
 // which the brief's test bodies call with no reference to the verifier or
-// server they must sign against. Tests in this file run sequentially (none
-// call t.Parallel), so a single package-level slot set by newTestVerifier and
-// cleared via t.Cleanup is safe.
-var activeLogoutFixture *logoutFixture
+// server they must sign against. It is keyed by the *testing.T newTestVerifier
+// was called with (a top-level test, since none of these call t.Parallel) and
+// guarded by a mutex because other tests in this package do call t.Parallel()
+// and could run newTestVerifier concurrently with these; a bare package
+// variable would then be a data race, not merely a false "the package doesn't
+// use parallel tests" assumption. Subtests spawned via t.Run get a distinct
+// *testing.T from the one registered, so lookup also matches by name prefix
+// ("Test/subtest" against the registered "Test").
+var (
+	logoutFixturesMu sync.Mutex
+	logoutFixtures   = map[*testing.T]*logoutFixture{}
+)
 
 // newTestVerifier builds an *OIDCVerifier backed by a fresh test IdP with one
 // published RSA key, following the same construction oidc_verifier_test.go
@@ -113,9 +154,14 @@ func newTestVerifier(t *testing.T) *OIDCVerifier {
 		t.Fatalf("rsa.GenerateKey() error = %v", err)
 	}
 
-	previous := activeLogoutFixture
-	activeLogoutFixture = &logoutFixture{server: s, keyID: "key-a", foreignKey: foreignKey}
-	t.Cleanup(func() { activeLogoutFixture = previous })
+	logoutFixturesMu.Lock()
+	logoutFixtures[t] = &logoutFixture{server: s, keyID: "key-a", foreignKey: foreignKey}
+	logoutFixturesMu.Unlock()
+	t.Cleanup(func() {
+		logoutFixturesMu.Lock()
+		delete(logoutFixtures, t)
+		logoutFixturesMu.Unlock()
+	})
 
 	return v
 }
@@ -146,12 +192,26 @@ func signLogoutTokenWithForeignKey(t *testing.T, claims map[string]any) string {
 	return signLogoutClaims(t, "foreign-key", fixture.foreignKey, mergeLogoutClaims(fixture.server, claims))
 }
 
+// requireLogoutFixture finds the fixture registered by the newTestVerifier
+// call that owns t — either t itself, or an ancestor whose name is a prefix
+// of t's (t.Run subtests are given a fresh *testing.T that testing itself
+// does not expose a parent pointer for).
 func requireLogoutFixture(t *testing.T) *logoutFixture {
 	t.Helper()
-	if activeLogoutFixture == nil {
-		t.Fatal("signLogoutToken called without newTestVerifier")
+
+	logoutFixturesMu.Lock()
+	defer logoutFixturesMu.Unlock()
+
+	if fixture, ok := logoutFixtures[t]; ok {
+		return fixture
 	}
-	return activeLogoutFixture
+	for owner, fixture := range logoutFixtures {
+		if strings.HasPrefix(t.Name(), owner.Name()+"/") {
+			return fixture
+		}
+	}
+	t.Fatal("signLogoutToken called without newTestVerifier")
+	return nil
 }
 
 // mergeLogoutClaims fills in iss, aud, and a fresh iat unless overrides
