@@ -39,6 +39,31 @@ func TestHashSessionIDIsStableAndNotTheInput(t *testing.T) {
 	if hash != HashSessionID(raw) {
 		t.Fatal("hash is not stable, so a session could never be looked up twice")
 	}
+
+	// Different inputs must hash to different outputs, else collisions break lookup.
+	rawA, err := NewSessionID()
+	if err != nil {
+		t.Fatalf("NewSessionID: %v", err)
+	}
+	rawB, err := NewSessionID()
+	if err != nil {
+		t.Fatalf("NewSessionID: %v", err)
+	}
+	hashA := HashSessionID(rawA)
+	hashB := HashSessionID(rawB)
+	if hashA == hashB {
+		t.Fatal("different session IDs produced the same hash, collisions would break lookup")
+	}
+
+	// Output must be 64 lowercase hex chars (SHA-256).
+	if len(hashA) != 64 {
+		t.Fatalf("hash length = %d, want 64 (SHA-256)", len(hashA))
+	}
+	for _, c := range hashA {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			t.Fatalf("hash %q contains non-hex character %q", hashA, c)
+		}
+	}
 }
 
 func TestExpiresAtIsTheEarlierBound(t *testing.T) {
@@ -80,6 +105,12 @@ func TestIsLive(t *testing.T) {
 		{"fresh", live, now, true},
 		{"just inside the idle bound", live, now.Add(59 * time.Minute), true},
 		{"past the idle bound", live, now.Add(61 * time.Minute), false},
+		{
+			name:    "at the exact expiry boundary",
+			session: live,
+			at:      live.ExpiresAt(idleTTL),
+			want:    false,
+		},
 		{
 			name:    "past the absolute bound despite recent activity",
 			session: Session{LastSeenAt: now.Add(8 * time.Hour), AbsoluteExpiresAt: now.Add(8 * time.Hour)},
