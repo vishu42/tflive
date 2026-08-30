@@ -463,11 +463,18 @@ func normalizedHeaderDump(header http.Header) string {
 }
 
 func TestAuthLogoutClearsCookieAndRedirectsToIdP(t *testing.T) {
+	raw := "session-token"
+	sessions := newFakeSessionStore()
+	sessions.byHash[authn.HashSessionID(raw)] = authn.Session{
+		IDHash:  authn.HashSessionID(raw),
+		Subject: "user-1",
+		IDToken: "raw.id.token",
+	}
 	flow := &stubFlow{endSessionURL: "https://idp.test/logout?id_token_hint=raw.id.token"}
-	server := newAuthTestServer(t, flow, stubVerifier{})
+	server := newAuthTestServer(t, flow, stubVerifier{}, withSessions(sessions))
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
-	request.AddCookie(&http.Cookie{Name: authn.SessionCookieName, Value: "raw.id.token"})
+	request.AddCookie(&http.Cookie{Name: authn.SessionCookieName, Value: raw})
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -493,10 +500,17 @@ func TestAuthLogoutClearsCookieAndRedirectsToIdP(t *testing.T) {
 }
 
 func TestAuthLogoutWithoutProviderSupportRedirectsHome(t *testing.T) {
-	server := newAuthTestServer(t, &stubFlow{}, stubVerifier{})
+	raw := "session-token"
+	sessions := newFakeSessionStore()
+	sessions.byHash[authn.HashSessionID(raw)] = authn.Session{
+		IDHash:  authn.HashSessionID(raw),
+		Subject: "user-1",
+		IDToken: "raw.id.token",
+	}
+	server := newAuthTestServer(t, &stubFlow{}, stubVerifier{}, withSessions(sessions))
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
-	request.AddCookie(&http.Cookie{Name: authn.SessionCookieName, Value: "raw.id.token"})
+	request.AddCookie(&http.Cookie{Name: authn.SessionCookieName, Value: raw})
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -505,6 +519,47 @@ func TestAuthLogoutWithoutProviderSupportRedirectsHome(t *testing.T) {
 	}
 	if location := response.Header().Get("Location"); location != "http://localhost:5173/" {
 		t.Fatalf("Location = %q", location)
+	}
+}
+
+func TestLogoutRevokesTheSessionAndUsesTheStoredIDToken(t *testing.T) {
+	raw := "session-token"
+	sessions := newFakeSessionStore()
+	sessions.byHash[authn.HashSessionID(raw)] = authn.Session{
+		IDHash:  authn.HashSessionID(raw),
+		Subject: "user-1",
+		IDToken: "stored.id.token",
+	}
+	flow := &stubFlow{endSessionURL: "https://idp.test/logout"}
+	server := newAuthTestServer(t, flow, stubVerifier{}, withSessions(sessions))
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
+	request.AddCookie(&http.Cookie{Name: authn.SessionCookieName, Value: raw})
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", recorder.Code)
+	}
+	if sessions.revoked[authn.HashSessionID(raw)] != 1 {
+		t.Fatal("logout did not revoke the session row; a copied cookie would still work")
+	}
+	// stubFlow records what it was handed rather than building a URL.
+	if flow.gotIDTokenHint != "stored.id.token" {
+		t.Fatalf("id_token_hint = %q, want the ID token stored on the session", flow.gotIDTokenHint)
+	}
+}
+
+func TestLogoutWithoutASessionStillRedirects(t *testing.T) {
+	sessions := newFakeSessionStore()
+	server := newAuthTestServer(t, &stubFlow{}, stubVerifier{}, withSessions(sessions))
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303 even with no session", recorder.Code)
 	}
 }
 

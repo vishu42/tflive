@@ -140,9 +140,12 @@ func (server *Server) handleAuthCallback(response http.ResponseWriter, request *
 	http.Redirect(response, request, authn.SafeReturnTo(transaction.ReturnTo), http.StatusFound)
 }
 
-// handleAuthLogout clears our session and sends the browser on to end the
+// handleAuthLogout revokes our session and sends the browser on to end the
 // IdP's. Without that second half, logging out and back in silently returns
 // the same user, because the provider's SSO session still stands.
+//
+// Revoking the row rather than only clearing the cookie is what makes logout
+// real: a copy of the cookie taken beforehand stops working too.
 //
 // It redirects rather than returning the URL in a body: that URL carries the
 // raw ID token as id_token_hint, a body would be readable by any script on the
@@ -153,8 +156,16 @@ func (server *Server) handleAuthLogout(response http.ResponseWriter, request *ht
 	response.Header().Set("Cache-Control", "no-store")
 
 	var idTokenHint string
-	if cookie, err := request.Cookie(authn.SessionCookieName); err == nil {
-		idTokenHint = cookie.Value
+	if cookie, err := request.Cookie(authn.SessionCookieName); err == nil && cookie.Value != "" {
+		idHash := authn.HashSessionID(cookie.Value)
+		if session, err := server.auth.Sessions.SessionByHash(request.Context(), idHash); err == nil {
+			idTokenHint = session.IDToken
+		}
+		if err := server.auth.Sessions.RevokeSession(request.Context(), idHash, server.now()); err != nil {
+			// The cookie is cleared regardless, so the browser is signed out
+			// either way; the row outliving it is what this logs.
+			log.Printf("auth logout: failed to revoke session: %v", err)
+		}
 	}
 	http.SetCookie(response, authn.ClearedSessionCookie(server.auth.SecureCookies))
 

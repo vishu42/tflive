@@ -14,10 +14,11 @@ type MeResponse struct {
 	Email              string             `json:"email,omitempty"`
 	GlobalCapabilities GlobalCapabilities `json:"globalCapabilities"`
 	TenantID           string             `json:"tenantID"`
-	// SessionExpiresAt is when the ID token backing this session expires, in
-	// RFC 3339. It lets the web client re-authenticate at a quiet moment
-	// instead of being interrupted by a 401. It is not a control: the API
-	// rejects an expired token regardless of what the browser believes.
+	// SessionExpiresAt is when this session ends: the earlier of its idle and
+	// absolute bounds, both of which tflive owns. It lets the web client
+	// re-authenticate at a quiet moment instead of being interrupted by a 401.
+	// It is not a control: the API rejects an expired session regardless of
+	// what the browser believes.
 	SessionExpiresAt string `json:"sessionExpiresAt,omitempty"`
 }
 
