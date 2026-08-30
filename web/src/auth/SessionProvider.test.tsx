@@ -112,6 +112,33 @@ describe("SessionProvider", () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
+  it("does not navigate after unmount while the triggering refetch is still pending", async () => {
+    const nearExpiry = new Date(Date.now() + 61 * 1000).toISOString();
+    getMe.mockResolvedValueOnce({ ...me, sessionExpiresAt: nearExpiry });
+    let resolveRefetch: ((value: typeof me) => void) | undefined;
+    getMe.mockImplementationOnce(
+      () =>
+        new Promise<typeof me>((resolve) => {
+          resolveRefetch = resolve;
+        })
+    );
+
+    const { unmount } = renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+
+    // Reach the re-auth moment: attempt() calls refetch, which is the pending
+    // promise above, so attempt is suspended on that await right now.
+    await vi.advanceTimersByTimeAsync(2 * 1000);
+    expect(getMe).toHaveBeenCalledTimes(2);
+
+    unmount();
+    resolveRefetch?.({ ...me, sessionExpiresAt: nearExpiry });
+    // Flush the microtask queue so the suspended continuation, if any, runs.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(assign).not.toHaveBeenCalled();
+  });
+
   it("navigates once a refetch confirms the session has actually ended", async () => {
     const nearExpiry = new Date(Date.now() + 61 * 1000).toISOString();
     // Every call returns the same fixed bound, so the refetch the re-auth

@@ -80,6 +80,14 @@ export default function SessionProvider() {
 
     let timer: ReturnType<typeof setTimeout>;
     let deferringSince: number | null = null;
+    // attempt awaits a refetch, and React only ever runs a given effect
+    // instance's cleanup once. If that cleanup fires while attempt is
+    // suspended on the await — unmount, or a dependency change — the
+    // continuation would otherwise resume into a component that is already
+    // gone, rearming a timer nothing will ever clear again or navigating
+    // after teardown. cancelled is checked right after the await so that
+    // resumption is a no-op once cleanup has run.
+    let cancelled = false;
     const attempt = async () => {
       const busy = pendingMutationsRef.current > 0 || document.querySelector("[data-unsaved='true']");
       if (busy) {
@@ -96,6 +104,7 @@ export default function SessionProvider() {
       // active user (and the browser's one round trip to the IdP) away from a
       // session that has not actually ended.
       const { data: refreshed } = await refetchMe();
+      if (cancelled) return;
       const nextFireAt = refreshed?.sessionExpiresAt
         ? new Date(refreshed.sessionExpiresAt).getTime() - REAUTH_LEAD_MS
         : NaN;
@@ -106,7 +115,10 @@ export default function SessionProvider() {
       login();
     };
     timer = setTimeout(attempt, Math.max(0, fireAt - Date.now()));
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [me?.sessionExpiresAt, login, refetchMe]);
 
   if (status === "loop") {
