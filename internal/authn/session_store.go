@@ -79,10 +79,10 @@ func (s Session) ExpiresAt(idleTTL time.Duration) time.Time {
 	return idle
 }
 
-// IsLive checks whether a session is still active: not revoked and not expired.
-// Revocation is checked before time bounds so a revoked session is rejected
-// immediately, without timing side-channels that expose whether the expiry
-// was reached.
+// IsLive reports whether a session may still authenticate a request.
+// Revocation is unconditional and so is checked first: a revoked session is
+// dead whatever the clock says, and back-channel logout depends on that being
+// true the instant the row is marked.
 func (s Session) IsLive(now time.Time, idleTTL time.Duration) bool {
 	if !s.RevokedAt.IsZero() {
 		return false
