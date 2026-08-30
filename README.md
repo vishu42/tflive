@@ -63,6 +63,15 @@ explicit, guarded action.
 - **Sign in with SSO.** Authentication is standard OIDC, and the local stack
   ships an identity provider so there is nothing to wire up to try it.
 
+tflive requires no session or timeout configuration on your identity provider:
+signed-in sessions are tflive's own record, bounded by its own absolute and
+idle timeouts, independent of whatever token lifespan or SSO idle timeout the
+provider runs. To get immediate revocation when a user signs out or is
+disabled at the IdP, instead of waiting for those bounds, point the provider's
+back-channel logout at `<TFLIVE_PUBLIC_URL>/v1/auth/backchannel-logout` and
+enable session-required logout so it includes `sid`. Without that, sessions
+still end at their own bounds — nothing breaks.
+
 ## Running it locally
 
 Requires Docker. No Go or Node toolchain.
