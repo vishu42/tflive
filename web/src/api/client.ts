@@ -1,3 +1,4 @@
+import { loginLoopDetected, recordLoginAttempt } from "../auth/loginAttempts";
 import type { Me } from "../auth/types";
 import type {
   ApiErrorBody,
@@ -242,9 +243,13 @@ async function fetchWithAuth(path: string, init: RequestInit): Promise<Response>
   // cannot read it. There is no bearer header and nothing to renew.
   const response = await fetch(path, { method: "GET", ...init, headers, credentials: "same-origin" });
 
-  if (response.status === 401) {
+  if (response.status === 401 && !loginLoopDetected()) {
     // A full navigation, never fetch: following the redirect to the IdP as an
-    // XHR would hit its origin cross-origin and die on CORS.
+    // XHR would hit its origin cross-origin and die on CORS. Once the loop
+    // guard has tripped, the redirect is skipped and the 401 surfaces as an
+    // error instead, so the browser stops bouncing and SessionProvider can
+    // explain what went wrong.
+    recordLoginAttempt();
     globalThis.location.assign(loginURL());
   }
 

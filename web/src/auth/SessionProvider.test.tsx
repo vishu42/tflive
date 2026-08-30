@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { ApiRequestError } from "../api/client";
+import { clearLoginAttempts, maxLoginAttempts, readLoginAttempts } from "./loginAttempts";
 import SessionProvider from "./SessionProvider";
+
+const attemptsKey = "tflive.auth.loginAttempts";
 
 const getMe = vi.fn();
 const logout = vi.fn();
@@ -48,9 +52,14 @@ describe("SessionProvider", () => {
     vi.stubGlobal("location", { ...window.location, assign, pathname: "/stacks", search: "" });
     getMe.mockReset();
     logout.mockReset();
+    sessionStorage.clear();
+    clearLoginAttempts();
   });
 
   afterEach(() => {
+    // Nothing configures Testing Library's automatic cleanup here, so mounted
+    // trees would otherwise pile up and make a testid ambiguous across tests.
+    cleanup();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -93,5 +102,42 @@ describe("SessionProvider", () => {
     renderProvider(<div data-testid="child">ready</div>);
     expect(await screen.findByTestId("auth-error")).toBeTruthy();
     expect(assign).not.toHaveBeenCalled();
+  });
+
+  // A redirect reloads the page, so the count has to live somewhere that
+  // outlives this component for the guard to see a loop rather than a bounce.
+  it("records the login redirect where a page reload cannot erase it", async () => {
+    getMe.mockRejectedValue(new ApiRequestError(401, "unauthorized", "unauthorized"));
+    renderProvider(<div data-testid="child">ready</div>);
+    await waitFor(() => {
+      expect(assign).toHaveBeenCalled();
+    });
+    expect(sessionStorage.getItem(attemptsKey)).toBe("1");
+  });
+
+  it("stops redirecting and explains once the attempts are spent", async () => {
+    sessionStorage.setItem(attemptsKey, String(maxLoginAttempts));
+    getMe.mockRejectedValue(new ApiRequestError(401, "unauthorized", "unauthorized"));
+    renderProvider(<div data-testid="child">ready</div>);
+    expect(await screen.findByTestId("auth-loop-error")).toBeTruthy();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("retries from the loop screen with a fresh count", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    sessionStorage.setItem(attemptsKey, String(maxLoginAttempts));
+    getMe.mockRejectedValue(new ApiRequestError(401, "unauthorized", "unauthorized"));
+    renderProvider(<div data-testid="child">ready</div>);
+    await user.click(await screen.findByTestId("auth-loop-retry-button"));
+    expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
+    expect(readLoginAttempts()).toBe(1);
+  });
+
+  it("clears the recorded attempts once /v1/me resolves", async () => {
+    sessionStorage.setItem(attemptsKey, "2");
+    getMe.mockResolvedValue(me);
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+    expect(sessionStorage.getItem(attemptsKey)).toBeNull();
   });
 });

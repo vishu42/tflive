@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 import { useIsMutating } from "@tanstack/react-query";
 import { ApiRequestError, loginURL, logout as postLogout } from "../api/client";
 import { AuthContext } from "./AuthContext";
+import { clearLoginAttempts, loginLoopDetected, recordLoginAttempt } from "./loginAttempts";
 import { useMeQuery } from "./useMeQuery";
 
 // How long before expiry to re-authenticate. Long enough that the round trip
@@ -13,7 +14,7 @@ const REAUTH_LEAD_MS = 60_000;
 const REAUTH_RETRY_MS = 5_000;
 
 export default function SessionProvider() {
-  const [status, setStatus] = useState<"loading" | "error">("loading");
+  const [status, setStatus] = useState<"loading" | "error" | "loop">("loading");
   const { data: me, error: meError, isLoading } = useMeQuery();
   const pendingMutations = useIsMutating();
   const navigated = useRef(false);
@@ -24,7 +25,28 @@ export default function SessionProvider() {
 
   const login = useCallback(() => {
     if (navigated.current) return;
+    // Every redirect that comes back still unauthenticated is a lap of the
+    // loop. Stop and explain rather than bouncing the browser forever.
+    if (loginLoopDetected()) {
+      setStatus("loop");
+      return;
+    }
     navigated.current = true;
+    recordLoginAttempt();
+    globalThis.location.assign(loginURL());
+  }, []);
+
+  // Reaching /v1/me with an identity proves the cookie survived the round
+  // trip, so the attempts spent getting here no longer count against us.
+  useEffect(() => {
+    if (me) clearLoginAttempts();
+  }, [me]);
+
+  const retryLogin = useCallback(() => {
+    clearLoginAttempts();
+    setStatus("loading");
+    navigated.current = true;
+    recordLoginAttempt();
     globalThis.location.assign(loginURL());
   }, []);
 
@@ -62,6 +84,27 @@ export default function SessionProvider() {
     timer = setTimeout(attempt, Math.max(0, fireAt - Date.now()));
     return () => clearTimeout(timer);
   }, [me?.sessionExpiresAt, login]);
+
+  if (status === "loop") {
+    return (
+      <div data-testid="auth-loop-error">
+        <h1>We could not keep you signed in</h1>
+        <p>
+          Sign-in worked, but this browser did not hold on to the session, so every page load
+          started it over. That happens when cookies are blocked for this site, or when the sign-in
+          token is too large to store — usually because the account carries a lot of group or role
+          claims.
+        </p>
+        <p>
+          Allow cookies for this site and try again. If it keeps failing, contact your
+          administrator.
+        </p>
+        <button type="button" onClick={retryLogin} data-testid="auth-loop-retry-button">
+          Try again
+        </button>
+      </div>
+    );
+  }
 
   if (isLoading) return null;
 
