@@ -52,6 +52,12 @@ const (
 
 var ErrSessionNotFound = errors.New("session not found")
 
+// ErrSessionEncryptionUnavailable is returned when a session row must be
+// encrypted or decrypted but the store holds no session cipher.
+// SESSION_ENCRYPTION_KEY is required configuration, so this signals a wiring
+// defect rather than an expected runtime state.
+var ErrSessionEncryptionUnavailable = errors.New("session encryption is unavailable")
+
 // NewSessionID returns the opaque value handed to the browser.
 func NewSessionID() (string, error) {
 	buffer := make([]byte, 32)

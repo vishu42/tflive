@@ -21,7 +21,7 @@ func newSessionTestStore(t *testing.T, ctx context.Context) *Store {
 	if err != nil {
 		t.Fatalf("new cipher: %v", err)
 	}
-	return NewStore(pool, WithCredentialCipher(cipher))
+	return NewStore(pool, WithSessionCipher(cipher))
 }
 
 func newTestSession(t *testing.T, now time.Time) (raw string, session authn.Session) {
@@ -70,6 +70,23 @@ func TestCreateAndReadSession(t *testing.T) {
 	}
 	if !got.RevokedAt.IsZero() {
 		t.Fatalf("RevokedAt = %v, want zero for a new session", got.RevokedAt)
+	}
+}
+
+func TestCreateSessionWithoutSessionCipherErrors(t *testing.T) {
+	ctx := context.Background()
+	// No WithSessionCipher: this is the CREDENTIAL_ENCRYPTION_KEY-unset shape
+	// that used to break sign-in when sessions were encrypted with the
+	// credential cipher. A store with no session cipher configured must fail
+	// closed with a clear error, not panic and not store the token in clear.
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	_, session := newTestSession(t, now)
+	err := store.CreateSession(ctx, session)
+	if !errors.Is(err, authn.ErrSessionEncryptionUnavailable) {
+		t.Fatalf("CreateSession err = %v, want authn.ErrSessionEncryptionUnavailable", err)
 	}
 }
 

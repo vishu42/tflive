@@ -56,7 +56,7 @@ type tokenVerifier interface {
 type apiDependencies struct {
 	newPostgresPool func(context.Context, string) (postgresPool, error)
 	migratePostgres func(context.Context, postgresPool) error
-	newStore        func(postgresPool, *queue.SpecRegistry, *secrets.Cipher) (appRepositories, error)
+	newStore        func(postgresPool, *queue.SpecRegistry, *secrets.Cipher, *secrets.Cipher) (appRepositories, error)
 	newLogReader    func(config.ArtifactStoreConfig) (app.TemplateRunLogReader, error)
 	newService      func(app.Service) (*app.Service, error)
 	newVerifier     func(context.Context, authn.OIDCVerifierConfig) (tokenVerifier, error)
@@ -102,12 +102,16 @@ func defaultAPIDependencies() apiDependencies {
 			}
 			return postgres.Migrate(ctx, pgxPool)
 		},
-		newStore: func(pool postgresPool, specs *queue.SpecRegistry, cipher *secrets.Cipher) (appRepositories, error) {
+		newStore: func(pool postgresPool, specs *queue.SpecRegistry, credentialCipher *secrets.Cipher, sessionCipher *secrets.Cipher) (appRepositories, error) {
 			pgxPool, ok := pool.(*pgxpool.Pool)
 			if !ok {
 				return nil, fmt.Errorf("unexpected postgres pool type %T", pool)
 			}
-			return postgres.NewStore(pgxPool, postgres.WithQueueSpecs(specs), postgres.WithCredentialCipher(cipher)), nil
+			return postgres.NewStore(pgxPool,
+				postgres.WithQueueSpecs(specs),
+				postgres.WithCredentialCipher(credentialCipher),
+				postgres.WithSessionCipher(sessionCipher),
+			), nil
 		},
 		newLogReader: func(cfg config.ArtifactStoreConfig) (app.TemplateRunLogReader, error) {
 			store, err := artifacts.NewObjectStore(cfg)
@@ -197,7 +201,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 			return fmt.Errorf("create credential cipher: %w", err)
 		}
 	}
-	store, err := deps.newStore(pool, specs, credentialCipher)
+	store, err := deps.newStore(pool, specs, credentialCipher, sessionSealer)
 	if err != nil {
 		return fmt.Errorf("wire service: %w", err)
 	}

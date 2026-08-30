@@ -453,6 +453,7 @@ type recordingAPIDependencies struct {
 	store               *recordingStore
 	queueSpecs          *queue.SpecRegistry
 	credentialCipher    *secrets.Cipher
+	sessionCipher       *secrets.Cipher
 	artifactStoreConfig config.ArtifactStoreConfig
 	logReader           recordingTemplateRunLogReader
 	service             app.Service
@@ -484,12 +485,13 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 			deps.migrated = true
 			return nil
 		},
-		newStore: func(pool postgresPool, specs *queue.SpecRegistry, cipher *secrets.Cipher) (appRepositories, error) {
+		newStore: func(pool postgresPool, specs *queue.SpecRegistry, credentialCipher *secrets.Cipher, sessionCipher *secrets.Cipher) (appRepositories, error) {
 			if pool != deps.pool {
 				t.Fatalf("newStore pool = %p, want %p", pool, deps.pool)
 			}
 			deps.queueSpecs = specs
-			deps.credentialCipher = cipher
+			deps.credentialCipher = credentialCipher
+			deps.sessionCipher = sessionCipher
 			return deps.store, nil
 		},
 		newLogReader: func(cfg config.ArtifactStoreConfig) (app.TemplateRunLogReader, error) {

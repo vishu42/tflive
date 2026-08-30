@@ -11,7 +11,7 @@ import (
 )
 
 func (store *Store) CreateSession(ctx context.Context, session authn.Session) error {
-	ciphertext, err := store.Encrypt(session.IDToken)
+	ciphertext, err := store.encryptSession(session.IDToken)
 	if err != nil {
 		return fmt.Errorf("create session: encrypt id token: %w", err)
 	}
@@ -89,7 +89,7 @@ func (store *Store) SessionByHash(ctx context.Context, idHash string) (authn.Ses
 	if revokedAt != nil {
 		session.RevokedAt = *revokedAt
 	}
-	idToken, err := store.Decrypt(ciphertext)
+	idToken, err := store.decryptSession(ciphertext)
 	if err != nil {
 		return authn.Session{}, fmt.Errorf("session by hash: decrypt id token: %w", err)
 	}
