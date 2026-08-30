@@ -152,6 +152,25 @@ func TestProvisionCreatesOneConfidentialClient(t *testing.T) {
 	}
 }
 
+func TestProvisionRegistersBackchannelLogout(t *testing.T) {
+	t.Parallel()
+
+	cfg := configForServer(t, "http://keycloak.example.test")
+	backend := newFakeProvisionBackend()
+
+	if _, err := provisionWithBackend(context.Background(), cfg, backend); err != nil {
+		t.Fatalf("provisionWithBackend returned error: %v", err)
+	}
+
+	api := backend.clients[cfg.APIClientID]
+	if api.Attributes["backchannel.logout.url"] != cfg.BackchannelLogoutURI {
+		t.Fatalf("backchannel.logout.url = %q, want %q", api.Attributes["backchannel.logout.url"], cfg.BackchannelLogoutURI)
+	}
+	if api.Attributes["backchannel.logout.session.required"] != "true" {
+		t.Fatalf("backchannel.logout.session.required = %q, want true — without it Keycloak omits sid, and a signed-out device would sign out every session the user has", api.Attributes["backchannel.logout.session.required"])
+	}
+}
+
 func TestProvisionWithBackendRequiresKeycloakBuiltins(t *testing.T) {
 	t.Parallel()
 

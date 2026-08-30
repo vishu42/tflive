@@ -62,6 +62,9 @@ type AuthConfig struct {
 	Sessions           authn.SessionStore
 	SessionAbsoluteTTL time.Duration
 	SessionIdleTTL     time.Duration
+	// LogoutTokenVerifier authenticates back-channel logout notifications.
+	// *authn.OIDCVerifier satisfies it in production.
+	LogoutTokenVerifier LogoutTokenVerifier
 	// Clock is time.Now when nil. Tests set it.
 	Clock func() time.Time
 }
@@ -87,6 +90,7 @@ func NewServer(service *app.Service, tenantID traits.TenantID, options ...Server
 		server.mux.HandleFunc("GET /v1/auth/login", server.handleAuthLogin)
 		server.mux.HandleFunc("GET /v1/auth/callback", server.handleAuthCallback)
 		server.mux.HandleFunc("POST /v1/auth/logout", server.handleAuthLogout)
+		server.mux.HandleFunc("POST /v1/auth/backchannel-logout", server.handleBackchannelLogout)
 	}
 
 	// Health routes.
@@ -179,7 +183,7 @@ func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier, tenan
 		server.auth.Sessions,
 		server.auth.SessionIdleTTL,
 		server.auth.Clock,
-		"/healthz", "/v1/auth/login", "/v1/auth/callback", "/v1/auth/logout",
+		"/healthz", "/v1/auth/login", "/v1/auth/callback", "/v1/auth/logout", "/v1/auth/backchannel-logout",
 	)(server.mux)
 	return server
 }

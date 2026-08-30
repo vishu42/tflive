@@ -63,6 +63,21 @@ func withClock(now time.Time) authTestOption {
 	return func(cfg *AuthConfig) { cfg.Clock = func() time.Time { return now } }
 }
 
+func withLogoutTokenVerifier(verifier LogoutTokenVerifier) authTestOption {
+	return func(cfg *AuthConfig) { cfg.LogoutTokenVerifier = verifier }
+}
+
+// fakeLogoutVerifier returns a fixed LogoutToken or error, so handler tests
+// need no live IdP or real logout-token signing.
+type fakeLogoutVerifier struct {
+	token authn.LogoutToken
+	err   error
+}
+
+func (v fakeLogoutVerifier) VerifyLogoutToken(context.Context, string) (authn.LogoutToken, error) {
+	return v.token, v.err
+}
+
 // fakeSessionStore is an in-memory authn.SessionStore.
 type fakeSessionStore struct {
 	created          []authn.Session

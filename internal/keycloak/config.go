@@ -26,6 +26,7 @@ type Config struct {
 	APIClientSecret             string
 	CallbackURI                 string
 	PostLogoutRedirectURI       string
+	BackchannelLogoutURI        string
 	PlatformAdminUsername       string
 	PlatformAdminPassword       string
 	PlatformAdminEmail          string
@@ -124,6 +125,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		APIClientSecret:             apiClientSecret,
 		CallbackURI:                 publicURL.String() + "/v1/auth/callback",
 		PostLogoutRedirectURI:       publicURL.String() + "/",
+		BackchannelLogoutURI:        publicURL.String() + "/v1/auth/backchannel-logout",
 		PlatformAdminUsername:       platformUsername,
 		PlatformAdminPassword:       platformPassword,
 		PlatformAdminEmail:          platformEmail,

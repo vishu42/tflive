@@ -114,6 +114,13 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 	apiAttributes := disabledGrantAttributes()
 	apiAttributes["pkce.code.challenge.method"] = "S256"
 	apiAttributes["post.logout.redirect.uris"] = cfg.PostLogoutRedirectURI
+	// Keycloak posts the logout notification here when a session it owns ends.
+	// session.required makes it include sid, in both the ID token and the
+	// logout token, which is what lets one device be signed out instead of
+	// every session the user has.
+	apiAttributes["backchannel.logout.url"] = cfg.BackchannelLogoutURI
+	apiAttributes["backchannel.logout.session.required"] = "true"
+	apiAttributes["backchannel.logout.revoke.offline.tokens"] = "false"
 	if _, err := backend.EnsureClient(ctx, cfg.Realm, ClientSpec{
 		ClientID:                     cfg.APIClientID,
 		Name:                         "tflive API",

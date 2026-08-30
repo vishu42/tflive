@@ -35,6 +35,9 @@ func TestLoadConfigReadsValidLocalSettings(t *testing.T) {
 	if got, want := cfg.PostLogoutRedirectURI, "http://localhost:5173/"; got != want {
 		t.Fatalf("PostLogoutRedirectURI = %q, want %q", got, want)
 	}
+	if got, want := cfg.BackchannelLogoutURI, "http://localhost:5173/v1/auth/backchannel-logout"; got != want {
+		t.Fatalf("BackchannelLogoutURI = %q, want %q", got, want)
+	}
 	if cfg.PlatformAdminEmail != "tflive-platform-admin@local.test" || cfg.PlatformAdminFirstName != "tflive" || cfg.PlatformAdminLastName != "Platform Administrator" {
 		t.Fatalf("platform admin profile = email %q, first %q, last %q", cfg.PlatformAdminEmail, cfg.PlatformAdminFirstName, cfg.PlatformAdminLastName)
 	}
