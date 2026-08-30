@@ -11,7 +11,12 @@ import { useMeQuery } from "./useMeQuery";
 const REAUTH_LEAD_MS = 60_000;
 // How often to retry when re-authentication is deferred because work is in
 // flight. Deferral delays re-auth; it never skips it.
-const REAUTH_RETRY_MS = 5_000;
+export const REAUTH_RETRY_MS = 5_000;
+// How long re-authentication may be deferred while work is in flight. Past
+// this, the session is closer to expiring than the deferral is to helping:
+// waiting longer only guarantees the 401 path takes the same navigation with
+// no warning at all.
+export const REAUTH_DEFER_LIMIT_MS = 120_000;
 
 export default function SessionProvider() {
   const [status, setStatus] = useState<"loading" | "error" | "loop">("loading");
@@ -74,10 +79,15 @@ export default function SessionProvider() {
     if (Number.isNaN(fireAt)) return;
 
     let timer: ReturnType<typeof setTimeout>;
+    let deferringSince: number | null = null;
     const attempt = () => {
-      if (pendingMutationsRef.current > 0 || document.querySelector("[data-unsaved='true']")) {
-        timer = setTimeout(attempt, REAUTH_RETRY_MS);
-        return;
+      const busy = pendingMutationsRef.current > 0 || document.querySelector("[data-unsaved='true']");
+      if (busy) {
+        deferringSince ??= Date.now();
+        if (Date.now() - deferringSince < REAUTH_DEFER_LIMIT_MS) {
+          timer = setTimeout(attempt, REAUTH_RETRY_MS);
+          return;
+        }
       }
       login();
     };

@@ -7,7 +7,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { ApiRequestError } from "../api/client";
 import { clearLoginAttempts, maxLoginAttempts, readLoginAttempts } from "./loginAttempts";
-import SessionProvider from "./SessionProvider";
+import SessionProvider, { REAUTH_DEFER_LIMIT_MS, REAUTH_RETRY_MS } from "./SessionProvider";
 
 const attemptsKey = "tflive.auth.loginAttempts";
 
@@ -87,6 +87,40 @@ describe("SessionProvider", () => {
     expect(assign).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(61 * 1000);
     expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
+  });
+
+  it("stops deferring re-authentication once the deferral limit is reached", async () => {
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: new Date(Date.now() + 61 * 1000).toISOString() });
+
+    // A form that never stops claiming unsaved work.
+    const guard = document.createElement("div");
+    guard.setAttribute("data-unsaved", "true");
+    document.body.append(guard);
+
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+
+    // Reach the re-auth moment, then hold past the deferral limit.
+    await vi.advanceTimersByTimeAsync(1000 + REAUTH_DEFER_LIMIT_MS + REAUTH_RETRY_MS);
+    expect(assign).toHaveBeenCalledTimes(1);
+
+    guard.remove();
+  });
+
+  it("keeps deferring re-authentication while unsaved work is present and the limit has not been reached", async () => {
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: new Date(Date.now() + 61 * 1000).toISOString() });
+
+    const guard = document.createElement("div");
+    guard.setAttribute("data-unsaved", "true");
+    document.body.append(guard);
+
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+
+    await vi.advanceTimersByTimeAsync(1000 + REAUTH_RETRY_MS * 2);
+    expect(assign).not.toHaveBeenCalled();
+
+    guard.remove();
   });
 
   it("navigates immediately when the session has already expired", async () => {
