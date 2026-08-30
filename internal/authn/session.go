@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	// SessionCookieName holds the IdP's raw ID token. It is deliberately not
-	// encrypted: it is a signed JWT whose contents are the user's own claims,
-	// and tampering is caught by verification.
+	// SessionCookieName holds an opaque reference to a session row, not a
+	// token. Only its SHA-256 reaches the database, so the cookie is useless
+	// to anyone who reads the table, and its size does not depend on how many
+	// claims the provider puts in an ID token.
 	SessionCookieName = "tflive_session"
 	// TransactionCookieName holds the in-flight login, sealed. state is only
 	// meaningful if the browser cannot forge it.
@@ -102,7 +103,8 @@ func SafeReturnTo(raw string) string {
 	return raw
 }
 
-// SessionCookie carries the ID token for the life of the browser session.
+// SessionCookie carries the opaque session reference for the life of the
+// browser session.
 func SessionCookie(value string, secure bool) *http.Cookie {
 	return &http.Cookie{
 		Name:     SessionCookieName,

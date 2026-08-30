@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/secrets"
 	"github.com/vishu42/tflive/internal/traits"
 )
@@ -27,6 +28,8 @@ type SecurityConfig struct {
 
 	PublicURL            *url.URL
 	SessionEncryptionKey Secret
+	SessionAbsoluteTTL   time.Duration
+	SessionIdleTTL       time.Duration
 
 	OpenFGA OpenFGAConfig
 
@@ -92,7 +95,7 @@ func (cfg OpenFGAConfig) GoString() string {
 
 func (cfg SecurityConfig) String() string {
 	return fmt.Sprintf(
-		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v ClientID:%q ClientSecret:%s} PublicURL:%v SessionEncryptionKey:%s OpenFGA:%s KeycloakAdminURL:%v KeycloakRealm:%q DirectoryReaderClientID:%q DirectoryReaderClientSecret:%s DirectoryReaderHTTPTimeout:%s}",
+		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v ClientID:%q ClientSecret:%s} PublicURL:%v SessionEncryptionKey:%s SessionAbsoluteTTL:%s SessionIdleTTL:%s OpenFGA:%s KeycloakAdminURL:%v KeycloakRealm:%q DirectoryReaderClientID:%q DirectoryReaderClientSecret:%s DirectoryReaderHTTPTimeout:%s}",
 		cfg.Mode,
 		cfg.TenantID,
 		cfg.OIDC.IssuerURL,
@@ -100,6 +103,8 @@ func (cfg SecurityConfig) String() string {
 		cfg.OIDC.ClientSecret,
 		cfg.PublicURL,
 		cfg.SessionEncryptionKey,
+		cfg.SessionAbsoluteTTL,
+		cfg.SessionIdleTTL,
 		cfg.OpenFGA,
 		cfg.KeycloakAdminURL,
 		cfg.KeycloakRealm,
@@ -162,6 +167,20 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 		return SecurityConfig{}, authConfigError("SESSION_ENCRYPTION_KEY must be a 32-byte raw, base64, or hex key")
 	}
 
+	sessionAbsoluteTTL, err := optionalPositiveDuration(getenv, "TFLIVE_SESSION_ABSOLUTE_TTL", authn.DefaultSessionAbsoluteTTL)
+	if err != nil {
+		return SecurityConfig{}, err
+	}
+	sessionIdleTTL, err := optionalPositiveDuration(getenv, "TFLIVE_SESSION_IDLE_TTL", authn.DefaultSessionIdleTTL)
+	if err != nil {
+		return SecurityConfig{}, err
+	}
+	// An idle bound past the absolute cap can never be reached, so it is a
+	// configuration mistake rather than a permissive setting.
+	if sessionIdleTTL > sessionAbsoluteTTL {
+		return SecurityConfig{}, authConfigError("TFLIVE_SESSION_IDLE_TTL must not exceed TFLIVE_SESSION_ABSOLUTE_TTL")
+	}
+
 	openFGA, err := loadOpenFGAConfig(getenv)
 	if err != nil {
 		return SecurityConfig{}, err
@@ -218,6 +237,8 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 
 		PublicURL:            publicURL,
 		SessionEncryptionKey: sessionKey,
+		SessionAbsoluteTTL:   sessionAbsoluteTTL,
+		SessionIdleTTL:       sessionIdleTTL,
 
 		OpenFGA: openFGA,
 
@@ -329,6 +350,18 @@ func safeOpaqueValue(value string) bool {
 	return value != "" && strings.IndexFunc(value, func(character rune) bool {
 		return unicode.IsSpace(character) || unicode.IsControl(character)
 	}) == -1
+}
+
+func optionalPositiveDuration(getenv func(string) string, name string, fallback time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		return 0, authConfigError("%s must be a positive duration", name)
+	}
+	return value, nil
 }
 
 func authConfigError(format string, arguments ...any) error {

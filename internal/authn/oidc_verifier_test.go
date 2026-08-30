@@ -1025,6 +1025,46 @@ func TestOIDCVerifierRedactsTokenAndProviderDetails(t *testing.T) {
 	}
 }
 
+func TestVerifyCarriesSessionIDClaim(t *testing.T) {
+	verified := verifyTokenWithClaims(t, map[string]any{"sid": "idp-sid-1"})
+	if verified.SessionID != "idp-sid-1" {
+		t.Fatalf("SessionID = %q, want %q", verified.SessionID, "idp-sid-1")
+	}
+}
+
+func TestVerifyToleratesAbsentSessionIDClaim(t *testing.T) {
+	verified := verifyTokenWithClaims(t, nil)
+	if verified.SessionID != "" {
+		t.Fatalf("SessionID = %q, want empty when sid is absent", verified.SessionID)
+	}
+}
+
+// verifyTokenWithClaims mints a token carrying the given extra claims, signs
+// it, and runs it through a fresh verifier.
+func verifyTokenWithClaims(t *testing.T, claims map[string]any) VerifiedToken {
+	t.Helper()
+
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatalf("NewOIDCVerifier() error = %v", err)
+	}
+	t.Cleanup(func() { _ = v.Close(context.Background()) })
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		for name, value := range claims {
+			_ = tok.Set(name, value)
+		}
+	})
+	verified, err := v.Verify(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	return verified
+}
+
 func (s *oidcTestServer) sign(t *testing.T, keyID string, mutate func(jwt.Token)) string {
 	t.Helper()
 

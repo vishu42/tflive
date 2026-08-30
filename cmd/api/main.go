@@ -73,6 +73,11 @@ func credentialEncryptor(store appRepositories) app.CredentialEncryptor {
 	return encryptor
 }
 
+func sessionStore(store appRepositories) authn.SessionStore {
+	sessions, _ := store.(authn.SessionStore)
+	return sessions
+}
+
 func main() {
 	if err := run(context.Background(), os.Getenv); err != nil {
 		writeStartupError(os.Stderr, err)
@@ -237,11 +242,14 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 	handler := api.NewAuthenticatedServer(service, verifier, cfg.Security.TenantID, cfg.Debug,
 		api.WithQueueReader(store),
 		api.WithAuth(api.AuthConfig{
-			Flow:          flow,
-			Verifier:      verifier,
-			Sealer:        sessionSealer,
-			PublicURL:     publicURL,
-			SecureCookies: cfg.Security.Mode == config.RuntimeProduction,
+			Flow:               flow,
+			Verifier:           verifier,
+			Sealer:             sessionSealer,
+			PublicURL:          publicURL,
+			SecureCookies:      cfg.Security.Mode == config.RuntimeProduction,
+			Sessions:           sessionStore(store),
+			SessionAbsoluteTTL: cfg.Security.SessionAbsoluteTTL,
+			SessionIdleTTL:     cfg.Security.SessionIdleTTL,
 		}),
 	)
 	if err := deps.listenAndServe(ctx, cfg.HTTPAddress, handler); err != nil {

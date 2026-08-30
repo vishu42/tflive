@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/secrets"
@@ -51,19 +52,129 @@ func (v stubVerifier) Verify(context.Context, string) (authn.VerifiedToken, erro
 	return v.token, v.err
 }
 
-func newAuthTestServer(t *testing.T, flow *stubFlow, verifier authn.Verifier) *Server {
+// authTestOption adjusts the AuthConfig a test server is built with.
+type authTestOption func(*AuthConfig)
+
+func withSessions(store authn.SessionStore) authTestOption {
+	return func(cfg *AuthConfig) { cfg.Sessions = store }
+}
+
+func withClock(now time.Time) authTestOption {
+	return func(cfg *AuthConfig) { cfg.Clock = func() time.Time { return now } }
+}
+
+// fakeSessionStore is an in-memory authn.SessionStore.
+type fakeSessionStore struct {
+	created          []authn.Session
+	byHash           map[string]authn.Session
+	touched          int
+	revoked          map[string]int
+	revokedBySID     map[string]int
+	revokedBySubject map[string]int
+}
+
+func newFakeSessionStore() *fakeSessionStore {
+	return &fakeSessionStore{
+		byHash:           map[string]authn.Session{},
+		revoked:          map[string]int{},
+		revokedBySID:     map[string]int{},
+		revokedBySubject: map[string]int{},
+	}
+}
+
+func (f *fakeSessionStore) CreateSession(_ context.Context, session authn.Session) error {
+	f.created = append(f.created, session)
+	f.byHash[session.IDHash] = session
+	return nil
+}
+
+func (f *fakeSessionStore) SessionByHash(_ context.Context, idHash string) (authn.Session, error) {
+	session, ok := f.byHash[idHash]
+	if !ok {
+		return authn.Session{}, authn.ErrSessionNotFound
+	}
+	return session, nil
+}
+
+func (f *fakeSessionStore) TouchSession(_ context.Context, idHash string, seenAt time.Time) error {
+	f.touched++
+	if session, ok := f.byHash[idHash]; ok {
+		session.LastSeenAt = seenAt
+		f.byHash[idHash] = session
+	}
+	return nil
+}
+
+func (f *fakeSessionStore) RevokeSession(_ context.Context, idHash string, at time.Time) error {
+	f.revoked[idHash]++
+	if session, ok := f.byHash[idHash]; ok {
+		session.RevokedAt = at
+		f.byHash[idHash] = session
+	}
+	return nil
+}
+
+func (f *fakeSessionStore) RevokeSessionsByIDPSessionID(_ context.Context, idpSessionID string, at time.Time) (int, error) {
+	f.revokedBySID[idpSessionID]++
+	count := 0
+	for hash, session := range f.byHash {
+		if session.IDPSessionID == idpSessionID && session.RevokedAt.IsZero() {
+			session.RevokedAt = at
+			f.byHash[hash] = session
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (f *fakeSessionStore) RevokeSessionsBySubject(_ context.Context, subject string, at time.Time) (int, error) {
+	f.revokedBySubject[subject]++
+	count := 0
+	for hash, session := range f.byHash {
+		if session.Subject == subject && session.RevokedAt.IsZero() {
+			session.RevokedAt = at
+			f.byHash[hash] = session
+			count++
+		}
+	}
+	return count, nil
+}
+
+func newAuthTestServer(t *testing.T, flow *stubFlow, verifier authn.Verifier, options ...authTestOption) *Server {
 	t.Helper()
 	sealer, err := secrets.NewCipher("01234567890123456789012345678901")
 	if err != nil {
 		t.Fatalf("NewCipher returned error: %v", err)
 	}
-	return NewServer(nil, "tenant_123", WithAuth(AuthConfig{
-		Flow:          flow,
-		Verifier:      verifier,
-		Sealer:        sealer,
-		PublicURL:     "http://localhost:5173",
-		SecureCookies: false,
-	}))
+	cfg := AuthConfig{
+		Flow:               flow,
+		Verifier:           verifier,
+		Sealer:             sealer,
+		PublicURL:          "http://localhost:5173",
+		SecureCookies:      false,
+		SessionAbsoluteTTL: authn.DefaultSessionAbsoluteTTL,
+		SessionIdleTTL:     authn.DefaultSessionIdleTTL,
+	}
+	for _, option := range options {
+		option(&cfg)
+	}
+	return NewServer(nil, "tenant_123", WithAuth(cfg))
+}
+
+// runCallback seals a transaction under a known state and the given nonce,
+// issues the callback request carrying it, and returns the recorder. Tests
+// that need a different transaction still build one with callbackRequest.
+func runCallback(t *testing.T, server *Server, nonce string) *httptest.ResponseRecorder {
+	t.Helper()
+	sealer, err := secrets.NewCipher("01234567890123456789012345678901")
+	if err != nil {
+		t.Fatalf("NewCipher returned error: %v", err)
+	}
+	transaction := authn.Transaction{State: "state-1", Nonce: nonce, CodeVerifier: "verifier-1", ReturnTo: "/stacks/abc"}
+	request := callbackRequest(t, sealer, transaction, url.Values{"code": {"code-1"}, "state": {"state-1"}})
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	return response
 }
 
 func cookieByName(response *httptest.ResponseRecorder, name string) *http.Cookie {
@@ -145,15 +256,12 @@ func callbackRequest(t *testing.T, sealer *secrets.Cipher, transaction authn.Tra
 }
 
 func TestAuthCallbackSetsSessionCookieAndRedirects(t *testing.T) {
+	sessions := newFakeSessionStore()
 	flow := &stubFlow{idToken: "raw.id.token"}
 	verifier := stubVerifier{token: authn.VerifiedToken{Subject: "user-123", Nonce: "nonce-1"}}
-	server := newAuthTestServer(t, flow, verifier)
-	sealer, _ := secrets.NewCipher("01234567890123456789012345678901")
+	server := newAuthTestServer(t, flow, verifier, withSessions(sessions))
 
-	transaction := authn.Transaction{State: "state-1", Nonce: "nonce-1", CodeVerifier: "verifier-1", ReturnTo: "/stacks/abc"}
-	request := callbackRequest(t, sealer, transaction, url.Values{"code": {"code-1"}, "state": {"state-1"}})
-	response := httptest.NewRecorder()
-	server.ServeHTTP(response, request)
+	response := runCallback(t, server, "nonce-1")
 
 	if response.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302; body = %s", response.Code, response.Body.String())
@@ -161,8 +269,10 @@ func TestAuthCallbackSetsSessionCookieAndRedirects(t *testing.T) {
 	if location := response.Header().Get("Location"); location != "/stacks/abc" {
 		t.Fatalf("Location = %q", location)
 	}
+	// The cookie is now an opaque reference to the session row, not the ID
+	// token itself.
 	session := cookieByName(response, authn.SessionCookieName)
-	if session == nil || session.Value != "raw.id.token" || !session.HttpOnly {
+	if session == nil || session.Value == "" || session.Value == "raw.id.token" || !session.HttpOnly {
 		t.Fatalf("session cookie = %#v", session)
 	}
 	cleared := cookieByName(response, authn.TransactionCookieName)
@@ -174,6 +284,62 @@ func TestAuthCallbackSetsSessionCookieAndRedirects(t *testing.T) {
 	}
 	if body := response.Body.String(); strings.Contains(body, "raw.id.token") {
 		t.Fatal("callback response body carries the token")
+	}
+}
+
+func TestCallbackCreatesSessionAndSetsOpaqueCookie(t *testing.T) {
+	sessions := newFakeSessionStore()
+	flow := &stubFlow{idToken: "header.payload.signature"}
+	verifier := stubVerifier{token: authn.VerifiedToken{
+		Subject: "user-1", Name: "Ada Lovelace", Email: "ada@example.test",
+		SessionID: "idp-sid-1", Nonce: "nonce-1",
+	}}
+	server := newAuthTestServer(t, flow, verifier, withSessions(sessions))
+
+	response := runCallback(t, server, "nonce-1")
+
+	cookie := cookieByName(response, authn.SessionCookieName)
+	if cookie == nil {
+		t.Fatal("no session cookie was set")
+	}
+	if strings.Count(cookie.Value, ".") == 2 {
+		t.Fatalf("cookie value %q still looks like a JWT; it must be an opaque reference", cookie.Value)
+	}
+	if len(sessions.created) != 1 {
+		t.Fatalf("created %d sessions, want 1", len(sessions.created))
+	}
+
+	created := sessions.created[0]
+	if created.IDHash != authn.HashSessionID(cookie.Value) {
+		t.Fatal("the stored hash does not match the cookie the browser was given")
+	}
+	if created.IDToken != "header.payload.signature" {
+		t.Fatal("the ID token was not kept; logout needs it for id_token_hint")
+	}
+	if created.IDPSessionID != "idp-sid-1" {
+		t.Fatalf("IDPSessionID = %q, want idp-sid-1", created.IDPSessionID)
+	}
+	if created.AbsoluteExpiresAt.Sub(created.CreatedAt) != authn.DefaultSessionAbsoluteTTL {
+		t.Fatalf("absolute window = %v, want 8h", created.AbsoluteExpiresAt.Sub(created.CreatedAt))
+	}
+}
+
+func TestCallbackSessionLifetimeIgnoresTokenExpiry(t *testing.T) {
+	// The whole point of the change: a 60-second ID token must still produce a
+	// full-length session.
+	sessions := newFakeSessionStore()
+	flow := &stubFlow{idToken: "header.payload.signature"}
+	verifier := stubVerifier{token: authn.VerifiedToken{
+		Subject: "user-1", Nonce: "nonce-1",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}}
+	server := newAuthTestServer(t, flow, verifier, withSessions(sessions))
+
+	runCallback(t, server, "nonce-1")
+
+	created := sessions.created[0]
+	if created.AbsoluteExpiresAt.Sub(created.CreatedAt) != authn.DefaultSessionAbsoluteTTL {
+		t.Fatalf("absolute window = %v, want 8h regardless of the token's exp", created.AbsoluteExpiresAt.Sub(created.CreatedAt))
 	}
 }
 

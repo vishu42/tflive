@@ -37,6 +37,10 @@ type VerifiedToken struct {
 	// enforces expiry during verification, and this is what the SPA uses to
 	// re-authenticate before it is interrupted.
 	ExpiresAt time.Time
+	// SessionID is the token's sid claim, empty when the provider omits it.
+	// It is the key a back-channel logout arrives on, so it is copied into the
+	// session record at sign-in.
+	SessionID string
 }
 
 type Verifier interface {

@@ -108,8 +108,35 @@ func (server *Server) handleAuthCallback(response http.ResponseWriter, request *
 		return
 	}
 
-	server.warnOnOversizedSession(rawIDToken)
-	http.SetCookie(response, authn.SessionCookie(rawIDToken, server.auth.SecureCookies))
+	sessionID, err := authn.NewSessionID()
+	if err != nil {
+		log.Printf("auth callback: failed to generate session id: %v", err)
+		server.writeAuthFailure(response)
+		return
+	}
+	now := server.now()
+	session := authn.Session{
+		IDHash:            authn.HashSessionID(sessionID),
+		Subject:           verified.Subject,
+		Name:              verified.Name,
+		PreferredUsername: verified.PreferredUsername,
+		Email:             verified.Email,
+		IDPSessionID:      verified.SessionID,
+		IDToken:           rawIDToken,
+		CreatedAt:         now,
+		LastSeenAt:        now,
+		// The IdP's token lifetime deliberately does not appear here. How long
+		// a tflive session lasts is tflive's to decide; the token's exp bounded
+		// only the authentication we just completed.
+		AbsoluteExpiresAt: now.Add(server.auth.SessionAbsoluteTTL),
+	}
+	if err := server.auth.Sessions.CreateSession(request.Context(), session); err != nil {
+		log.Printf("auth callback: failed to persist session: %v", err)
+		server.writeAuthFailure(response)
+		return
+	}
+
+	http.SetCookie(response, authn.SessionCookie(sessionID, server.auth.SecureCookies))
 	http.Redirect(response, request, authn.SafeReturnTo(transaction.ReturnTo), http.StatusFound)
 }
 
@@ -144,17 +171,6 @@ func (server *Server) writeAuthFailure(response http.ResponseWriter) {
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	response.WriteHeader(http.StatusUnauthorized)
 	_, _ = response.Write([]byte(authFailureBody))
-}
-
-// warnOnOversizedSession logs when an ID token approaches the 4096-byte cookie
-// limit. Past it, browsers drop the cookie silently and the user simply never
-// appears logged in. A provider that stuffs group or role claims into the ID
-// token is the realistic way to get there.
-func (server *Server) warnOnOversizedSession(rawIDToken string) {
-	const warnThresholdBytes = 3072
-	if len(rawIDToken) > warnThresholdBytes {
-		log.Printf("id token is %d bytes, approaching the 4096-byte cookie limit; sessions will break silently past it", len(rawIDToken))
-	}
 }
 
 func randomToken() (string, error) {

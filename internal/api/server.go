@@ -57,6 +57,13 @@ type AuthConfig struct {
 	// a caller can spoof.
 	PublicURL     string
 	SecureCookies bool
+	// Sessions persists the app-owned session the callback creates. The
+	// browser is handed a reference to it, never the ID token.
+	Sessions           authn.SessionStore
+	SessionAbsoluteTTL time.Duration
+	SessionIdleTTL     time.Duration
+	// Clock is time.Now when nil. Tests set it.
+	Clock func() time.Time
 }
 
 // WithAuth enables the browser login routes.
@@ -200,6 +207,13 @@ func (server *Server) requireConfiguredTenant(next http.Handler) http.Handler {
 func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	server.debugf("%s %s", request.Method, request.URL.Path)
 	server.handler.ServeHTTP(response, request)
+}
+
+func (server *Server) now() time.Time {
+	if server.auth.Clock != nil {
+		return server.auth.Clock()
+	}
+	return time.Now().UTC()
 }
 
 func (server *Server) debugf(format string, args ...any) {

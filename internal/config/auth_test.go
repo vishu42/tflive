@@ -310,6 +310,67 @@ func TestSecurityConfigStringRedactsSecrets(t *testing.T) {
 	}
 }
 
+func TestSessionTTLDefaults(t *testing.T) {
+	cfg := loadValidSecurityConfig(t, nil)
+	if cfg.SessionAbsoluteTTL != 8*time.Hour {
+		t.Fatalf("SessionAbsoluteTTL = %v, want 8h", cfg.SessionAbsoluteTTL)
+	}
+	if cfg.SessionIdleTTL != time.Hour {
+		t.Fatalf("SessionIdleTTL = %v, want 1h", cfg.SessionIdleTTL)
+	}
+}
+
+func TestSessionTTLOverrides(t *testing.T) {
+	cfg := loadValidSecurityConfig(t, map[string]string{
+		"TFLIVE_SESSION_ABSOLUTE_TTL": "2h",
+		"TFLIVE_SESSION_IDLE_TTL":     "15m",
+	})
+	if cfg.SessionAbsoluteTTL != 2*time.Hour {
+		t.Fatalf("SessionAbsoluteTTL = %v, want 2h", cfg.SessionAbsoluteTTL)
+	}
+	if cfg.SessionIdleTTL != 15*time.Minute {
+		t.Fatalf("SessionIdleTTL = %v, want 15m", cfg.SessionIdleTTL)
+	}
+}
+
+func TestSessionTTLRejectsNonPositiveAndInverted(t *testing.T) {
+	tests := map[string]map[string]string{
+		"zero absolute":        {"TFLIVE_SESSION_ABSOLUTE_TTL": "0s"},
+		"negative idle":        {"TFLIVE_SESSION_IDLE_TTL": "-1m"},
+		"unparseable":          {"TFLIVE_SESSION_IDLE_TTL": "soon"},
+		"idle longer than cap": {"TFLIVE_SESSION_ABSOLUTE_TTL": "1h", "TFLIVE_SESSION_IDLE_TTL": "2h"},
+	}
+	for name, env := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := loadSecurityConfigWith(t, env); err == nil {
+				t.Fatal("want an error, got none")
+			}
+		})
+	}
+}
+
+// loadValidSecurityConfig builds a complete valid environment, applies
+// overrides, and fails the test on error.
+func loadValidSecurityConfig(t *testing.T, overrides map[string]string) SecurityConfig {
+	t.Helper()
+	cfg, err := loadSecurityConfigWith(t, overrides)
+	if err != nil {
+		t.Fatalf("loadSecurityConfig returned error: %v", err)
+	}
+	return cfg
+}
+
+// loadSecurityConfigWith builds a complete valid environment, applies
+// overrides, and returns whatever loadSecurityConfig does with it.
+func loadSecurityConfigWith(t *testing.T, overrides map[string]string) (SecurityConfig, error) {
+	t.Helper()
+	values := validSecurityValues()
+	for key, value := range overrides {
+		values[key] = value
+	}
+	return loadSecurityConfig(mapConfigEnv(values))
+}
+
 func validSecurityValues() map[string]string {
 	return map[string]string{
 		"TFLIVE_ENVIRONMENT":     "development",

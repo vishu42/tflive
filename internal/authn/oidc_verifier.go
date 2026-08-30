@@ -167,6 +167,10 @@ func (v *OIDCVerifier) validatedToken(payload []byte) (VerifiedToken, error) {
 	if !ok {
 		return VerifiedToken{}, ErrInvalidToken
 	}
+	sessionID, ok := optionalStringClaim(token, "sid")
+	if !ok {
+		return VerifiedToken{}, ErrInvalidToken
+	}
 	expiresAt, ok := token.Expiration()
 	if !ok {
 		return VerifiedToken{}, ErrInvalidToken
@@ -178,6 +182,7 @@ func (v *OIDCVerifier) validatedToken(payload []byte) (VerifiedToken, error) {
 		Email:             email,
 		Nonce:             nonce,
 		ExpiresAt:         expiresAt,
+		SessionID:         sessionID,
 	}, nil
 }
 
