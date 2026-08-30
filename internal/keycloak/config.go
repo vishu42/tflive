@@ -17,15 +17,20 @@ const (
 // Config contains the complete desired state and credentials needed for one
 // Keycloak provisioning run. Secret fields must never be logged.
 type Config struct {
-	AdminURL                    *url.URL
-	AdminRealm                  string
-	AdminUsername               string
-	AdminPassword               string
-	Realm                       string
-	APIClientID                 string
-	APIClientSecret             string
-	CallbackURI                 string
-	PostLogoutRedirectURI       string
+	AdminURL              *url.URL
+	AdminRealm            string
+	AdminUsername         string
+	AdminPassword         string
+	Realm                 string
+	APIClientID           string
+	APIClientSecret       string
+	CallbackURI           string
+	PostLogoutRedirectURI string
+	// BackchannelLogoutURI is TFLIVE_BACKCHANNEL_LOGOUT_URL when set, else
+	// derived from TFLIVE_PUBLIC_URL like CallbackURI. Unlike the browser
+	// redirect URIs above, this one is called by the IdP's own server, not the
+	// browser, so it needs to be reachable from the IdP rather than from
+	// wherever the browser sits.
 	BackchannelLogoutURI        string
 	PlatformAdminUsername       string
 	PlatformAdminPassword       string
@@ -96,6 +101,20 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 
+	// The callback and post-logout URIs are resolved by the browser, so
+	// TFLIVE_PUBLIC_URL is always correct for them. A back-channel logout is a
+	// server-to-server POST from the IdP's own process, which cannot in
+	// general reach the browser's origin — an IdP on an internal network or
+	// behind split-horizon DNS needs a different, IdP-reachable address here.
+	backchannelLogoutURI := publicURL.String() + "/v1/auth/backchannel-logout"
+	if raw := strings.TrimSpace(getenv("TFLIVE_BACKCHANNEL_LOGOUT_URL")); raw != "" {
+		backchannelLogoutURL, err := parseAdminURL(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid Keycloak config: TFLIVE_BACKCHANNEL_LOGOUT_URL %w", err)
+		}
+		backchannelLogoutURI = backchannelLogoutURL.String()
+	}
+
 	timeout := defaultHTTPTimeout
 	if raw := strings.TrimSpace(getenv("KEYCLOAK_HTTP_TIMEOUT")); raw != "" {
 		timeout, err = time.ParseDuration(raw)
@@ -125,7 +144,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		APIClientSecret:             apiClientSecret,
 		CallbackURI:                 publicURL.String() + "/v1/auth/callback",
 		PostLogoutRedirectURI:       publicURL.String() + "/",
-		BackchannelLogoutURI:        publicURL.String() + "/v1/auth/backchannel-logout",
+		BackchannelLogoutURI:        backchannelLogoutURI,
 		PlatformAdminUsername:       platformUsername,
 		PlatformAdminPassword:       platformPassword,
 		PlatformAdminEmail:          platformEmail,

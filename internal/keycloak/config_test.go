@@ -89,6 +89,36 @@ func TestLoadConfigDerivesCallbackFromPublicURL(t *testing.T) {
 	}
 }
 
+func TestLoadConfigOverridesBackchannelLogoutURIWhenSet(t *testing.T) {
+	t.Parallel()
+
+	env := validConfigEnv()
+	env["TFLIVE_BACKCHANNEL_LOGOUT_URL"] = "http://api:8081/v1/auth/backchannel-logout"
+
+	cfg, err := LoadConfig(mapEnv(env))
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	// The IdP, not the browser, calls this one — so unlike CallbackURI it
+	// must not be forced to derive from TFLIVE_PUBLIC_URL, which the browser
+	// resolves but a server-to-server POST from the IdP's own process often
+	// cannot reach.
+	if got, want := cfg.BackchannelLogoutURI, "http://api:8081/v1/auth/backchannel-logout"; got != want {
+		t.Fatalf("BackchannelLogoutURI = %q, want %q", got, want)
+	}
+}
+
+func TestLoadConfigRejectsInvalidBackchannelLogoutURL(t *testing.T) {
+	t.Parallel()
+
+	env := validConfigEnv()
+	env["TFLIVE_BACKCHANNEL_LOGOUT_URL"] = "/backchannel-logout"
+
+	if _, err := LoadConfig(mapEnv(env)); err == nil || !strings.Contains(err.Error(), "TFLIVE_BACKCHANNEL_LOGOUT_URL") {
+		t.Fatalf("LoadConfig() error = %v, want a TFLIVE_BACKCHANNEL_LOGOUT_URL error", err)
+	}
+}
+
 func TestLoadConfigRequiresPublicURLAndClientSecret(t *testing.T) {
 	t.Parallel()
 

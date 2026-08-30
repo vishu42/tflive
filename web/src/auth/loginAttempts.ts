@@ -1,9 +1,9 @@
 // A sign-in that succeeds at the IdP but leaves the browser without a usable
 // session cookie puts the app in a redirect loop: /v1/me answers 401, we
-// navigate to login, the IdP sends us back, /v1/me answers 401 again. The two
-// realistic causes are an ID token past the ~4096-byte cookie limit (a
-// provider that stuffs group or role claims into it gets there easily) and a
-// browser configured to block cookies. Neither reports an error to script.
+// navigate to login, the IdP sends us back, /v1/me answers 401 again. The
+// realistic cause is a browser configured to block cookies for this site —
+// the session cookie is a 43-character opaque reference, not a token, so it
+// cannot run into a size limit. Blocking reports no error to script.
 //
 // An in-memory guard cannot see this: every redirect reloads the page and
 // resets it, so it stops one bounce and not a loop. sessionStorage survives

@@ -34,6 +34,12 @@ func (server *Server) handleBackchannelLogout(response http.ResponseWriter, requ
 		return
 	}
 
+	// ParseForm buffers the whole body before the 16 KB logout-token check
+	// below ever runs, and Go's own limit for an urlencoded body is 10 MB.
+	// This route is unauthenticated by necessity, so that 10 MB is free to
+	// anyone on the internet; cap it well under the smallest real logout
+	// token has any business needing.
+	request.Body = http.MaxBytesReader(response, request.Body, 64*1024)
 	if err := request.ParseForm(); err != nil {
 		http.Error(response, "invalid request", http.StatusBadRequest)
 		return

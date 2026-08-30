@@ -74,6 +74,29 @@ func WithAuth(cfg AuthConfig) ServerOption {
 	return func(server *Server) { server.auth = cfg }
 }
 
+// requireCompleteAuthWiring panics if a WithAuth configuration is missing a
+// dependency the browser login routes assume is present. Registration is
+// gated on Flow alone, so nothing else stops a caller from wiring Flow
+// without, say, Sessions — and the handlers dereference Sessions
+// unconditionally on every request. Catching that gap here, once, at boot,
+// turns a missing dependency into a deterministic startup panic instead of a
+// nil-pointer panic (or, for the TTLs, a session that is born already
+// expired) on the first real request.
+func requireCompleteAuthWiring(auth AuthConfig) {
+	switch {
+	case auth.Verifier == nil:
+		panic("api: WithAuth configured without a Verifier")
+	case auth.Sealer == nil:
+		panic("api: WithAuth configured without a Sealer")
+	case auth.Sessions == nil:
+		panic("api: WithAuth configured without a Sessions store")
+	case auth.SessionAbsoluteTTL <= 0:
+		panic("api: WithAuth configured without a positive SessionAbsoluteTTL")
+	case auth.SessionIdleTTL <= 0:
+		panic("api: WithAuth configured without a positive SessionIdleTTL")
+	}
+}
+
 func NewServer(service *app.Service, tenantID traits.TenantID, options ...ServerOption) *Server {
 	server := &Server{
 		service:  service,
@@ -87,6 +110,7 @@ func NewServer(service *app.Service, tenantID traits.TenantID, options ...Server
 	// Browser login routes. Registered only when auth is configured, so an
 	// unauthenticated test server does not expose a half-wired flow.
 	if server.auth.Flow != nil {
+		requireCompleteAuthWiring(server.auth)
 		server.mux.HandleFunc("GET /v1/auth/login", server.handleAuthLogin)
 		server.mux.HandleFunc("GET /v1/auth/callback", server.handleAuthCallback)
 		server.mux.HandleFunc("POST /v1/auth/logout", server.handleAuthLogout)

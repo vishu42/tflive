@@ -162,11 +162,16 @@ func newAuthTestServer(t *testing.T, flow *stubFlow, verifier authn.Verifier, op
 		t.Fatalf("NewCipher returned error: %v", err)
 	}
 	cfg := AuthConfig{
-		Flow:               flow,
-		Verifier:           verifier,
-		Sealer:             sealer,
-		PublicURL:          "http://localhost:5173",
-		SecureCookies:      false,
+		Flow:          flow,
+		Verifier:      verifier,
+		Sealer:        sealer,
+		PublicURL:     "http://localhost:5173",
+		SecureCookies: false,
+		// NewServer now panics on a WithAuth wired without a session store, so
+		// every test server needs one even when the test at hand never
+		// exercises it; withSessions overrides this with a caller-owned store
+		// when a test needs to assert against it.
+		Sessions:           newFakeSessionStore(),
 		SessionAbsoluteTTL: authn.DefaultSessionAbsoluteTTL,
 		SessionIdleTTL:     authn.DefaultSessionIdleTTL,
 	}
@@ -584,7 +589,15 @@ func TestAuthRoutesArePublic(t *testing.T) {
 	flow := &stubFlow{authorizationURL: "https://idp.test/authorize"}
 	sealer, _ := secrets.NewCipher("01234567890123456789012345678901")
 	server := NewAuthenticatedServer(nil, stubVerifier{err: authn.ErrInvalidToken}, "tenant_123", false,
-		WithAuth(AuthConfig{Flow: flow, Verifier: stubVerifier{}, Sealer: sealer, PublicURL: "http://localhost:5173"}))
+		WithAuth(AuthConfig{
+			Flow:               flow,
+			Verifier:           stubVerifier{},
+			Sealer:             sealer,
+			PublicURL:          "http://localhost:5173",
+			Sessions:           newFakeSessionStore(),
+			SessionAbsoluteTTL: authn.DefaultSessionAbsoluteTTL,
+			SessionIdleTTL:     authn.DefaultSessionIdleTTL,
+		}))
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/auth/login", nil)
 	response := httptest.NewRecorder()
@@ -592,5 +605,20 @@ func TestAuthRoutesArePublic(t *testing.T) {
 
 	if response.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302 — /v1/auth/login is behind the auth gate", response.Code)
+	}
+
+	// Built through NewAuthenticatedServer, unlike newAuthTestServer's plain
+	// NewServer: this is the path that actually runs RequireAuthentication, so
+	// it is the one that would catch a public-paths regression. Without
+	// LogoutTokenVerifier configured the handler itself answers 503, but that
+	// 503 — not a 401 from the middleware — is exactly what proves the route
+	// reached the handler unauthenticated.
+	backchannelRequest := httptest.NewRequest(http.MethodPost, "/v1/auth/backchannel-logout", strings.NewReader("logout_token=anything"))
+	backchannelRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	backchannelResponse := httptest.NewRecorder()
+	server.ServeHTTP(backchannelResponse, backchannelRequest)
+
+	if backchannelResponse.Code == http.StatusUnauthorized {
+		t.Fatalf("status = %d, want anything but 401 — /v1/auth/backchannel-logout must stay public even with no bearer token or cookie", backchannelResponse.Code)
 	}
 }

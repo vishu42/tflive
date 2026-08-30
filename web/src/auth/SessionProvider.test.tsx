@@ -89,6 +89,44 @@ describe("SessionProvider", () => {
     expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
   });
 
+  it("reschedules instead of navigating when a refetch shows the session slid forward", async () => {
+    const nearExpiry = new Date(Date.now() + 61 * 1000).toISOString();
+    const slidExpiry = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    // The initial /v1/me snapshot looks like it is about to expire; the
+    // refetch that the re-auth attempt triggers reports it was slid forward
+    // in the meantime, as a server-side touch would do for a session that is
+    // still active.
+    getMe.mockResolvedValueOnce({ ...me, sessionExpiresAt: nearExpiry });
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: slidExpiry });
+
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+
+    await vi.advanceTimersByTimeAsync(2 * 1000);
+    expect(assign).not.toHaveBeenCalled();
+    expect(getMe).toHaveBeenCalledTimes(2);
+
+    // The old bound has now passed with no navigation: the schedule moved
+    // with the refetched, later expiry instead.
+    await vi.advanceTimersByTimeAsync(60 * 1000);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("navigates once a refetch confirms the session has actually ended", async () => {
+    const nearExpiry = new Date(Date.now() + 61 * 1000).toISOString();
+    // Every call returns the same fixed bound, so the refetch the re-auth
+    // attempt triggers finds nothing moved — the session genuinely is near
+    // its end.
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: nearExpiry });
+
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+
+    await vi.advanceTimersByTimeAsync(2 * 1000);
+    expect(getMe).toHaveBeenCalledTimes(2);
+    expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
+  });
+
   it("stops deferring re-authentication once the deferral limit is reached", async () => {
     getMe.mockResolvedValue({ ...me, sessionExpiresAt: new Date(Date.now() + 61 * 1000).toISOString() });
 

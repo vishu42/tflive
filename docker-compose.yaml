@@ -80,6 +80,11 @@ services:
       # post-logout URIs from TFLIVE_PUBLIC_URL, and registers this exact
       # secret on the client, so the API and the IdP always agree.
       TFLIVE_PUBLIC_URL: ${TFLIVE_PUBLIC_URL:-http://localhost:5173}
+      # Back-channel logout is a server-to-server POST from Keycloak's own
+      # container, not a browser redirect — TFLIVE_PUBLIC_URL resolves inside
+      # Keycloak to Keycloak's own loopback, not the host's browser-facing
+      # port, so this is pinned to the API's address on the Compose network.
+      TFLIVE_BACKCHANNEL_LOGOUT_URL: http://api:8081/v1/auth/backchannel-logout
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-tflive-api-local-only}
       KEYCLOAK_PLATFORM_ADMIN_USERNAME: ${KEYCLOAK_PLATFORM_ADMIN_USERNAME:-tflive-platform-admin}
       KEYCLOAK_PLATFORM_ADMIN_PASSWORD: ${KEYCLOAK_PLATFORM_ADMIN_PASSWORD:-tflive-platform-admin-local-only}

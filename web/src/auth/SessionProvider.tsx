@@ -20,7 +20,7 @@ export const REAUTH_DEFER_LIMIT_MS = 120_000;
 
 export default function SessionProvider() {
   const [status, setStatus] = useState<"loading" | "error" | "loop">("loading");
-  const { data: me, error: meError, isLoading } = useMeQuery();
+  const { data: me, error: meError, isLoading, refetch: refetchMe } = useMeQuery();
   const pendingMutations = useIsMutating();
   const navigated = useRef(false);
   // The live mutation count, read from a ref so the expiry timer below does not
@@ -80,7 +80,7 @@ export default function SessionProvider() {
 
     let timer: ReturnType<typeof setTimeout>;
     let deferringSince: number | null = null;
-    const attempt = () => {
+    const attempt = async () => {
       const busy = pendingMutationsRef.current > 0 || document.querySelector("[data-unsaved='true']");
       if (busy) {
         deferringSince ??= Date.now();
@@ -89,11 +89,25 @@ export default function SessionProvider() {
           return;
         }
       }
+      // The snapshot that armed this timer can be stale: the server slides
+      // the idle bound on every authenticated request, including this one, so
+      // sessionExpiresAt from the last render may already be well behind the
+      // server's own bound. Refetch and trust that instead of navigating an
+      // active user (and the browser's one round trip to the IdP) away from a
+      // session that has not actually ended.
+      const { data: refreshed } = await refetchMe();
+      const nextFireAt = refreshed?.sessionExpiresAt
+        ? new Date(refreshed.sessionExpiresAt).getTime() - REAUTH_LEAD_MS
+        : NaN;
+      if (!Number.isNaN(nextFireAt) && nextFireAt > Date.now()) {
+        timer = setTimeout(attempt, nextFireAt - Date.now());
+        return;
+      }
       login();
     };
     timer = setTimeout(attempt, Math.max(0, fireAt - Date.now()));
     return () => clearTimeout(timer);
-  }, [me?.sessionExpiresAt, login]);
+  }, [me?.sessionExpiresAt, login, refetchMe]);
 
   if (status === "loop") {
     return (
@@ -101,9 +115,8 @@ export default function SessionProvider() {
         <h1>We could not keep you signed in</h1>
         <p>
           Sign-in worked, but this browser did not hold on to the session, so every page load
-          started it over. That happens when cookies are blocked for this site, or when the sign-in
-          token is too large to store — usually because the account carries a lot of group or role
-          claims.
+          started it over. That happens when cookies are blocked for this site — by browser
+          settings, an extension, or a privacy mode that clears them between page loads.
         </p>
         <p>
           Allow cookies for this site and try again. If it keeps failing, contact your

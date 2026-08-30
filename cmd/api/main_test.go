@@ -690,6 +690,32 @@ func (recordingStore) AppendAuditEvent(context.Context, traits.SecurityAuditEven
 	return nil
 }
 
+// authn.SessionStore, wired so sessionStore's type assertion in main.go
+// succeeds against this fake the way it does against *postgres.Store.
+func (recordingStore) CreateSession(context.Context, authn.Session) error {
+	return nil
+}
+
+func (recordingStore) SessionByHash(context.Context, string) (authn.Session, error) {
+	return authn.Session{}, authn.ErrSessionNotFound
+}
+
+func (recordingStore) TouchSession(context.Context, string, time.Time) error {
+	return nil
+}
+
+func (recordingStore) RevokeSession(context.Context, string, time.Time) error {
+	return nil
+}
+
+func (recordingStore) RevokeSessionsByIDPSessionID(context.Context, string, time.Time) (int, error) {
+	return 0, nil
+}
+
+func (recordingStore) RevokeSessionsBySubject(context.Context, string, time.Time) (int, error) {
+	return 0, nil
+}
+
 type recordingTemplateRunLogReader struct{}
 
 func (recordingTemplateRunLogReader) ReadTemplateRunLog(context.Context, traits.TemplateRunLog) ([]byte, error) {

@@ -180,6 +180,15 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 	if sessionIdleTTL > sessionAbsoluteTTL {
 		return SecurityConfig{}, authConfigError("TFLIVE_SESSION_IDLE_TTL must not exceed TFLIVE_SESSION_ABSOLUTE_TTL")
 	}
+	// The cookie path only writes LastSeenAt back once every
+	// authn.SessionTouchInterval (authn/middleware.go), and IsLive is
+	// evaluated before that write on every request. An idle bound at or below
+	// the interval expires the session before it can ever be observed as
+	// touched, so it can never slide — a silent hard cap rather than the
+	// sliding window the setting promises.
+	if sessionIdleTTL <= authn.SessionTouchInterval {
+		return SecurityConfig{}, authConfigError("TFLIVE_SESSION_IDLE_TTL must exceed the %s session touch interval, or an idle session expires before it can ever slide", authn.SessionTouchInterval)
+	}
 
 	openFGA, err := loadOpenFGAConfig(getenv)
 	if err != nil {

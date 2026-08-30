@@ -132,7 +132,7 @@ connects to Postgres or Temporal or starts its HTTP listener.
 | `OIDC_CLIENT_ID` | No | Required OAuth client ID; also the ID token audience the verifier checks against |
 | `OIDC_CLIENT_SECRET` | Yes | Required; the API is a confidential client and authenticates as one when it exchanges a code |
 | `TFLIVE_PUBLIC_URL` | No | Required; the origin the browser reaches. The API derives its own OIDC redirect URI (`<TFLIVE_PUBLIC_URL>/v1/auth/callback`) and post-logout redirect URI from it — never from `Host` or `X-Forwarded-Proto`, which an attacker can set |
-| `SESSION_ENCRYPTION_KEY` | Yes | Required 32-byte key (raw, base64, or hex) that seals the short-lived login transaction cookie (`state`, `nonce`, PKCE verifier, `return_to`) |
+| `SESSION_ENCRYPTION_KEY` | Yes | Required 32-byte key (raw, base64, or hex) that seals the short-lived login transaction cookie (`state`, `nonce`, PKCE verifier, `return_to`) and encrypts each session row's stored ID token at rest |
 | `TFLIVE_SESSION_ABSOLUTE_TTL` | No | Optional hard cap on a session from sign-in, never extended; defaults to `8h` |
 | `TFLIVE_SESSION_IDLE_TTL` | No | Optional idle bound, sliding on activity; defaults to `1h`; must not exceed `TFLIVE_SESSION_ABSOLUTE_TTL` |
 | `OPENFGA_API_URL` | No | Required OpenFGA API base URL |
@@ -315,12 +315,15 @@ The row also keeps the raw ID token, encrypted at rest, solely so
 `handleAuthLogout` can pass it to the IdP as `id_token_hint` during
 RP-initiated logout — without it, Keycloak shows a logout confirmation page
 instead of signing out silently. It is encrypted with
-`CREDENTIAL_ENCRYPTION_KEY`, the same cipher that protects stored Terraform
-credentials, not `SESSION_ENCRYPTION_KEY`, which seals only the transaction
-cookie above. `CREDENTIAL_ENCRYPTION_KEY` is optional at API config load, but
-sign-in now depends on it in practice: session creation fails if no credential
-cipher is configured, so a deployment that never touches Terraform credentials
-still needs this key set for login to work.
+`SESSION_ENCRYPTION_KEY` — the same required key that seals the transaction
+cookie above, through a separate cipher instance
+(`encryptSession`/`decryptSession` in `internal/postgres/store.go`) so the two
+uses stay independently testable.
+
+Rotating `SESSION_ENCRYPTION_KEY` therefore invalidates every stored session,
+not only an in-flight login: `SessionByHash` decrypts the stored ID token on
+every lookup, so a session created under the old key fails that decrypt and
+is treated as unauthenticated, the same as if it had been revoked.
 
 There is still no refresh token — that part of the design is unchanged.
 Storing and rotating one was evaluated and rejected: correct handling needs a
@@ -358,13 +361,24 @@ something an unauthenticated caller gets to learn.
 A BYO-IdP deployment needs **no** session or timeout configuration on its
 provider; the 8h/1h bounds above are entirely tflive's own. To get immediate
 revocation instead of waiting on those bounds, point the provider's
-back-channel logout at:
+back-channel logout at the API's `/v1/auth/backchannel-logout` endpoint —
+**reachable from the identity provider**, not from the browser. Those are
+frequently different addresses: the callback and post-logout redirect URIs
+are resolved by the browser, so `TFLIVE_PUBLIC_URL` (e.g.
+`http://localhost:5173` on the reference stack) is correct for them, but a
+back-channel logout is a server-to-server POST from the IdP's own process —
+if the IdP runs in its own container or network, `TFLIVE_PUBLIC_URL` names
+nothing it can reach, and the notification silently never arrives.
 
-```text
-<TFLIVE_PUBLIC_URL>/v1/auth/backchannel-logout
-```
+`TFLIVE_BACKCHANNEL_LOGOUT_URL` (optional; defaults to
+`<TFLIVE_PUBLIC_URL>/v1/auth/backchannel-logout`, unchanged from before) lets
+a deployment register a different, IdP-reachable address. On the local
+Compose stack, the provisioner sets it to `http://api:8081/v1/auth/backchannel-logout`
+— the API's address on the Compose network, which is what Keycloak resolves,
+rather than `http://localhost:5173`, which inside Keycloak's own container
+means Keycloak's own loopback.
 
-and enable session-required logout so the provider includes `sid` in both the
+Also enable session-required logout so the provider includes `sid` in both the
 ID token and the logout token — without it, tflive can only match on `sub`,
 so signing one device out signs out every session the user has. On Keycloak,
 the provisioner (`internal/keycloak/provisioner.go`) sets this automatically
@@ -372,7 +386,7 @@ on the `tflive-api` client:
 
 | Attribute | Value | Effect |
 |---|---|---|
-| `backchannel.logout.url` | `<TFLIVE_PUBLIC_URL>/v1/auth/backchannel-logout` | Where Keycloak posts the logout token |
+| `backchannel.logout.url` | `TFLIVE_BACKCHANNEL_LOGOUT_URL`, or `<TFLIVE_PUBLIC_URL>/v1/auth/backchannel-logout` if unset | Where Keycloak posts the logout token |
 | `backchannel.logout.session.required` | `true` | Includes `sid` in the ID token and the logout token |
 
 A provider that never calls this endpoint is not a broken deployment: sessions

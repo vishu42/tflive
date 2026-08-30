@@ -74,9 +74,16 @@ func credentialEncryptor(store appRepositories) app.CredentialEncryptor {
 	return encryptor
 }
 
-func sessionStore(store appRepositories) authn.SessionStore {
-	sessions, _ := store.(authn.SessionStore)
-	return sessions
+// sessionStore requires the wired store to also satisfy authn.SessionStore.
+// A silently swallowed assertion failure here would boot the API clean and
+// only surface at the first login callback, as a nil-pointer panic instead of
+// a startup error naming the actual defect.
+func sessionStore(store appRepositories) (authn.SessionStore, error) {
+	sessions, ok := store.(authn.SessionStore)
+	if !ok {
+		return nil, fmt.Errorf("store %T does not implement authn.SessionStore", store)
+	}
+	return sessions, nil
 }
 
 func main() {
@@ -244,6 +251,11 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire service: %w", err)
 	}
 
+	sessions, err := sessionStore(store)
+	if err != nil {
+		return fmt.Errorf("wire session store: %w", err)
+	}
+
 	handler := api.NewAuthenticatedServer(service, verifier, cfg.Security.TenantID, cfg.Debug,
 		api.WithQueueReader(store),
 		api.WithAuth(api.AuthConfig{
@@ -253,7 +265,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 			Sealer:              sessionSealer,
 			PublicURL:           publicURL,
 			SecureCookies:       cfg.Security.Mode == config.RuntimeProduction,
-			Sessions:            sessionStore(store),
+			Sessions:            sessions,
 			SessionAbsoluteTTL:  cfg.Security.SessionAbsoluteTTL,
 			SessionIdleTTL:      cfg.Security.SessionIdleTTL,
 		}),

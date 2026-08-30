@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vishu42/tflive/internal/authn"
 )
 
 func TestLoadSecurityConfigDevelopmentModes(t *testing.T) {
@@ -339,6 +341,10 @@ func TestSessionTTLRejectsNonPositiveAndInverted(t *testing.T) {
 		"negative idle":        {"TFLIVE_SESSION_IDLE_TTL": "-1m"},
 		"unparseable":          {"TFLIVE_SESSION_IDLE_TTL": "soon"},
 		"idle longer than cap": {"TFLIVE_SESSION_ABSOLUTE_TTL": "1h", "TFLIVE_SESSION_IDLE_TTL": "2h"},
+		// At or below the touch interval, LastSeenAt is never written back
+		// before IsLive expires the session, so it can never slide.
+		"idle equal to touch interval": {"TFLIVE_SESSION_ABSOLUTE_TTL": "1h", "TFLIVE_SESSION_IDLE_TTL": authn.SessionTouchInterval.String()},
+		"idle below touch interval":    {"TFLIVE_SESSION_ABSOLUTE_TTL": "1h", "TFLIVE_SESSION_IDLE_TTL": "1m"},
 	}
 	for name, env := range tests {
 		t.Run(name, func(t *testing.T) {
