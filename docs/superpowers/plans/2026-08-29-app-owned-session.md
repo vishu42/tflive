@@ -384,7 +384,10 @@ import (
 func newSessionTestStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 
-	pool := openTestPool(t, ctx)
+	// openMigratedTestPool, not openTestPool: the latter creates an empty
+	// schema and never applies migrations, so the sessions table would not
+	// exist.
+	pool := openMigratedTestPool(t, ctx)
 	cipher, err := secrets.NewCipher("717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3")
 	if err != nil {
 		t.Fatalf("new cipher: %v", err)
@@ -1647,7 +1650,64 @@ func TestVerifyLogoutTokenRejectsAForeignSignature(t *testing.T) {
 Run: `go test ./internal/authn/ -run TestVerifyLogoutToken -v`
 Expected: FAIL — `verifier.VerifyLogoutToken undefined`.
 
-- [ ] **Step 3: Write the implementation**
+- [ ] **Step 3a: Extract the shared signature check**
+
+`Verify` currently does two jobs in one function: verify the signature against the JWKS (with a
+refresh-and-retry on an unknown key id), then enforce ID-token claims. A logout token needs the
+first half and not the second, so split them — one place trusts the provider's keys, and neither
+caller can skip it.
+
+In `internal/authn/oidc_verifier.go`, add:
+
+```go
+// verifiedPayload checks a compact JWS against the provider's keys and returns
+// the verified payload. It says nothing about the claims inside: ID tokens and
+// back-channel logout tokens require different ones, and both need exactly this
+// signature check first.
+func (v *OIDCVerifier) verifiedPayload(ctx context.Context, raw string) ([]byte, error) {
+	if len(raw) == 0 || len(raw) > maxTokenBytes || strings.Count(raw, ".") != 2 {
+		return nil, ErrInvalidToken
+	}
+	header, err := protectedHeader(raw)
+	if err != nil {
+		return nil, ErrInvalidToken
+	}
+	algorithm, keyID, ok := allowedHeader(header)
+	if !ok {
+		return nil, ErrInvalidToken
+	}
+	key, err := v.keyFor(ctx, keyID, algorithm)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := jws.Verify([]byte(raw), jws.WithKey(algorithm, key), jws.WithCompact())
+	if err != nil {
+		return v.payloadAfterSignatureFailure(ctx, raw, keyID, algorithm)
+	}
+	return payload, nil
+}
+```
+
+Rename `retryAfterSignatureFailure` to `payloadAfterSignatureFailure` and change it to return
+`([]byte, error)`: every `return VerifiedToken{}, X` becomes `return nil, X`, and its final
+`return v.validatedToken(payload)` becomes `return payload, nil`.
+
+`Verify` then becomes:
+
+```go
+func (v *OIDCVerifier) Verify(ctx context.Context, raw string) (VerifiedToken, error) {
+	payload, err := v.verifiedPayload(ctx, raw)
+	if err != nil {
+		return VerifiedToken{}, err
+	}
+	return v.validatedToken(payload)
+}
+```
+
+Run `go test ./internal/authn/ -v` and confirm the existing verifier tests still pass — this step
+is a pure refactor and must change no behaviour.
+
+- [ ] **Step 3b: Write the implementation**
 
 Create `internal/authn/logout_token.go`:
 
@@ -1679,12 +1739,14 @@ type LogoutToken struct {
 // IdP. It reuses the JWKS and issuer the ID-token verifier already maintains,
 // so there is one place a provider's signing keys are trusted.
 func (v *OIDCVerifier) VerifyLogoutToken(ctx context.Context, raw string) (LogoutToken, error) {
-	if len(raw) > maxTokenBytes {
-		return LogoutToken{}, ErrInvalidLogoutToken
-	}
-	// Signature verification against the cached JWKS, refreshing on an unknown
-	// key id exactly as ID-token verification does.
-	if _, err := v.Verify(ctx, raw); err != nil && !errors.Is(err, ErrInvalidToken) {
+	// verifiedPayload is the shared signature check extracted in Step 3a. It
+	// must NOT be v.Verify: that also enforces ID-token claims (exp, name,
+	// preferred_username, azp), none of which a logout token carries, so every
+	// valid logout token would be rejected — and swallowing that rejection to
+	// work around it would swallow signature failures too, since both return
+	// ErrInvalidToken.
+	payload, err := v.verifiedPayload(ctx, raw)
+	if err != nil {
 		return LogoutToken{}, err
 	}
 
@@ -1692,10 +1754,14 @@ func (v *OIDCVerifier) VerifyLogoutToken(ctx context.Context, raw string) (Logou
 	issuer := v.discovery.Issuer
 	v.mu.RUnlock()
 
-	token, err := v.parseSignedToken(ctx, raw,
+	token, err := jwt.Parse(payload,
+		// The signature is already verified above; this parses claims from the
+		// verified payload.
+		jwt.WithVerify(false),
 		jwt.WithIssuer(issuer),
 		jwt.WithAudience(v.cfg.Audience),
 		jwt.WithRequiredClaim("events"),
+		jwt.WithRequiredClaim("iat"),
 		jwt.WithClock(jwt.ClockFunc(v.cfg.Clock)),
 		jwt.WithAcceptableSkew(clockSkew),
 	)
@@ -1743,7 +1809,10 @@ func (v *OIDCVerifier) VerifyLogoutToken(ctx context.Context, raw string) (Logou
 const logoutTokenMaxAge = 2 * time.Minute
 ```
 
-> **Implementation note for the executor:** `parseSignedToken` above is a placeholder name for however `OIDCVerifier` already performs keyset-backed parsing — read `internal/authn/oidc_verifier.go` and reuse the existing private helper rather than adding a second JWKS path. If `Verify` is the only entry point, factor the shared part out so both call it. Do not write a second key-fetching code path; one place trusts the provider's keys.
+> **Why the split in Step 3a matters:** without it there is no way to check a logout token's
+> signature except `Verify`, which also demands ID-token claims a logout token does not have. Working
+> around that by ignoring `ErrInvalidToken` would ignore signature failures too — they return the
+> same error — leaving the endpoint accepting forged logout tokens from anyone who can reach it.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -2190,4 +2259,7 @@ git commit -m "docs: describe the app-owned session and back-channel logout"
 
 **Type consistency.** `IDHash` names the hash in the `Session` struct, the migration column, and every repository method. `IDPSessionID` names the `sid` claim on `Session`; the same value is `SessionID` on `VerifiedToken` and `LogoutToken`, matching the claim name at the token boundary and the column name at the storage boundary. `SessionStore` is the interface throughout. `authn.ErrSessionNotFound` is the only not-found error the cookie path treats as ordinary.
 
-**One flagged uncertainty for the executor.** Task 6's `parseSignedToken` is a placeholder for whatever keyset-backed parse helper `OIDCVerifier` already has — read the file and reuse it. Adding a second JWKS path would mean two places trust the provider's keys, which is the thing the existing design is careful to avoid.
+**Resolved during the pre-flight scan (2026-08-29).** Two defects were found in this plan and corrected before execution:
+
+1. Task 6 originally called `Verify` for the logout token's signature check and swallowed `ErrInvalidToken`. `Verify` also enforces ID-token claims (`exp`, `name`, `preferred_username`, `azp`) that a logout token does not carry, so every valid logout token would have been rejected — and swallowing that error would have swallowed signature failures, which return the same error, leaving the endpoint open to forged tokens. Task 6 now has Step 3a extracting `verifiedPayload` as the one place the provider's keys are trusted, with both entry points built on it.
+2. Task 2's tests called `openTestPool`, which creates an empty schema and applies no migrations, so `sessions` would not have existed. They now call `openMigratedTestPool`.
