@@ -292,6 +292,26 @@ func TestCookieAuthenticatesFromTheSessionStore(t *testing.T) {
 	// never consulted it.
 }
 
+// A server built without WithAuth (most of internal/api's own tests, plus any
+// future caller that forgets it) has a nil SessionStore. A cookie must 401
+// against that, not panic a nil interface mid-request.
+func TestNilSessionStoreRejectsCookieInsteadOfPanicking(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	handler := RequireAuthentication(rejectingVerifier{}, nil, time.Hour, func() time.Time { return now })(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Fatal("handler ran with no session store")
+		}),
+	)
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "session-token"})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", recorder.Code)
+	}
+}
+
 func TestExpiredAndRevokedSessionsAre401(t *testing.T) {
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	tests := map[string]Session{

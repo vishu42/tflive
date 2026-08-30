@@ -168,7 +168,12 @@ func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier, tenan
 	// verifier is a separate parameter from server.auth.Verifier for Bearer
 	// tokens: callers that build a server without WithAuth (most of this
 	// package's tests) still get a working Bearer path, since only the
-	// cookie path needs the rest of AuthConfig.
+	// cookie path needs the rest of AuthConfig. The two must nonetheless be
+	// the same logical verifier as the one server.auth.Verifier hands the
+	// OIDC callback (see handleAuthCallback in auth.go) — production wires
+	// one instance to both — since a caller's Bearer token and a browser's
+	// callback are being checked against the same IdP. Nothing in the type
+	// system enforces that; keep them in sync by hand.
 	server.handler = authn.RequireAuthentication(
 		verifier,
 		server.auth.Sessions,

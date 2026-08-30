@@ -78,6 +78,14 @@ func authenticate(
 	if err != nil || cookie.Value == "" {
 		return Principal{}, false
 	}
+
+	// A server built without WithAuth has no session store. Cookies cannot
+	// authenticate against nothing, and a nil interface would panic rather
+	// than 401, so treat it as no credential.
+	if sessions == nil {
+		return Principal{}, false
+	}
+
 	idHash := HashSessionID(cookie.Value)
 	session, err := sessions.SessionByHash(request.Context(), idHash)
 	if err != nil {
