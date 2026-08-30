@@ -424,9 +424,9 @@ func TestOIDCVerifierVerifiesStringAudience(t *testing.T) {
 	}
 }
 
-// OIDC Core 1.0 §3.1.3.7 steps 4-5: when aud carries more than one value, azp
-// must be present and equal our client ID. A single-audience token has no
-// such requirement, so an absent azp there is fine.
+// OIDC Core 1.0 §3.1.3.7 steps 4-5: azp must equal our client ID whenever it
+// is present, and is required once aud carries more than one value. A
+// single-audience token need not carry it, so an absent azp there is fine.
 func TestOIDCVerifierAcceptsSingleAudienceTokenWithoutAzp(t *testing.T) {
 	s := newOIDCTestServer(t)
 	s.addRSAKey(t, "key-a")
@@ -507,6 +507,74 @@ func TestOIDCVerifierRejectsMultiAudienceTokenWithAbsentAzp(t *testing.T) {
 
 	raw := s.sign(t, "key-a", func(tok jwt.Token) {
 		_ = tok.Set(jwt.AudienceKey, []string{"test-audience", "other-client"})
+	})
+	_, err = v.Verify(context.Background(), raw)
+	if !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("Verify() error = %v, want ErrInvalidToken", err)
+	}
+}
+
+// The substitution azp actually guards against: another client in the same
+// realm holds an ID token minted for itself, and a stray audience mapper has
+// replaced our audience into it, leaving aud a single entry that names us.
+// Only azp still names the client the token was issued to, so it must be
+// consulted even when aud carries one value.
+func TestOIDCVerifierRejectsSingleAudienceTokenWithWrongAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience"})
+		_ = tok.Set("azp", "other-client")
+	})
+	_, err = v.Verify(context.Background(), raw)
+	if !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("Verify() error = %v, want ErrInvalidToken", err)
+	}
+}
+
+func TestOIDCVerifierAcceptsSingleAudienceTokenWithMatchingAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience"})
+		_ = tok.Set("azp", "test-audience")
+	})
+	got, err := v.Verify(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if got.Subject != "user-123" {
+		t.Fatalf("Verify().Subject = %q, want user-123", got.Subject)
+	}
+}
+
+func TestOIDCVerifierRejectsNonStringAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience"})
+		_ = tok.Set("azp", []string{"test-audience"})
 	})
 	_, err = v.Verify(context.Background(), raw)
 	if !errors.Is(err, ErrInvalidToken) {

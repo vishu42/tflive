@@ -125,14 +125,24 @@ func (v *OIDCVerifier) validatedToken(payload []byte) (VerifiedToken, error) {
 		return VerifiedToken{}, ErrInvalidToken
 	}
 
-	// OIDC Core 1.0 §3.1.3.7 steps 4-5: when the ID token's aud carries more
-	// than one value, azp must be present and must equal our client ID.
-	// jwt.WithAudience above only asserts aud *contains* the client ID, which
-	// is not sufficient on its own once a mapper (ours or a stale one left
-	// behind by another IdP client) can push extra audiences into the token.
-	if audiences, ok := token.Audience(); ok && len(audiences) > 1 {
-		azp, ok := optionalStringClaim(token, "azp")
-		if !ok || azp != v.cfg.Audience {
+	// OIDC Core 1.0 §3.1.3.7 steps 4-5: azp, whenever the token carries it,
+	// must equal our client ID, and it is additionally *required* once aud
+	// carries more than one value. jwt.WithAudience above only asserts aud
+	// *contains* the client ID, which is not sufficient on its own once a
+	// mapper (ours or a stale one left behind by another IdP client) can push
+	// our audience into a token minted for a different client. That is the
+	// substitution azp exists to catch, and it happens with a single-entry
+	// aud, so the claim is checked on every token rather than only on
+	// multi-audience ones.
+	azp, ok := optionalStringClaim(token, "azp")
+	if !ok {
+		return VerifiedToken{}, ErrInvalidToken
+	}
+	if azp != "" && azp != v.cfg.Audience {
+		return VerifiedToken{}, ErrInvalidToken
+	}
+	if azp == "" {
+		if audiences, ok := token.Audience(); ok && len(audiences) > 1 {
 			return VerifiedToken{}, ErrInvalidToken
 		}
 	}
