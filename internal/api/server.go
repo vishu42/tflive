@@ -165,7 +165,15 @@ func NewServer(service *app.Service, tenantID traits.TenantID, options ...Server
 func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier, tenantID traits.TenantID, debug bool, options ...ServerOption) *Server {
 	server := NewServer(service, tenantID, options...)
 	server.debug = debug
-	server.handler = authn.RequireAuthentication(verifier,
+	// verifier is a separate parameter from server.auth.Verifier for Bearer
+	// tokens: callers that build a server without WithAuth (most of this
+	// package's tests) still get a working Bearer path, since only the
+	// cookie path needs the rest of AuthConfig.
+	server.handler = authn.RequireAuthentication(
+		verifier,
+		server.auth.Sessions,
+		server.auth.SessionIdleTTL,
+		server.auth.Clock,
 		"/healthz", "/v1/auth/login", "/v1/auth/callback", "/v1/auth/logout",
 	)(server.mux)
 	return server
