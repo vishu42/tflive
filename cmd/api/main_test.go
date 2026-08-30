@@ -542,6 +542,10 @@ func (testTokenVerifier) Verify(context.Context, string) (authn.VerifiedToken, e
 
 func (testTokenVerifier) Close(context.Context) error { return nil }
 
+func (testTokenVerifier) VerifyLogoutToken(context.Context, string) (authn.LogoutToken, error) {
+	return authn.LogoutToken{Subject: "test-user"}, nil
+}
+
 func (testTokenVerifier) Endpoints() authn.Endpoints {
 	return authn.Endpoints{Authorization: "https://idp.test/authorize", Token: "https://idp.test/token"}
 }
@@ -557,6 +561,10 @@ func (verifier *recordingTokenVerifier) Verify(context.Context, string) (authn.V
 func (verifier *recordingTokenVerifier) Close(context.Context) error {
 	verifier.closed = true
 	return nil
+}
+
+func (*recordingTokenVerifier) VerifyLogoutToken(context.Context, string) (authn.LogoutToken, error) {
+	return authn.LogoutToken{Subject: "test-user"}, nil
 }
 
 func (*recordingTokenVerifier) Endpoints() authn.Endpoints {

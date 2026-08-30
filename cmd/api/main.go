@@ -49,6 +49,7 @@ type appRepositories interface {
 type tokenVerifier interface {
 	authn.Verifier
 	authn.EndpointSource
+	VerifyLogoutToken(context.Context, string) (authn.LogoutToken, error)
 	Close(context.Context) error
 }
 
@@ -242,14 +243,15 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 	handler := api.NewAuthenticatedServer(service, verifier, cfg.Security.TenantID, cfg.Debug,
 		api.WithQueueReader(store),
 		api.WithAuth(api.AuthConfig{
-			Flow:               flow,
-			Verifier:           verifier,
-			Sealer:             sessionSealer,
-			PublicURL:          publicURL,
-			SecureCookies:      cfg.Security.Mode == config.RuntimeProduction,
-			Sessions:           sessionStore(store),
-			SessionAbsoluteTTL: cfg.Security.SessionAbsoluteTTL,
-			SessionIdleTTL:     cfg.Security.SessionIdleTTL,
+			Flow:                flow,
+			Verifier:            verifier,
+			LogoutTokenVerifier: verifier,
+			Sealer:              sessionSealer,
+			PublicURL:           publicURL,
+			SecureCookies:       cfg.Security.Mode == config.RuntimeProduction,
+			Sessions:            sessionStore(store),
+			SessionAbsoluteTTL:  cfg.Security.SessionAbsoluteTTL,
+			SessionIdleTTL:      cfg.Security.SessionIdleTTL,
 		}),
 	)
 	if err := deps.listenAndServe(ctx, cfg.HTTPAddress, handler); err != nil {

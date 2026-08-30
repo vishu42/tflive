@@ -90,3 +90,16 @@ func TestBackchannelLogoutIsUnauthenticatedAndUncached(t *testing.T) {
 		t.Fatalf("Cache-Control = %q, want no-store", recorder.Header().Get("Cache-Control"))
 	}
 }
+
+func TestBackchannelLogoutWithoutAVerifierReturns503InsteadOfPanicking(t *testing.T) {
+	sessions := newFakeSessionStore()
+	// No withLogoutTokenVerifier: a misconfigured deployment, not a bad
+	// request from the IdP.
+	server := newAuthTestServer(t, &stubFlow{}, stubVerifier{}, withSessions(sessions))
+
+	recorder := postLogoutToken(t, server, "logout_token=anything")
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
+	}
+}

@@ -28,6 +28,12 @@ type LogoutTokenVerifier interface {
 func (server *Server) handleBackchannelLogout(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 
+	if server.auth.LogoutTokenVerifier == nil {
+		log.Printf("backchannel logout: no logout token verifier configured; refusing")
+		http.Error(response, "not available", http.StatusServiceUnavailable)
+		return
+	}
+
 	if err := request.ParseForm(); err != nil {
 		http.Error(response, "invalid request", http.StatusBadRequest)
 		return
