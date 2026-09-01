@@ -13,12 +13,20 @@ const invalidCredentialsCode = "unauthorized"
 // RequireAuthentication protects every request except paths named in
 // publicPaths.
 //
-// Two credential kinds resolve to one Principal. A cookie names an app-owned
-// session row, whose lifetime tflive chose; an Authorization header carries an
-// IdP token for a CLI or service caller, verified as it always was. The header
-// wins so a stale browser cookie on the same connection cannot override it.
+// The session cookie is the only credential. It names an app-owned session row
+// whose lifetime tflive chose, and identity comes off that row rather than off
+// a token presented per request — the ID token behind it was verified once, at
+// the callback, and its claims copied onto the row there.
+//
+// An Authorization header is deliberately not a credential here. Accepting an
+// IdP token as a bearer credential made the ID token a key to every /v1 route,
+// which mattered because RP-initiated logout necessarily puts that token in a
+// URL, where it reaches browser history and every access log in between. A
+// signed token is also not revocable: logout, back-channel logout, and an admin
+// disabling an account all mark a session row, and none of them can reach a
+// copy of a JWT somebody already holds. A caller that needs non-browser access
+// wants a credential tflive issues and can revoke, not this.
 func RequireAuthentication(
-	verifier Verifier,
 	sessions SessionStore,
 	idleTTL time.Duration,
 	clock func() time.Time,
@@ -43,7 +51,7 @@ func RequireAuthentication(
 				return
 			}
 
-			principal, ok := authenticate(request, verifier, sessions, idleTTL, clock)
+			principal, ok := authenticate(request, sessions, idleTTL, clock)
 			if !ok {
 				writeUnauthorized(response)
 				return
@@ -55,25 +63,10 @@ func RequireAuthentication(
 
 func authenticate(
 	request *http.Request,
-	verifier Verifier,
 	sessions SessionStore,
 	idleTTL time.Duration,
 	clock func() time.Time,
 ) (Principal, bool) {
-	if raw, ok := bearerToken(request.Header.Get("Authorization")); ok {
-		verified, err := verifier.Verify(request.Context(), raw)
-		if err != nil {
-			// ErrVerifierUnavailable means the IdP is unreachable — every
-			// request fails the same 401 an invalid token would, so without
-			// this log an outage is a silent 401 storm.
-			if errors.Is(err, ErrVerifierUnavailable) {
-				log.Printf("authn middleware: token verifier unavailable: %v", err)
-			}
-			return Principal{}, false
-		}
-		return principalFromVerifiedToken(verified), true
-	}
-
 	cookie, err := request.Cookie(SessionCookieName)
 	if err != nil || cookie.Value == "" {
 		return Principal{}, false
@@ -106,6 +99,14 @@ func authenticate(
 			// A failed touch shortens this session, it does not break it, so
 			// the request proceeds.
 			log.Printf("authn middleware: failed to touch session: %v", err)
+		} else {
+			// Report the bound this request just wrote, not the one it read.
+			// /v1/me is how the browser learns when to re-authenticate, and a
+			// pre-touch answer names a moment this very request has already
+			// moved: an idle session would keep being told it ends at the
+			// instant the client is asking about, and the client would give
+			// up and re-authenticate a session that is not ending.
+			session.LastSeenAt = now
 		}
 	}
 
@@ -116,14 +117,6 @@ func authenticate(
 		Email:             session.Email,
 		ExpiresAt:         session.ExpiresAt(idleTTL),
 	}, true
-}
-
-func bearerToken(header string) (string, bool) {
-	parts := strings.Fields(header)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
-		return "", false
-	}
-	return parts[1], true
 }
 
 func writeUnauthorized(response http.ResponseWriter) {

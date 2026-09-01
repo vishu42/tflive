@@ -190,20 +190,15 @@ func NewServer(service *app.Service, tenantID traits.TenantID, options ...Server
 }
 
 // NewAuthenticatedServer protects all /v1 routes and leaves health probes public.
-func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier, tenantID traits.TenantID, debug bool, options ...ServerOption) *Server {
+func NewAuthenticatedServer(service *app.Service, tenantID traits.TenantID, debug bool, options ...ServerOption) *Server {
 	server := NewServer(service, tenantID, options...)
 	server.debug = debug
-	// verifier is a separate parameter from server.auth.Verifier for Bearer
-	// tokens: callers that build a server without WithAuth (most of this
-	// package's tests) still get a working Bearer path, since only the
-	// cookie path needs the rest of AuthConfig. The two must nonetheless be
-	// the same logical verifier as the one server.auth.Verifier hands the
-	// OIDC callback (see handleAuthCallback in auth.go) — production wires
-	// one instance to both — since a caller's Bearer token and a browser's
-	// callback are being checked against the same IdP. Nothing in the type
-	// system enforces that; keep them in sync by hand.
+	// No verifier here. The middleware authenticates against the session store
+	// alone, so the only place a token is verified is the OIDC callback, which
+	// reaches its verifier through server.auth. This used to take a verifier of
+	// its own for the Bearer path, which had to be kept the same instance as
+	// server.auth.Verifier by hand because nothing in the type system said so.
 	server.handler = authn.RequireAuthentication(
-		verifier,
 		server.auth.Sessions,
 		server.auth.SessionIdleTTL,
 		server.auth.Clock,

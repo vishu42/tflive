@@ -9,42 +9,14 @@ import (
 	"time"
 )
 
-type middlewareVerifier struct {
-	token VerifiedToken
-	err   error
-	raw   string
-}
-
-func (verifier *middlewareVerifier) Verify(_ context.Context, raw string) (VerifiedToken, error) {
-	verifier.raw = raw
-	return verifier.token, verifier.err
-}
-
-// rejectingVerifier fails every token. It stands in for the IdP verifier in
-// tests that authenticate through the cookie, so a 200 proves the cookie path
-// never consulted it.
-type rejectingVerifier struct{}
-
-func (rejectingVerifier) Verify(context.Context, string) (VerifiedToken, error) {
-	return VerifiedToken{}, ErrInvalidToken
-}
-
-// acceptingVerifier returns a VerifiedToken for the given subject, whatever
-// token it is handed.
-type acceptingVerifier struct {
-	subject string
-}
-
-func (verifier acceptingVerifier) Verify(context.Context, string) (VerifiedToken, error) {
-	return VerifiedToken{Subject: verifier.subject}, nil
-}
-
 // fakeSessionStore is a SessionStore over an in-memory map. Only SessionByHash
 // and TouchSession are exercised by the middleware; touched counts calls to
 // TouchSession so tests can assert the touch interval is honored.
 type fakeSessionStore struct {
 	byHash  map[string]Session
 	touched int
+	// touchErr, when set, fails every TouchSession.
+	touchErr error
 }
 
 func (store *fakeSessionStore) CreateSession(_ context.Context, session Session) error {
@@ -62,6 +34,9 @@ func (store *fakeSessionStore) SessionByHash(_ context.Context, idHash string) (
 
 func (store *fakeSessionStore) TouchSession(_ context.Context, idHash string, seenAt time.Time) error {
 	store.touched++
+	if store.touchErr != nil {
+		return store.touchErr
+	}
 	if session, ok := store.byHash[idHash]; ok {
 		session.LastSeenAt = seenAt
 		store.byHash[idHash] = session
@@ -85,12 +60,20 @@ func (store *fakeSessionStore) RevokeSessionsBySubject(_ context.Context, _ stri
 	return 0, nil
 }
 
+func (store *fakeSessionStore) RevokeSessionsBySubjectWithoutIDPSession(_ context.Context, _ string, _ time.Time) (int, error) {
+	return 0, nil
+}
+
+func (store *fakeSessionStore) DeleteSessionsExpiredBefore(_ context.Context, _ time.Time) (int, error) {
+	return 0, nil
+}
+
 // serveAuthenticated builds the middleware around sessions with a
 // rejectingVerifier, issues a request carrying raw as the session cookie, and
 // asserts the response is 200.
 func serveAuthenticated(t *testing.T, sessions SessionStore, now time.Time, raw string) {
 	t.Helper()
-	handler := RequireAuthentication(rejectingVerifier{}, sessions, time.Hour, func() time.Time { return now })(
+	handler := RequireAuthentication(sessions, time.Hour, func() time.Time { return now })(
 		http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 			response.WriteHeader(http.StatusOK)
 		}),
@@ -105,40 +88,55 @@ func serveAuthenticated(t *testing.T, sessions SessionStore, now time.Time, raw 
 }
 
 func TestRequireAuthentication(t *testing.T) {
-	expiresAt := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
-	valid := VerifiedToken{Subject: "user-123", Name: "Ada", PreferredUsername: "ada", Email: "ada@example.test", ExpiresAt: expiresAt}
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	valid := Session{
+		IDHash:            HashSessionID("session-token"),
+		Subject:           "user-123",
+		Name:              "Ada",
+		PreferredUsername: "ada",
+		Email:             "ada@example.test",
+		LastSeenAt:        now,
+		AbsoluteExpiresAt: now.Add(8 * time.Hour),
+	}
 
 	for _, test := range []struct {
 		name          string
 		path          string
 		authorization string
-		verifier      middlewareVerifier
+		cookie        string
 		status        int
 		called        bool
 	}{
 		{name: "public health", path: "/healthz", status: http.StatusOK, called: true},
-		{name: "missing token", path: "/v1/stacks", status: http.StatusUnauthorized},
-		{name: "invalid scheme", path: "/v1/stacks", authorization: "Basic ignored", status: http.StatusUnauthorized},
-		{name: "invalid token", path: "/v1/stacks", authorization: "Bearer invalid", verifier: middlewareVerifier{err: ErrInvalidToken}, status: http.StatusUnauthorized},
-		{name: "unavailable verifier", path: "/v1/stacks", authorization: "Bearer unavailable", verifier: middlewareVerifier{err: ErrVerifierUnavailable}, status: http.StatusUnauthorized},
-		{name: "valid token", path: "/v1/stacks", authorization: "Bearer valid", verifier: middlewareVerifier{token: valid}, status: http.StatusOK, called: true},
+		{name: "no credential", path: "/v1/stacks", status: http.StatusUnauthorized},
+		{name: "unknown cookie value", path: "/v1/stacks", cookie: "not-a-session", status: http.StatusUnauthorized},
+		// An Authorization header is not a credential. Accepting one made the
+		// ID token — which RP-initiated logout necessarily puts in a URL — a
+		// key to every /v1 route, and a signed token cannot be revoked.
+		{name: "bearer header is ignored", path: "/v1/stacks", authorization: "Bearer any-token", status: http.StatusUnauthorized},
+		{name: "bearer header does not override a cookie", path: "/v1/stacks", authorization: "Bearer any-token", cookie: "session-token", status: http.StatusOK, called: true},
+		{name: "session cookie", path: "/v1/stacks", cookie: "session-token", status: http.StatusOK, called: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			verifier := test.verifier
 			called := false
-			sessions := &fakeSessionStore{byHash: map[string]Session{}}
-			handler := RequireAuthentication(&verifier, sessions, time.Hour, nil, "/healthz")(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			sessions := &fakeSessionStore{byHash: map[string]Session{valid.IDHash: valid}}
+			handler := RequireAuthentication(sessions, time.Hour, func() time.Time { return now }, "/healthz")(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 				called = true
 				if request.URL.Path == "/v1/stacks" {
 					principal, ok := PrincipalFromContext(request.Context())
-					if !ok || principal.Subject != valid.Subject || principal.Name != valid.Name || principal.PreferredUsername != valid.PreferredUsername || principal.Email != valid.Email || !principal.ExpiresAt.Equal(valid.ExpiresAt) {
+					if !ok || principal.Subject != valid.Subject || principal.Name != valid.Name || principal.PreferredUsername != valid.PreferredUsername || principal.Email != valid.Email {
 						t.Fatalf("principal = %#v, ok = %t", principal, ok)
 					}
 				}
 				response.WriteHeader(http.StatusOK)
 			}))
 			request := httptest.NewRequest(http.MethodGet, test.path, nil)
-			request.Header.Set("Authorization", test.authorization)
+			if test.authorization != "" {
+				request.Header.Set("Authorization", test.authorization)
+			}
+			if test.cookie != "" {
+				request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: test.cookie})
+			}
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
 			if response.Code != test.status {
@@ -169,22 +167,6 @@ func TestPrincipalFromContextIsNotMutableByAReader(t *testing.T) {
 	}
 }
 
-func TestRequireAuthenticationDoesNotLeakVerifierErrors(t *testing.T) {
-	secret := "token-or-provider-detail"
-	verifier := &middlewareVerifier{err: errors.New(secret)}
-	sessions := &fakeSessionStore{byHash: map[string]Session{}}
-	handler := RequireAuthentication(verifier, sessions, time.Hour, nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Fatal("protected handler was called")
-	}))
-	request := httptest.NewRequest(http.MethodGet, "/v1/stacks", nil)
-	request.Header.Set("Authorization", "Bearer opaque")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusUnauthorized || response.Body.String() != `{"code":"unauthorized"}` {
-		t.Fatalf("response = %d %q", response.Code, response.Body.String())
-	}
-}
-
 func TestRequireAuthenticationAcceptsSessionCookie(t *testing.T) {
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	validSession := Session{
@@ -207,17 +189,16 @@ func TestRequireAuthenticationAcceptsSessionCookie(t *testing.T) {
 		wantSubject   string
 	}{
 		{name: "cookie only", cookie: "cookie-token", hasCookie: true, status: http.StatusOK, wantSubject: "cookie-user"},
-		{name: "header only", authorization: "Bearer header-token", status: http.StatusOK, wantSubject: "header-user"},
-		{name: "header wins over cookie", authorization: "Bearer header-token", cookie: "cookie-token", hasCookie: true, status: http.StatusOK, wantSubject: "header-user"},
+		{name: "header only", authorization: "Bearer header-token", status: http.StatusUnauthorized},
+		{name: "header does not displace the cookie", authorization: "Bearer header-token", cookie: "cookie-token", hasCookie: true, status: http.StatusOK, wantSubject: "cookie-user"},
 		{name: "empty cookie", cookie: "", hasCookie: true, status: http.StatusUnauthorized},
 		{name: "neither", status: http.StatusUnauthorized},
-		{name: "malformed header falls back to cookie", authorization: "Basic ignored", cookie: "cookie-token", hasCookie: true, status: http.StatusOK, wantSubject: "cookie-user"},
+		{name: "malformed header is ignored too", authorization: "Basic ignored", cookie: "cookie-token", hasCookie: true, status: http.StatusOK, wantSubject: "cookie-user"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			verifier := &middlewareVerifier{token: VerifiedToken{Subject: "header-user"}}
 			sessions := &fakeSessionStore{byHash: map[string]Session{validSession.IDHash: validSession}}
 			var got Principal
-			handler := RequireAuthentication(verifier, sessions, time.Hour, func() time.Time { return now }, "/healthz")(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			handler := RequireAuthentication(sessions, time.Hour, func() time.Time { return now }, "/healthz")(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 				got, _ = PrincipalFromContext(request.Context())
 				response.WriteHeader(http.StatusOK)
 			}))
@@ -242,9 +223,8 @@ func TestRequireAuthenticationAcceptsSessionCookie(t *testing.T) {
 }
 
 func TestRequireAuthenticationIgnoresOtherCookies(t *testing.T) {
-	verifier := &middlewareVerifier{token: VerifiedToken{Subject: "user-123"}}
 	sessions := &fakeSessionStore{byHash: map[string]Session{}}
-	handler := RequireAuthentication(verifier, sessions, time.Hour, nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	handler := RequireAuthentication(sessions, time.Hour, nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("protected handler was called")
 	}))
 	request := httptest.NewRequest(http.MethodGet, "/v1/stacks", nil)
@@ -271,7 +251,7 @@ func TestCookieAuthenticatesFromTheSessionStore(t *testing.T) {
 	}}
 
 	var got Principal
-	handler := RequireAuthentication(rejectingVerifier{}, sessions, time.Hour, func() time.Time { return now })(
+	handler := RequireAuthentication(sessions, time.Hour, func() time.Time { return now })(
 		http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
 			got, _ = PrincipalFromContext(request.Context())
 		}),
@@ -297,7 +277,7 @@ func TestCookieAuthenticatesFromTheSessionStore(t *testing.T) {
 // against that, not panic a nil interface mid-request.
 func TestNilSessionStoreRejectsCookieInsteadOfPanicking(t *testing.T) {
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
-	handler := RequireAuthentication(rejectingVerifier{}, nil, time.Hour, func() time.Time { return now })(
+	handler := RequireAuthentication(nil, time.Hour, func() time.Time { return now })(
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			t.Fatal("handler ran with no session store")
 		}),
@@ -336,7 +316,7 @@ func TestExpiredAndRevokedSessionsAre401(t *testing.T) {
 			session.IDHash = HashSessionID(raw)
 			sessions := &fakeSessionStore{byHash: map[string]Session{session.IDHash: session}}
 
-			handler := RequireAuthentication(rejectingVerifier{}, sessions, time.Hour, func() time.Time { return now })(
+			handler := RequireAuthentication(sessions, time.Hour, func() time.Time { return now })(
 				http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 					t.Fatal("handler ran for a dead session")
 				}),
@@ -383,22 +363,65 @@ func TestTouchOnlyAfterTheTouchInterval(t *testing.T) {
 	})
 }
 
-func TestBearerPathStillUsesTheVerifier(t *testing.T) {
+// TestExpiresAtReflectsTheTouchTheSameRequestWrote pins the bound reported to
+// the browser to the one this request just wrote. Reporting the pre-touch
+// bound is not merely stale: it is the moment the client is already asking
+// about, so an idle client's proactive re-authentication can never find a
+// later bound to rearm on and gives up on a session that is not ending.
+func TestExpiresAtReflectsTheTouchTheSameRequestWrote(t *testing.T) {
+	const idleTTL = time.Hour
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
-	sessions := &fakeSessionStore{byHash: map[string]Session{}}
+	raw := "session-token"
+	session := Session{
+		IDHash:            HashSessionID(raw),
+		Subject:           "user-1",
+		LastSeenAt:        now.Add(-59 * time.Minute),
+		AbsoluteExpiresAt: now.Add(8 * time.Hour),
+	}
+	sessions := &fakeSessionStore{byHash: map[string]Session{session.IDHash: session}}
 
 	var got Principal
-	handler := RequireAuthentication(acceptingVerifier{subject: "cli-user"}, sessions, time.Hour, func() time.Time { return now })(
+	handler := RequireAuthentication(sessions, idleTTL, func() time.Time { return now })(
 		http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
 			got, _ = PrincipalFromContext(request.Context())
 		}),
 	)
 	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
-	request.Header.Set("Authorization", "Bearer some-token")
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, request)
+	request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: raw})
+	handler.ServeHTTP(httptest.NewRecorder(), request)
 
-	if recorder.Code != http.StatusOK || got.Subject != "cli-user" {
-		t.Fatalf("status = %d, subject = %q; the Bearer path must still verify tokens", recorder.Code, got.Subject)
+	if want := now.Add(idleTTL); !got.ExpiresAt.Equal(want) {
+		t.Fatalf("ExpiresAt = %v, want %v — the touch this request wrote must be in the answer it returns", got.ExpiresAt, want)
+	}
+}
+
+// TestExpiresAtDoesNotClaimAFailedTouch keeps the reported bound honest when
+// the write did not land: a failed touch shortens the session, and saying
+// otherwise would promise a bound the database does not hold.
+func TestExpiresAtDoesNotClaimAFailedTouch(t *testing.T) {
+	const idleTTL = time.Hour
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	raw := "session-token"
+	lastSeen := now.Add(-59 * time.Minute)
+	session := Session{
+		IDHash:            HashSessionID(raw),
+		Subject:           "user-1",
+		LastSeenAt:        lastSeen,
+		AbsoluteExpiresAt: now.Add(8 * time.Hour),
+	}
+	sessions := &fakeSessionStore{byHash: map[string]Session{session.IDHash: session}, touchErr: errors.New("write failed")}
+
+	var got Principal
+	handler := RequireAuthentication(sessions, idleTTL, func() time.Time { return now })(
+		http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+			got, _ = PrincipalFromContext(request.Context())
+		}),
+	)
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: raw})
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+
+	if want := lastSeen.Add(idleTTL); !got.ExpiresAt.Equal(want) {
+		t.Fatalf("ExpiresAt = %v, want %v — a touch that failed must not be reported as written", got.ExpiresAt, want)
 	}
 }

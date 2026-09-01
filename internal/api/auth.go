@@ -147,11 +147,16 @@ func (server *Server) handleAuthCallback(response http.ResponseWriter, request *
 // Revoking the row rather than only clearing the cookie is what makes logout
 // real: a copy of the cookie taken beforehand stops working too.
 //
-// It redirects rather than returning the URL in a body: that URL carries the
-// raw ID token as id_token_hint, a body would be readable by any script on the
-// origin, and the middleware accepts that token as a bearer credential. A
-// Location header on a 303 is not script-readable, and http.Redirect writes no
-// body for a POST.
+// The URL it redirects to carries the raw ID token as id_token_hint, which is
+// how RP-initiated logout is specified and what stops Keycloak interrupting
+// with a confirmation page. That token is an identity assertion and nothing
+// more — the middleware authenticates against the session store alone, so a
+// copy read out of browser history or an access log opens nothing.
+//
+// It still redirects rather than returning the URL in a body, because a body
+// would be readable by any script on the origin and there is no reason to hand
+// the token to script. A Location header on a 303 is not script-readable, and
+// http.Redirect writes no body for a POST.
 func (server *Server) handleAuthLogout(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 
