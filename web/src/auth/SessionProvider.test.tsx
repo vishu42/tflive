@@ -14,9 +14,19 @@ const attemptsKey = "tflive.auth.loginAttempts";
 const getMe = vi.fn();
 const logout = vi.fn();
 
+// getMe is mocked below, so nothing here goes through the real fetch that
+// counts requests. This stands in for it: calling recordApiRequest() is how a
+// test says "this tab has talked to the API", which is what tells the re-auth
+// timer the session's idle bound may have moved.
+let apiRequests = 0;
+
+function recordApiRequest() {
+  apiRequests += 1;
+}
+
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
-  return { ...actual, getMe: () => getMe(), logout: () => logout() };
+  return { ...actual, getMe: () => getMe(), logout: () => logout(), apiRequestsMade: () => apiRequests };
 });
 
 function renderProvider(children: ReactNode) {
@@ -52,6 +62,7 @@ describe("SessionProvider", () => {
     vi.stubGlobal("location", { ...window.location, assign, pathname: "/stacks", search: "" });
     getMe.mockReset();
     logout.mockReset();
+    apiRequests = 0;
     sessionStorage.clear();
     clearLoginAttempts();
   });
@@ -83,10 +94,49 @@ describe("SessionProvider", () => {
     getMe.mockResolvedValue({ ...me, sessionExpiresAt: new Date(Date.now() + 120 * 1000).toISOString() });
     renderProvider(<div data-testid="child">ready</div>);
     await screen.findByTestId("child");
+    recordApiRequest();
 
     expect(assign).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(61 * 1000);
     expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
+  });
+
+  // Refetching /v1/me is itself an authenticated request, so a timer that
+  // refetched unconditionally would slide the very bound it was checking and
+  // renew an unattended tab forever, putting TFLIVE_SESSION_IDLE_TTL out of
+  // reach. A tab that has said nothing says nothing here either.
+  it("stays quiet at the re-auth moment when the tab has made no other request", async () => {
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: new Date(Date.now() + 61 * 1000).toISOString() });
+
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+
+    // Past the re-auth moment, and then past the expiry itself.
+    await vi.advanceTimersByTimeAsync(70 * 1000);
+
+    expect(getMe).toHaveBeenCalledTimes(1);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("takes the proactive path when a quiet tab becomes active inside the lead window", async () => {
+    const nearExpiry = new Date(Date.now() + 61 * 1000).toISOString();
+    const slidExpiry = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    getMe.mockResolvedValueOnce({ ...me, sessionExpiresAt: nearExpiry });
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: slidExpiry });
+
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+
+    // The re-auth moment passes with the tab quiet: no refetch.
+    await vi.advanceTimersByTimeAsync(2 * 1000);
+    expect(getMe).toHaveBeenCalledTimes(1);
+
+    // The user comes back and the app calls the API, which slides the bound.
+    // The next local check notices and picks the schedule back up.
+    recordApiRequest();
+    await vi.advanceTimersByTimeAsync(REAUTH_RETRY_MS);
+    expect(getMe).toHaveBeenCalledTimes(2);
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it("reschedules instead of navigating when a refetch shows the session slid forward", async () => {
@@ -101,6 +151,7 @@ describe("SessionProvider", () => {
 
     renderProvider(<div data-testid="child">ready</div>);
     await screen.findByTestId("child");
+    recordApiRequest();
 
     await vi.advanceTimersByTimeAsync(2 * 1000);
     expect(assign).not.toHaveBeenCalled();
@@ -125,6 +176,7 @@ describe("SessionProvider", () => {
 
     const { unmount } = renderProvider(<div data-testid="child">ready</div>);
     await screen.findByTestId("child");
+    recordApiRequest();
 
     // Reach the re-auth moment: attempt() calls refetch, which is the pending
     // promise above, so attempt is suspended on that await right now.
@@ -148,6 +200,7 @@ describe("SessionProvider", () => {
 
     renderProvider(<div data-testid="child">ready</div>);
     await screen.findByTestId("child");
+    recordApiRequest();
 
     await vi.advanceTimersByTimeAsync(2 * 1000);
     expect(getMe).toHaveBeenCalledTimes(2);
@@ -164,6 +217,7 @@ describe("SessionProvider", () => {
 
     renderProvider(<div data-testid="child">ready</div>);
     await screen.findByTestId("child");
+    recordApiRequest();
 
     // Reach the re-auth moment, then hold past the deferral limit.
     await vi.advanceTimersByTimeAsync(1000 + REAUTH_DEFER_LIMIT_MS + REAUTH_RETRY_MS);
@@ -181,6 +235,7 @@ describe("SessionProvider", () => {
 
     renderProvider(<div data-testid="child">ready</div>);
     await screen.findByTestId("child");
+    recordApiRequest();
 
     await vi.advanceTimersByTimeAsync(1000 + REAUTH_RETRY_MS * 2);
     expect(assign).not.toHaveBeenCalled();

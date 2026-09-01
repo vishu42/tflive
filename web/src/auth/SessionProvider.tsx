@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { useIsMutating } from "@tanstack/react-query";
-import { ApiRequestError, loginURL, logout as postLogout } from "../api/client";
+import { ApiRequestError, apiRequestsMade, loginURL, logout as postLogout } from "../api/client";
 import { AuthContext } from "./AuthContext";
 import { clearLoginAttempts, loginLoopDetected, recordLoginAttempt } from "./loginAttempts";
 import { useMeQuery } from "./useMeQuery";
@@ -91,8 +91,23 @@ export default function SessionProvider() {
   useEffect(() => {
     if (!me?.sessionExpiresAt) return;
 
-    const fireAt = new Date(me.sessionExpiresAt).getTime() - REAUTH_LEAD_MS;
+    const expiresAt = new Date(me.sessionExpiresAt).getTime();
+    const fireAt = expiresAt - REAUTH_LEAD_MS;
     if (Number.isNaN(fireAt)) return;
+
+    if (expiresAt <= Date.now()) {
+      // The snapshot handed to us is already past its bound, which means this
+      // tab was away — suspended, or holding a cached /v1/me across a long
+      // gap — long enough to miss the end of its own session. There is nothing
+      // left to schedule, so take the user to sign in rather than leave a dead
+      // page on screen.
+      login();
+      return;
+    }
+
+    // Requests made before this point are already reflected in the snapshot
+    // above; only ones after it can have moved the server's idle bound past it.
+    const quietSince = apiRequestsMade();
 
     let timer: ReturnType<typeof setTimeout>;
     let deferringSince: number | null = null;
@@ -105,6 +120,26 @@ export default function SessionProvider() {
     // resumption is a no-op once cleanup has run.
     let cancelled = false;
     const attempt = async () => {
+      // Asking /v1/me again is itself an authenticated request, so it slides
+      // the very bound it is asking about. Doing that unconditionally turns
+      // this timer into a keepalive: an unattended tab renews itself one lead
+      // period before each expiry, forever, and TFLIVE_SESSION_IDLE_TTL can
+      // never fire. A tab that has made no other request since the snapshot
+      // has nothing to learn by asking — the bound cannot have moved — so it
+      // stays quiet and lets the session end on the server's terms. Someone
+      // typing into a form without saving counts as quiet here, because that
+      // is exactly what the server's idle bound means by it.
+      if (apiRequestsMade() === quietSince) {
+        // Keep watching, locally, until the snapshot's own expiry: a user who
+        // comes back inside the lead window does move the bound, and should
+        // get the proactive path rather than a 401 on their next click. Past
+        // expiry the session is over and the 401 path takes it from there.
+        if (Date.now() < expiresAt) {
+          timer = setTimeout(attempt, REAUTH_RETRY_MS);
+        }
+        return;
+      }
+
       const busy = pendingMutationsRef.current > 0 || document.querySelector("[data-unsaved='true']");
       if (busy) {
         deferringSince ??= Date.now();
@@ -113,12 +148,17 @@ export default function SessionProvider() {
           return;
         }
       }
+      // Past the deferral gate either way, so this episode of deferring is
+      // over. Leaving the timestamp set would let the next episode inherit an
+      // already-spent grace period and skip the wait that protects unsaved
+      // work.
+      deferringSince = null;
       // The snapshot that armed this timer can be stale: the server slides
-      // the idle bound on every authenticated request, including this one, so
-      // sessionExpiresAt from the last render may already be well behind the
-      // server's own bound. Refetch and trust that instead of navigating an
-      // active user (and the browser's one round trip to the IdP) away from a
-      // session that has not actually ended.
+      // the idle bound on every authenticated request, and this tab has made
+      // some since, so sessionExpiresAt from the last render may already be
+      // well behind the server's own bound. Refetch and trust that instead of
+      // navigating an active user (and the browser's one round trip to the
+      // IdP) away from a session that has not actually ended.
       const { data: refreshed } = await refetchMe();
       if (cancelled) return;
       const nextFireAt = refreshed?.sessionExpiresAt

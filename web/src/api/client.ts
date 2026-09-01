@@ -233,6 +233,18 @@ export function loginURL(): string {
   return `/v1/auth/login?return_to=${encodeURIComponent(returnTo)}`;
 }
 
+// Every request this module makes carries the session cookie, and the server
+// slides the session's idle bound on any request that arrives more than a touch
+// interval after the last one. SessionProvider counts them so it can tell "the
+// bound may have moved since our last snapshot" from "this tab has said
+// nothing at all", which is what keeps its expiry timer from renewing an
+// unattended tab forever.
+let requestsMade = 0;
+
+export function apiRequestsMade(): number {
+  return requestsMade;
+}
+
 async function fetchWithAuth(path: string, init: RequestInit): Promise<Response> {
   const headers = new Headers(init.headers);
   if (!headers.has("content-type")) {
@@ -242,6 +254,9 @@ async function fetchWithAuth(path: string, init: RequestInit): Promise<Response>
   // The session cookie is httpOnly: the browser attaches it and this code
   // cannot read it. There is no bearer header and nothing to renew.
   const response = await fetch(path, { method: "GET", ...init, headers, credentials: "same-origin" });
+  // Counted once the server has answered, so the count only ever covers
+  // requests that actually reached it and could have slid the bound.
+  requestsMade += 1;
 
   if (response.status === 401 && !loginLoopDetected()) {
     // A full navigation, never fetch: following the redirect to the IdP as an

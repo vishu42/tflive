@@ -322,6 +322,12 @@ Two independent bounds decide whether a session is live (`Session.IsLive`):
 The session's effective expiry is the earlier of the two (`Session.ExpiresAt`),
 which is what `/v1/me` reports as `sessionExpiresAt` so the SPA can
 re-authenticate proactively rather than being surprised by a `401` mid-action.
+That proactive path is deliberately one-sided: asking `/v1/me` again is itself
+a request and would slide the very bound it is checking, so the SPA only
+re-checks when it has made some *other* request since the snapshot. A tab
+nobody is using makes none, so it makes no noise at its expiry either and the
+idle bound is reached — the alternative is a browser that renews itself once an
+hour forever and an idle bound that can never fire.
 `TFLIVE_SESSION_IDLE_TTL` must not exceed `TFLIVE_SESSION_ABSOLUTE_TTL` — the
 API refuses to start otherwise, since an unreachable idle bound is a
 configuration mistake, not a permissive setting. Revocation (`RevokedAt`) is
