@@ -5,16 +5,6 @@ import (
 	"fmt"
 )
 
-const (
-	directoryReaderClientID = "tflive-directory-reader"
-)
-
-var directoryReaderRealmManagementRoles = []string{
-	"query-users",
-	"view-users",
-	"view-realm",
-}
-
 var platformRealmManagementRoles = []string{
 	"manage-users",
 	"query-users",
@@ -73,11 +63,9 @@ type ResourceRef struct {
 // Result contains only non-sensitive identifiers suitable for operational
 // logs after a successful provisioning run.
 type Result struct {
-	Realm                       string
-	APIClientID                 string
-	PlatformAdminUsername       string
-	DirectoryReaderClientID     string
-	DirectoryReaderClientSecret string
+	Realm                 string
+	APIClientID           string
+	PlatformAdminUsername string
 }
 
 type provisionBackend interface {
@@ -88,7 +76,6 @@ type provisionBackend interface {
 	EnsureUser(context.Context, string, UserSpec) (ResourceRef, error)
 	ClientRole(context.Context, string, ResourceRef, string) (ResourceRef, error)
 	EnsureClientRoleMapping(context.Context, string, ResourceRef, ResourceRef, []ResourceRef) error
-	EnsureClientScopeMapping(context.Context, string, ResourceRef, ResourceRef, []ResourceRef) error
 }
 
 func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBackend) (Result, error) {
@@ -182,53 +169,16 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 		return Result{}, fmt.Errorf("assign least-privilege realm administration roles: %w", err)
 	}
 
-	directoryReaderClient, err := backend.EnsureClient(ctx, cfg.Realm, ClientSpec{
-		ClientID:                     directoryReaderClientID,
-		Name:                         "tflive directory reader",
-		Secret:                       cfg.DirectoryReaderClientSecret,
-		Enabled:                      true,
-		Protocol:                     "openid-connect",
-		BearerOnly:                   false,
-		PublicClient:                 false,
-		StandardFlowEnabled:          false,
-		ImplicitFlowEnabled:          false,
-		DirectAccessGrantsEnabled:    false,
-		ServiceAccountsEnabled:       true,
-		AuthorizationServicesEnabled: false,
-		FullScopeAllowed:             false,
-		Attributes:                   disabledGrantAttributes(),
-	})
-	if err != nil {
-		return Result{}, fmt.Errorf("ensure directory reader client %s: %w", directoryReaderClientID, err)
-	}
-	directoryReaderSA, err := backend.EnsureUser(ctx, cfg.Realm, UserSpec{
-		Username: "service-account-" + directoryReaderClientID,
-		Enabled:  true,
-	})
-	if err != nil {
-		return Result{}, fmt.Errorf("ensure directory reader service account: %w", err)
-	}
-	directoryReaderRoles := make([]ResourceRef, 0, len(directoryReaderRealmManagementRoles))
-	for _, roleName := range directoryReaderRealmManagementRoles {
-		role, err := backend.ClientRole(ctx, cfg.Realm, realmManagement, roleName)
-		if err != nil {
-			return Result{}, fmt.Errorf("lookup realm-management role %s for directory reader: %w", roleName, err)
-		}
-		directoryReaderRoles = append(directoryReaderRoles, role)
-	}
-	if err := backend.EnsureClientRoleMapping(ctx, cfg.Realm, directoryReaderSA, realmManagement, directoryReaderRoles); err != nil {
-		return Result{}, fmt.Errorf("assign directory reader realm-management roles: %w", err)
-	}
-	if err := backend.EnsureClientScopeMapping(ctx, cfg.Realm, directoryReaderClient, realmManagement, directoryReaderRoles); err != nil {
-		return Result{}, fmt.Errorf("assign directory reader client scope roles: %w", err)
-	}
+	// No directory reader service account. Grant display names and the user
+	// search box read a local projection of what each ID token asserted at
+	// sign-in, so nothing here needs query-users or view-users on the realm --
+	// which is exactly the elevated permission a customer's security team
+	// would have had to approve on their own IdP.
 
 	return Result{
-		Realm:                       cfg.Realm,
-		APIClientID:                 cfg.APIClientID,
-		PlatformAdminUsername:       cfg.PlatformAdminUsername,
-		DirectoryReaderClientID:     directoryReaderClientID,
-		DirectoryReaderClientSecret: cfg.DirectoryReaderClientSecret,
+		Realm:                 cfg.Realm,
+		APIClientID:           cfg.APIClientID,
+		PlatformAdminUsername: cfg.PlatformAdminUsername,
 	}, nil
 }
 

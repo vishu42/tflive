@@ -1,5 +1,13 @@
 # AUTH-016: Keycloak User-Directory Reader Implementation Plan
 
+> **Superseded by #155 (identity projection).** The Keycloak user-directory
+> reader described here has been removed: `internal/keycloak/directory.go`, the
+> `app.UserDirectory` port, and the `tflive-directory-reader` service account
+> are all gone. Grant display names and user search now read a local `users`
+> table projected from each ID token at sign-in — see the "Identity Projection"
+> section of `docs/authentication.md`. Kept as a record of the design that was
+> replaced and why.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a least-privilege Keycloak user-directory reader that uses a dedicated service credential to search realm users, returning only safe display attributes for access management.

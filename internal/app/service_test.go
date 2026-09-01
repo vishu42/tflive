@@ -2710,7 +2710,8 @@ func TestAssignStackRoleEnqueuesDesiredRoleWithoutCallingOpenFGA(t *testing.T) {
 
 	authorizer := &recordingAuthorizer{tiers: testPlatformAuthorizer()}
 	work := newRecordingWork(nil)
-	service := NewService(Service{Work: work, Authorizer: authorizer, Clock: fixedClock{now: time.Now()}})
+	users := &fakeUserRepository{users: []UserProfile{{Sub: "user_456", DisplayName: "Casey Jones", Email: "casey@example.com"}}}
+	service := NewService(Service{Work: work, Authorizer: authorizer, Users: users, Clock: fixedClock{now: time.Now()}})
 
 	view, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
 		TenantID: traits.TenantID("tenant_123"),
@@ -2763,7 +2764,8 @@ func TestAssignStackRoleEnqueuesMatchingRole(t *testing.T) {
 
 	authorizer := &recordingAuthorizer{grants: []authz.Grant{existing}, tiers: testPlatformAuthorizer()}
 	work := newRecordingWork(nil)
-	service := NewService(Service{Work: work, Authorizer: authorizer, Clock: fixedClock{now: time.Now()}})
+	users := &fakeUserRepository{users: []UserProfile{{Sub: "user_456", DisplayName: "Casey Jones", Email: "casey@example.com"}}}
+	service := NewService(Service{Work: work, Authorizer: authorizer, Users: users, Clock: fixedClock{now: time.Now()}})
 
 	if _, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
 		TenantID: traits.TenantID("tenant_123"),
@@ -2804,7 +2806,8 @@ func TestRevokeStackRoleEnqueuesEmptyRole(t *testing.T) {
 
 	authorizer := &recordingAuthorizer{grants: []authz.Grant{existing}, tiers: testPlatformAuthorizer()}
 	work := newRecordingWork(nil)
-	service := NewService(Service{Work: work, Authorizer: authorizer, Clock: fixedClock{now: time.Now()}})
+	users := &fakeUserRepository{users: []UserProfile{{Sub: "user_456", DisplayName: "Casey Jones", Email: "casey@example.com"}}}
+	service := NewService(Service{Work: work, Authorizer: authorizer, Users: users, Clock: fixedClock{now: time.Now()}})
 
 	if err := service.RevokeStackRole(adminContext(), RevokeStackRoleCommand{
 		TenantID: traits.TenantID("tenant_123"),

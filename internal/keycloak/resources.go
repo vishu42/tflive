@@ -215,18 +215,6 @@ func (c *Client) EnsureClientRoleMapping(ctx context.Context, realm string, user
 	)
 }
 
-func (c *Client) EnsureClientScopeMapping(ctx context.Context, realm string, client, roleClient ResourceRef, roles []ResourceRef) error {
-	return c.doJSON(
-		ctx,
-		http.MethodPost,
-		[]string{"admin", "realms", realm, "clients", client.ID, "scope-mappings", "clients", roleClient.ID},
-		nil,
-		rolePayload(roles),
-		[]int{http.StatusNoContent},
-		nil,
-	)
-}
-
 func applyRealmSpec(resource map[string]any, spec RealmSpec) map[string]any {
 	resource["realm"] = spec.Name
 	resource["enabled"] = spec.Enabled

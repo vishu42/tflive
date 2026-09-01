@@ -2,7 +2,6 @@ import { loginLoopDetected, recordLoginAttempt } from "../auth/loginAttempts";
 import type { Me } from "../auth/types";
 import type {
   ApiErrorBody,
-  DirectoryUser,
   CredentialMetadata,
   GrantView,
   ListGrantsResponse,

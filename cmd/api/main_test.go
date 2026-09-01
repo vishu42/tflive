@@ -242,8 +242,6 @@ func TestRunGatesSecureCookiesOnRuntimeMode(t *testing.T) {
 				values["TFLIVE_PUBLIC_URL"] = "https://app.example.com"
 				values["OPENFGA_API_URL"] = "https://openfga.example.com"
 				values["OPENFGA_API_TOKEN"] = "openfga-token"
-				values["KEYCLOAK_DIRECTORY_READER_CLIENT_ID"] = "directory-reader"
-				values["KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET"] = "directory-reader-secret"
 			}
 
 			deps := newRecordingAPIDependencies(t)
@@ -688,6 +686,19 @@ func (recordingStore) GetTemplateRevisionVariables(context.Context, traits.Tenan
 
 func (recordingStore) AppendAuditEvent(context.Context, traits.SecurityAuditEvent) error {
 	return nil
+}
+
+// app.UserRepository, the identity projection the OIDC callback writes through.
+func (recordingStore) UpsertUser(context.Context, app.UserProfile, time.Time) error {
+	return nil
+}
+
+func (recordingStore) SearchUsers(context.Context, string, int, int) ([]app.UserProfile, error) {
+	return nil, nil
+}
+
+func (recordingStore) UsersBySubs(context.Context, []string) (map[string]app.UserProfile, error) {
+	return nil, nil
 }
 
 // authn.SessionStore, wired so sessionStore's type assertion in main.go

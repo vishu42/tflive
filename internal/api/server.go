@@ -82,8 +82,17 @@ func WithAuth(cfg AuthConfig) ServerOption {
 // turns a missing dependency into a deterministic startup panic instead of a
 // nil-pointer panic (or, for the TTLs, a session that is born already
 // expired) on the first real request.
-func requireCompleteAuthWiring(auth AuthConfig) {
+//
+// The service is checked alongside the AuthConfig because the callback
+// projects the signed-in user through it, so it is now as load-bearing for
+// the login routes as the session store is — including its user repository,
+// which the callback writes the projection through on every sign-in.
+func requireCompleteAuthWiring(service *app.Service, auth AuthConfig) {
 	switch {
+	case service == nil:
+		panic("api: WithAuth configured without a Service")
+	case service.Users == nil:
+		panic("api: WithAuth configured without a Service user repository")
 	case auth.Verifier == nil:
 		panic("api: WithAuth configured without a Verifier")
 	case auth.Sealer == nil:
@@ -110,7 +119,7 @@ func NewServer(service *app.Service, tenantID traits.TenantID, options ...Server
 	// Browser login routes. Registered only when auth is configured, so an
 	// unauthenticated test server does not expose a half-wired flow.
 	if server.auth.Flow != nil {
-		requireCompleteAuthWiring(server.auth)
+		requireCompleteAuthWiring(server.service, server.auth)
 		server.mux.HandleFunc("GET /v1/auth/login", server.handleAuthLogin)
 		server.mux.HandleFunc("GET /v1/auth/callback", server.handleAuthCallback)
 		server.mux.HandleFunc("POST /v1/auth/logout", server.handleAuthLogout)
@@ -337,9 +346,9 @@ func (server *Server) handleSearchUsers(response http.ResponseWriter, request *h
 }
 
 type searchUsersResponse struct {
-	Users []app.DirectoryUser `json:"users"`
-	First int                 `json:"first"`
-	Max   int                 `json:"max"`
+	Users []app.UserProfile `json:"users"`
+	First int               `json:"first"`
+	Max   int               `json:"max"`
 }
 
 func (server *Server) handleRegisterTemplate(response http.ResponseWriter, request *http.Request) {
@@ -1035,8 +1044,11 @@ func writeAppError(response http.ResponseWriter, err error) {
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, app.ErrNotFound):
 		writeError(response, http.StatusNotFound, "not_found", err.Error())
-	case errors.Is(err, app.ErrDirectoryUnavailable):
-		writeError(response, http.StatusServiceUnavailable, "directory_unavailable", "directory unavailable")
+	// Its own code because it is not a malformed request: the caller named a
+	// real person tflive has simply never seen sign in.
+	case errors.Is(err, app.ErrUserNotProvisioned):
+		writeError(response, http.StatusBadRequest, "unknown_user",
+			"that user has not signed in to tflive yet - they need to sign in once before a role can be granted")
 	// Its own code, because the client can act on this one: re-plan, then apply.
 	case errors.Is(err, app.ErrStackTemplatePlanStale):
 		writeError(response, http.StatusConflict, "plan_stale", err.Error())

@@ -19,6 +19,15 @@ type Principal struct {
 	ExpiresAt         time.Time
 }
 
+// DisplayName applies the same fallback as VerifiedToken.DisplayName, over the
+// claims copied onto the session row at sign-in. Both exist because the same
+// person is labelled in two places — the app header from this, a grants list
+// from the projection — and a provider that omits `name` should not make one of
+// them blank while the other reads correctly.
+func (principal Principal) DisplayName() string {
+	return firstNonEmpty(principal.Name, principal.PreferredUsername, principal.Email, principal.Subject)
+}
+
 type principalContextKey struct{}
 
 func ContextWithPrincipal(ctx context.Context, principal Principal) context.Context {

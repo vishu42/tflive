@@ -135,8 +135,8 @@ func TestPlatformCapabilitiesComeFromOpenFGANotRealmRoles(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		UserDirectory: &fakeUserDirectory{users: []DirectoryUser{}},
-		Authorizer:    newPlatformAuthorizer(platformAdmin("granted-subject")),
+		Users:      &fakeUserRepository{users: []UserProfile{}},
+		Authorizer: newPlatformAuthorizer(platformAdmin("granted-subject")),
 	})
 	command := SearchUsersCommand{TenantID: traits.TenantID("tenant_1"), Query: "a", Max: 20}
 

@@ -49,11 +49,9 @@ const twoGrants: ListGrantsResponse = {
 const searchResults: SearchUsersResponse = {
   users: [
     {
-      id: "u3",
-      username: "charlie",
-      email: "charlie@example.com",
-      firstName: "Charlie",
-      lastName: "Brown"
+      sub: "u3",
+      displayName: "Charlie Brown",
+      email: "charlie@example.com"
     }
   ],
   first: 0,

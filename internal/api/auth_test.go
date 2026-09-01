@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/secrets"
 )
@@ -204,7 +206,41 @@ func newAuthTestServer(t *testing.T, flow *stubFlow, verifier authn.Verifier, op
 	for _, option := range options {
 		option(&cfg)
 	}
-	return NewServer(nil, "tenant_123", WithAuth(cfg))
+	// The callback projects the signed-in user through the service, so a real
+	// one is wired here even for the tests that only assert on cookies.
+	service := app.NewService(app.Service{Users: &apiFakeUserRepository{}})
+	return NewServer(service, "tenant_123", WithAuth(cfg))
+}
+
+// newAuthTestServerWithUsers is newAuthTestServer for the tests that assert on
+// the identity projection itself, and so need a handle on the repository the
+// callback writes through.
+func newAuthTestServerWithUsers(
+	t *testing.T,
+	flow *stubFlow,
+	verifier authn.Verifier,
+	users app.UserRepository,
+	options ...authTestOption,
+) *Server {
+	t.Helper()
+	sealer, err := secrets.NewCipher("01234567890123456789012345678901")
+	if err != nil {
+		t.Fatalf("NewCipher returned error: %v", err)
+	}
+	cfg := AuthConfig{
+		Flow:               flow,
+		Verifier:           verifier,
+		Sealer:             sealer,
+		PublicURL:          "http://localhost:5173",
+		SecureCookies:      false,
+		Sessions:           newFakeSessionStore(),
+		SessionAbsoluteTTL: authn.DefaultSessionAbsoluteTTL,
+		SessionIdleTTL:     authn.DefaultSessionIdleTTL,
+	}
+	for _, option := range options {
+		option(&cfg)
+	}
+	return NewServer(app.NewService(app.Service{Users: users}), "tenant_123", WithAuth(cfg))
 }
 
 // runCallback seals a transaction under a known state and the given nonce,
@@ -614,7 +650,7 @@ func TestAuthRoutesArePublic(t *testing.T) {
 	// cannot obtain one from behind an authentication gate.
 	flow := &stubFlow{authorizationURL: "https://idp.test/authorize"}
 	sealer, _ := secrets.NewCipher("01234567890123456789012345678901")
-	server := NewAuthenticatedServer(nil, "tenant_123", false,
+	server := NewAuthenticatedServer(app.NewService(app.Service{Users: &apiFakeUserRepository{}}), "tenant_123", false,
 		WithAuth(AuthConfig{
 			Flow:               flow,
 			Verifier:           stubVerifier{},
@@ -647,4 +683,100 @@ func TestAuthRoutesArePublic(t *testing.T) {
 	if backchannelResponse.Code == http.StatusUnauthorized {
 		t.Fatalf("status = %d, want anything but 401 — /v1/auth/backchannel-logout must stay public even with no bearer token or cookie", backchannelResponse.Code)
 	}
+}
+
+// The callback is the only place an identity is verified, so it is the only
+// place the projection can be written. Without this, a user could sign in and
+// still be invisible to the grants UI.
+func TestAuthCallbackProjectsSignedInUser(t *testing.T) {
+	users := &apiFakeUserRepository{}
+	flow := &stubFlow{idToken: "raw.id.token"}
+	verifier := stubVerifier{token: authn.VerifiedToken{
+		Subject:           "user-123",
+		Name:              "Ada Lovelace",
+		PreferredUsername: "ada",
+		Email:             "ada@example.com",
+		Nonce:             "nonce-1",
+	}}
+	server := newAuthTestServerWithUsers(t, flow, verifier, users)
+
+	if response := runCallback(t, server, "nonce-1"); response.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302; body = %s", response.Code, response.Body.String())
+	}
+
+	if len(users.users) != 1 {
+		t.Fatalf("projected %d users, want 1", len(users.users))
+	}
+	projected := users.users[0]
+	if projected.Sub != "user-123" || projected.DisplayName != "Ada Lovelace" || projected.Email != "ada@example.com" {
+		t.Fatalf("projected = %#v", projected)
+	}
+}
+
+// A provider is not obliged to send `name`. The projection must still label the
+// person with something, or the grants list shows a blank row.
+func TestAuthCallbackProjectsFallbackDisplayName(t *testing.T) {
+	users := &apiFakeUserRepository{}
+	flow := &stubFlow{idToken: "raw.id.token"}
+	verifier := stubVerifier{token: authn.VerifiedToken{
+		Subject: "user-123",
+		Email:   "ada@example.com",
+		Nonce:   "nonce-1",
+	}}
+	server := newAuthTestServerWithUsers(t, flow, verifier, users)
+
+	if response := runCallback(t, server, "nonce-1"); response.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302; body = %s", response.Code, response.Body.String())
+	}
+	if len(users.users) != 1 || users.users[0].DisplayName != "ada@example.com" {
+		t.Fatalf("projected = %#v, want the email as display name", users.users)
+	}
+}
+
+// Failing the sign-in is deliberate: continuing would sign someone in who is
+// then ungrantable and invisible to search, with nothing saying why.
+func TestAuthCallbackFailsWhenProjectionWriteFails(t *testing.T) {
+	sessions := newFakeSessionStore()
+	flow := &stubFlow{idToken: "raw.id.token"}
+	verifier := stubVerifier{token: authn.VerifiedToken{Subject: "user-123", Nonce: "nonce-1"}}
+	users := &apiFakeUserRepository{upsertErr: errors.New("database is down")}
+	server := newAuthTestServerWithUsers(t, flow, verifier, users, withSessions(sessions))
+
+	response := runCallback(t, server, "nonce-1")
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body = %s", response.Code, response.Body.String())
+	}
+	// The projection is written first precisely so this holds: no session row
+	// can exist for a subject that was never projected.
+	if count := len(sessions.created); count != 0 {
+		t.Fatalf("created %d sessions, want 0 — the session must not outlive a failed projection", count)
+	}
+}
+
+// The callback writes the identity projection on every sign-in, so a Service
+// without a user repository is as half-wired as an AuthConfig without a
+// session store. The wiring check exists to say so once at boot rather than
+// nil-panic on the first login.
+func TestNewServerPanicsWithoutAUserRepository(t *testing.T) {
+	sealer, err := secrets.NewCipher("01234567890123456789012345678901")
+	if err != nil {
+		t.Fatalf("NewCipher returned error: %v", err)
+	}
+	cfg := AuthConfig{
+		Flow:               &stubFlow{authorizationURL: "https://idp.test/authorize"},
+		Verifier:           stubVerifier{},
+		Sealer:             sealer,
+		PublicURL:          "http://localhost:5173",
+		Sessions:           newFakeSessionStore(),
+		SessionAbsoluteTTL: authn.DefaultSessionAbsoluteTTL,
+		SessionIdleTTL:     authn.DefaultSessionIdleTTL,
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewServer did not panic on a Service without a user repository")
+		}
+	}()
+	NewServer(app.NewService(app.Service{}), "tenant_123", WithAuth(cfg))
 }

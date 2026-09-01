@@ -243,7 +243,7 @@ type Service struct {
 	RegistrationIDs          TemplateRegistrationIDGenerator
 	Clock                    Clock
 	Audit                    AuditRepository
-	UserDirectory            UserDirectory
+	Users                    UserRepository
 }
 
 // CredentialSetIDGenerator creates credential identifiers.
@@ -415,7 +415,7 @@ type GetStackCommand struct {
 	StackID  traits.StackID
 }
 
-// SearchUsersCommand asks the app to search realm users via the directory.
+// SearchUsersCommand asks the app to search the local identity projection.
 type SearchUsersCommand struct {
 	TenantID traits.TenantID
 	Query    string
@@ -1175,8 +1175,25 @@ func (service *Service) PlatformCapabilities(ctx context.Context) (PlatformCapab
 	return ResolvePlatformCapabilities(ctx, service.Authorizer)
 }
 
-// SearchUsers queries the user directory for realm users matching the given criteria.
-func (service *Service) SearchUsers(ctx context.Context, command SearchUsersCommand) ([]DirectoryUser, error) {
+// RecordSignIn projects the identity a just-verified token asserted.
+//
+// It runs no authorization check, by design: the caller is the OIDC callback,
+// which invokes this at the instant authentication succeeded and before any
+// principal is in the context. There is nothing to authorize — the token is the
+// authority for what it says about its own subject, and this writes nothing
+// else.
+func (service *Service) RecordSignIn(ctx context.Context, profile UserProfile) error {
+	if profile.Sub == "" {
+		return fmt.Errorf("%w: subject is required", ErrInvalidCommand)
+	}
+	if err := service.requireUserRepository(); err != nil {
+		return err
+	}
+	return service.Users.UpsertUser(ctx, profile, service.Clock.Now())
+}
+
+// SearchUsers matches projected users against the given criteria.
+func (service *Service) SearchUsers(ctx context.Context, command SearchUsersCommand) ([]UserProfile, error) {
 	principal, ok := authn.PrincipalFromContext(ctx)
 	if !ok || principal.Subject == "" {
 		return nil, ErrUnauthenticated
@@ -1187,15 +1204,15 @@ func (service *Service) SearchUsers(ctx context.Context, command SearchUsersComm
 	if err := validateSearchUsersCommand(command); err != nil {
 		return nil, err
 	}
-	if service.UserDirectory == nil {
-		return nil, ErrDirectoryUnavailable
+	if err := service.requireUserRepository(); err != nil {
+		return nil, err
 	}
-	users, err := service.UserDirectory.SearchUsers(ctx, command.Query, command.First, command.Max)
+	users, err := service.Users.SearchUsers(ctx, command.Query, command.First, command.Max)
 	if err != nil {
 		return nil, err
 	}
 	if users == nil {
-		return []DirectoryUser{}, nil
+		return []UserProfile{}, nil
 	}
 	return users, nil
 }
@@ -1242,6 +1259,9 @@ func (service *Service) ListStackGrants(ctx context.Context, command ListStackGr
 	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
 		return ListStackGrantsResult{}, err
 	}
+	if err := service.requireUserRepository(); err != nil {
+		return ListStackGrantsResult{}, err
+	}
 	object, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
 	if err != nil {
 		return ListStackGrantsResult{}, fmt.Errorf("list grants stack: %w", err)
@@ -1251,19 +1271,30 @@ func (service *Service) ListStackGrants(ctx context.Context, command ListStackGr
 		return ListStackGrantsResult{}, err
 	}
 
+	// One lookup for every grant on the stack, rather than one per grant. This
+	// read used to be an N+1 of Keycloak admin API calls, which put the
+	// customer's IdP on the critical path for rendering a list.
+	subs := make([]string, 0, len(result.Grants))
+	for _, grant := range result.Grants {
+		subs = append(subs, grant.Subject().ID())
+	}
+	profiles, err := service.Users.UsersBySubs(ctx, subs)
+	if err != nil {
+		return ListStackGrantsResult{}, err
+	}
+
 	grants := make([]GrantView, 0, len(result.Grants))
 	for _, grant := range result.Grants {
 		userSub := grant.Subject().ID()
-		role := grant.Relation().String()
-		gv := GrantView{UserSub: userSub, Role: role}
+		gv := GrantView{UserSub: userSub, Role: grant.Relation().String()}
 
-		if service.UserDirectory != nil {
-			user, getErr := service.UserDirectory.GetUser(ctx, userSub)
-			if getErr == nil && user != nil {
-				gv.DisplayName = displayNameFromUser(*user)
-				gv.Email = user.Email
-			}
+		if profile, ok := profiles[userSub]; ok {
+			gv.DisplayName = profile.DisplayName
+			gv.Email = profile.Email
 		}
+		// A tuple can name a subject with no projected row — someone deleted
+		// from the IdP, or a tuple written out of band — and a grants list has
+		// to render either way. The sub is a poor label but an accurate one.
 		if gv.DisplayName == "" {
 			gv.DisplayName = userSub
 		}
@@ -1271,13 +1302,6 @@ func (service *Service) ListStackGrants(ctx context.Context, command ListStackGr
 	}
 
 	return ListStackGrantsResult{Grants: grants}, nil
-}
-
-func displayNameFromUser(user DirectoryUser) string {
-	if user.FirstName != "" || user.LastName != "" {
-		return strings.TrimSpace(user.FirstName + " " + user.LastName)
-	}
-	return user.Username
 }
 
 // listGrantsForStack reads every direct role assignment on one stack. The
@@ -1310,12 +1334,22 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 	if service.Work == nil {
 		return GrantView{}, fmt.Errorf("%w: unit of work not configured", authz.ErrUnavailable)
 	}
+	if err := service.requireUserRepository(); err != nil {
+		return GrantView{}, err
+	}
 
-	if service.UserDirectory != nil {
-		user, getErr := service.UserDirectory.GetUser(ctx, command.UserSub)
-		if getErr != nil || user == nil {
-			return GrantView{}, fmt.Errorf("%w: target user not found in directory", ErrInvalidCommand)
-		}
+	// The projection is the only place tflive knows a person exists, so this
+	// check is where the accepted limitation is actually enforced: a subject
+	// that has never signed in cannot be granted a role. It is unconditional —
+	// previously it was skipped whenever no directory was configured, which
+	// made "can this user be granted?" depend on deployment wiring.
+	profiles, err := service.Users.UsersBySubs(ctx, []string{command.UserSub})
+	if err != nil {
+		return GrantView{}, err
+	}
+	target, known := profiles[command.UserSub]
+	if !known {
+		return GrantView{}, ErrUserNotProvisioned
 	}
 
 	object, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
@@ -1387,7 +1421,23 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 		return GrantView{}, fmt.Errorf("assign stack role: %w", err)
 	}
 
-	return GrantView{UserSub: command.UserSub, Role: command.Role}, nil
+	// The display fields come from the lookup already done above, so the
+	// caller can render the new row without re-reading the grants list.
+	return GrantView{
+		UserSub:     command.UserSub,
+		Role:        command.Role,
+		DisplayName: firstNonEmptyString(target.DisplayName, command.UserSub),
+		Email:       target.Email,
+	}, nil
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStackRoleCommand) error {

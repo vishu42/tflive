@@ -41,7 +41,7 @@ func MeFromPrincipal(principal authn.Principal, tenantID traits.TenantID, capabi
 
 	return MeResponse{
 		Sub:                principal.Subject,
-		DisplayName:        principal.Name,
+		DisplayName:        principal.DisplayName(),
 		Email:              principal.Email,
 		GlobalCapabilities: capabilities,
 		TenantID:           string(tenantID),
