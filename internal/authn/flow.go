@@ -116,6 +116,10 @@ func (f *Flow) Exchange(ctx context.Context, code, codeVerifier string) (string,
 // EndSessionURL builds the RP-initiated logout URL, or returns empty when the
 // provider does not advertise one. Without it, logging out and back in
 // silently returns the same user, because the IdP's own session still stands.
+//
+// idTokenHint is the whole ID token, not a reference to one. Without it the OP
+// cannot tell the request came from us rather than from anything else able to
+// navigate the browser, so Keycloak stops to ask the user to confirm.
 func (f *Flow) EndSessionURL(idTokenHint, postLogoutRedirectURI string) string {
 	endpoint := f.cfg.Endpoints.Endpoints().EndSession
 	if endpoint == "" {
