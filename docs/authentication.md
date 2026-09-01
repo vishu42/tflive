@@ -193,29 +193,45 @@ AUTH-007 middleware owns HTTP status mapping and credential parsing.
 
 ## API Request Authentication
 
-Every `/v1` route accepts a credential two ways: an `Authorization: Bearer
-<id-token>` header, or the `tflive_session` cookie the browser was handed at
-login. The middleware tries the header first and falls back to the cookie —
-never the reverse — so a CLI or service-to-service caller presenting its own
-token on a request that happens to also carry a browser cookie is never
-silently overridden by that stale cookie. Both paths converge on the same
-`authn.Principal`, but they no longer share one verification step: the Bearer
-path still calls `Verifier.Verify` against the IdP's live signing keys, exactly
-as before, while the cookie path looks up the session row by the cookie's
-SHA-256 hash and checks `Session.IsLive` against tflive's own bounds — see
-"Browser Session" below. The IdP is not consulted on the cookie path at all.
+The `tflive_session` cookie is the only credential `/v1` accepts. The
+middleware hashes it, looks up the session row, and checks `Session.IsLive`
+against tflive's own bounds — see "Browser Session" below. The IdP is not
+consulted on this path at all; the ID token behind the session was verified
+once, at the callback, and its claims copied onto the row there.
 
-`/healthz` and the four `/v1/auth/*` routes below remain public. Missing,
-malformed, invalid, or temporarily unverifiable credentials receive `401`
-with the stable JSON body `{"code":"unauthorized"}`; tokens, claims, and
-verifier details are never written to logs or responses.
+An `Authorization` header authenticates nothing. tflive previously accepted an
+`Authorization: Bearer <id-token>` header for "a CLI or service-to-service
+caller," and that was removed because:
 
-After verification, the request context contains an `authn.Principal` with
+- **Nothing used it.** There is no CLI in this repository; the worker reaches
+  Postgres, Temporal, and OpenFGA directly and never calls the API; and the web
+  client sends no `Authorization` header — it relies on the cookie.
+- **A CLI could not have used it.** The flow is server-side, so no endpoint
+  hands a token to a caller, and the token lives 300 seconds with no refresh
+  token stored. A CLI would have had to re-run the whole browser flow every
+  five minutes.
+- **It made the ID token a key.** RP-initiated logout necessarily puts that
+  token in a URL, where it reaches browser history and every access log in
+  between. While the Bearer path existed, a copy read out of one of those
+  worked against every `/v1` route.
+- **A signed token cannot be revoked.** Logout, back-channel logout, and an
+  admin disabling an account all mark a session row. None of them can reach a
+  JWT somebody already holds.
+
+A non-browser caller therefore wants a credential tflive issues and can revoke
+— personal access tokens, the device authorization flow, or service accounts —
+not a re-used ID token. None of those exist yet.
+
+`/healthz` and the four `/v1/auth/*` routes below remain public. A missing,
+unknown, expired, or revoked cookie receives `401` with the stable JSON body
+`{"code":"unauthorized"}`; tokens, claims, and verifier details are never
+written to logs or responses.
+
+After authentication, the request context contains an `authn.Principal` with
 the immutable subject and safe display claims — `Name`, `PreferredUsername`,
-`Email`, and `ExpiresAt` (the ID token's `exp` on the Bearer path, tflive's own
-idle/absolute bound on the cookie path). It carries no role claim: OpenFGA is
-the sole authorization source, so nothing from the token feeds an access
-decision. Handlers and application services obtain it with
+`Email`, and `ExpiresAt` (tflive's own idle/absolute bound). It carries no role
+claim: OpenFGA is the sole authorization source, so nothing from the token
+feeds an access decision. Handlers and application services obtain it with
 `authn.PrincipalFromContext` rather than parsing HTTP headers or tokens.
 
 ## Browser Session
@@ -229,6 +245,16 @@ authorization-code flow on its behalf, plus one more the IdP calls directly:
 | `GET /v1/auth/callback` | Redeems the code on the back channel, verifies the resulting ID token, creates a session row, and hands the browser the session cookie |
 | `POST /v1/auth/logout` | Revokes the session row, clears the session cookie, and redirects to the IdP's RP-initiated logout |
 | `POST /v1/auth/backchannel-logout` | Unauthenticated; ends sessions on the IdP's own instruction — see "Back-Channel Logout" below |
+
+`/v1/auth/login` takes a `return_to` query parameter, the one place the flow
+accepts untrusted input, and `authn.SafeReturnTo` reduces it to a same-origin
+path or `/`. Absolute, protocol-relative (`//host`, `/\host`),
+userinfo-bearing, control-character, and unnormalized paths are all refused. So
+is anything under `/v1`: no API path is a place for a browser to land, and one
+of them is a trap — `return_to=/v1/auth/login` would make the callback restart
+the login it has just finished, and with an SSO session standing the browser
+loops until it gives up. The SPA's own loop guard cannot catch that, because
+server-side redirects never load a page for it to count.
 
 Two cookies carry the interactive flow:
 
@@ -314,11 +340,23 @@ are a snapshot rather than live.
 The row also keeps the raw ID token, encrypted at rest, solely so
 `handleAuthLogout` can pass it to the IdP as `id_token_hint` during
 RP-initiated logout — without it, Keycloak shows a logout confirmation page
-instead of signing out silently. It is encrypted with
+instead of signing out silently. Despite that parameter's name it is the whole
+token, not a reference to one. It is encrypted with
 `SESSION_ENCRYPTION_KEY` — the same required key that seals the transaction
 cookie above, through a separate cipher instance
 (`encryptSession`/`decryptSession` in `internal/postgres/store.go`) so the two
 uses stay independently testable.
+
+Expired rows are swept out of the table, not left in it. Revoking marks a row
+rather than deleting it and expiry is a comparison made at read time, so
+nothing else would ever remove one — and every row holds an encrypted ID
+token. `authn.ReapSessions` runs as a goroutine alongside the API server
+(`cmd/api/main.go`) and every 15 minutes deletes rows whose absolute bound has
+passed, the query the `sessions_absolute_expires_at_idx` index exists for. It
+sweeps on the absolute bound alone: a row past it is dead whatever its idle
+bound says, and the absolute TTL is therefore the cap on how long any dead row
+can linger. Several API replicas sweeping at once is harmless — a `DELETE`
+over a closed range is idempotent — so there is no leader election.
 
 Rotating `SESSION_ENCRYPTION_KEY` therefore invalidates every stored session,
 not only an in-flight login: `SessionByHash` decrypts the stored ID token on
@@ -333,10 +371,34 @@ streaming log response, and `offline_access` means three different things
 across Keycloak, Okta, and Google. The full reasoning, including the ArgoCD
 comparison that shaped it, is in the [design
 doc](superpowers/specs/2026-08-25-oidc-server-side-flow-design.md). What has
-changed is what "expired" means: it is no longer the IdP's ID token `exp`, so
-when a tflive session does end, the same silent-redirect trip through
-`/v1/auth/login` picks up the user's still-live IdP SSO session and returns
-with a fresh code — no password, no MFA prompt — exactly as before.
+changed is what "expired" means: it is no longer the IdP's ID token `exp` but
+tflive's own idle and absolute bounds.
+
+### What ends a session, and what does not
+
+An expiring IdP session does **not** end a tflive session. Keycloak's cleanup
+task removes expired sessions from its own storage and notifies nobody
+(`ClearExpiredUserSessions` calls `removeAllExpired()` and nothing else), so
+back-channel logout fires only on explicit events — a logout, or an admin
+disabling a user. This is the independence the app-owned session was built for.
+
+Re-authentication is **not** silent, though. tflive never contacts the IdP
+after the callback — no refresh, no userinfo call — so Keycloak's SSO idle
+timer starts at sign-in and is never refreshed. At Keycloak's default
+`ssoSessionIdleTimeout` of 1800s it is always dead thirty minutes in, long
+before tflive's own session ends. When a tflive session does expire, the trip
+through `/v1/auth/login` therefore finds no SSO session to pick up and the user
+gets a full credential prompt.
+
+That is the safer of the two possible behaviours, and it is worth being
+deliberate about: silent re-authentication is the IdP renewing someone without
+asking, which is exactly what would nullify `TFLIVE_SESSION_IDLE_TTL`. An
+abandoned browser whose tflive session idled out would simply be resumed.
+
+The BYO-IdP consequence follows: **tflive's idle bound is only enforceable if
+the deployment's IdP idles out at least as fast.** A provider configured with a
+long SSO idle timeout makes `TFLIVE_SESSION_IDLE_TTL` advisory, because the
+redirect that follows it will be answered silently.
 
 ### Back-Channel Logout
 
@@ -389,19 +451,41 @@ on the `tflive-api` client:
 | `backchannel.logout.url` | `TFLIVE_BACKCHANNEL_LOGOUT_URL`, or `<TFLIVE_PUBLIC_URL>/v1/auth/backchannel-logout` if unset | Where Keycloak posts the logout token |
 | `backchannel.logout.session.required` | `true` | Includes `sid` in the ID token and the logout token |
 
+Matching prefers `sid` over `sub`, so a provider that signs one device out does
+not sign the user out everywhere. When the `sid` matches no row the handler
+falls back to `sub` in the same token: a provider may put `sid` in the logout
+token but not in the ID token the session was built from, leaving
+`idp_session_id` empty on every row, and the narrow key would then silently
+revoke nothing at all. Either way the endpoint answers `200` — whether tflive
+holds a session for a given `sid` is not something an unauthenticated caller
+gets to learn.
+
 A provider that never calls this endpoint is not a broken deployment: sessions
 still end at their own absolute and idle bounds, exactly as if back-channel
 logout did not exist. The endpoint only closes the gap between "the IdP
 considers this session over" and "tflive does too."
 
 Logout redirects rather than returning the IdP's logout URL in a JSON body.
-That URL carries the raw ID token as `id_token_hint`, and a JSON body would
-be readable by any script on the origin — handing an XSS exactly the
-credential `HttpOnly` exists to hide, and one the authentication middleware
-would accept as a bearer credential. A `Location` header on a `303` is not
+That URL carries the raw ID token as `id_token_hint`, and there is no reason to
+hand that to script on the origin. A `Location` header on a `303` is not
 script-readable. The route is `POST`, not `GET`, so a cross-site image tag
 cannot trigger it — though `SameSite=Lax` would already make such a request
 arrive without the session cookie regardless.
+
+The token does still travel in a URL the browser navigates to, so it reaches
+browser history, the IdP's access log, and any proxy in between. That is normal
+and is what the spec assumes: an ID token is an identity assertion issued to
+one client, not a credential. It is only true here because `/v1` no longer
+accepts bearer tokens — while it did, a copy read out of any of those logs was
+a working API credential that survived the very logout that wrote it there.
+
+The realm's `accessTokenLifespan` is 300 seconds, which bounds the ID token
+too — Keycloak has no separate ID-token lifespan, since `TokenManager` copies
+the access token's `exp` onto it. That is hygiene rather than a control now.
+RP-Initiated Logout 1.0 says the OP **SHOULD** honour an expired
+`id_token_hint` (conditioned on the RP having a current or recent session at
+the OP, and a `sid` matching neither MAY be declined as suspect), and a session
+running up to eight hours means ours is normally expired at logout anyway.
 
 ## Operation and Reruns
 
