@@ -28,7 +28,8 @@ type Session struct {
 	// it. It is the key a back-channel logout arrives on.
 	IDPSessionID string
 	// IDToken is the raw ID token, kept for id_token_hint at RP-initiated
-	// logout. The repository encrypts it at rest.
+	// logout. Despite that parameter's name it is the whole token, not a
+	// reference to one, so the repository encrypts it at rest.
 	IDToken           string
 	CreatedAt         time.Time
 	LastSeenAt        time.Time
@@ -106,4 +107,14 @@ type SessionStore interface {
 	RevokeSession(ctx context.Context, idHash string, at time.Time) error
 	RevokeSessionsByIDPSessionID(ctx context.Context, idpSessionID string, at time.Time) (int, error)
 	RevokeSessionsBySubject(ctx context.Context, subject string, at time.Time) (int, error)
+	// RevokeSessionsBySubjectWithoutIDPSession revokes only this subject's
+	// sessions that carry no IdP session id. Those are exactly the rows a
+	// sid-keyed revoke can never reach, which is what makes it safe to use as
+	// a fallback: a session that does have a sid stays addressable by its own.
+	RevokeSessionsBySubjectWithoutIDPSession(ctx context.Context, subject string, at time.Time) (int, error)
+	// DeleteSessionsExpiredBefore removes rows whose absolute bound has passed
+	// and reports how many. Revoking a session marks it rather than deleting
+	// it, so this is the only thing that ever takes a row — and its encrypted
+	// ID token — back out of the table.
+	DeleteSessionsExpiredBefore(ctx context.Context, cutoff time.Time) (int, error)
 }

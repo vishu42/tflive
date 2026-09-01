@@ -256,7 +256,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire session store: %w", err)
 	}
 
-	handler := api.NewAuthenticatedServer(service, verifier, cfg.Security.TenantID, cfg.Debug,
+	handler := api.NewAuthenticatedServer(service, cfg.Security.TenantID, cfg.Debug,
 		api.WithQueueReader(store),
 		api.WithAuth(api.AuthConfig{
 			Flow:                flow,
@@ -270,6 +270,14 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 			SessionIdleTTL:      cfg.Security.SessionIdleTTL,
 		}),
 	)
+	// Expired rows are swept alongside serving rather than by a separate job:
+	// the API is the only process that writes sessions, and a row nobody
+	// deletes keeps an encrypted ID token forever. It stops with the server,
+	// and a sweep in flight when ctx is cancelled fails harmlessly.
+	reaperCtx, stopReaper := context.WithCancel(ctx)
+	defer stopReaper()
+	go authn.ReapSessions(reaperCtx, sessions, authn.DefaultSessionReapInterval, nil)
+
 	if err := deps.listenAndServe(ctx, cfg.HTTPAddress, handler); err != nil {
 		return fmt.Errorf("listen and serve api: %w", err)
 	}

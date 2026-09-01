@@ -80,20 +80,22 @@ func (v fakeLogoutVerifier) VerifyLogoutToken(context.Context, string) (authn.Lo
 
 // fakeSessionStore is an in-memory authn.SessionStore.
 type fakeSessionStore struct {
-	created          []authn.Session
-	byHash           map[string]authn.Session
-	touched          int
-	revoked          map[string]int
-	revokedBySID     map[string]int
-	revokedBySubject map[string]int
+	created                    []authn.Session
+	byHash                     map[string]authn.Session
+	touched                    int
+	revoked                    map[string]int
+	revokedBySID               map[string]int
+	revokedBySubject           map[string]int
+	revokedBySubjectWithoutSID map[string]int
 }
 
 func newFakeSessionStore() *fakeSessionStore {
 	return &fakeSessionStore{
-		byHash:           map[string]authn.Session{},
-		revoked:          map[string]int{},
-		revokedBySID:     map[string]int{},
-		revokedBySubject: map[string]int{},
+		byHash:                     map[string]authn.Session{},
+		revoked:                    map[string]int{},
+		revokedBySID:               map[string]int{},
+		revokedBySubject:           map[string]int{},
+		revokedBySubjectWithoutSID: map[string]int{},
 	}
 }
 
@@ -149,6 +151,30 @@ func (f *fakeSessionStore) RevokeSessionsBySubject(_ context.Context, subject st
 		if session.Subject == subject && session.RevokedAt.IsZero() {
 			session.RevokedAt = at
 			f.byHash[hash] = session
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (f *fakeSessionStore) RevokeSessionsBySubjectWithoutIDPSession(_ context.Context, subject string, at time.Time) (int, error) {
+	f.revokedBySubjectWithoutSID[subject]++
+	count := 0
+	for hash, session := range f.byHash {
+		if session.Subject == subject && session.IDPSessionID == "" && session.RevokedAt.IsZero() {
+			session.RevokedAt = at
+			f.byHash[hash] = session
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (f *fakeSessionStore) DeleteSessionsExpiredBefore(_ context.Context, cutoff time.Time) (int, error) {
+	count := 0
+	for hash, session := range f.byHash {
+		if session.AbsoluteExpiresAt.Before(cutoff) {
+			delete(f.byHash, hash)
 			count++
 		}
 	}
@@ -588,7 +614,7 @@ func TestAuthRoutesArePublic(t *testing.T) {
 	// cannot obtain one from behind an authentication gate.
 	flow := &stubFlow{authorizationURL: "https://idp.test/authorize"}
 	sealer, _ := secrets.NewCipher("01234567890123456789012345678901")
-	server := NewAuthenticatedServer(nil, stubVerifier{err: authn.ErrInvalidToken}, "tenant_123", false,
+	server := NewAuthenticatedServer(nil, "tenant_123", false,
 		WithAuth(AuthConfig{
 			Flow:               flow,
 			Verifier:           stubVerifier{},

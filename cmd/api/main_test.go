@@ -197,7 +197,7 @@ func TestRunWiresConfiguredTenantBoundary(t *testing.T) {
 	}
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_other/stacks", nil)
-	request.Header.Set("Authorization", "Bearer test-token")
+	request.AddCookie(&http.Cookie{Name: authn.SessionCookieName, Value: recordingSessionRaw})
 	response := httptest.NewRecorder()
 	deps.serverHandler.ServeHTTP(response, request)
 
@@ -696,8 +696,23 @@ func (recordingStore) CreateSession(context.Context, authn.Session) error {
 	return nil
 }
 
-func (recordingStore) SessionByHash(context.Context, string) (authn.Session, error) {
-	return authn.Session{}, authn.ErrSessionNotFound
+// recordingSessionRaw is the cookie value SessionByHash below will honour. The
+// session cookie is the only credential the middleware accepts, so a test that
+// needs to reach a protected route through the fully wired server has to
+// present one.
+const recordingSessionRaw = "wired-api-session"
+
+func (recordingStore) SessionByHash(_ context.Context, idHash string) (authn.Session, error) {
+	if idHash != authn.HashSessionID(recordingSessionRaw) {
+		return authn.Session{}, authn.ErrSessionNotFound
+	}
+	now := time.Now().UTC()
+	return authn.Session{
+		IDHash:            idHash,
+		Subject:           "user-123",
+		LastSeenAt:        now,
+		AbsoluteExpiresAt: now.Add(time.Hour),
+	}, nil
 }
 
 func (recordingStore) TouchSession(context.Context, string, time.Time) error {
@@ -713,6 +728,14 @@ func (recordingStore) RevokeSessionsByIDPSessionID(context.Context, string, time
 }
 
 func (recordingStore) RevokeSessionsBySubject(context.Context, string, time.Time) (int, error) {
+	return 0, nil
+}
+
+func (recordingStore) RevokeSessionsBySubjectWithoutIDPSession(context.Context, string, time.Time) (int, error) {
+	return 0, nil
+}
+
+func (recordingStore) DeleteSessionsExpiredBefore(context.Context, time.Time) (int, error) {
 	return 0, nil
 }
 

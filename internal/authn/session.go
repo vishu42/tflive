@@ -100,6 +100,14 @@ func SafeReturnTo(raw string) string {
 	if parsed.Path != path.Clean(parsed.Path) {
 		return "/"
 	}
+	// No API path is a place for a browser to land, and one of them is a trap:
+	// return_to=/v1/auth/login makes the callback restart the login it has
+	// just finished, and with an SSO session standing the browser loops until
+	// it gives up. The client's loop guard cannot see that — these are
+	// server-side redirects, so no page ever loads to count them.
+	if raw == "/v1" || strings.HasPrefix(raw, "/v1/") {
+		return "/"
+	}
 	return raw
 }
 

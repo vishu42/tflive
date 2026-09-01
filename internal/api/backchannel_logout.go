@@ -64,7 +64,23 @@ func (server *Server) handleBackchannelLogout(response http.ResponseWriter, requ
 	var revoked int
 	if token.SessionID != "" {
 		revoked, err = server.auth.Sessions.RevokeSessionsByIDPSessionID(request.Context(), token.SessionID, now)
+		// A sid that matches no row is not evidence there is nothing to
+		// revoke: a provider may put sid in the logout token but not in the ID
+		// token the session was built from, leaving idp_session_id empty on
+		// every row, and then the narrow key silently revokes nothing at all.
+		//
+		// The fallback is restricted to rows with no sid of their own, because
+		// "matched nothing" has a second, entirely ordinary cause — the row
+		// for this sid was revoked by /v1/auth/logout a moment ago, or reaped
+		// at its absolute bound. A subject-wide revoke here would take the
+		// user's other devices down with it every time they signed out of one,
+		// which is precisely the narrowing this handler exists to do.
+		if err == nil && revoked == 0 {
+			revoked, err = server.auth.Sessions.RevokeSessionsBySubjectWithoutIDPSession(request.Context(), token.Subject, now)
+		}
 	} else {
+		// No sid at all: the provider cannot tell us which session, so the
+		// subject is the only key there is.
 		revoked, err = server.auth.Sessions.RevokeSessionsBySubject(request.Context(), token.Subject, now)
 	}
 	if err != nil {

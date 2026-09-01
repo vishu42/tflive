@@ -145,6 +145,16 @@ func TestSafeReturnTo(t *testing.T) {
 		{name: "relative", in: "stacks", want: "/"},
 		{name: "parent traversal", in: "/../../etc", want: "/"},
 		{name: "control character", in: "/stacks\n/evil", want: "/"},
+		// The callback would restart the login it has just finished, and with
+		// an SSO session standing the browser loops until it gives up. These
+		// are server-side redirects, so the client's loop guard never sees a
+		// page load to count.
+		{name: "login route", in: "/v1/auth/login", want: "/"},
+		{name: "login route with query", in: "/v1/auth/login?return_to=%2Fstacks", want: "/"},
+		{name: "api route", in: "/v1/stacks", want: "/"},
+		{name: "api root", in: "/v1", want: "/"},
+		// Not an API path: only the /v1 segment itself is refused.
+		{name: "v1 lookalike path", in: "/v10/stacks", want: "/v10/stacks"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := SafeReturnTo(test.in); got != test.want {

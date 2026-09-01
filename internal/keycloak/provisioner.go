@@ -99,13 +99,16 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 	realmSpec := RealmSpec{
 		Name:    cfg.Realm,
 		Enabled: true,
-		// One hour. Bounds the lifetime of the ID token Keycloak mints at
-		// sign-in; tflive holds no refresh token, so that token is used only
-		// once more, as id_token_hint at RP-initiated logout. It no longer
-		// governs how long a tflive session lasts — session lifetime is now
-		// tflive's own, set by TFLIVE_SESSION_ABSOLUTE_TTL and
-		// TFLIVE_SESSION_IDLE_TTL.
-		AccessTokenLifespan: 3600,
+		// Five minutes. It does not govern how long a tflive session lasts —
+		// that is tflive's own, set by TFLIVE_SESSION_ABSOLUTE_TTL and
+		// TFLIVE_SESSION_IDLE_TTL — and the ID token it bounds authenticates
+		// nothing at tflive after the callback, since the middleware works off
+		// the session store. So this is hygiene rather than a control: the one
+		// token we keep is short-lived by default, and nothing is lost by that.
+		// RP-Initiated Logout 1.0 says the OP SHOULD honour an expired
+		// id_token_hint, and a session running up to eight hours means ours is
+		// expired at logout whatever this value says.
+		AccessTokenLifespan: 300,
 		SSLRequired:         sslRequired,
 		RegistrationAllowed: false,
 	}

@@ -151,3 +151,36 @@ func (store *Store) RevokeSessionsBySubject(ctx context.Context, subject string,
 	}
 	return int(tag.RowsAffected()), nil
 }
+
+// DeleteSessionsExpiredBefore drops rows past their absolute bound. Revoked
+// rows are left to the same bound rather than deleted on revocation: they are
+// already dead to IsLive, and one rule for when a row leaves the table is
+// easier to reason about than two.
+func (store *Store) DeleteSessionsExpiredBefore(ctx context.Context, cutoff time.Time) (int, error) {
+	tag, err := store.pool.Exec(ctx, `
+		delete from sessions where absolute_expires_at < $1
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired sessions: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+// RevokeSessionsBySubjectWithoutIDPSession revokes this subject's sessions
+// that carry no IdP session id. Those rows are unreachable by a sid-keyed
+// revoke, so a back-channel logout naming a sid we never stored has no other
+// way to reach them; rows that do carry a sid are deliberately left alone,
+// since each is addressable by its own.
+func (store *Store) RevokeSessionsBySubjectWithoutIDPSession(ctx context.Context, subject string, at time.Time) (int, error) {
+	if subject == "" {
+		return 0, nil
+	}
+	tag, err := store.pool.Exec(ctx, `
+		update sessions set revoked_at = $2
+		where subject = $1 and idp_session_id = '' and revoked_at is null
+	`, subject, at)
+	if err != nil {
+		return 0, fmt.Errorf("revoke sessions by subject without idp session: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}

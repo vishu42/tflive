@@ -52,7 +52,7 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 	}
 
 	realm := backend.realms[cfg.Realm]
-	if !realm.Enabled || realm.AccessTokenLifespan != 3600 || realm.SSLRequired != "external" || realm.RegistrationAllowed {
+	if !realm.Enabled || realm.AccessTokenLifespan != 300 || realm.SSLRequired != "external" || realm.RegistrationAllowed {
 		t.Fatalf("realm spec = %#v", realm)
 	}
 	for _, role := range []string{"platform-admin", "stack-creator"} {

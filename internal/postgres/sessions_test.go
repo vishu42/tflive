@@ -207,3 +207,85 @@ func TestRevokeSessionsByIDPSessionIDAndSubject(t *testing.T) {
 		t.Fatalf("revoked = %d, want 1 — an already-revoked row must not count again", revoked)
 	}
 }
+
+// TestDeleteSessionsExpiredBefore covers the only path that takes a row — and
+// the encrypted ID token in it — back out of the table. Revoking marks a row
+// rather than removing it, so without this sweep the table only ever grows.
+func TestDeleteSessionsExpiredBefore(t *testing.T) {
+	ctx := context.Background()
+	store := newSessionTestStore(t, ctx)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	_, live := newTestSession(t, now)
+	_, expired := newTestSession(t, now)
+	expired.IDHash = authn.HashSessionID("expired-session")
+	expired.AbsoluteExpiresAt = now.Add(-time.Minute)
+	// Revoked but still inside its absolute bound: dead to IsLive, and
+	// deliberately still here, because one rule for when a row leaves the
+	// table is easier to reason about than two.
+	_, revoked := newTestSession(t, now)
+	revoked.IDHash = authn.HashSessionID("revoked-session")
+	revoked.RevokedAt = now
+
+	for _, session := range []authn.Session{live, expired, revoked} {
+		if err := store.CreateSession(ctx, session); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+	}
+	if err := store.RevokeSession(ctx, revoked.IDHash, now); err != nil {
+		t.Fatalf("RevokeSession: %v", err)
+	}
+
+	deleted, err := store.DeleteSessionsExpiredBefore(ctx, now)
+	if err != nil {
+		t.Fatalf("DeleteSessionsExpiredBefore: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted = %d, want 1 — only the row past its absolute bound", deleted)
+	}
+	if _, err := store.SessionByHash(ctx, expired.IDHash); !errors.Is(err, authn.ErrSessionNotFound) {
+		t.Fatalf("SessionByHash(expired) error = %v, want ErrSessionNotFound", err)
+	}
+	for _, session := range []authn.Session{live, revoked} {
+		if _, err := store.SessionByHash(ctx, session.IDHash); err != nil {
+			t.Fatalf("SessionByHash(%s): %v — a row inside its absolute bound must survive the sweep", session.IDHash, err)
+		}
+	}
+}
+
+// TestRevokeSessionsBySubjectWithoutIDPSession pins the fallback's blast
+// radius. It exists for rows a sid-keyed revoke can never reach, so a row that
+// carries a sid of its own must survive it — otherwise one device's logout
+// would sign the user out everywhere.
+func TestRevokeSessionsBySubjectWithoutIDPSession(t *testing.T) {
+	ctx := context.Background()
+	store := newSessionTestStore(t, ctx)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	_, keyed := newTestSession(t, now)
+	_, unkeyed := newTestSession(t, now)
+	unkeyed.IDHash = authn.HashSessionID("unkeyed-session")
+	unkeyed.IDPSessionID = ""
+
+	for _, session := range []authn.Session{keyed, unkeyed} {
+		if err := store.CreateSession(ctx, session); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+	}
+
+	revoked, err := store.RevokeSessionsBySubjectWithoutIDPSession(ctx, "user-sub-1", now)
+	if err != nil {
+		t.Fatalf("RevokeSessionsBySubjectWithoutIDPSession: %v", err)
+	}
+	if revoked != 1 {
+		t.Fatalf("revoked = %d, want 1 — only the row with no sid of its own", revoked)
+	}
+
+	got, err := store.SessionByHash(ctx, keyed.IDHash)
+	if err != nil {
+		t.Fatalf("SessionByHash(keyed): %v", err)
+	}
+	if !got.RevokedAt.IsZero() {
+		t.Fatal("a session addressable by its own sid was revoked by the fallback")
+	}
+}
