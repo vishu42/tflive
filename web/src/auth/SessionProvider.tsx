@@ -59,8 +59,24 @@ export default function SessionProvider() {
     postLogout();
   }, []);
 
+  // The error screen below is reached only by a failure that is *not* a 401 —
+  // /v1/me answering 500 because a dependency it calls is down, say. The
+  // session is fine, so a trip to the IdP cannot help: it would spend a login
+  // attempt, come back to the same failure, and after three presses trip the
+  // loop guard into telling the user their browser is blocking cookies, which
+  // is a diagnosis of something that is not happening. Retry means retry.
+  const retryMe = useCallback(() => {
+    void refetchMe();
+  }, [refetchMe]);
+
   useEffect(() => {
-    if (!meError) return;
+    if (!meError) {
+      // A retry that worked clears the error screen. Only "error" is reset:
+      // "loop" is a terminal diagnosis with its own button, and clobbering it
+      // here would put the user back on the redirect merry-go-round.
+      setStatus((current) => (current === "error" ? "loading" : current));
+      return;
+    }
     if (meError instanceof ApiRequestError && meError.status === 401) {
       login();
       return;
@@ -147,7 +163,7 @@ export default function SessionProvider() {
     return (
       <div data-testid="auth-error">
         <p>Authentication failed. The identity service may be unavailable.</p>
-        <button type="button" onClick={login} data-testid="auth-retry-button">
+        <button type="button" onClick={retryMe} data-testid="auth-retry-button">
           Retry
         </button>
       </div>

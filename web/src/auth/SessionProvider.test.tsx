@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
@@ -201,6 +201,24 @@ describe("SessionProvider", () => {
     renderProvider(<div data-testid="child">ready</div>);
     expect(await screen.findByTestId("auth-error")).toBeTruthy();
     expect(assign).not.toHaveBeenCalled();
+  });
+
+  // The session is fine on this path — /v1/me failed for some other reason —
+  // so a trip to the IdP cannot help. Spending login attempts on it would trip
+  // the loop guard and blame the user's cookie settings for a server fault.
+  it("retries the request rather than the sign-in when /v1/me fails for a non-auth reason", async () => {
+    getMe.mockRejectedValue(new ApiRequestError(503, "unavailable", "unavailable"));
+    renderProvider(<div data-testid="child">ready</div>);
+
+    const retry = await screen.findByTestId("auth-retry-button");
+    getMe.mockResolvedValue(me);
+    await act(async () => {
+      retry.click();
+    });
+
+    await screen.findByTestId("child");
+    expect(assign).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(attemptsKey)).toBeNull();
   });
 
   // A redirect reloads the page, so the count has to live somewhere that

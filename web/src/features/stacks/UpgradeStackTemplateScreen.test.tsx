@@ -383,6 +383,20 @@ describe("UpgradeStackTemplateScreen", () => {
     await waitFor(() => expect(screen.getByTestId("upgrade-stack-template-error")).toBeTruthy());
   });
 
+  // Without the marker, SessionProvider's proactive re-auth timer sees no
+  // in-flight mutation and no unsaved work, and full-page-navigates to the IdP
+  // mid-edit — taking every value typed here with it.
+  it("marks itself unsaved once a variable is edited, so SessionProvider's proactive re-auth defers", () => {
+    const queryClient = testQueryClient();
+    seedUpgradeable(queryClient);
+
+    renderScreen(queryClient);
+
+    expect(document.querySelector("[data-unsaved='true']")).toBeNull();
+    fireEvent.change(screen.getByLabelText(/new_var/), { target: { value: "enabled" } });
+    expect(document.querySelector("[data-unsaved='true']")).not.toBeNull();
+  });
+
   it("renders not found when the stack template id is not installed", () => {
     const queryClient = testQueryClient();
     seedUpgradeable(queryClient);
