@@ -1,4 +1,4 @@
-# tflive terraform platform
+# TFlive Terraform Platform
 
 > [!WARNING]
 > tflive is not production ready. It is an MVP baseline intended for local
