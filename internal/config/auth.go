@@ -272,14 +272,6 @@ func parseConfigURL(name, raw string) (*url.URL, error) {
 	return parseAbsoluteURL(name, raw)
 }
 
-func parseOptionalConfigURL(name, raw string) (*url.URL, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-	return parseAbsoluteURL(name, raw)
-}
-
 func parseAbsoluteURL(name, raw string) (*url.URL, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {

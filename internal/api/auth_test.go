@@ -753,3 +753,30 @@ func TestAuthCallbackFailsWhenProjectionWriteFails(t *testing.T) {
 		t.Fatalf("created %d sessions, want 0 — the session must not outlive a failed projection", count)
 	}
 }
+
+// The callback writes the identity projection on every sign-in, so a Service
+// without a user repository is as half-wired as an AuthConfig without a
+// session store. The wiring check exists to say so once at boot rather than
+// nil-panic on the first login.
+func TestNewServerPanicsWithoutAUserRepository(t *testing.T) {
+	sealer, err := secrets.NewCipher("01234567890123456789012345678901")
+	if err != nil {
+		t.Fatalf("NewCipher returned error: %v", err)
+	}
+	cfg := AuthConfig{
+		Flow:               &stubFlow{authorizationURL: "https://idp.test/authorize"},
+		Verifier:           stubVerifier{},
+		Sealer:             sealer,
+		PublicURL:          "http://localhost:5173",
+		Sessions:           newFakeSessionStore(),
+		SessionAbsoluteTTL: authn.DefaultSessionAbsoluteTTL,
+		SessionIdleTTL:     authn.DefaultSessionIdleTTL,
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewServer did not panic on a Service without a user repository")
+		}
+	}()
+	NewServer(app.NewService(app.Service{}), "tenant_123", WithAuth(cfg))
+}

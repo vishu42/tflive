@@ -85,11 +85,14 @@ func WithAuth(cfg AuthConfig) ServerOption {
 //
 // The service is checked alongside the AuthConfig because the callback
 // projects the signed-in user through it, so it is now as load-bearing for
-// the login routes as the session store is.
+// the login routes as the session store is — including its user repository,
+// which the callback writes the projection through on every sign-in.
 func requireCompleteAuthWiring(service *app.Service, auth AuthConfig) {
 	switch {
 	case service == nil:
 		panic("api: WithAuth configured without a Service")
+	case service.Users == nil:
+		panic("api: WithAuth configured without a Service user repository")
 	case auth.Verifier == nil:
 		panic("api: WithAuth configured without a Verifier")
 	case auth.Sealer == nil:

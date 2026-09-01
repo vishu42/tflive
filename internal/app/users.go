@@ -3,7 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
+
+	"github.com/vishu42/tflive/internal/authz"
 )
 
 // ErrUserNotProvisioned means the target subject has never signed in, so there
@@ -42,4 +45,16 @@ type UserRepository interface {
 	// Subjects with no projected row are absent from the map rather than
 	// present and empty, so the caller can tell the difference.
 	UsersBySubs(ctx context.Context, subs []string) (map[string]UserProfile, error)
+}
+
+// requireUserRepository guards every entry point that reads or writes the
+// projection. The grants and search routes are registered unconditionally,
+// so a Service wired without a UserRepository is reachable; without this it
+// nil-panics on the first request instead of answering. ErrUnavailable rather
+// than ErrInvalidCommand, because nothing about the request is wrong.
+func (service *Service) requireUserRepository() error {
+	if service.Users == nil {
+		return fmt.Errorf("%w: user repository not configured", authz.ErrUnavailable)
+	}
+	return nil
 }

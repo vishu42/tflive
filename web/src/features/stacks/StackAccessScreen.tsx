@@ -232,7 +232,7 @@ export default function StackAccessScreen() {
                       >
                         {user.displayName}
                         <small>
-                          {user.email}
+                          {user.email || user.sub}
                           {currentGrant && ` — ${currentGrant.role}`}
                           {assigned && !currentGrant && " — assigned"}
                         </small>

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -298,5 +299,61 @@ func TestAssignStackRoleReturnsProjectedDisplayFields(t *testing.T) {
 	}
 	if view.DisplayName != "Casey Jones" || view.Email != "casey@example.com" {
 		t.Fatalf("view = %#v, want the projected display name and email", view)
+	}
+}
+
+// A Service wired without a UserRepository is reachable: the grants and search
+// routes register unconditionally. Every entry point that touches the
+// projection has to answer "unavailable" rather than nil-panic.
+func TestUserProjectionEntryPointsRequireARepository(t *testing.T) {
+	t.Parallel()
+
+	newUnwiredService := func() *Service {
+		return NewService(Service{
+			Work:       newRecordingWork(nil),
+			Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
+			Clock:      fixedClock{now: time.Now()},
+		})
+	}
+
+	tests := map[string]func(*Service) error{
+		"RecordSignIn": func(service *Service) error {
+			return service.RecordSignIn(context.Background(), UserProfile{Sub: "u1"})
+		},
+		"SearchUsers": func(service *Service) error {
+			_, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
+				TenantID: traits.TenantID("tenant_123"),
+				Query:    "ali",
+				Max:      20,
+			})
+			return err
+		},
+		"ListStackGrants": func(service *Service) error {
+			_, err := service.ListStackGrants(adminContext(), ListStackGrantsCommand{
+				TenantID: traits.TenantID("tenant_123"),
+				StackID:  traits.StackID("stack_abc"),
+			})
+			return err
+		},
+		"AssignStackRole": func(service *Service) error {
+			_, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
+				TenantID: traits.TenantID("tenant_123"),
+				StackID:  traits.StackID("stack_abc"),
+				UserSub:  "user_456",
+				Role:     "operator",
+			})
+			return err
+		},
+	}
+
+	for name, call := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			err := call(newUnwiredService())
+			if !errors.Is(err, authz.ErrUnavailable) {
+				t.Fatalf("error = %v, want authz.ErrUnavailable", err)
+			}
+		})
 	}
 }

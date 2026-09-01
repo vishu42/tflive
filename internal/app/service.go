@@ -1186,8 +1186,8 @@ func (service *Service) RecordSignIn(ctx context.Context, profile UserProfile) e
 	if profile.Sub == "" {
 		return fmt.Errorf("%w: subject is required", ErrInvalidCommand)
 	}
-	if service.Users == nil {
-		return fmt.Errorf("%w: user repository not configured", ErrInvalidCommand)
+	if err := service.requireUserRepository(); err != nil {
+		return err
 	}
 	return service.Users.UpsertUser(ctx, profile, service.Clock.Now())
 }
@@ -1202,6 +1202,9 @@ func (service *Service) SearchUsers(ctx context.Context, command SearchUsersComm
 		return nil, err
 	}
 	if err := validateSearchUsersCommand(command); err != nil {
+		return nil, err
+	}
+	if err := service.requireUserRepository(); err != nil {
 		return nil, err
 	}
 	users, err := service.Users.SearchUsers(ctx, command.Query, command.First, command.Max)
@@ -1254,6 +1257,9 @@ func (service *Service) ListStackGrants(ctx context.Context, command ListStackGr
 		return ListStackGrantsResult{}, err
 	}
 	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
+		return ListStackGrantsResult{}, err
+	}
+	if err := service.requireUserRepository(); err != nil {
 		return ListStackGrantsResult{}, err
 	}
 	object, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
@@ -1327,6 +1333,9 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 
 	if service.Work == nil {
 		return GrantView{}, fmt.Errorf("%w: unit of work not configured", authz.ErrUnavailable)
+	}
+	if err := service.requireUserRepository(); err != nil {
+		return GrantView{}, err
 	}
 
 	// The projection is the only place tflive knows a person exists, so this
