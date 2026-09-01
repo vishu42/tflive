@@ -20,7 +20,6 @@ import (
 	"github.com/vishu42/tflive/internal/authorizer"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
-	"github.com/vishu42/tflive/internal/keycloak"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/queue"
@@ -42,6 +41,7 @@ type appRepositories interface {
 	app.TemplateRevisionRepository
 	app.TemplateRunLogRepository
 	app.AuditRepository
+	app.UserRepository
 	app.UnitOfWork
 	queue.Reader
 }
@@ -217,19 +217,6 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 	if err != nil {
 		return fmt.Errorf("wire log reader: %w", err)
 	}
-	var directoryClient app.UserDirectory
-	if !cfg.Security.DirectoryReaderClientSecret.Empty() {
-		client := keycloak.NewDirectoryClient(keycloak.DirectoryClientConfig{
-			AdminURL:     cfg.Security.KeycloakAdminURL,
-			Realm:        cfg.Security.KeycloakRealm,
-			ClientID:     cfg.Security.DirectoryReaderClientID,
-			ClientSecret: cfg.Security.DirectoryReaderClientSecret.Value(),
-			HTTPTimeout:  cfg.Security.DirectoryReaderHTTPTimeout,
-			Debug:        cfg.Debug,
-		})
-		directoryClient = &directoryClientAdapter{client: client, debug: cfg.Debug}
-	}
-
 	service, err := deps.newService(app.Service{
 		Authorizer:               authorizer,
 		Work:                     store,
@@ -245,7 +232,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		TemplateRunLogs:          logReader,
 		TemplateRunLogMetadata:   store,
 		Audit:                    store,
-		UserDirectory:            directoryClient,
+		Users:                    store,
 	})
 	if err != nil {
 		return fmt.Errorf("wire service: %w", err)
@@ -308,78 +295,4 @@ func listenAndServe(ctx context.Context, address string, handler http.Handler) e
 		return nil
 	}
 	return err
-}
-
-type directoryClientAdapter struct {
-	client *keycloak.DirectoryClient
-	debug  bool
-}
-
-func (a *directoryClientAdapter) SearchUsers(ctx context.Context, query string, first, max int) ([]app.DirectoryUser, error) {
-	if a.debug {
-		log.Printf("[DEBUG] directoryClientAdapter.SearchUsers query=%q first=%d max=%d", query, first, max)
-	}
-	if err := a.client.Authenticate(ctx); err != nil {
-		if a.debug {
-			log.Printf("[DEBUG] directoryClientAdapter.Authenticate failed: %v", err)
-		}
-		return nil, fmt.Errorf("authenticate directory client: %w", err)
-	}
-	if a.debug {
-		log.Printf("[DEBUG] directoryClientAdapter.Authenticate succeeded")
-	}
-	users, err := a.client.SearchUsers(ctx, query, first, max)
-	if err != nil {
-		if a.debug {
-			log.Printf("[DEBUG] directoryClientAdapter.SearchUsers failed: %v", err)
-		}
-		return nil, err
-	}
-	result := make([]app.DirectoryUser, len(users))
-	for i, u := range users {
-		result[i] = app.DirectoryUser{
-			ID:        u.ID,
-			Username:  u.Username,
-			Email:     u.Email,
-			FirstName: u.FirstName,
-			LastName:  u.LastName,
-		}
-	}
-	if a.debug {
-		log.Printf("[DEBUG] directoryClientAdapter.SearchUsers returned %d users", len(result))
-	}
-	return result, nil
-}
-
-func (a *directoryClientAdapter) GetUser(ctx context.Context, userID string) (*app.DirectoryUser, error) {
-	if a.debug {
-		log.Printf("[DEBUG] directoryClientAdapter.GetUser userID=%s", userID)
-	}
-	if err := a.client.Authenticate(ctx); err != nil {
-		if a.debug {
-			log.Printf("[DEBUG] directoryClientAdapter.Authenticate failed: %v", err)
-		}
-		return nil, fmt.Errorf("authenticate directory client: %w", err)
-	}
-	if a.debug {
-		log.Printf("[DEBUG] directoryClientAdapter.Authenticate succeeded")
-	}
-	user, err := a.client.GetUser(ctx, userID)
-	if err != nil {
-		if a.debug {
-			log.Printf("[DEBUG] directoryClientAdapter.GetUser failed: %v", err)
-		}
-		return nil, err
-	}
-	result := &app.DirectoryUser{
-		ID:        user.ID,
-		Username:  user.Username,
-		Email:     user.Email,
-		FirstName: user.FirstName,
-		LastName:  user.LastName,
-	}
-	if a.debug {
-		log.Printf("[DEBUG] directoryClientAdapter.GetUser returned user id=%s username=%s", result.ID, result.Username)
-	}
-	return result, nil
 }

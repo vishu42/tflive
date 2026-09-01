@@ -63,6 +63,7 @@ func TestMigrateAppliesSchema(t *testing.T) {
 		"template_variables",
 		"work_queue",
 		"security_audit_log",
+		"users",
 	} {
 		table := table
 		t.Run(table, func(t *testing.T) {

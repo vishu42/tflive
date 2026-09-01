@@ -31,15 +31,14 @@ type Config struct {
 	// redirect URIs above, this one is called by the IdP's own server, not the
 	// browser, so it needs to be reachable from the IdP rather than from
 	// wherever the browser sits.
-	BackchannelLogoutURI        string
-	PlatformAdminUsername       string
-	PlatformAdminPassword       string
-	PlatformAdminEmail          string
-	PlatformAdminFirstName      string
-	PlatformAdminLastName       string
-	DirectoryReaderClientSecret string
-	Environment                 string
-	HTTPTimeout                 time.Duration
+	BackchannelLogoutURI   string
+	PlatformAdminUsername  string
+	PlatformAdminPassword  string
+	PlatformAdminEmail     string
+	PlatformAdminFirstName string
+	PlatformAdminLastName  string
+	Environment            string
+	HTTPTimeout            time.Duration
 }
 
 // LoadConfig reads and validates Keycloak provisioning configuration.
@@ -96,10 +95,6 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	directoryReaderSecret, err := required(getenv, "KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET")
-	if err != nil {
-		return Config{}, err
-	}
 
 	// The callback and post-logout URIs are resolved by the browser, so
 	// TFLIVE_PUBLIC_URL is always correct for them. A back-channel logout is a
@@ -135,24 +130,23 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 
 	return Config{
-		AdminURL:                    adminURL,
-		AdminRealm:                  valueOrDefault(getenv("KEYCLOAK_ADMIN_REALM"), defaultAdminRealm),
-		AdminUsername:               adminUsername,
-		AdminPassword:               adminPassword,
-		Realm:                       valueOrDefault(getenv("KEYCLOAK_REALM"), defaultRealm),
-		APIClientID:                 valueOrDefault(getenv("KEYCLOAK_API_CLIENT_ID"), defaultAPIClient),
-		APIClientSecret:             apiClientSecret,
-		CallbackURI:                 publicURL.String() + "/v1/auth/callback",
-		PostLogoutRedirectURI:       publicURL.String() + "/",
-		BackchannelLogoutURI:        backchannelLogoutURI,
-		PlatformAdminUsername:       platformUsername,
-		PlatformAdminPassword:       platformPassword,
-		PlatformAdminEmail:          platformEmail,
-		PlatformAdminFirstName:      platformFirstName,
-		PlatformAdminLastName:       platformLastName,
-		DirectoryReaderClientSecret: directoryReaderSecret,
-		Environment:                 environment,
-		HTTPTimeout:                 timeout,
+		AdminURL:               adminURL,
+		AdminRealm:             valueOrDefault(getenv("KEYCLOAK_ADMIN_REALM"), defaultAdminRealm),
+		AdminUsername:          adminUsername,
+		AdminPassword:          adminPassword,
+		Realm:                  valueOrDefault(getenv("KEYCLOAK_REALM"), defaultRealm),
+		APIClientID:            valueOrDefault(getenv("KEYCLOAK_API_CLIENT_ID"), defaultAPIClient),
+		APIClientSecret:        apiClientSecret,
+		CallbackURI:            publicURL.String() + "/v1/auth/callback",
+		PostLogoutRedirectURI:  publicURL.String() + "/",
+		BackchannelLogoutURI:   backchannelLogoutURI,
+		PlatformAdminUsername:  platformUsername,
+		PlatformAdminPassword:  platformPassword,
+		PlatformAdminEmail:     platformEmail,
+		PlatformAdminFirstName: platformFirstName,
+		PlatformAdminLastName:  platformLastName,
+		Environment:            environment,
+		HTTPTimeout:            timeout,
 	}, nil
 }
 

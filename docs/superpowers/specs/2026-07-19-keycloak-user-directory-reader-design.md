@@ -1,5 +1,13 @@
 # AUTH-016: Least-privilege Keycloak User-Directory Reader Design
 
+> **Superseded by #155 (identity projection).** The Keycloak user-directory
+> reader described here has been removed: `internal/keycloak/directory.go`, the
+> `app.UserDirectory` port, and the `tflive-directory-reader` service account
+> are all gone. Grant display names and user search now read a local `users`
+> table projected from each ID token at sign-in — see the "Identity Projection"
+> section of `docs/authentication.md`. Kept as a record of the design that was
+> replaced and why.
+
 ## Summary
 
 Add a read-only Keycloak user-directory adapter that uses a dedicated service credential with minimal realm permissions (`query-users`, `view-users`, `view-realm`) to search and resolve realm users. Exposes a paginated search endpoint gated by `platform-admin` role, returning only safe display attributes (subject ID, username, email, name) — never credentials or admin tokens.

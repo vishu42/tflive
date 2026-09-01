@@ -136,6 +136,6 @@ internal/runner/      OpenTofu execution
 internal/authn/       token verification
 internal/authz/       authorization decisions
 internal/openfga/     OpenFGA model and adapter
-internal/keycloak/    realm provisioning and directory reads
+internal/keycloak/    realm provisioning (local demo IdP only)
 web/                  Vite UI
 ```

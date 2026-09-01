@@ -27,6 +27,9 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 	if err != nil {
 		t.Fatalf("provisionWithBackend() final run error = %v", err)
 	}
+	if last.Realm != "tflive" || last.APIClientID != "tflive-api" || last.PlatformAdminUsername != cfg.PlatformAdminUsername {
+		t.Fatalf("final result = %#v", last)
+	}
 
 	if got, want := backend.createdRealms, 1; got != want {
 		t.Fatalf("created realms = %d, want %d", got, want)
@@ -40,10 +43,15 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 	// an ID token's aud is the client ID by construction, so the workaround
 	// that forced an aud into an access token is gone. The backend has no way
 	// to create either any more -- provisionBackend no longer has the methods.
-	if got, want := backend.createdClients, 2; got != want {
+	//
+	// One client, not two: the directory reader service account is gone with
+	// the Keycloak directory it existed to read.
+	if got, want := backend.createdClients, 1; got != want {
 		t.Fatalf("created clients = %d, want %d", got, want)
 	}
-	if got, want := backend.createdUsers, 2; got != want {
+	// One user: the platform administrator. The directory reader's service
+	// account went with its client.
+	if got, want := backend.createdUsers, 1; got != want {
 		t.Fatalf("created users = %d, want %d", got, want)
 	}
 	platformUser := backend.users[cfg.PlatformAdminUsername]
@@ -71,8 +79,7 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 
 	// The seeded administrator carries no global realm role at all. Its
 	// platform tier is a tuple #212 writes; the realm-management roles below
-	// are different -- they are Keycloak's own, and the directory reads need
-	// them.
+	// are different -- they are Keycloak's own, needed to administer the realm.
 	wantAdminRoles := []string{"manage-users", "query-users", "view-realm", "view-users"}
 	for _, role := range wantAdminRoles {
 		if !backend.clientRoleMappings[cfg.PlatformAdminUsername]["realm-management"][role] {
@@ -83,34 +90,17 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 		t.Fatal("platform user must not receive realm-admin")
 	}
 
-	directoryReader := backend.clients[directoryReaderClientID]
-	if !directoryReader.ServiceAccountsEnabled || directoryReader.PublicClient || directoryReader.BearerOnly {
-		t.Fatalf("directory reader client = %#v", directoryReader)
+	// No directory reader client is provisioned any more. Display names come
+	// from the local identity projection, so nothing needs query-users or
+	// view-users on the realm -- which is the whole point: that was the
+	// elevated permission a customer's security team would have to approve.
+	for clientID := range backend.clients {
+		if strings.Contains(clientID, "directory-reader") {
+			t.Fatalf("provisioned a directory reader client %q, want none", clientID)
+		}
 	}
-	if got, want := last.DirectoryReaderClientID, directoryReaderClientID; got != want {
-		t.Fatalf("result.DirectoryReaderClientID = %q, want %q", got, want)
-	}
-	if got, want := last.DirectoryReaderClientSecret, cfg.DirectoryReaderClientSecret; got != want {
-		t.Fatalf("result.DirectoryReaderClientSecret = %q, want %q", got, want)
-	}
-	saUser := "service-account-" + directoryReaderClientID
-	if !backend.clientRoleMappings[saUser]["realm-management"]["query-users"] {
-		t.Fatalf("directory reader realm-management roles = %#v", backend.clientRoleMappings[saUser]["realm-management"])
-	}
-	if !backend.clientRoleMappings[saUser]["realm-management"]["view-users"] {
-		t.Fatalf("directory reader missing view-users role")
-	}
-	if !backend.clientRoleMappings[saUser]["realm-management"]["view-realm"] {
-		t.Fatalf("directory reader missing view-realm role")
-	}
-	if !backend.clientScopeMappings[directoryReaderClientID]["realm-management"]["query-users"] {
-		t.Fatalf("directory reader client scope roles = %#v", backend.clientScopeMappings[directoryReaderClientID]["realm-management"])
-	}
-	if !backend.clientScopeMappings[directoryReaderClientID]["realm-management"]["view-users"] {
-		t.Fatalf("directory reader client scope roles = %#v", backend.clientScopeMappings[directoryReaderClientID]["realm-management"])
-	}
-	if !backend.clientScopeMappings[directoryReaderClientID]["realm-management"]["view-realm"] {
-		t.Fatalf("directory reader client scope roles = %#v", backend.clientScopeMappings[directoryReaderClientID]["realm-management"])
+	if len(backend.clientScopeMappings) != 0 {
+		t.Fatalf("client scope mappings = %#v, want none", backend.clientScopeMappings)
 	}
 }
 

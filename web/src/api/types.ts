@@ -184,16 +184,17 @@ export interface ListGrantsResponse {
   grants: GrantView[];
 }
 
-export interface DirectoryUser {
-  id: string;
-  username: string;
+// A row of the local identity projection: what the user's ID token asserted at
+// their last sign-in. `sub` is the only stable key and the value a grant is
+// written against; the other two are display data.
+export interface UserProfile {
+  sub: string;
+  displayName: string;
   email: string;
-  firstName: string;
-  lastName: string;
 }
 
 export interface SearchUsersResponse {
-  users: DirectoryUser[];
+  users: UserProfile[];
   first: number;
   max: number;
 }

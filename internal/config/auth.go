@@ -32,12 +32,6 @@ type SecurityConfig struct {
 	SessionIdleTTL       time.Duration
 
 	OpenFGA OpenFGAConfig
-
-	KeycloakAdminURL            *url.URL
-	KeycloakRealm               string
-	DirectoryReaderClientID     string
-	DirectoryReaderClientSecret Secret
-	DirectoryReaderHTTPTimeout  time.Duration
 }
 
 type OIDCConfig struct {
@@ -95,7 +89,7 @@ func (cfg OpenFGAConfig) GoString() string {
 
 func (cfg SecurityConfig) String() string {
 	return fmt.Sprintf(
-		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v ClientID:%q ClientSecret:%s} PublicURL:%v SessionEncryptionKey:%s SessionAbsoluteTTL:%s SessionIdleTTL:%s OpenFGA:%s KeycloakAdminURL:%v KeycloakRealm:%q DirectoryReaderClientID:%q DirectoryReaderClientSecret:%s DirectoryReaderHTTPTimeout:%s}",
+		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v ClientID:%q ClientSecret:%s} PublicURL:%v SessionEncryptionKey:%s SessionAbsoluteTTL:%s SessionIdleTTL:%s OpenFGA:%s}",
 		cfg.Mode,
 		cfg.TenantID,
 		cfg.OIDC.IssuerURL,
@@ -106,19 +100,12 @@ func (cfg SecurityConfig) String() string {
 		cfg.SessionAbsoluteTTL,
 		cfg.SessionIdleTTL,
 		cfg.OpenFGA,
-		cfg.KeycloakAdminURL,
-		cfg.KeycloakRealm,
-		cfg.DirectoryReaderClientID,
-		cfg.DirectoryReaderClientSecret,
-		cfg.DirectoryReaderHTTPTimeout,
 	)
 }
 
 func (cfg SecurityConfig) GoString() string {
 	return cfg.String()
 }
-
-const DefaultDirectoryReaderHTTPTimeout = 10 * time.Second
 
 func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 	mode, err := parseRuntimeMode(getenv("TFLIVE_ENVIRONMENT"))
@@ -209,31 +196,11 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 		}
 	}
 
-	keycloakAdminURL, err := parseOptionalConfigURL("KEYCLOAK_ADMIN_URL", getenv("KEYCLOAK_ADMIN_URL"))
-	if err != nil {
-		return SecurityConfig{}, err
-	}
-	keycloakRealm := strings.TrimSpace(getenv("KEYCLOAK_REALM"))
-	if keycloakRealm == "" {
-		keycloakRealm = "tflive"
-	}
-	directoryReaderClientID := strings.TrimSpace(getenv("KEYCLOAK_DIRECTORY_READER_CLIENT_ID"))
-	directoryReaderSecret := newSecret(getenv("KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET"))
-	directoryReaderTimeout := DefaultDirectoryReaderHTTPTimeout
-	if raw := strings.TrimSpace(getenv("KEYCLOAK_DIRECTORY_READER_HTTP_TIMEOUT")); raw != "" {
-		directoryReaderTimeout, err = time.ParseDuration(raw)
-		if err != nil || directoryReaderTimeout <= 0 {
-			return SecurityConfig{}, authConfigError("KEYCLOAK_DIRECTORY_READER_HTTP_TIMEOUT must be a positive duration")
-		}
-	}
-	if mode == RuntimeProduction {
-		if directoryReaderClientID == "" {
-			return SecurityConfig{}, authConfigError("KEYCLOAK_DIRECTORY_READER_CLIENT_ID is required in production")
-		}
-		if directoryReaderSecret.Empty() {
-			return SecurityConfig{}, authConfigError("KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET is required in production")
-		}
-	}
+	// No Keycloak configuration is read here. Identity reaches the API as an
+	// OIDC token from whatever provider OIDC_ISSUER_URL names, and display
+	// names now come from the local projection rather than a vendor admin API,
+	// so the API binary has no Keycloak-shaped setting left. The provisioner
+	// still has its own.
 
 	return SecurityConfig{
 		Mode:     mode,
@@ -250,12 +217,6 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 		SessionIdleTTL:       sessionIdleTTL,
 
 		OpenFGA: openFGA,
-
-		KeycloakAdminURL:            keycloakAdminURL,
-		KeycloakRealm:               keycloakRealm,
-		DirectoryReaderClientID:     directoryReaderClientID,
-		DirectoryReaderClientSecret: directoryReaderSecret,
-		DirectoryReaderHTTPTimeout:  directoryReaderTimeout,
 	}, nil
 }
 

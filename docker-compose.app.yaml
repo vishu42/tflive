@@ -21,10 +21,6 @@ services:
         condition: service_completed_successfully
     environment:
       HTTP_ADDRESS: ":8081"
-      KEYCLOAK_ADMIN_URL: http://keycloak:8082
-      KEYCLOAK_REALM: tflive
-      KEYCLOAK_DIRECTORY_READER_CLIENT_ID: ${KEYCLOAK_DIRECTORY_READER_CLIENT_ID:-tflive-directory-reader}
-      KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET: ${KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET:-somerandsomesecret}
       DATABASE_URL: postgres://${APP_DB_USER:-tflive}:${APP_DB_PASSWORD:-tflive}@postgres:5432/${APP_DB_NAME:-tflive_test}?sslmode=disable
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-terraform-runs}

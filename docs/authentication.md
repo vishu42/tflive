@@ -100,7 +100,7 @@ system and must not reuse the examples.
 
 | Variable | Sensitive | Purpose |
 |---|---:|---|
-| `KEYCLOAK_ADMIN_URL` | No | Admin API base URL; Compose fixes it to `http://keycloak:8080` |
+| `KEYCLOAK_ADMIN_URL` | No | Admin API base URL; Compose fixes it to `http://keycloak:8082`. Provisioner only — the API no longer reads any Keycloak setting |
 | `KEYCLOAK_ADMIN_REALM` | No | Bootstrap administrator realm; defaults to `master` |
 | `KEYCLOAK_ADMIN_USERNAME` | Yes | Master bootstrap administrator username |
 | `KEYCLOAK_ADMIN_PASSWORD` | Yes | Master bootstrap administrator password |
@@ -128,7 +128,7 @@ connects to Postgres or Temporal or starts its HTTP listener.
 | `TFLIVE_ENVIRONMENT` | No | Optional runtime mode; empty defaults to `development`; valid values are `development` and `production` |
 | `TFLIVE_TENANT_ID` | No | Required single configured tenant identifier |
 | `VITE_TFLIVE_TENANT_ID` | No | Frontend build-time tenant context; must exactly match `TFLIVE_TENANT_ID`; local development falls back to `tenant_123` |
-| `OIDC_ISSUER_URL` | No | Required exact Keycloak issuer URL |
+| `OIDC_ISSUER_URL` | No | Required exact OIDC issuer URL; any compliant provider, not only the local Keycloak |
 | `OIDC_CLIENT_ID` | No | Required OAuth client ID; also the ID token audience the verifier checks against |
 | `OIDC_CLIENT_SECRET` | Yes | Required; the API is a confidential client and authenticates as one when it exchanges a code |
 | `TFLIVE_PUBLIC_URL` | No | Required; the origin the browser reaches. The API derives its own OIDC redirect URI (`<TFLIVE_PUBLIC_URL>/v1/auth/callback`) and post-logout redirect URI from it — never from `Host` or `X-Forwarded-Proto`, which an attacker can set |
@@ -492,6 +492,58 @@ RP-Initiated Logout 1.0 says the OP **SHOULD** honour an expired
 `id_token_hint` (conditioned on the RP having a current or recent session at
 the OP, and a `sid` matching neither MAY be declined as suspect), and a session
 running up to eight hours means ours is normally expired at logout anyway.
+
+## Identity Projection
+
+Grant display names and the user-search box read a local `users` table, not the
+IdP.
+
+There is nothing standard to read from an OIDC provider here. `/userinfo` only
+ever describes the bearer of the token presented, so it cannot look up a third
+user, and cross-user lookup is vendor-specific admin API territory — Okta's
+Users API, Microsoft Graph, Google's Admin SDK. Each needs elevated permissions
+a customer's security team must approve, and each would put that provider on
+the critical path for rendering a grants list. tflive previously did exactly
+this against the Keycloak Admin API, with a service account holding
+`query-users` and `view-users` on the realm. That is gone.
+
+Instead, every ID token tflive verifies already carries what the UI needs, and
+the callback writes it down:
+
+| Column | Source |
+|---|---|
+| `sub` | the `sub` claim — the only stable key, and the same string that becomes `user:<sub>` in an OpenFGA tuple |
+| `display_name` | the first non-empty of `name`, `preferred_username`, `email`, `sub` |
+| `email` | the `email` claim, which may be empty |
+| `first_seen_at` | set on the first sign-in and never updated |
+| `last_seen_at` | moved on every sign-in |
+
+The write happens in the OIDC callback, before the session row is created, and
+a failure there fails the sign-in. Ordering it first is what makes the useful
+statement true: **a session row exists only for a subject that is in the
+projection.**
+
+This is a projection, not a directory. tflive is not the source of truth for
+identity and performs no account lifecycle: nothing creates, disables, or
+deletes a row except a sign-in. A changed name or email is picked up the next
+time that person signs in.
+
+### Accepted limitation: a user must sign in before they can be granted a role
+
+A person who has never signed in is not in the projection, does not appear in
+the search box, and cannot be granted a role — `POST .../grants` answers
+`400 unknown_user`. They sign in once, which lands them in the projection, and
+are grantable from then on.
+
+This is deliberate, and it has an ordering consequence worth knowing before you
+hit it: to give a colleague access, they must sign in first, and only then can
+you grant them a role. The same applies to bootstrapping the first
+administrator.
+
+There is no pending-grant mechanism and no email-to-`sub` reconciliation, both
+of which would mean inventing an identity tflive has not been told about. SCIM
+is the answer if pre-provisioning is ever genuinely required, and is
+out of scope here and in the security architecture.
 
 ## Operation and Reruns
 

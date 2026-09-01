@@ -7,7 +7,7 @@ import {
   useAssignStackRoleMutation,
   useRevokeStackRoleMutation
 } from "../../api/queries";
-import type { DirectoryUser, GrantView } from "../../api/types";
+import type { GrantView, UserProfile } from "../../api/types";
 import { tenantID } from "../../config";
 
 const ROLES = ["owner", "operator", "approver", "viewer"] as const;
@@ -24,7 +24,7 @@ export default function StackAccessScreen() {
   const grants = useStackGrantsQuery(tenantID, stackId);
 
   const [search, setSearch] = useState("");
-  const [selectedUser, setSelectedUser] = useState<DirectoryUser | null>(null);
+  const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [selectedRole, setSelectedRole] = useState<Role>("viewer");
   const [searchFocused, setSearchFocused] = useState(false);
   const [undoEntry, setUndoEntry] = useState<UndoEntry | null>(null);
@@ -46,7 +46,7 @@ export default function StackAccessScreen() {
     setMutationError("");
     try {
       await assignMutation.mutateAsync({
-        user_sub: selectedUser.id,
+        user_sub: selectedUser.sub,
         role: selectedRole
       });
       setSelectedUser(null);
@@ -213,13 +213,13 @@ export default function StackAccessScreen() {
                     </div>
                   )}
                   {searchResults.data.users.map((user) => {
-                    const assigned = assignedSubs.has(user.id);
+                    const assigned = assignedSubs.has(user.sub);
                     const currentGrant = grants.data?.grants.find(
-                      (g) => g.userSub === user.id
+                      (g) => g.userSub === user.sub
                     );
                     return (
                       <div
-                        key={user.id}
+                        key={user.sub}
                         className={`search-result-item${assigned ? " assigned" : ""}`}
                         onClick={() => {
                           if (!assigned) {
@@ -228,13 +228,11 @@ export default function StackAccessScreen() {
                           }
                         }}
                         role="option"
-                        aria-selected={selectedUser?.id === user.id}
+                        aria-selected={selectedUser?.sub === user.sub}
                       >
-                        {user.firstName
-                          ? `${user.firstName} ${user.lastName || ""}`.trim()
-                          : user.username}
+                        {user.displayName}
                         <small>
-                          {user.email || user.username}
+                          {user.email}
                           {currentGrant && ` — ${currentGrant.role}`}
                           {assigned && !currentGrant && " — assigned"}
                         </small>
@@ -248,9 +246,7 @@ export default function StackAccessScreen() {
           {selectedUser && (
             <div className="selected-user-card">
               <span>
-                {selectedUser.firstName
-                  ? `${selectedUser.firstName} ${selectedUser.lastName || ""}`.trim()
-                  : selectedUser.username}
+                {selectedUser.displayName}
               </span>
               <button
                 onClick={() => setSelectedUser(null)}
@@ -284,11 +280,11 @@ export default function StackAccessScreen() {
             {assignMutation.isPending ? (
               <>
                 <Loader2 size={14} className="spin" />
-                {assignedSubs.has(selectedUser?.id ?? "")
+                {assignedSubs.has(selectedUser?.sub ?? "")
                   ? "Replacing..."
                   : "Assigning..."}
               </>
-            ) : assignedSubs.has(selectedUser?.id ?? "") ? (
+            ) : assignedSubs.has(selectedUser?.sub ?? "") ? (
               "Replace Role"
             ) : (
               "Assign Role"

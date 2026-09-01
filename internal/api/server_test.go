@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -2313,12 +2314,12 @@ func TestMalformedGeneratedStackIDReturnsServiceUnavailable(t *testing.T) {
 func TestSearchUsersPlatformAdminAllowed(t *testing.T) {
 	t.Parallel()
 
-	expected := []app.DirectoryUser{
-		{ID: "u1", Username: "alice", Email: "alice@example.com", FirstName: "Alice", LastName: "Smith"},
-		{ID: "u2", Username: "bob", Email: "bob@example.com", FirstName: "Bob", LastName: "Jones"},
+	expected := []app.UserProfile{
+		{Sub: "u1", DisplayName: "Alice Smith", Email: "alice@example.com"},
+		{Sub: "u2", DisplayName: "Bob Jones", Email: "bob@example.com"},
 	}
 	deps := newAPITestDependencies().withPlatformTier("admin")
-	deps.userDirectory = apiFakeUserDirectory{users: expected}
+	deps.users = apiFakeUserRepository{users: expected}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/users/search?q=ali", nil)
@@ -2335,8 +2336,8 @@ func TestSearchUsersPlatformAdminAllowed(t *testing.T) {
 	if len(body.Users) != 2 {
 		t.Fatalf("users = %d, want 2", len(body.Users))
 	}
-	if body.Users[0].Username != "alice" {
-		t.Fatalf("first user = %q, want alice", body.Users[0].Username)
+	if body.Users[0].DisplayName != "Alice Smith" {
+		t.Fatalf("first user = %q, want Alice Smith", body.Users[0].DisplayName)
 	}
 	if body.First != 0 {
 		t.Fatalf("first = %d, want 0", body.First)
@@ -2423,26 +2424,29 @@ func TestSearchUsersInvalidPagination(t *testing.T) {
 	}
 }
 
-func TestSearchUsersDirectoryUnavailable(t *testing.T) {
+// The projection is a local table, so a read failure is a database failure and
+// gets the same 500 as any other repository error. There is no longer an
+// external directory that can be "unavailable" on its own.
+func TestSearchUsersRepositoryFailureIsInternalError(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies().withPlatformTier("admin")
-	deps.userDirectory = apiFakeUserDirectory{err: app.ErrDirectoryUnavailable}
+	deps.users = apiFakeUserRepository{searchErr: errors.New("connection refused")}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/users/search?q=test", nil)
 
 	server.ServeHTTP(response, request)
 
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusInternalServerError, response.Body.String())
 	}
 	var body errorResponse
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.Error != "directory_unavailable" {
-		t.Fatalf("error = %q, want directory_unavailable", body.Error)
+	if body.Error != "internal_error" {
+		t.Fatalf("error = %q, want internal_error", body.Error)
 	}
 }
 
@@ -2471,7 +2475,7 @@ type apiTestDependencies struct {
 	logs                   recordingTemplateRunLogReader
 	logMetadata            recordingTemplateRunLogRepository
 	workflows              recordingWorkflowDispatcher
-	userDirectory          apiFakeUserDirectory
+	users                  apiFakeUserRepository
 	stackID                traits.StackID
 	stackTemplateID        traits.StackTemplateID
 	runID                  traits.TemplateRunID
@@ -2524,7 +2528,7 @@ func (deps *apiTestDependencies) service() *app.Service {
 		TemplateRunLogs:          &deps.logs,
 		TemplateRunLogMetadata:   &deps.logMetadata,
 		Workflows:                &deps.workflows,
-		UserDirectory:            &deps.userDirectory,
+		Users:                    &deps.users,
 		StackIDs:                 fixedStackIDGenerator{id: deps.stackID},
 		StackTemplateIDs:         fixedStackTemplateIDGenerator{id: deps.stackTemplateID},
 		RunIDs:                   fixedTemplateRunIDGenerator{runID: deps.runID},
@@ -3080,26 +3084,40 @@ func (clock fixedClock) Now() time.Time {
 	return clock.now
 }
 
-type apiFakeUserDirectory struct {
-	users  []app.DirectoryUser
-	err    error
-	getErr error
+type apiFakeUserRepository struct {
+	users     []app.UserProfile
+	searchErr error
+	lookupErr error
+	upsertErr error
 }
 
-func (f *apiFakeUserDirectory) SearchUsers(_ context.Context, _ string, _, _ int) ([]app.DirectoryUser, error) {
-	return f.users, f.err
-}
-
-func (f *apiFakeUserDirectory) GetUser(_ context.Context, userID string) (*app.DirectoryUser, error) {
-	if f.getErr != nil {
-		return nil, f.getErr
+func (f *apiFakeUserRepository) UpsertUser(_ context.Context, profile app.UserProfile, _ time.Time) error {
+	if f.upsertErr != nil {
+		return f.upsertErr
 	}
-	for _, u := range f.users {
-		if u.ID == userID {
-			return &u, nil
+	f.users = append(f.users, profile)
+	return nil
+}
+
+func (f *apiFakeUserRepository) SearchUsers(_ context.Context, _ string, _, _ int) ([]app.UserProfile, error) {
+	return f.users, f.searchErr
+}
+
+func (f *apiFakeUserRepository) UsersBySubs(_ context.Context, subs []string) (map[string]app.UserProfile, error) {
+	if f.lookupErr != nil {
+		return nil, f.lookupErr
+	}
+	wanted := make(map[string]struct{}, len(subs))
+	for _, sub := range subs {
+		wanted[sub] = struct{}{}
+	}
+	found := make(map[string]app.UserProfile)
+	for _, user := range f.users {
+		if _, ok := wanted[user.Sub]; ok {
+			found[user.Sub] = user
 		}
 	}
-	return nil, nil
+	return found, nil
 }
 
 func TestMeReturnsIdentityWithGlobalCapabilities(t *testing.T) {
@@ -3217,8 +3235,8 @@ func TestListStackGrantsListsGrants(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.userDirectory = apiFakeUserDirectory{
-		users: []app.DirectoryUser{{ID: "user-1", Username: "alice", Email: "alice@example.com", FirstName: "Alice"}},
+	deps.users = apiFakeUserRepository{
+		users: []app.UserProfile{{Sub: "user-1", DisplayName: "Alice", Email: "alice@example.com"}},
 	}
 	deps.withGrants(testGrant(t, "user-1", "stack_123", "owner"))
 	server := NewServer(deps.service(), configuredTenantID)
@@ -3271,8 +3289,8 @@ func TestAssignStackRoleAssignsRoleAndReturnsGrantView(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.userDirectory = apiFakeUserDirectory{
-		users: []app.DirectoryUser{{ID: "user-2", Username: "bob", Email: "bob@example.com"}},
+	deps.users = apiFakeUserRepository{
+		users: []app.UserProfile{{Sub: "user-2", DisplayName: "bob", Email: "bob@example.com"}},
 	}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -3371,8 +3389,8 @@ func TestAssignStackRoleLastOwnerDemotionReturnsConflict(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.userDirectory = apiFakeUserDirectory{
-		users: []app.DirectoryUser{{ID: apiKeycloakSubject, Username: "admin", Email: "admin@example.com"}},
+	deps.users = apiFakeUserRepository{
+		users: []app.UserProfile{{Sub: apiKeycloakSubject, DisplayName: "admin", Email: "admin@example.com"}},
 	}
 	deps.withGrants(testGrant(t, apiKeycloakSubject, "stack_123", "owner"))
 	server := NewServer(deps.service(), configuredTenantID)

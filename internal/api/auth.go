@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
 )
 
@@ -104,6 +105,29 @@ func (server *Server) handleAuthCallback(response http.ResponseWriter, request *
 	}
 	if subtle.ConstantTimeCompare([]byte(verified.Nonce), []byte(transaction.Nonce)) != 1 {
 		log.Printf("auth callback: nonce mismatch")
+		server.writeAuthFailure(response)
+		return
+	}
+
+	// Project the identity before the session exists, so that a session row
+	// implies a projected user rather than merely coinciding with one. That
+	// ordering is what makes "signed in at least once" a fact the grants UI can
+	// rely on instead of a hope.
+	//
+	// A failure here fails the sign-in. It is tempting to log and continue, as
+	// a failed session touch does in the middleware, but the cases are not
+	// alike: a failed touch shortens a session that still works, whereas a
+	// failed projection would sign someone in who is then invisible to search
+	// and cannot be granted a role, with nothing anywhere saying why. It also
+	// costs nothing to be strict — this is a single-row upsert into the same
+	// database the session row is about to go into, so if it fails, the session
+	// write was going to fail too.
+	if err := server.service.RecordSignIn(request.Context(), app.UserProfile{
+		Sub:         verified.Subject,
+		DisplayName: verified.DisplayName(),
+		Email:       verified.Email,
+	}); err != nil {
+		log.Printf("auth callback: failed to project signed-in user: %v", err)
 		server.writeAuthFailure(response)
 		return
 	}
