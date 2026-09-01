@@ -11,59 +11,70 @@ import (
 )
 
 func (v *OIDCVerifier) Verify(ctx context.Context, raw string) (VerifiedToken, error) {
-	if len(raw) == 0 || len(raw) > maxTokenBytes || strings.Count(raw, ".") != 2 {
-		return VerifiedToken{}, ErrInvalidToken
-	}
-
-	header, err := protectedHeader(raw)
-	if err != nil {
-		return VerifiedToken{}, ErrInvalidToken
-	}
-	algorithm, keyID, ok := allowedHeader(header)
-	if !ok {
-		return VerifiedToken{}, ErrInvalidToken
-	}
-	key, err := v.keyFor(ctx, keyID, algorithm)
+	payload, err := v.verifiedPayload(ctx, raw)
 	if err != nil {
 		return VerifiedToken{}, err
-	}
-	payload, err := jws.Verify([]byte(raw), jws.WithKey(algorithm, key), jws.WithCompact())
-	if err != nil {
-		return v.retryAfterSignatureFailure(ctx, raw, keyID, algorithm)
 	}
 	return v.validatedToken(payload)
 }
 
-func (v *OIDCVerifier) retryAfterSignatureFailure(ctx context.Context, raw, keyID string, algorithm jwa.SignatureAlgorithm) (VerifiedToken, error) {
+// verifiedPayload checks a compact JWS against the provider's keys and returns
+// the verified payload. It says nothing about the claims inside: ID tokens and
+// back-channel logout tokens require different ones, and both need exactly this
+// signature check first.
+func (v *OIDCVerifier) verifiedPayload(ctx context.Context, raw string) ([]byte, error) {
+	if len(raw) == 0 || len(raw) > maxTokenBytes || strings.Count(raw, ".") != 2 {
+		return nil, ErrInvalidToken
+	}
+	header, err := protectedHeader(raw)
+	if err != nil {
+		return nil, ErrInvalidToken
+	}
+	algorithm, keyID, ok := allowedHeader(header)
+	if !ok {
+		return nil, ErrInvalidToken
+	}
+	key, err := v.keyFor(ctx, keyID, algorithm)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := jws.Verify([]byte(raw), jws.WithKey(algorithm, key), jws.WithCompact())
+	if err != nil {
+		return v.payloadAfterSignatureFailure(ctx, raw, keyID, algorithm)
+	}
+	return payload, nil
+}
+
+func (v *OIDCVerifier) payloadAfterSignatureFailure(ctx context.Context, raw, keyID string, algorithm jwa.SignatureAlgorithm) ([]byte, error) {
 	refreshErr := v.refreshKeys(ctx, true)
 	key, found, keyErr := v.cachedKeyFor(keyID, algorithm)
 	if keyErr != nil {
 		if errors.Is(keyErr, errJWKSCacheExpired) {
-			return VerifiedToken{}, ErrVerifierUnavailable
+			return nil, ErrVerifierUnavailable
 		}
-		return VerifiedToken{}, keyErr
+		return nil, keyErr
 	}
 	if !found {
 		if errors.Is(refreshErr, errRefreshCooldown) {
-			return VerifiedToken{}, ErrVerifierUnavailable
+			return nil, ErrVerifierUnavailable
 		}
 		if refreshErr != nil {
-			return VerifiedToken{}, ErrVerifierUnavailable
+			return nil, ErrVerifierUnavailable
 		}
-		return VerifiedToken{}, ErrInvalidToken
+		return nil, ErrInvalidToken
 	}
 	if refreshErr != nil && !errors.Is(refreshErr, errRefreshCooldown) {
-		return VerifiedToken{}, ErrVerifierUnavailable
+		return nil, ErrVerifierUnavailable
 	}
 
 	payload, err := jws.Verify([]byte(raw), jws.WithKey(algorithm, key), jws.WithCompact())
 	if err != nil {
 		if errors.Is(refreshErr, errRefreshCooldown) {
-			return VerifiedToken{}, ErrVerifierUnavailable
+			return nil, ErrVerifierUnavailable
 		}
-		return VerifiedToken{}, ErrInvalidToken
+		return nil, ErrInvalidToken
 	}
-	return v.validatedToken(payload)
+	return payload, nil
 }
 
 func protectedHeader(raw string) (jws.Headers, error) {
@@ -125,6 +136,28 @@ func (v *OIDCVerifier) validatedToken(payload []byte) (VerifiedToken, error) {
 		return VerifiedToken{}, ErrInvalidToken
 	}
 
+	// OIDC Core 1.0 §3.1.3.7 steps 4-5: azp, whenever the token carries it,
+	// must equal our client ID, and it is additionally *required* once aud
+	// carries more than one value. jwt.WithAudience above only asserts aud
+	// *contains* the client ID, which is not sufficient on its own once a
+	// mapper (ours or a stale one left behind by another IdP client) can push
+	// our audience into a token minted for a different client. That is the
+	// substitution azp exists to catch, and it happens with a single-entry
+	// aud, so the claim is checked on every token rather than only on
+	// multi-audience ones.
+	azp, ok := optionalStringClaim(token, "azp")
+	if !ok {
+		return VerifiedToken{}, ErrInvalidToken
+	}
+	if azp != "" && azp != v.cfg.Audience {
+		return VerifiedToken{}, ErrInvalidToken
+	}
+	if azp == "" {
+		if audiences, ok := token.Audience(); ok && len(audiences) > 1 {
+			return VerifiedToken{}, ErrInvalidToken
+		}
+	}
+
 	subject, ok := token.Subject()
 	if !ok || subject == "" {
 		return VerifiedToken{}, ErrInvalidToken
@@ -141,11 +174,26 @@ func (v *OIDCVerifier) validatedToken(payload []byte) (VerifiedToken, error) {
 	if !ok {
 		return VerifiedToken{}, ErrInvalidToken
 	}
+	nonce, ok := optionalStringClaim(token, "nonce")
+	if !ok {
+		return VerifiedToken{}, ErrInvalidToken
+	}
+	sessionID, ok := optionalStringClaim(token, "sid")
+	if !ok {
+		return VerifiedToken{}, ErrInvalidToken
+	}
+	expiresAt, ok := token.Expiration()
+	if !ok {
+		return VerifiedToken{}, ErrInvalidToken
+	}
 	return VerifiedToken{
 		Subject:           subject,
 		Name:              name,
 		PreferredUsername: preferredUsername,
 		Email:             email,
+		Nonce:             nonce,
+		ExpiresAt:         expiresAt,
+		SessionID:         sessionID,
 	}, nil
 }
 

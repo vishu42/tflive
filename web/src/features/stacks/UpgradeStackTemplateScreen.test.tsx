@@ -142,6 +142,7 @@ describe("UpgradeStackTemplateScreen", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("preselects the first same-source alternative revision", () => {
@@ -325,6 +326,10 @@ describe("UpgradeStackTemplateScreen", () => {
     // being dropped. The loading guards cannot catch it: a failed query is
     // "error", not "pending", and isFetching is false once retries are spent.
     queryClient.removeQueries({ queryKey: queryKeys.templateRevisionVariables("tenant_123", "rev_next") });
+    // The 401 also drives client.ts's fetchWithAuth to navigate via
+    // globalThis.location.assign; stub it so jsdom does not attempt (and
+    // warn about) a real navigation.
+    vi.stubGlobal("location", { ...window.location, assign: vi.fn() });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ error: "unauthorized", message: "unauthorized" }), {
         status: 401,
@@ -343,6 +348,10 @@ describe("UpgradeStackTemplateScreen", () => {
     const queryClient = testQueryClient();
     seedUpgradeable(queryClient);
     queryClient.removeQueries({ queryKey: queryKeys.templateRevisionVariables("tenant_123", "rev_current") });
+    // The 401 also drives client.ts's fetchWithAuth to navigate via
+    // globalThis.location.assign; stub it so jsdom does not attempt (and
+    // warn about) a real navigation.
+    vi.stubGlobal("location", { ...window.location, assign: vi.fn() });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ error: "unauthorized", message: "unauthorized" }), {
         status: 401,
@@ -372,6 +381,20 @@ describe("UpgradeStackTemplateScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: /Change revision/ }));
 
     await waitFor(() => expect(screen.getByTestId("upgrade-stack-template-error")).toBeTruthy());
+  });
+
+  // Without the marker, SessionProvider's proactive re-auth timer sees no
+  // in-flight mutation and no unsaved work, and full-page-navigates to the IdP
+  // mid-edit — taking every value typed here with it.
+  it("marks itself unsaved once a variable is edited, so SessionProvider's proactive re-auth defers", () => {
+    const queryClient = testQueryClient();
+    seedUpgradeable(queryClient);
+
+    renderScreen(queryClient);
+
+    expect(document.querySelector("[data-unsaved='true']")).toBeNull();
+    fireEvent.change(screen.getByLabelText(/new_var/), { target: { value: "enabled" } });
+    expect(document.querySelector("[data-unsaved='true']")).not.toBeNull();
   });
 
   it("renders not found when the stack template id is not installed", () => {

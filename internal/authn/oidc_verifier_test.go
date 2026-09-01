@@ -29,16 +29,20 @@ type oidcTestServer struct {
 	issuer          string
 	issuerPathToken string
 
-	mu                sync.Mutex
-	keys              map[string]*rsa.PrivateKey
-	published         []string
-	discoveryIssuer   string
-	unavailableBody   string
-	discoveryBody     string
-	jwksBody          string
-	discoveryRequests int
-	jwksRequests      int
-	clock             time.Time
+	mu                    sync.Mutex
+	keys                  map[string]*rsa.PrivateKey
+	published             []string
+	discoveryIssuer       string
+	unavailableBody       string
+	discoveryBody         string
+	jwksBody              string
+	authorizationEndpoint string
+	tokenEndpoint         string
+	endSessionEndpoint    string
+	omitEndpoints         bool
+	discoveryRequests     int
+	jwksRequests          int
+	clock                 time.Time
 }
 
 func newOIDCTestServer(t *testing.T) *oidcTestServer {
@@ -52,6 +56,9 @@ func newOIDCTestServer(t *testing.T) *oidcTestServer {
 	s.server = httptest.NewServer(http.HandlerFunc(s.serveHTTP))
 	s.issuer = s.server.URL + "/" + s.issuerPathToken
 	s.discoveryIssuer = s.issuer
+	s.authorizationEndpoint = s.server.URL + "/authorize"
+	s.tokenEndpoint = s.server.URL + "/token"
+	s.endSessionEndpoint = s.server.URL + "/logout"
 	t.Cleanup(s.server.Close)
 
 	return s
@@ -148,6 +155,10 @@ func (s *oidcTestServer) serveDiscovery(writer http.ResponseWriter) {
 	unavailableBody := s.unavailableBody
 	discoveryBody := s.discoveryBody
 	issuer := s.discoveryIssuer
+	authorizationEndpoint := s.authorizationEndpoint
+	tokenEndpoint := s.tokenEndpoint
+	endSessionEndpoint := s.endSessionEndpoint
+	omitEndpoints := s.omitEndpoints
 	s.mu.Unlock()
 
 	if unavailableBody != "" {
@@ -160,14 +171,21 @@ func (s *oidcTestServer) serveDiscovery(writer http.ResponseWriter) {
 		return
 	}
 
+	type document struct {
+		Issuer                string `json:"issuer"`
+		JWKSURI               string `json:"jwks_uri"`
+		AuthorizationEndpoint string `json:"authorization_endpoint,omitempty"`
+		TokenEndpoint         string `json:"token_endpoint,omitempty"`
+		EndSessionEndpoint    string `json:"end_session_endpoint,omitempty"`
+	}
+	doc := document{Issuer: issuer, JWKSURI: s.server.URL + "/jwks"}
+	if !omitEndpoints {
+		doc.AuthorizationEndpoint = authorizationEndpoint
+		doc.TokenEndpoint = tokenEndpoint
+		doc.EndSessionEndpoint = endSessionEndpoint
+	}
 	writer.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(writer).Encode(struct {
-		Issuer  string `json:"issuer"`
-		JWKSURI string `json:"jwks_uri"`
-	}{
-		Issuer:  issuer,
-		JWKSURI: s.server.URL + "/jwks",
-	}); err != nil {
+	if err := json.NewEncoder(writer).Encode(doc); err != nil {
 		s.t.Errorf("Encode discovery document: %v", err)
 	}
 }
@@ -223,7 +241,8 @@ func TestOIDCVerifierVerifiesValidAccessTokenAndExtractsIdentity(t *testing.T) {
 	s := newOIDCTestServer(t)
 	s.addRSAKey(t, "key-a")
 	s.publish("key-a")
-	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	now := time.Now()
+	v, err := NewOIDCVerifier(context.Background(), s.config(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,9 +258,124 @@ func TestOIDCVerifierVerifiesValidAccessTokenAndExtractsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
-	want := VerifiedToken{Subject: "user-123", Name: "Ada Lovelace", PreferredUsername: "ada", Email: "ada@example.test"}
+	want := VerifiedToken{
+		Subject:           "user-123",
+		Name:              "Ada Lovelace",
+		PreferredUsername: "ada",
+		Email:             "ada@example.test",
+		ExpiresAt:         now.Add(time.Hour).Truncate(time.Second).UTC(),
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Verify() = %#v, want %#v", got, want)
+	}
+}
+
+func TestOIDCVerifierExtractsNonceAndExpiry(t *testing.T) {
+	server := newOIDCTestServer(t)
+	server.addRSAKey(t, "kid-1")
+	server.publish("kid-1")
+	now := time.Now()
+	expiry := now.Add(time.Hour).Truncate(time.Second)
+
+	verifier, err := NewOIDCVerifier(context.Background(), server.config(now))
+	if err != nil {
+		t.Fatalf("NewOIDCVerifier returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = verifier.Close(context.Background()) })
+
+	raw := server.sign(t, "kid-1", func(tok jwt.Token) {
+		_ = tok.Set(jwt.ExpirationKey, expiry)
+		_ = tok.Set("nonce", "nonce-value")
+	})
+
+	verified, err := verifier.Verify(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Verify returned error: %v", err)
+	}
+	if verified.Nonce != "nonce-value" {
+		t.Fatalf("Nonce = %q, want nonce-value", verified.Nonce)
+	}
+	if !verified.ExpiresAt.Equal(expiry) {
+		t.Fatalf("ExpiresAt = %v, want %v", verified.ExpiresAt, expiry)
+	}
+}
+
+func TestOIDCVerifierAcceptsTokenWithoutNonce(t *testing.T) {
+	// nonce is optional in the code flow. An absent claim is a valid token, not
+	// a malformed one; the callback is what decides whether it needed to match.
+	server := newOIDCTestServer(t)
+	server.addRSAKey(t, "kid-1")
+	server.publish("kid-1")
+	now := time.Now()
+
+	verifier, err := NewOIDCVerifier(context.Background(), server.config(now))
+	if err != nil {
+		t.Fatalf("NewOIDCVerifier returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = verifier.Close(context.Background()) })
+
+	raw := server.sign(t, "kid-1", nil)
+
+	verified, err := verifier.Verify(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Verify returned error: %v", err)
+	}
+	if verified.Nonce != "" {
+		t.Fatalf("Nonce = %q, want empty", verified.Nonce)
+	}
+}
+
+func TestOIDCVerifierExposesDiscoveredEndpoints(t *testing.T) {
+	server := newOIDCTestServer(t)
+	server.addRSAKey(t, "kid-1")
+	server.publish("kid-1")
+
+	verifier, err := NewOIDCVerifier(context.Background(), server.config(time.Now()))
+	if err != nil {
+		t.Fatalf("NewOIDCVerifier returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = verifier.Close(context.Background()) })
+
+	endpoints := verifier.Endpoints()
+	if endpoints.Authorization != server.authorizationEndpoint {
+		t.Fatalf("Authorization = %q, want %q", endpoints.Authorization, server.authorizationEndpoint)
+	}
+	if endpoints.Token != server.tokenEndpoint {
+		t.Fatalf("Token = %q, want %q", endpoints.Token, server.tokenEndpoint)
+	}
+	if endpoints.EndSession != server.endSessionEndpoint {
+		t.Fatalf("EndSession = %q, want %q", endpoints.EndSession, server.endSessionEndpoint)
+	}
+}
+
+func TestOIDCVerifierRejectsDiscoveryMissingFlowEndpoints(t *testing.T) {
+	// Without an authorization or token endpoint the API cannot run the flow at
+	// all, so failing at construction beats failing on the first login.
+	server := newOIDCTestServer(t)
+	server.addRSAKey(t, "kid-1")
+	server.publish("kid-1")
+	server.omitEndpoints = true
+
+	if _, err := NewOIDCVerifier(context.Background(), server.config(time.Now())); !errors.Is(err, ErrVerifierUnavailable) {
+		t.Fatalf("NewOIDCVerifier error = %v, want ErrVerifierUnavailable", err)
+	}
+}
+
+func TestOIDCVerifierAcceptsProviderWithoutEndSessionEndpoint(t *testing.T) {
+	// end_session_endpoint is optional; logout degrades to clearing our cookie.
+	server := newOIDCTestServer(t)
+	server.addRSAKey(t, "kid-1")
+	server.publish("kid-1")
+	server.endSessionEndpoint = ""
+
+	verifier, err := NewOIDCVerifier(context.Background(), server.config(time.Now()))
+	if err != nil {
+		t.Fatalf("NewOIDCVerifier returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = verifier.Close(context.Background()) })
+
+	if endpoints := verifier.Endpoints(); endpoints.EndSession != "" {
+		t.Fatalf("EndSession = %q, want empty", endpoints.EndSession)
 	}
 }
 
@@ -287,6 +421,164 @@ func TestOIDCVerifierVerifiesStringAudience(t *testing.T) {
 	}
 	if got.Subject != "user-123" {
 		t.Fatalf("Verify().Subject = %q, want user-123", got.Subject)
+	}
+}
+
+// OIDC Core 1.0 §3.1.3.7 steps 4-5: azp must equal our client ID whenever it
+// is present, and is required once aud carries more than one value. A
+// single-audience token need not carry it, so an absent azp there is fine.
+func TestOIDCVerifierAcceptsSingleAudienceTokenWithoutAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience"})
+	})
+	got, err := v.Verify(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if got.Subject != "user-123" {
+		t.Fatalf("Verify().Subject = %q, want user-123", got.Subject)
+	}
+}
+
+func TestOIDCVerifierAcceptsMultiAudienceTokenWithMatchingAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience", "other-client"})
+		_ = tok.Set("azp", "test-audience")
+	})
+	got, err := v.Verify(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if got.Subject != "user-123" {
+		t.Fatalf("Verify().Subject = %q, want user-123", got.Subject)
+	}
+}
+
+// The exploitable path: an ID token minted by the same issuer for a different
+// client, with our client ID pushed into aud by a stray audience mapper. If
+// azp names that other client, this must not authenticate as us.
+func TestOIDCVerifierRejectsMultiAudienceTokenWithWrongAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience", "other-client"})
+		_ = tok.Set("azp", "other-client")
+	})
+	_, err = v.Verify(context.Background(), raw)
+	if !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("Verify() error = %v, want ErrInvalidToken", err)
+	}
+}
+
+func TestOIDCVerifierRejectsMultiAudienceTokenWithAbsentAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience", "other-client"})
+	})
+	_, err = v.Verify(context.Background(), raw)
+	if !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("Verify() error = %v, want ErrInvalidToken", err)
+	}
+}
+
+// The substitution azp actually guards against: another client in the same
+// realm holds an ID token minted for itself, and a stray audience mapper has
+// replaced our audience into it, leaving aud a single entry that names us.
+// Only azp still names the client the token was issued to, so it must be
+// consulted even when aud carries one value.
+func TestOIDCVerifierRejectsSingleAudienceTokenWithWrongAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience"})
+		_ = tok.Set("azp", "other-client")
+	})
+	_, err = v.Verify(context.Background(), raw)
+	if !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("Verify() error = %v, want ErrInvalidToken", err)
+	}
+}
+
+func TestOIDCVerifierAcceptsSingleAudienceTokenWithMatchingAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience"})
+		_ = tok.Set("azp", "test-audience")
+	})
+	got, err := v.Verify(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if got.Subject != "user-123" {
+		t.Fatalf("Verify().Subject = %q, want user-123", got.Subject)
+	}
+}
+
+func TestOIDCVerifierRejectsNonStringAzp(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close(context.Background())
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		_ = tok.Set(jwt.AudienceKey, []string{"test-audience"})
+		_ = tok.Set("azp", []string{"test-audience"})
+	})
+	_, err = v.Verify(context.Background(), raw)
+	if !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("Verify() error = %v, want ErrInvalidToken", err)
 	}
 }
 
@@ -733,6 +1025,46 @@ func TestOIDCVerifierRedactsTokenAndProviderDetails(t *testing.T) {
 	}
 }
 
+func TestVerifyCarriesSessionIDClaim(t *testing.T) {
+	verified := verifyTokenWithClaims(t, map[string]any{"sid": "idp-sid-1"})
+	if verified.SessionID != "idp-sid-1" {
+		t.Fatalf("SessionID = %q, want %q", verified.SessionID, "idp-sid-1")
+	}
+}
+
+func TestVerifyToleratesAbsentSessionIDClaim(t *testing.T) {
+	verified := verifyTokenWithClaims(t, nil)
+	if verified.SessionID != "" {
+		t.Fatalf("SessionID = %q, want empty when sid is absent", verified.SessionID)
+	}
+}
+
+// verifyTokenWithClaims mints a token carrying the given extra claims, signs
+// it, and runs it through a fresh verifier.
+func verifyTokenWithClaims(t *testing.T, claims map[string]any) VerifiedToken {
+	t.Helper()
+
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+	v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+	if err != nil {
+		t.Fatalf("NewOIDCVerifier() error = %v", err)
+	}
+	t.Cleanup(func() { _ = v.Close(context.Background()) })
+
+	raw := s.sign(t, "key-a", func(tok jwt.Token) {
+		for name, value := range claims {
+			_ = tok.Set(name, value)
+		}
+	})
+	verified, err := v.Verify(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	return verified
+}
+
 func (s *oidcTestServer) sign(t *testing.T, keyID string, mutate func(jwt.Token)) string {
 	t.Helper()
 
@@ -905,7 +1237,8 @@ func TestOIDCVerifierAcceptsProviderTokenShapes(t *testing.T) {
 			s := newOIDCTestServer(t)
 			s.addRSAKey(t, "key-a")
 			s.publish("key-a")
-			v, err := NewOIDCVerifier(context.Background(), s.config(time.Now()))
+			now := time.Now()
+			v, err := NewOIDCVerifier(context.Background(), s.config(now))
 			if err != nil {
 				t.Fatalf("NewOIDCVerifier() error = %v", err)
 			}
@@ -915,8 +1248,10 @@ func TestOIDCVerifierAcceptsProviderTokenShapes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Verify() error = %v", err)
 			}
-			if !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("Verify() = %#v, want %#v", got, test.want)
+			want := test.want
+			want.ExpiresAt = now.Add(time.Hour).Truncate(time.Second).UTC()
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("Verify() = %#v, want %#v", got, want)
 			}
 		})
 	}

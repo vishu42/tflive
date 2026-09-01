@@ -86,6 +86,10 @@ export default function UpgradeStackTemplateScreen() {
   }
 
   const upgradeStackTemplateMutation = useUpgradeStackTemplateMutation(tenantID, stackId);
+  // Read by SessionProvider's proactive re-auth timer: it defers navigating
+  // away while a `[data-unsaved='true']` element is mounted, so values typed
+  // into the upgrade form are never wiped out by a background sign-in redirect.
+  const hasUnsavedValues = Object.keys(editedValues).length > 0;
 
   async function handleUpgrade() {
     if (!stackTemplate || !targetRevision || targetVariablesRefreshing) {
@@ -195,7 +199,11 @@ export default function UpgradeStackTemplateScreen() {
   }
 
   return (
-    <section className="upgrade-stack-template-screen" data-testid="upgrade-stack-template-screen">
+    <section
+      className="upgrade-stack-template-screen"
+      data-testid="upgrade-stack-template-screen"
+      data-unsaved={hasUnsavedValues ? "true" : undefined}
+    >
       <header className="page-header">
         {backLink}
         <h1>{stackTemplateLabel(stackTemplate)}</h1>

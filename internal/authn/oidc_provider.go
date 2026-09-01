@@ -28,8 +28,28 @@ var (
 const manualJWKSRefreshInterval = 100 * 365 * 24 * time.Hour
 
 type discoveryDocument struct {
-	Issuer  string `json:"issuer"`
-	JWKSURI string `json:"jwks_uri"`
+	Issuer                string `json:"issuer"`
+	JWKSURI               string `json:"jwks_uri"`
+	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	TokenEndpoint         string `json:"token_endpoint"`
+	EndSessionEndpoint    string `json:"end_session_endpoint"`
+}
+
+// validFlowEndpoints reports whether discovery advertises the endpoints the
+// authorization-code flow needs. end_session_endpoint is optional: a provider
+// without one degrades to local logout.
+func validFlowEndpoints(discovery discoveryDocument) bool {
+	for _, raw := range []string{discovery.AuthorizationEndpoint, discovery.TokenEndpoint} {
+		parsed, err := url.Parse(raw)
+		if err != nil || !validProviderURL(parsed) || parsed.User != nil {
+			return false
+		}
+	}
+	if discovery.EndSessionEndpoint == "" {
+		return true
+	}
+	parsed, err := url.Parse(discovery.EndSessionEndpoint)
+	return err == nil && validProviderURL(parsed) && parsed.User == nil
 }
 
 type keyCache struct {
@@ -63,6 +83,9 @@ func NewOIDCVerifier(ctx context.Context, cfg OIDCVerifierConfig) (*OIDCVerifier
 		return nil, ErrVerifierUnavailable
 	}
 	if discovery.Issuer != cfg.IssuerURL.String() {
+		return nil, ErrVerifierUnavailable
+	}
+	if !validFlowEndpoints(discovery) {
 		return nil, ErrVerifierUnavailable
 	}
 
@@ -287,6 +310,9 @@ func (v *OIDCVerifier) refreshDiscoveryIfDue(ctx context.Context) error {
 	}
 	if discovery.Issuer != v.cfg.IssuerURL.String() {
 		return errors.New("OIDC discovery issuer mismatch")
+	}
+	if !validFlowEndpoints(discovery) {
+		return errors.New("OIDC discovery is missing flow endpoints")
 	}
 	jwksURL, err := validJWKSURL(discovery.JWKSURI)
 	if err != nil {

@@ -34,6 +34,10 @@ export default function AddStackTemplateScreen() {
   const variablesFailed = chosenRevision !== null && variablesQuery.status === "error";
 
   const addTemplateToStackMutation = useAddTemplateToStackMutation(tenantID, stackId);
+  // Read by SessionProvider's proactive re-auth timer: it defers navigating
+  // away while a `[data-unsaved='true']` element is mounted, so variable
+  // values entered here are never wiped out by a background sign-in redirect.
+  const hasUnsavedValues = Object.keys(values).length > 0;
 
   function handleChoose(revisionID: string) {
     setChosenRevisionID(revisionID);
@@ -91,7 +95,11 @@ export default function AddStackTemplateScreen() {
   }
 
   return (
-    <section className="add-stack-template-screen" data-testid="add-stack-template-screen">
+    <section
+      className="add-stack-template-screen"
+      data-testid="add-stack-template-screen"
+      data-unsaved={hasUnsavedValues ? "true" : undefined}
+    >
       <header className="page-header">
         <Link to={`/stacks/${stackId}/template`} className="muted back-link">
           <ArrowLeft size={14} />

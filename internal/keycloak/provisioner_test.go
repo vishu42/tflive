@@ -11,14 +11,14 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 	t.Parallel()
 
 	cfg := configForServer(t, "http://keycloak.example.test")
-	backend := newFakeProvisionBackend(cfg)
+	backend := newFakeProvisionBackend()
 
 	for run := 1; run <= 2; run++ {
 		result, err := provisionWithBackend(context.Background(), cfg, backend)
 		if err != nil {
 			t.Fatalf("provisionWithBackend() run %d error = %v", run, err)
 		}
-		if result.Realm != "tflive" || result.WebClientID != "tflive-web" || result.APIClientID != "tflive-api" {
+		if result.Realm != "tflive" || result.APIClientID != "tflive-api" {
 			t.Fatalf("result = %#v", result)
 		}
 	}
@@ -36,14 +36,12 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 	if got, want := backend.createdRoles, 0; got != want {
 		t.Fatalf("created roles = %d, want %d", got, want)
 	}
-	if got, want := backend.createdClients, 3; got != want {
+	// No audience scope, no protocol mapper: this task's whole point is that
+	// an ID token's aud is the client ID by construction, so the workaround
+	// that forced an aud into an access token is gone. The backend has no way
+	// to create either any more -- provisionBackend no longer has the methods.
+	if got, want := backend.createdClients, 2; got != want {
 		t.Fatalf("created clients = %d, want %d", got, want)
-	}
-	if got, want := backend.createdScopes, 1; got != want {
-		t.Fatalf("created scopes = %d, want %d", got, want)
-	}
-	if got, want := backend.createdMappers, 1; got != want {
-		t.Fatalf("created mappers = %d, want %d", got, want)
 	}
 	if got, want := backend.createdUsers, 2; got != want {
 		t.Fatalf("created users = %d, want %d", got, want)
@@ -66,28 +64,9 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 		t.Fatalf("realm role mappings = %#v, want none", backend.realmRoleMappings)
 	}
 
-	web := backend.clients[cfg.WebClientID]
-	if !web.PublicClient || !web.StandardFlowEnabled || web.BearerOnly || web.ImplicitFlowEnabled || web.DirectAccessGrantsEnabled || web.ServiceAccountsEnabled {
-		t.Fatalf("web client flow spec = %#v", web)
-	}
-	if web.Attributes["pkce.code.challenge.method"] != "S256" {
-		t.Fatalf("web PKCE method = %q", web.Attributes["pkce.code.challenge.method"])
-	}
-	if !equalStrings(web.RedirectURIs, cfg.RedirectURIs) || !equalStrings(web.WebOrigins, cfg.WebOrigins) {
-		t.Fatalf("web allowlists = redirects %#v origins %#v", web.RedirectURIs, web.WebOrigins)
-	}
-
 	api := backend.clients[cfg.APIClientID]
-	if !api.BearerOnly || api.PublicClient || api.StandardFlowEnabled || api.DirectAccessGrantsEnabled || api.ServiceAccountsEnabled {
+	if !api.StandardFlowEnabled || api.PublicClient || api.BearerOnly || api.ImplicitFlowEnabled || api.DirectAccessGrantsEnabled || api.ServiceAccountsEnabled {
 		t.Fatalf("API client flow spec = %#v", api)
-	}
-
-	mapper := backend.mappers[audienceScopeName+"/"+audienceMapperName]
-	if mapper.ProtocolMapper != "oidc-audience-mapper" || mapper.Config["included.client.audience"] != cfg.APIClientID || mapper.Config["access.token.claim"] != "true" {
-		t.Fatalf("audience mapper = %#v", mapper)
-	}
-	if !backend.defaultScopes[cfg.WebClientID][audienceScopeName] || !backend.defaultScopes[cfg.WebClientID]["roles"] {
-		t.Fatalf("web default scopes = %#v", backend.defaultScopes[cfg.WebClientID])
 	}
 
 	// The seeded administrator carries no global realm role at all. Its
@@ -135,31 +114,60 @@ func TestProvisionWithBackendIsRepeatableAndUsesApprovedDesiredState(t *testing.
 	}
 }
 
-func TestProvisionWithBackendRejectsInvalidEffectiveToken(t *testing.T) {
+func TestProvisionCreatesOneConfidentialClient(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		token   ExampleAccessToken
-		wantErr string
-	}{
-		// The audience is all the effective token is checked for now. A realm
-		// role in it decides nothing, so its absence is not an error.
-		{name: "missing API audience", token: ExampleAccessToken{Audience: []string{"account"}}, wantErr: "missing audience tflive-api"},
-	}
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			cfg := configForServer(t, "http://keycloak.example.test")
-			backend := newFakeProvisionBackend(cfg)
-			backend.exampleToken = tt.token
+	cfg := configForServer(t, "http://keycloak.example.test")
+	backend := newFakeProvisionBackend()
 
-			_, err := provisionWithBackend(context.Background(), cfg, backend)
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("provisionWithBackend() error = %v, want substring %q", err, tt.wantErr)
-			}
-		})
+	if _, err := provisionWithBackend(context.Background(), cfg, backend); err != nil {
+		t.Fatalf("provisionWithBackend returned error: %v", err)
+	}
+
+	if _, exists := backend.clients["tflive-web"]; exists {
+		t.Fatal("the public browser client still exists")
+	}
+
+	api := backend.clients[cfg.APIClientID]
+	if api.PublicClient || api.BearerOnly {
+		t.Fatalf("api client = %#v, want confidential and not bearer-only", api)
+	}
+	if !api.StandardFlowEnabled {
+		t.Fatal("api client cannot run the authorization-code flow")
+	}
+	if api.Secret != cfg.APIClientSecret {
+		t.Fatalf("api client secret = %q", api.Secret)
+	}
+	if len(api.RedirectURIs) != 1 || api.RedirectURIs[0] != cfg.CallbackURI {
+		t.Fatalf("redirect URIs = %v, want [%s]", api.RedirectURIs, cfg.CallbackURI)
+	}
+	if len(api.WebOrigins) != 0 {
+		t.Fatalf("web origins = %v, want none — the browser never calls the API cross-origin", api.WebOrigins)
+	}
+	if api.Attributes["post.logout.redirect.uris"] != cfg.PostLogoutRedirectURI {
+		t.Fatalf("post-logout redirect = %q", api.Attributes["post.logout.redirect.uris"])
+	}
+	if api.Attributes["pkce.code.challenge.method"] != "S256" {
+		t.Fatal("PKCE is not enforced on the confidential client")
+	}
+}
+
+func TestProvisionRegistersBackchannelLogout(t *testing.T) {
+	t.Parallel()
+
+	cfg := configForServer(t, "http://keycloak.example.test")
+	backend := newFakeProvisionBackend()
+
+	if _, err := provisionWithBackend(context.Background(), cfg, backend); err != nil {
+		t.Fatalf("provisionWithBackend returned error: %v", err)
+	}
+
+	api := backend.clients[cfg.APIClientID]
+	if api.Attributes["backchannel.logout.url"] != cfg.BackchannelLogoutURI {
+		t.Fatalf("backchannel.logout.url = %q, want %q", api.Attributes["backchannel.logout.url"], cfg.BackchannelLogoutURI)
+	}
+	if api.Attributes["backchannel.logout.session.required"] != "true" {
+		t.Fatalf("backchannel.logout.session.required = %q, want true — without it Keycloak omits sid, and a signed-out device would sign out every session the user has", api.Attributes["backchannel.logout.session.required"])
 	}
 }
 
@@ -171,7 +179,6 @@ func TestProvisionWithBackendRequiresKeycloakBuiltins(t *testing.T) {
 		mutate  func(*fakeProvisionBackend)
 		wantErr string
 	}{
-		{name: "roles client scope", mutate: func(b *fakeProvisionBackend) { delete(b.scopes, "roles") }, wantErr: "required client scope roles"},
 		{name: "realm management client", mutate: func(b *fakeProvisionBackend) { delete(b.clients, "realm-management") }, wantErr: "required client realm-management"},
 	}
 	for _, tt := range tests {
@@ -179,7 +186,7 @@ func TestProvisionWithBackendRequiresKeycloakBuiltins(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := configForServer(t, "http://keycloak.example.test")
-			backend := newFakeProvisionBackend(cfg)
+			backend := newFakeProvisionBackend()
 			tt.mutate(backend)
 
 			_, err := provisionWithBackend(context.Background(), cfg, backend)
@@ -194,33 +201,24 @@ type fakeProvisionBackend struct {
 	realms              map[string]RealmSpec
 	roles               map[string]RoleSpec
 	clients             map[string]ClientSpec
-	scopes              map[string]ClientScopeSpec
-	mappers             map[string]ProtocolMapperSpec
 	users               map[string]UserSpec
-	defaultScopes       map[string]map[string]bool
 	realmRoleMappings   map[string]map[string]bool
 	clientRoleMappings  map[string]map[string]map[string]bool
 	clientScopeMappings map[string]map[string]map[string]bool
-	exampleToken        ExampleAccessToken
 
 	createdRealms  int
 	createdRoles   int
 	createdClients int
-	createdScopes  int
-	createdMappers int
 	createdUsers   int
 }
 
-func newFakeProvisionBackend(cfg Config) *fakeProvisionBackend {
+func newFakeProvisionBackend() *fakeProvisionBackend {
 	return &fakeProvisionBackend{
 		realms: map[string]RealmSpec{}, roles: map[string]RoleSpec{},
 		clients: map[string]ClientSpec{"realm-management": {ClientID: "realm-management"}},
-		scopes:  map[string]ClientScopeSpec{"roles": {Name: "roles", Protocol: "openid-connect"}},
-		mappers: map[string]ProtocolMapperSpec{}, users: map[string]UserSpec{},
-		defaultScopes: map[string]map[string]bool{}, realmRoleMappings: map[string]map[string]bool{},
+		users:   map[string]UserSpec{}, realmRoleMappings: map[string]map[string]bool{},
 		clientRoleMappings:  map[string]map[string]map[string]bool{},
 		clientScopeMappings: map[string]map[string]map[string]bool{},
-		exampleToken:        ExampleAccessToken{Audience: []string{cfg.APIClientID}, RealmRoles: []string{"platform-admin", "stack-creator"}},
 	}
 }
 
@@ -253,38 +251,6 @@ func (f *fakeProvisionBackend) LookupClient(_ context.Context, _ string, clientI
 		return ResourceRef{}, fmt.Errorf("required client %s was not found", clientID)
 	}
 	return ResourceRef{ID: "client-" + clientID, Name: clientID}, nil
-}
-
-func (f *fakeProvisionBackend) EnsureClientScope(_ context.Context, _ string, spec ClientScopeSpec) (ResourceRef, error) {
-	if _, ok := f.scopes[spec.Name]; !ok {
-		f.createdScopes++
-	}
-	f.scopes[spec.Name] = spec
-	return ResourceRef{ID: "scope-" + spec.Name, Name: spec.Name}, nil
-}
-
-func (f *fakeProvisionBackend) LookupClientScope(_ context.Context, _ string, name string) (ResourceRef, error) {
-	if _, ok := f.scopes[name]; !ok {
-		return ResourceRef{}, fmt.Errorf("required client scope %s was not found", name)
-	}
-	return ResourceRef{ID: "scope-" + name, Name: name}, nil
-}
-
-func (f *fakeProvisionBackend) EnsureProtocolMapper(_ context.Context, _ string, scope ResourceRef, spec ProtocolMapperSpec) error {
-	key := scope.Name + "/" + spec.Name
-	if _, ok := f.mappers[key]; !ok {
-		f.createdMappers++
-	}
-	f.mappers[key] = spec
-	return nil
-}
-
-func (f *fakeProvisionBackend) EnsureDefaultClientScope(_ context.Context, _ string, client, scope ResourceRef) error {
-	if f.defaultScopes[client.Name] == nil {
-		f.defaultScopes[client.Name] = map[string]bool{}
-	}
-	f.defaultScopes[client.Name][scope.Name] = true
-	return nil
 }
 
 func (f *fakeProvisionBackend) EnsureUser(_ context.Context, _ string, spec UserSpec) (ResourceRef, error) {
@@ -323,8 +289,4 @@ func (f *fakeProvisionBackend) EnsureClientScopeMapping(_ context.Context, _ str
 		f.clientScopeMappings[client.Name][roleClient.Name][role.Name] = true
 	}
 	return nil
-}
-
-func (f *fakeProvisionBackend) ExampleAccessToken(_ context.Context, _ string, _, _ ResourceRef) (ExampleAccessToken, error) {
-	return f.exampleToken, nil
 }

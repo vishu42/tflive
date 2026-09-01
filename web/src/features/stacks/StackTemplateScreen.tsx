@@ -73,6 +73,10 @@ export default function StackTemplateScreen() {
   const deleteTemplateCredentialMutation = useDeleteStackTemplateCredentialMutation(tenantID, installedTemplate?.id ?? "");
 
   const canSaveConfig = canSaveInstalledTemplateConfig(installedTemplate, variables, variableValues);
+  // Read by SessionProvider's proactive re-auth timer: it defers navigating
+  // away while a `[data-unsaved='true']` element is mounted, so an in-flight
+  // edit here is never wiped out by a background sign-in redirect.
+  const hasUnsavedConfig = Object.keys(editedValues).length > 0;
 
   function handleSelectStackTemplate(stackTemplateID: string) {
     if (stackTemplateID === installedTemplate?.id) {
@@ -228,19 +232,21 @@ export default function StackTemplateScreen() {
               </RequireCapability>
             </section>
             <TemplateRunActions stackId={stackId} stackTemplate={installedTemplate} />
-            <RequireCapability
-              capability="canOperate"
-              fallback={
-                <StackTemplateConfigPanel
-                  {...configPanelProps}
-                  canSave={false}
-                  saveBusy={false}
-                  disabledReason="Editing requires operator access"
-                />
-              }
-            >
-              <StackTemplateConfigPanel {...configPanelProps} />
-            </RequireCapability>
+            <div data-unsaved={hasUnsavedConfig ? "true" : undefined}>
+              <RequireCapability
+                capability="canOperate"
+                fallback={
+                  <StackTemplateConfigPanel
+                    {...configPanelProps}
+                    canSave={false}
+                    saveBusy={false}
+                    disabledReason="Editing requires operator access"
+                  />
+                }
+              >
+                <StackTemplateConfigPanel {...configPanelProps} />
+              </RequireCapability>
+            </div>
             <RequireCapability capability="canManageAccess">
               <CredentialsPanel
                 title="Template credentials"

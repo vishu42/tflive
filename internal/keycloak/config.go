@@ -2,7 +2,6 @@ package keycloak
 
 import (
 	"fmt"
-	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -11,7 +10,6 @@ import (
 const (
 	defaultAdminRealm  = "master"
 	defaultRealm       = "tflive"
-	defaultWebClient   = "tflive-web"
 	defaultAPIClient   = "tflive-api"
 	defaultHTTPTimeout = 10 * time.Second
 )
@@ -19,19 +17,25 @@ const (
 // Config contains the complete desired state and credentials needed for one
 // Keycloak provisioning run. Secret fields must never be logged.
 type Config struct {
-	AdminURL               *url.URL
-	AdminRealm             string
-	AdminUsername          string
-	AdminPassword          string
-	Realm                  string
-	WebClientID            string
-	APIClientID            string
-	RedirectURIs           []string
-	WebOrigins             []string
-	PlatformAdminUsername  string
-	PlatformAdminPassword  string
-	PlatformAdminEmail     string
-	PlatformAdminFirstName string
+	AdminURL              *url.URL
+	AdminRealm            string
+	AdminUsername         string
+	AdminPassword         string
+	Realm                 string
+	APIClientID           string
+	APIClientSecret       string
+	CallbackURI           string
+	PostLogoutRedirectURI string
+	// BackchannelLogoutURI is TFLIVE_BACKCHANNEL_LOGOUT_URL when set, else
+	// derived from TFLIVE_PUBLIC_URL like CallbackURI. Unlike the browser
+	// redirect URIs above, this one is called by the IdP's own server, not the
+	// browser, so it needs to be reachable from the IdP rather than from
+	// wherever the browser sits.
+	BackchannelLogoutURI        string
+	PlatformAdminUsername       string
+	PlatformAdminPassword       string
+	PlatformAdminEmail          string
+	PlatformAdminFirstName      string
 	PlatformAdminLastName       string
 	DirectoryReaderClientSecret string
 	Environment                 string
@@ -57,11 +61,15 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	redirectsRaw, err := required(getenv, "KEYCLOAK_WEB_REDIRECT_URIS")
+	publicURLRaw, err := required(getenv, "TFLIVE_PUBLIC_URL")
 	if err != nil {
 		return Config{}, err
 	}
-	originsRaw, err := required(getenv, "KEYCLOAK_WEB_ORIGINS")
+	publicURL, err := parseAdminURL(publicURLRaw)
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid Keycloak config: TFLIVE_PUBLIC_URL %w", err)
+	}
+	apiClientSecret, err := required(getenv, "OIDC_CLIENT_SECRET")
 	if err != nil {
 		return Config{}, err
 	}
@@ -93,13 +101,18 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 
-	redirectURIs, err := parseBrowserURLs("KEYCLOAK_WEB_REDIRECT_URIS", redirectsRaw, false)
-	if err != nil {
-		return Config{}, err
-	}
-	webOrigins, err := parseBrowserURLs("KEYCLOAK_WEB_ORIGINS", originsRaw, true)
-	if err != nil {
-		return Config{}, err
+	// The callback and post-logout URIs are resolved by the browser, so
+	// TFLIVE_PUBLIC_URL is always correct for them. A back-channel logout is a
+	// server-to-server POST from the IdP's own process, which cannot in
+	// general reach the browser's origin — an IdP on an internal network or
+	// behind split-horizon DNS needs a different, IdP-reachable address here.
+	backchannelLogoutURI := publicURL.String() + "/v1/auth/backchannel-logout"
+	if raw := strings.TrimSpace(getenv("TFLIVE_BACKCHANNEL_LOGOUT_URL")); raw != "" {
+		backchannelLogoutURL, err := parseAdminURL(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid Keycloak config: TFLIVE_BACKCHANNEL_LOGOUT_URL %w", err)
+		}
+		backchannelLogoutURI = backchannelLogoutURL.String()
 	}
 
 	timeout := defaultHTTPTimeout
@@ -122,19 +135,20 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 
 	return Config{
-		AdminURL:               adminURL,
-		AdminRealm:             valueOrDefault(getenv("KEYCLOAK_ADMIN_REALM"), defaultAdminRealm),
-		AdminUsername:          adminUsername,
-		AdminPassword:          adminPassword,
-		Realm:                  valueOrDefault(getenv("KEYCLOAK_REALM"), defaultRealm),
-		WebClientID:            valueOrDefault(getenv("KEYCLOAK_WEB_CLIENT_ID"), defaultWebClient),
-		APIClientID:            valueOrDefault(getenv("KEYCLOAK_API_CLIENT_ID"), defaultAPIClient),
-		RedirectURIs:           redirectURIs,
-		WebOrigins:             webOrigins,
-		PlatformAdminUsername:  platformUsername,
-		PlatformAdminPassword:  platformPassword,
-		PlatformAdminEmail:     platformEmail,
-		PlatformAdminFirstName: platformFirstName,
+		AdminURL:                    adminURL,
+		AdminRealm:                  valueOrDefault(getenv("KEYCLOAK_ADMIN_REALM"), defaultAdminRealm),
+		AdminUsername:               adminUsername,
+		AdminPassword:               adminPassword,
+		Realm:                       valueOrDefault(getenv("KEYCLOAK_REALM"), defaultRealm),
+		APIClientID:                 valueOrDefault(getenv("KEYCLOAK_API_CLIENT_ID"), defaultAPIClient),
+		APIClientSecret:             apiClientSecret,
+		CallbackURI:                 publicURL.String() + "/v1/auth/callback",
+		PostLogoutRedirectURI:       publicURL.String() + "/",
+		BackchannelLogoutURI:        backchannelLogoutURI,
+		PlatformAdminUsername:       platformUsername,
+		PlatformAdminPassword:       platformPassword,
+		PlatformAdminEmail:          platformEmail,
+		PlatformAdminFirstName:      platformFirstName,
 		PlatformAdminLastName:       platformLastName,
 		DirectoryReaderClientSecret: directoryReaderSecret,
 		Environment:                 environment,
@@ -171,50 +185,4 @@ func parseAdminURL(raw string) (*url.URL, error) {
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
 	return u, nil
-}
-
-func parseBrowserURLs(name, raw string, origin bool) ([]string, error) {
-	parts := strings.Split(raw, ",")
-	values := make([]string, 0, len(parts))
-	seen := make(map[string]struct{}, len(parts))
-	for _, part := range parts {
-		value := strings.TrimSpace(part)
-		if value == "" {
-			return nil, fmt.Errorf("invalid Keycloak config: %s contains an empty value", name)
-		}
-		if strings.ContainsAny(value, "*+") {
-			return nil, fmt.Errorf("invalid Keycloak config: %s must not contain wildcards", name)
-		}
-
-		u, err := url.Parse(value)
-		if err != nil || u.Scheme == "" || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-			return nil, fmt.Errorf("invalid Keycloak config: %s value %q must be an absolute http or https URL", name, value)
-		}
-		if u.User != nil {
-			return nil, fmt.Errorf("invalid Keycloak config: %s value %q must not contain user information", name, value)
-		}
-		if u.RawQuery != "" || u.Fragment != "" {
-			return nil, fmt.Errorf("invalid Keycloak config: %s value %q must not contain a query or fragment", name, value)
-		}
-		if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
-			return nil, fmt.Errorf("invalid Keycloak config: %s value %q plain HTTP is allowed only for loopback hosts", name, value)
-		}
-		if origin && u.Path != "" {
-			return nil, fmt.Errorf("invalid Keycloak config: %s origin must not contain a path", name)
-		}
-		if _, ok := seen[value]; ok {
-			return nil, fmt.Errorf("invalid Keycloak config: %s contains duplicate value %q", name, value)
-		}
-		seen[value] = struct{}{}
-		values = append(values, value)
-	}
-	return values, nil
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }

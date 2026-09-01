@@ -63,9 +63,36 @@ explicit, guarded action.
 - **Sign in with SSO.** Authentication is standard OIDC, and the local stack
   ships an identity provider so there is nothing to wire up to try it.
 
+tflive requires no session or timeout configuration on your identity provider:
+signed-in sessions are tflive's own record, bounded by its own absolute and
+idle timeouts, independent of whatever token lifespan or SSO idle timeout the
+provider runs. To get immediate revocation when a user signs out or is
+disabled at the IdP, instead of waiting for those bounds, point the provider's
+back-channel logout at the API's `/v1/auth/backchannel-logout` endpoint and
+enable session-required logout so it includes `sid`. Without that, sessions
+still end at their own bounds — nothing breaks.
+
+That URL must be **reachable from the identity provider**, not from the
+browser — a back-channel logout is a server-to-server POST, not a redirect
+the browser follows. The two addresses differ whenever the IdP runs on an
+internal network or behind split-horizon DNS, which is why it is a separate
+setting, `TFLIVE_BACKCHANNEL_LOGOUT_URL`, rather than always derived from
+`TFLIVE_PUBLIC_URL`: on this local stack, Keycloak resolves
+`http://localhost:5173` (`TFLIVE_PUBLIC_URL`) inside its own container, not
+the host's browser-facing port, so the provisioner registers
+`http://api:8081/v1/auth/backchannel-logout` instead.
+
 ## Running it locally
 
 Requires Docker. No Go or Node toolchain.
+
+> [!NOTE]
+> **Upgrading an existing local stack?** Run
+> `docker compose -f docker-compose.yaml -f docker-compose.app.yaml down -v`
+> before starting it back up. The provisioner no longer creates the
+> `tflive-web` public client or its audience mapper, but an existing Keycloak
+> volume keeps them from before — and the stale public client can still mint
+> browser-held access tokens, which is the posture this change exists to end.
 
 **1. Start the infrastructure and provision it.**
 
@@ -102,6 +129,11 @@ First run builds from source, so it takes a few minutes. Later runs are cached.
 
 **4. Open http://localhost:5173** and sign in with the platform administrator
 credentials from `.env.example`.
+
+> [!IMPORTANT]
+> Use `localhost`, not `127.0.0.1`. The redirect URI is derived from a single
+> `TFLIVE_PUBLIC_URL`, so only that exact origin is registered with Keycloak —
+> `127.0.0.1` fails sign-in with "Invalid parameter: redirect_uri".
 
 ### Stopping it
 

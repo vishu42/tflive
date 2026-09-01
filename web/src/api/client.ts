@@ -1,4 +1,4 @@
-import { getUserManager } from "../auth/userManager";
+import { loginLoopDetected, recordLoginAttempt } from "../auth/loginAttempts";
 import type { Me } from "../auth/types";
 import type {
   ApiErrorBody,
@@ -228,12 +228,21 @@ export function searchUsers(tenantID: string, q: string, first: number, max: num
   return requestJSON(`/v1/tenants/${encodeURIComponent(tenantID)}/users/search?${params.toString()}`);
 }
 
-async function authHeaders(): Promise<HeadersInit> {
-  const user = await getUserManager().getUser();
-  if (!user?.access_token) {
-    return {};
-  }
-  return { authorization: `Bearer ${user.access_token}` };
+export function loginURL(): string {
+  const returnTo = `${globalThis.location.pathname}${globalThis.location.search}`;
+  return `/v1/auth/login?return_to=${encodeURIComponent(returnTo)}`;
+}
+
+// Every request this module makes carries the session cookie, and the server
+// slides the session's idle bound on any request that arrives more than a touch
+// interval after the last one. SessionProvider counts them so it can tell "the
+// bound may have moved since our last snapshot" from "this tab has said
+// nothing at all", which is what keeps its expiry timer from renewing an
+// unattended tab forever.
+let requestsMade = 0;
+
+export function apiRequestsMade(): number {
+  return requestsMade;
 }
 
 async function fetchWithAuth(path: string, init: RequestInit): Promise<Response> {
@@ -242,34 +251,36 @@ async function fetchWithAuth(path: string, init: RequestInit): Promise<Response>
     headers.set("content-type", "application/json");
   }
 
-  const authHdrs = await authHeaders();
-  for (const [key, value] of Object.entries(authHdrs)) {
-    headers.set(key, value);
-  }
+  // The session cookie is httpOnly: the browser attaches it and this code
+  // cannot read it. There is no bearer header and nothing to renew.
+  const response = await fetch(path, { method: "GET", ...init, headers, credentials: "same-origin" });
+  // Counted once the server has answered, so the count only ever covers
+  // requests that actually reached it and could have slid the bound.
+  requestsMade += 1;
 
-  const response = await fetch(path, { method: "GET", ...init, headers });
-
-  if (response.status === 401) {
-    try {
-      await getUserManager().signinSilent();
-      const retryUser = await getUserManager().getUser();
-      if (retryUser?.access_token) {
-        const retryHeaders = new Headers(init.headers);
-        if (!retryHeaders.has("content-type")) {
-          retryHeaders.set("content-type", "application/json");
-        }
-        retryHeaders.set("authorization", `Bearer ${retryUser.access_token}`);
-        return fetch(path, { method: "GET", ...init, headers: retryHeaders });
-      }
-      getUserManager().signinRedirect();
-      return response;
-    } catch {
-      getUserManager().signinRedirect();
-      return response;
-    }
+  if (response.status === 401 && !loginLoopDetected()) {
+    // A full navigation, never fetch: following the redirect to the IdP as an
+    // XHR would hit its origin cross-origin and die on CORS. Once the loop
+    // guard has tripped, the redirect is skipped and the 401 surfaces as an
+    // error instead, so the browser stops bouncing and SessionProvider can
+    // explain what went wrong.
+    recordLoginAttempt();
+    globalThis.location.assign(loginURL());
   }
 
   return response;
+}
+
+export function logout(): void {
+  // A real form POST, never fetch. The response is a 303 whose Location carries
+  // the ID token as id_token_hint; a navigation lets the browser follow it
+  // without script ever reading that header. POST rather than a link so a
+  // cross-site image tag cannot log the user out.
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = "/v1/auth/logout";
+  document.body.appendChild(form);
+  form.submit();
 }
 
 async function requestJSON<T>(path: string, init: RequestInit = {}): Promise<T> {

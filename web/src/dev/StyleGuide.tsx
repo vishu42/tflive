@@ -13,7 +13,7 @@ import "./styleguide.css";
  * runtime rather than restating them, so the swatches cannot drift from
  * tokens.css either.
  *
- * It is mounted OUTSIDE OidcAuthProvider (see app/router.tsx) so it renders
+ * It is mounted OUTSIDE SessionProvider (see app/router.tsx) so it renders
  * with no Keycloak and no backend — the app itself cannot mount without
  * them, which makes this the only way to see the design system locally.
  */

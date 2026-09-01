@@ -20,6 +20,7 @@ import (
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/queue"
+	"github.com/vishu42/tflive/internal/secrets"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -196,7 +197,7 @@ func TestRunWiresConfiguredTenantBoundary(t *testing.T) {
 	}
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_other/stacks", nil)
-	request.Header.Set("Authorization", "Bearer test-token")
+	request.AddCookie(&http.Cookie{Name: authn.SessionCookieName, Value: recordingSessionRaw})
 	response := httptest.NewRecorder()
 	deps.serverHandler.ServeHTTP(response, request)
 
@@ -215,6 +216,61 @@ func TestRunWiresConfiguredTenantBoundary(t *testing.T) {
 	}
 }
 
+// TestRunGatesSecureCookiesOnRuntimeMode asserts the one cookie attribute
+// whose regression is invisible in dev and serious in production: a session
+// cookie sent over plaintext. AuthConfig.SecureCookies is unexported outside
+// internal/api, so this observes it the way a browser would — through the
+// Secure flag on the Set-Cookie the login route actually issues — rather than
+// reaching into the server's internals.
+func TestRunGatesSecureCookiesOnRuntimeMode(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name       string
+		production bool
+	}{
+		{name: "development", production: false},
+		{name: "production", production: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			values := apiTestValues()
+			if test.production {
+				values["TFLIVE_ENVIRONMENT"] = "production"
+				values["OIDC_ISSUER_URL"] = "https://id.example.com/realms/tflive"
+				values["TFLIVE_PUBLIC_URL"] = "https://app.example.com"
+				values["OPENFGA_API_URL"] = "https://openfga.example.com"
+				values["OPENFGA_API_TOKEN"] = "openfga-token"
+				values["KEYCLOAK_DIRECTORY_READER_CLIENT_ID"] = "directory-reader"
+				values["KEYCLOAK_DIRECTORY_READER_CLIENT_SECRET"] = "directory-reader-secret"
+			}
+
+			deps := newRecordingAPIDependencies(t)
+			if err := runWithDependencies(context.Background(), apiTestGetenv(values), deps.apiDependencies); err != nil {
+				t.Fatalf("runWithDependencies returned error: %v", err)
+			}
+
+			request := httptest.NewRequest(http.MethodGet, "/v1/auth/login", nil)
+			response := httptest.NewRecorder()
+			deps.serverHandler.ServeHTTP(response, request)
+
+			var transactionCookie *http.Cookie
+			for _, cookie := range response.Result().Cookies() {
+				if cookie.Name == authn.TransactionCookieName {
+					transactionCookie = cookie
+				}
+			}
+			if transactionCookie == nil {
+				t.Fatalf("no %s cookie in response; headers = %v", authn.TransactionCookieName, response.Header())
+			}
+			if transactionCookie.Secure != test.production {
+				t.Fatalf("transaction cookie Secure = %v, want %v for production=%v", transactionCookie.Secure, test.production, test.production)
+			}
+		})
+	}
+}
+
 func TestRunConstructsAndClosesOIDCVerifier(t *testing.T) {
 	deps := newRecordingAPIDependencies(t)
 	verifier := &recordingTokenVerifier{}
@@ -227,7 +283,7 @@ func TestRunConstructsAndClosesOIDCVerifier(t *testing.T) {
 	if err := runWithDependencies(context.Background(), apiTestEnv, deps.apiDependencies); err != nil {
 		t.Fatalf("runWithDependencies() error = %v", err)
 	}
-	if got.IssuerURL == nil || got.IssuerURL.String() != apiTestEnv("OIDC_ISSUER_URL") || got.Audience != apiTestEnv("OIDC_AUDIENCE") {
+	if got.IssuerURL == nil || got.IssuerURL.String() != apiTestEnv("OIDC_ISSUER_URL") || got.Audience != apiTestEnv("OIDC_CLIENT_ID") {
 		t.Fatalf("OIDC verifier config = %#v", got)
 	}
 	if !verifier.closed {
@@ -370,8 +426,11 @@ func apiTestValues() map[string]string {
 		"ARTIFACT_STORE_FILESYSTEM_ROOT": "/var/lib/tflive/artifacts",
 		"TFLIVE_ENVIRONMENT":             "development",
 		"TFLIVE_TENANT_ID":               "tenant_123",
+		"TFLIVE_PUBLIC_URL":              "http://localhost:5173",
 		"OIDC_ISSUER_URL":                "http://localhost:8082/realms/tflive",
-		"OIDC_AUDIENCE":                  "tflive-api",
+		"OIDC_CLIENT_ID":                 "tflive-api",
+		"OIDC_CLIENT_SECRET":             "oidc-client-secret",
+		"SESSION_ENCRYPTION_KEY":         "01234567890123456789012345678901",
 		"OPENFGA_API_URL":                "http://localhost:8080",
 		"OPENFGA_STORE_ID":               "store-id",
 		"OPENFGA_MODEL_ID":               "model-id",
@@ -393,6 +452,8 @@ type recordingAPIDependencies struct {
 	pool                *recordingPostgresPool
 	store               *recordingStore
 	queueSpecs          *queue.SpecRegistry
+	credentialCipher    *secrets.Cipher
+	sessionCipher       *secrets.Cipher
 	artifactStoreConfig config.ArtifactStoreConfig
 	logReader           recordingTemplateRunLogReader
 	service             app.Service
@@ -424,11 +485,13 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 			deps.migrated = true
 			return nil
 		},
-		newStore: func(pool postgresPool, specs *queue.SpecRegistry) (appRepositories, error) {
+		newStore: func(pool postgresPool, specs *queue.SpecRegistry, credentialCipher *secrets.Cipher, sessionCipher *secrets.Cipher) (appRepositories, error) {
 			if pool != deps.pool {
 				t.Fatalf("newStore pool = %p, want %p", pool, deps.pool)
 			}
 			deps.queueSpecs = specs
+			deps.credentialCipher = credentialCipher
+			deps.sessionCipher = sessionCipher
 			return deps.store, nil
 		},
 		newLogReader: func(cfg config.ArtifactStoreConfig) (app.TemplateRunLogReader, error) {
@@ -481,6 +544,14 @@ func (testTokenVerifier) Verify(context.Context, string) (authn.VerifiedToken, e
 
 func (testTokenVerifier) Close(context.Context) error { return nil }
 
+func (testTokenVerifier) VerifyLogoutToken(context.Context, string) (authn.LogoutToken, error) {
+	return authn.LogoutToken{Subject: "test-user"}, nil
+}
+
+func (testTokenVerifier) Endpoints() authn.Endpoints {
+	return authn.Endpoints{Authorization: "https://idp.test/authorize", Token: "https://idp.test/token"}
+}
+
 type recordingTokenVerifier struct {
 	closed bool
 }
@@ -492,6 +563,14 @@ func (verifier *recordingTokenVerifier) Verify(context.Context, string) (authn.V
 func (verifier *recordingTokenVerifier) Close(context.Context) error {
 	verifier.closed = true
 	return nil
+}
+
+func (*recordingTokenVerifier) VerifyLogoutToken(context.Context, string) (authn.LogoutToken, error) {
+	return authn.LogoutToken{Subject: "test-user"}, nil
+}
+
+func (*recordingTokenVerifier) Endpoints() authn.Endpoints {
+	return authn.Endpoints{Authorization: "https://idp.test/authorize", Token: "https://idp.test/token"}
 }
 
 type recordingPostgresPool struct {
@@ -609,6 +688,55 @@ func (recordingStore) GetTemplateRevisionVariables(context.Context, traits.Tenan
 
 func (recordingStore) AppendAuditEvent(context.Context, traits.SecurityAuditEvent) error {
 	return nil
+}
+
+// authn.SessionStore, wired so sessionStore's type assertion in main.go
+// succeeds against this fake the way it does against *postgres.Store.
+func (recordingStore) CreateSession(context.Context, authn.Session) error {
+	return nil
+}
+
+// recordingSessionRaw is the cookie value SessionByHash below will honour. The
+// session cookie is the only credential the middleware accepts, so a test that
+// needs to reach a protected route through the fully wired server has to
+// present one.
+const recordingSessionRaw = "wired-api-session"
+
+func (recordingStore) SessionByHash(_ context.Context, idHash string) (authn.Session, error) {
+	if idHash != authn.HashSessionID(recordingSessionRaw) {
+		return authn.Session{}, authn.ErrSessionNotFound
+	}
+	now := time.Now().UTC()
+	return authn.Session{
+		IDHash:            idHash,
+		Subject:           "user-123",
+		LastSeenAt:        now,
+		AbsoluteExpiresAt: now.Add(time.Hour),
+	}, nil
+}
+
+func (recordingStore) TouchSession(context.Context, string, time.Time) error {
+	return nil
+}
+
+func (recordingStore) RevokeSession(context.Context, string, time.Time) error {
+	return nil
+}
+
+func (recordingStore) RevokeSessionsByIDPSessionID(context.Context, string, time.Time) (int, error) {
+	return 0, nil
+}
+
+func (recordingStore) RevokeSessionsBySubject(context.Context, string, time.Time) (int, error) {
+	return 0, nil
+}
+
+func (recordingStore) RevokeSessionsBySubjectWithoutIDPSession(context.Context, string, time.Time) (int, error) {
+	return 0, nil
+}
+
+func (recordingStore) DeleteSessionsExpiredBefore(context.Context, time.Time) (int, error) {
+	return 0, nil
 }
 
 type recordingTemplateRunLogReader struct{}

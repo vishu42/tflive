@@ -5,7 +5,7 @@ import type { StackCapabilities } from "../../auth/types";
 import { AuthContext } from "../../auth/AuthContext";
 import type { AuthContextValue } from "../../auth/AuthContext";
 
-vi.mock("../../auth/OidcAuthProvider");
+vi.mock("../../auth/SessionProvider");
 
 function authValue(): AuthContextValue {
   return {

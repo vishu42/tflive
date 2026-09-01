@@ -271,9 +271,11 @@ describe("TemplateRunActions", () => {
     });
 
     const view = renderActions(queryClient);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith("/v1/tenants/tenant_123/stack-templates/stpl_1/runs", expect.objectContaining({ method: "GET" }))
-    );
+    // Wait for the run history to actually load (Plan enabled), not just for
+    // the request to have been issued: the request settling and the button's
+    // disabled state flipping are separate ticks, and asserting only the
+    // former raced ahead of the latter and clicked a still-disabled button.
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(false));
 
     fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
     await waitFor(() => expect(screen.getByTestId("template-run-plan-link")).toBeTruthy());

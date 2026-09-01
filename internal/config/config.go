@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/vishu42/tflive/internal/secrets"
 )
 
 const (
@@ -16,25 +18,27 @@ const (
 var ErrInvalidConfig = errors.New("invalid config")
 
 type APIConfig struct {
-	DatabaseURL       string
-	HTTPAddress       string
-	TemporalAddress   string
-	TemporalNamespace string
-	TemporalTaskQueue string
-	WorkerRunRoot     string
-	ArtifactStore     ArtifactStoreConfig
-	Security          SecurityConfig
-	Debug             bool
+	DatabaseURL             string
+	HTTPAddress             string
+	TemporalAddress         string
+	TemporalNamespace       string
+	TemporalTaskQueue       string
+	WorkerRunRoot           string
+	ArtifactStore           ArtifactStoreConfig
+	Security                SecurityConfig
+	CredentialEncryptionKey Secret
+	Debug                   bool
 }
 
 type WorkerConfig struct {
-	DatabaseURL       string
-	TemporalAddress   string
-	TemporalNamespace string
-	TemporalTaskQueue string
-	WorkerRunRoot     string
-	ArtifactStore     ArtifactStoreConfig
-	OpenFGA           OpenFGAConfig
+	DatabaseURL             string
+	TemporalAddress         string
+	TemporalNamespace       string
+	TemporalTaskQueue       string
+	WorkerRunRoot           string
+	ArtifactStore           ArtifactStoreConfig
+	OpenFGA                 OpenFGAConfig
+	CredentialEncryptionKey Secret
 }
 
 type ArtifactStoreKind string
@@ -90,6 +94,11 @@ func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
 	}
 
 	cfg.Debug = parseBool(getenv("TFLIVE_DEBUG"))
+	credentialKey, err := loadCredentialEncryptionKey(getenv)
+	if err != nil {
+		return APIConfig{}, err
+	}
+	cfg.CredentialEncryptionKey = credentialKey
 
 	if cfg.DatabaseURL == "" {
 		return APIConfig{}, fmt.Errorf("%w: DATABASE_URL is required", ErrInvalidConfig)
@@ -126,6 +135,11 @@ func LoadWorkerConfig(getenv func(string) string) (WorkerConfig, error) {
 	if cfg.WorkerRunRoot == "" {
 		cfg.WorkerRunRoot = DefaultWorkerRunRoot
 	}
+	credentialKey, err := loadCredentialEncryptionKey(getenv)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	cfg.CredentialEncryptionKey = credentialKey
 
 	if cfg.TemporalAddress == "" {
 		return WorkerConfig{}, fmt.Errorf("%w: TEMPORAL_ADDRESS is required", ErrInvalidConfig)
@@ -135,6 +149,22 @@ func LoadWorkerConfig(getenv func(string) string) (WorkerConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// loadCredentialEncryptionKey validates CREDENTIAL_ENCRYPTION_KEY the same
+// way SESSION_ENCRYPTION_KEY is validated: by constructing the cipher it
+// backs. Unlike SESSION_ENCRYPTION_KEY, it is optional — an empty value means
+// credential encryption is unavailable, not misconfigured — but a value that
+// is present and malformed must fail at startup rather than at first use.
+func loadCredentialEncryptionKey(getenv func(string) string) (Secret, error) {
+	key := newSecret(strings.TrimSpace(getenv("CREDENTIAL_ENCRYPTION_KEY")))
+	if key.Empty() {
+		return key, nil
+	}
+	if _, err := secrets.NewCipher(key.Value()); err != nil {
+		return Secret{}, fmt.Errorf("%w: CREDENTIAL_ENCRYPTION_KEY must be a 32-byte raw, base64, or hex key", ErrInvalidConfig)
+	}
+	return key, nil
 }
 
 func loadArtifactStoreConfig(getenv func(string) string) (ArtifactStoreConfig, error) {

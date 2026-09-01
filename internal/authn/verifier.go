@@ -29,6 +29,18 @@ type VerifiedToken struct {
 	Name              string
 	PreferredUsername string
 	Email             string
+	// Nonce is the token's nonce claim, empty when absent. It is compared
+	// against the login transaction only at the callback; the middleware
+	// ignores it.
+	Nonce string
+	// ExpiresAt is the token's exp claim. It is presentation only: the API
+	// enforces expiry during verification, and this is what the SPA uses to
+	// re-authenticate before it is interrupted.
+	ExpiresAt time.Time
+	// SessionID is the token's sid claim, empty when the provider omits it.
+	// It is the key a back-channel logout arrives on, so it is copied into the
+	// session record at sign-in.
+	SessionID string
 }
 
 type Verifier interface {

@@ -75,7 +75,7 @@ func TestHealthzReturnsOK(t *testing.T) {
 }
 
 func TestAuthenticatedServerProtectsV1AndLeavesHealthPublic(t *testing.T) {
-	server := NewAuthenticatedServer(app.NewService(app.Service{}), apiTestVerifier{}, configuredTenantID, false)
+	server := NewAuthenticatedServer(app.NewService(app.Service{}), configuredTenantID, false)
 
 	for _, test := range []struct {
 		path   string
@@ -162,7 +162,7 @@ func TestTenantBoundaryRejectsMissingAndMalformedPaths(t *testing.T) {
 func TestAuthenticatedServerEvaluatesTenantAfterAuthentication(t *testing.T) {
 	t.Parallel()
 
-	server := NewAuthenticatedServer(nil, apiTestVerifier{}, configuredTenantID, false)
+	server, cookie := sessionCookieServer(t, nil)
 	path := "/v1/tenants/tenant_other/stacks"
 
 	unauthenticated := httptest.NewRecorder()
@@ -172,7 +172,7 @@ func TestAuthenticatedServerEvaluatesTenantAfterAuthentication(t *testing.T) {
 	}
 
 	authenticatedRequest := httptest.NewRequest(http.MethodGet, path, nil)
-	authenticatedRequest.Header.Set("Authorization", "Bearer test-token")
+	authenticatedRequest.AddCookie(cookie)
 	authenticated := httptest.NewRecorder()
 	server.ServeHTTP(authenticated, authenticatedRequest)
 	if authenticated.Code != http.StatusNotFound {
@@ -190,9 +190,9 @@ func TestAuthenticatedServerAllowsConfiguredTenantToReachService(t *testing.T) {
 		Name:     "Acme Prod",
 		Slug:     "acme-prod",
 	}}
-	server := NewAuthenticatedServer(deps.service(), apiTestVerifier{}, configuredTenantID, false)
-	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
-	request.Header.Set("Authorization", "Bearer test-token")
+	server, cookie := sessionCookieServer(t, deps.service())
+	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
+	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
 
 	server.ServeHTTP(response, request)
@@ -216,6 +216,70 @@ type apiTestVerifier struct{}
 
 func (apiTestVerifier) Verify(context.Context, string) (authn.VerifiedToken, error) {
 	return authn.VerifiedToken{Subject: "user-123"}, nil
+}
+
+// sessionCookieServer builds a server whose middleware can actually
+// authenticate someone. The cookie is the only credential now, so a test that
+// wants to reach a protected route has to hold a live session row rather than
+// set an Authorization header.
+func sessionCookieServer(t *testing.T, service *app.Service) (*Server, *http.Cookie) {
+	t.Helper()
+
+	const raw = "server-test-session"
+	now := time.Now().UTC()
+	sessions := &serverTestSessionStore{byHash: map[string]authn.Session{
+		authn.HashSessionID(raw): {
+			IDHash:            authn.HashSessionID(raw),
+			Subject:           "user-123",
+			LastSeenAt:        now,
+			AbsoluteExpiresAt: now.Add(time.Hour),
+		},
+	}}
+	server := NewAuthenticatedServer(service, configuredTenantID, false, WithAuth(AuthConfig{
+		Sessions:       sessions,
+		SessionIdleTTL: time.Hour,
+	}))
+	return server, &http.Cookie{Name: authn.SessionCookieName, Value: raw}
+}
+
+// serverTestSessionStore satisfies authn.SessionStore with only the lookup the
+// middleware performs; the rest is unreachable from these tests.
+type serverTestSessionStore struct {
+	byHash map[string]authn.Session
+}
+
+func (store *serverTestSessionStore) CreateSession(context.Context, authn.Session) error { return nil }
+
+func (store *serverTestSessionStore) SessionByHash(_ context.Context, idHash string) (authn.Session, error) {
+	session, ok := store.byHash[idHash]
+	if !ok {
+		return authn.Session{}, authn.ErrSessionNotFound
+	}
+	return session, nil
+}
+
+func (store *serverTestSessionStore) TouchSession(context.Context, string, time.Time) error {
+	return nil
+}
+
+func (store *serverTestSessionStore) RevokeSession(context.Context, string, time.Time) error {
+	return nil
+}
+
+func (store *serverTestSessionStore) RevokeSessionsByIDPSessionID(context.Context, string, time.Time) (int, error) {
+	return 0, nil
+}
+
+func (store *serverTestSessionStore) RevokeSessionsBySubject(context.Context, string, time.Time) (int, error) {
+	return 0, nil
+}
+
+func (store *serverTestSessionStore) RevokeSessionsBySubjectWithoutIDPSession(context.Context, string, time.Time) (int, error) {
+	return 0, nil
+}
+
+func (store *serverTestSessionStore) DeleteSessionsExpiredBefore(context.Context, time.Time) (int, error) {
+	return 0, nil
 }
 
 func TestStartTemplateRunCallsService(t *testing.T) {
@@ -3327,7 +3391,7 @@ func TestAssignStackRoleLastOwnerDemotionReturnsConflict(t *testing.T) {
 }
 
 func TestAuthenticatedServerProtectsMeRoute(t *testing.T) {
-	server := NewAuthenticatedServer(app.NewService(app.Service{}), apiTestVerifier{}, configuredTenantID, false)
+	server := NewAuthenticatedServer(app.NewService(app.Service{}), configuredTenantID, false)
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)

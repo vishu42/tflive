@@ -1,0 +1,315 @@
+// @vitest-environment jsdom
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
+import { ApiRequestError } from "../api/client";
+import { clearLoginAttempts, maxLoginAttempts, readLoginAttempts } from "./loginAttempts";
+import SessionProvider, { REAUTH_DEFER_LIMIT_MS, REAUTH_RETRY_MS } from "./SessionProvider";
+
+const attemptsKey = "tflive.auth.loginAttempts";
+
+const getMe = vi.fn();
+const logout = vi.fn();
+
+// getMe is mocked below, so nothing here goes through the real fetch that
+// counts requests. This stands in for it: calling recordApiRequest() is how a
+// test says "this tab has talked to the API", which is what tells the re-auth
+// timer the session's idle bound may have moved.
+let apiRequests = 0;
+
+function recordApiRequest() {
+  apiRequests += 1;
+}
+
+vi.mock("../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+  return { ...actual, getMe: () => getMe(), logout: () => logout(), apiRequestsMade: () => apiRequests };
+});
+
+function renderProvider(children: ReactNode) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={["/stacks"]}>
+        <Routes>
+          <Route element={<SessionProvider />}>
+            <Route path="/stacks" element={children} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+}
+
+const me = {
+  sub: "user-123",
+  displayName: "Ada",
+  email: "ada@example.test",
+  tenantID: "tenant_123",
+  globalCapabilities: { isPlatformAdmin: false, canCreateStack: true },
+  sessionExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString()
+};
+
+describe("SessionProvider", () => {
+  let assign: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign, pathname: "/stacks", search: "" });
+    getMe.mockReset();
+    logout.mockReset();
+    apiRequests = 0;
+    sessionStorage.clear();
+    clearLoginAttempts();
+  });
+
+  afterEach(() => {
+    // Nothing configures Testing Library's automatic cleanup here, so mounted
+    // trees would otherwise pile up and make a testid ambiguous across tests.
+    cleanup();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("renders children once /v1/me resolves", async () => {
+    getMe.mockResolvedValue(me);
+    renderProvider(<div data-testid="child">ready</div>);
+    expect(await screen.findByTestId("child")).toBeTruthy();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("navigates to the login route on a 401", async () => {
+    getMe.mockRejectedValue(new ApiRequestError(401, "unauthorized", "unauthorized"));
+    renderProvider(<div data-testid="child">ready</div>);
+    await waitFor(() => {
+      expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
+    });
+  });
+
+  it("re-authenticates sixty seconds before the session expires", async () => {
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: new Date(Date.now() + 120 * 1000).toISOString() });
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+    recordApiRequest();
+
+    expect(assign).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(61 * 1000);
+    expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
+  });
+
+  // Refetching /v1/me is itself an authenticated request, so a timer that
+  // refetched unconditionally would slide the very bound it was checking and
+  // renew an unattended tab forever, putting TFLIVE_SESSION_IDLE_TTL out of
+  // reach. A tab that has said nothing says nothing here either.
+  it("stays quiet at the re-auth moment when the tab has made no other request", async () => {
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: new Date(Date.now() + 61 * 1000).toISOString() });
+
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+
+    // Past the re-auth moment, and then past the expiry itself.
+    await vi.advanceTimersByTimeAsync(70 * 1000);
+
+    expect(getMe).toHaveBeenCalledTimes(1);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("takes the proactive path when a quiet tab becomes active inside the lead window", async () => {
+    const nearExpiry = new Date(Date.now() + 61 * 1000).toISOString();
+    const slidExpiry = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    getMe.mockResolvedValueOnce({ ...me, sessionExpiresAt: nearExpiry });
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: slidExpiry });
+
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+
+    // The re-auth moment passes with the tab quiet: no refetch.
+    await vi.advanceTimersByTimeAsync(2 * 1000);
+    expect(getMe).toHaveBeenCalledTimes(1);
+
+    // The user comes back and the app calls the API, which slides the bound.
+    // The next local check notices and picks the schedule back up.
+    recordApiRequest();
+    await vi.advanceTimersByTimeAsync(REAUTH_RETRY_MS);
+    expect(getMe).toHaveBeenCalledTimes(2);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("reschedules instead of navigating when a refetch shows the session slid forward", async () => {
+    const nearExpiry = new Date(Date.now() + 61 * 1000).toISOString();
+    const slidExpiry = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    // The initial /v1/me snapshot looks like it is about to expire; the
+    // refetch that the re-auth attempt triggers reports it was slid forward
+    // in the meantime, as a server-side touch would do for a session that is
+    // still active.
+    getMe.mockResolvedValueOnce({ ...me, sessionExpiresAt: nearExpiry });
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: slidExpiry });
+
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+    recordApiRequest();
+
+    await vi.advanceTimersByTimeAsync(2 * 1000);
+    expect(assign).not.toHaveBeenCalled();
+    expect(getMe).toHaveBeenCalledTimes(2);
+
+    // The old bound has now passed with no navigation: the schedule moved
+    // with the refetched, later expiry instead.
+    await vi.advanceTimersByTimeAsync(60 * 1000);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("does not navigate after unmount while the triggering refetch is still pending", async () => {
+    const nearExpiry = new Date(Date.now() + 61 * 1000).toISOString();
+    getMe.mockResolvedValueOnce({ ...me, sessionExpiresAt: nearExpiry });
+    let resolveRefetch: ((value: typeof me) => void) | undefined;
+    getMe.mockImplementationOnce(
+      () =>
+        new Promise<typeof me>((resolve) => {
+          resolveRefetch = resolve;
+        })
+    );
+
+    const { unmount } = renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+    recordApiRequest();
+
+    // Reach the re-auth moment: attempt() calls refetch, which is the pending
+    // promise above, so attempt is suspended on that await right now.
+    await vi.advanceTimersByTimeAsync(2 * 1000);
+    expect(getMe).toHaveBeenCalledTimes(2);
+
+    unmount();
+    resolveRefetch?.({ ...me, sessionExpiresAt: nearExpiry });
+    // Flush the microtask queue so the suspended continuation, if any, runs.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("navigates once a refetch confirms the session has actually ended", async () => {
+    const nearExpiry = new Date(Date.now() + 61 * 1000).toISOString();
+    // Every call returns the same fixed bound, so the refetch the re-auth
+    // attempt triggers finds nothing moved — the session genuinely is near
+    // its end.
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: nearExpiry });
+
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+    recordApiRequest();
+
+    await vi.advanceTimersByTimeAsync(2 * 1000);
+    expect(getMe).toHaveBeenCalledTimes(2);
+    expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
+  });
+
+  it("stops deferring re-authentication once the deferral limit is reached", async () => {
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: new Date(Date.now() + 61 * 1000).toISOString() });
+
+    // A form that never stops claiming unsaved work.
+    const guard = document.createElement("div");
+    guard.setAttribute("data-unsaved", "true");
+    document.body.append(guard);
+
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+    recordApiRequest();
+
+    // Reach the re-auth moment, then hold past the deferral limit.
+    await vi.advanceTimersByTimeAsync(1000 + REAUTH_DEFER_LIMIT_MS + REAUTH_RETRY_MS);
+    expect(assign).toHaveBeenCalledTimes(1);
+
+    guard.remove();
+  });
+
+  it("keeps deferring re-authentication while unsaved work is present and the limit has not been reached", async () => {
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: new Date(Date.now() + 61 * 1000).toISOString() });
+
+    const guard = document.createElement("div");
+    guard.setAttribute("data-unsaved", "true");
+    document.body.append(guard);
+
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+    recordApiRequest();
+
+    await vi.advanceTimersByTimeAsync(1000 + REAUTH_RETRY_MS * 2);
+    expect(assign).not.toHaveBeenCalled();
+
+    guard.remove();
+  });
+
+  it("navigates immediately when the session has already expired", async () => {
+    getMe.mockResolvedValue({ ...me, sessionExpiresAt: new Date(Date.now() - 1000).toISOString() });
+    renderProvider(<div data-testid="child">ready</div>);
+    await waitFor(() => {
+      expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
+    });
+  });
+
+  it("renders an error state when /v1/me fails for a non-auth reason", async () => {
+    getMe.mockRejectedValue(new ApiRequestError(503, "unavailable", "unavailable"));
+    renderProvider(<div data-testid="child">ready</div>);
+    expect(await screen.findByTestId("auth-error")).toBeTruthy();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  // The session is fine on this path — /v1/me failed for some other reason —
+  // so a trip to the IdP cannot help. Spending login attempts on it would trip
+  // the loop guard and blame the user's cookie settings for a server fault.
+  it("retries the request rather than the sign-in when /v1/me fails for a non-auth reason", async () => {
+    getMe.mockRejectedValue(new ApiRequestError(503, "unavailable", "unavailable"));
+    renderProvider(<div data-testid="child">ready</div>);
+
+    const retry = await screen.findByTestId("auth-retry-button");
+    getMe.mockResolvedValue(me);
+    await act(async () => {
+      retry.click();
+    });
+
+    await screen.findByTestId("child");
+    expect(assign).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(attemptsKey)).toBeNull();
+  });
+
+  // A redirect reloads the page, so the count has to live somewhere that
+  // outlives this component for the guard to see a loop rather than a bounce.
+  it("records the login redirect where a page reload cannot erase it", async () => {
+    getMe.mockRejectedValue(new ApiRequestError(401, "unauthorized", "unauthorized"));
+    renderProvider(<div data-testid="child">ready</div>);
+    await waitFor(() => {
+      expect(assign).toHaveBeenCalled();
+    });
+    expect(sessionStorage.getItem(attemptsKey)).toBe("1");
+  });
+
+  it("stops redirecting and explains once the attempts are spent", async () => {
+    sessionStorage.setItem(attemptsKey, String(maxLoginAttempts));
+    getMe.mockRejectedValue(new ApiRequestError(401, "unauthorized", "unauthorized"));
+    renderProvider(<div data-testid="child">ready</div>);
+    expect(await screen.findByTestId("auth-loop-error")).toBeTruthy();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("retries from the loop screen with a fresh count", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    sessionStorage.setItem(attemptsKey, String(maxLoginAttempts));
+    getMe.mockRejectedValue(new ApiRequestError(401, "unauthorized", "unauthorized"));
+    renderProvider(<div data-testid="child">ready</div>);
+    await user.click(await screen.findByTestId("auth-loop-retry-button"));
+    expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
+    expect(readLoginAttempts()).toBe(1);
+  });
+
+  it("clears the recorded attempts once /v1/me resolves", async () => {
+    sessionStorage.setItem(attemptsKey, "2");
+    getMe.mockResolvedValue(me);
+    renderProvider(<div data-testid="child">ready</div>);
+    await screen.findByTestId("child");
+    expect(sessionStorage.getItem(attemptsKey)).toBeNull();
+  });
+});

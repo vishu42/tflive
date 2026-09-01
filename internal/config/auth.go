@@ -7,6 +7,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/vishu42/tflive/internal/authn"
+	"github.com/vishu42/tflive/internal/secrets"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -23,7 +25,13 @@ type SecurityConfig struct {
 	Mode     RuntimeMode
 	TenantID traits.TenantID
 	OIDC     OIDCConfig
-	OpenFGA  OpenFGAConfig
+
+	PublicURL            *url.URL
+	SessionEncryptionKey Secret
+	SessionAbsoluteTTL   time.Duration
+	SessionIdleTTL       time.Duration
+
+	OpenFGA OpenFGAConfig
 
 	KeycloakAdminURL            *url.URL
 	KeycloakRealm               string
@@ -33,8 +41,9 @@ type SecurityConfig struct {
 }
 
 type OIDCConfig struct {
-	IssuerURL *url.URL
-	Audience  string
+	IssuerURL    *url.URL
+	ClientID     string
+	ClientSecret Secret
 }
 
 type OpenFGAConfig struct {
@@ -86,11 +95,16 @@ func (cfg OpenFGAConfig) GoString() string {
 
 func (cfg SecurityConfig) String() string {
 	return fmt.Sprintf(
-		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v Audience:%q} OpenFGA:%s KeycloakAdminURL:%v KeycloakRealm:%q DirectoryReaderClientID:%q DirectoryReaderClientSecret:%s DirectoryReaderHTTPTimeout:%s}",
+		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v ClientID:%q ClientSecret:%s} PublicURL:%v SessionEncryptionKey:%s SessionAbsoluteTTL:%s SessionIdleTTL:%s OpenFGA:%s KeycloakAdminURL:%v KeycloakRealm:%q DirectoryReaderClientID:%q DirectoryReaderClientSecret:%s DirectoryReaderHTTPTimeout:%s}",
 		cfg.Mode,
 		cfg.TenantID,
 		cfg.OIDC.IssuerURL,
-		cfg.OIDC.Audience,
+		cfg.OIDC.ClientID,
+		cfg.OIDC.ClientSecret,
+		cfg.PublicURL,
+		cfg.SessionEncryptionKey,
+		cfg.SessionAbsoluteTTL,
+		cfg.SessionIdleTTL,
 		cfg.OpenFGA,
 		cfg.KeycloakAdminURL,
 		cfg.KeycloakRealm,
@@ -124,12 +138,56 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 	if err != nil {
 		return SecurityConfig{}, err
 	}
-	audience := strings.TrimSpace(getenv("OIDC_AUDIENCE"))
-	if audience == "" {
-		return SecurityConfig{}, authConfigError("OIDC_AUDIENCE is required")
+	if strings.TrimSpace(getenv("OIDC_AUDIENCE")) != "" {
+		return SecurityConfig{}, authConfigError("OIDC_AUDIENCE is retired: set OIDC_CLIENT_ID to the OAuth client ID instead")
 	}
-	if !safeOpaqueValue(audience) {
-		return SecurityConfig{}, authConfigError("OIDC_AUDIENCE must not contain whitespace or control characters")
+	clientID := strings.TrimSpace(getenv("OIDC_CLIENT_ID"))
+	if clientID == "" {
+		return SecurityConfig{}, authConfigError("OIDC_CLIENT_ID is required")
+	}
+	if !safeOpaqueValue(clientID) {
+		return SecurityConfig{}, authConfigError("OIDC_CLIENT_ID must not contain whitespace or control characters")
+	}
+	clientSecret := newSecret(strings.TrimSpace(getenv("OIDC_CLIENT_SECRET")))
+	if clientSecret.Empty() {
+		return SecurityConfig{}, authConfigError("OIDC_CLIENT_SECRET is required")
+	}
+
+	publicURL, err := parseConfigURL("TFLIVE_PUBLIC_URL", getenv("TFLIVE_PUBLIC_URL"))
+	if err != nil {
+		return SecurityConfig{}, err
+	}
+	publicURL.Path = strings.TrimRight(publicURL.Path, "/")
+
+	sessionKey := newSecret(strings.TrimSpace(getenv("SESSION_ENCRYPTION_KEY")))
+	if sessionKey.Empty() {
+		return SecurityConfig{}, authConfigError("SESSION_ENCRYPTION_KEY is required")
+	}
+	if _, err := secrets.NewCipher(sessionKey.Value()); err != nil {
+		return SecurityConfig{}, authConfigError("SESSION_ENCRYPTION_KEY must be a 32-byte raw, base64, or hex key")
+	}
+
+	sessionAbsoluteTTL, err := optionalPositiveDuration(getenv, "TFLIVE_SESSION_ABSOLUTE_TTL", authn.DefaultSessionAbsoluteTTL)
+	if err != nil {
+		return SecurityConfig{}, err
+	}
+	sessionIdleTTL, err := optionalPositiveDuration(getenv, "TFLIVE_SESSION_IDLE_TTL", authn.DefaultSessionIdleTTL)
+	if err != nil {
+		return SecurityConfig{}, err
+	}
+	// An idle bound past the absolute cap can never be reached, so it is a
+	// configuration mistake rather than a permissive setting.
+	if sessionIdleTTL > sessionAbsoluteTTL {
+		return SecurityConfig{}, authConfigError("TFLIVE_SESSION_IDLE_TTL must not exceed TFLIVE_SESSION_ABSOLUTE_TTL")
+	}
+	// The cookie path only writes LastSeenAt back once every
+	// authn.SessionTouchInterval (authn/middleware.go), and IsLive is
+	// evaluated before that write on every request. An idle bound at or below
+	// the interval expires the session before it can ever be observed as
+	// touched, so it can never slide — a silent hard cap rather than the
+	// sliding window the setting promises.
+	if sessionIdleTTL <= authn.SessionTouchInterval {
+		return SecurityConfig{}, authConfigError("TFLIVE_SESSION_IDLE_TTL must exceed the %s session touch interval, or an idle session expires before it can ever slide", authn.SessionTouchInterval)
 	}
 
 	openFGA, err := loadOpenFGAConfig(getenv)
@@ -142,6 +200,9 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 	if mode == RuntimeProduction {
 		if issuerURL.Scheme != "https" {
 			return SecurityConfig{}, authConfigError("OIDC_ISSUER_URL must use HTTPS in production")
+		}
+		if publicURL.Scheme != "https" {
+			return SecurityConfig{}, authConfigError("TFLIVE_PUBLIC_URL must use HTTPS in production")
 		}
 		if openFGA.APIToken.Empty() {
 			return SecurityConfig{}, authConfigError("OPENFGA_API_TOKEN is required in production")
@@ -178,9 +239,16 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 		Mode:     mode,
 		TenantID: traits.TenantID(tenantID),
 		OIDC: OIDCConfig{
-			IssuerURL: issuerURL,
-			Audience:  audience,
+			IssuerURL:    issuerURL,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
 		},
+
+		PublicURL:            publicURL,
+		SessionEncryptionKey: sessionKey,
+		SessionAbsoluteTTL:   sessionAbsoluteTTL,
+		SessionIdleTTL:       sessionIdleTTL,
+
 		OpenFGA: openFGA,
 
 		KeycloakAdminURL:            keycloakAdminURL,
@@ -291,6 +359,18 @@ func safeOpaqueValue(value string) bool {
 	return value != "" && strings.IndexFunc(value, func(character rune) bool {
 		return unicode.IsSpace(character) || unicode.IsControl(character)
 	}) == -1
+}
+
+func optionalPositiveDuration(getenv func(string) string, name string, fallback time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		return 0, authConfigError("%s must be a positive duration", name)
+	}
+	return value, nil
 }
 
 func authConfigError(format string, arguments ...any) error {

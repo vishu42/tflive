@@ -15,6 +15,7 @@ import (
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/queue"
+	"github.com/vishu42/tflive/internal/secrets"
 	"github.com/vishu42/tflive/internal/temporal"
 	"github.com/vishu42/tflive/internal/traits"
 	"github.com/vishu42/tflive/internal/workflows"
@@ -304,6 +305,7 @@ type recordingWorkerDependencies struct {
 	worker               *recordingTemporalWorker
 	pool                 *recordingWorkerPostgresPool
 	store                *recordingWorkerStore
+	credentialCipher     *secrets.Cipher
 	temporalConfig       temporal.Config
 	workerTaskQueue      string
 	workerOptions        temporalworker.Options
@@ -341,10 +343,11 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			deps.migrated = true
 			return nil
 		},
-		newStore: func(pool postgresPool) (workerStore, error) {
+		newStore: func(pool postgresPool, cipher *secrets.Cipher) (workerStore, error) {
 			if pool != deps.pool {
 				t.Fatalf("newStore pool = %p, want %p", pool, deps.pool)
 			}
+			deps.credentialCipher = cipher
 			return deps.store, nil
 		},
 		dialTemporal: func(_ context.Context, cfg temporal.Config) (client.Client, error) {

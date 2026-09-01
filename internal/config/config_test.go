@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -266,6 +267,125 @@ func TestLoadWorkerConfigRequiresDatabaseURL(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("error = %v, want ErrInvalidConfig", err)
+	}
+}
+
+func TestLoadAPIConfigAllowsEmptyCredentialEncryptionKey(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadAPIConfig(withValidSecurity(func(key string) string {
+		switch key {
+		case "DATABASE_URL":
+			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
+		case "TEMPORAL_ADDRESS":
+			return "localhost:7233"
+		default:
+			return ""
+		}
+	}))
+	if err != nil {
+		t.Fatalf("LoadAPIConfig returned error: %v", err)
+	}
+	if !cfg.CredentialEncryptionKey.Empty() {
+		t.Fatal("CredentialEncryptionKey is not empty, want empty: credential encryption is optional")
+	}
+}
+
+func TestLoadAPIConfigAcceptsValidCredentialEncryptionKey(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadAPIConfig(withValidSecurity(func(key string) string {
+		switch key {
+		case "DATABASE_URL":
+			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
+		case "TEMPORAL_ADDRESS":
+			return "localhost:7233"
+		case "CREDENTIAL_ENCRYPTION_KEY":
+			return "01234567890123456789012345678901"
+		default:
+			return ""
+		}
+	}))
+	if err != nil {
+		t.Fatalf("LoadAPIConfig returned error: %v", err)
+	}
+	if cfg.CredentialEncryptionKey.Value() != "01234567890123456789012345678901" {
+		t.Fatalf("CredentialEncryptionKey.Value() = %q", cfg.CredentialEncryptionKey.Value())
+	}
+}
+
+func TestLoadAPIConfigRejectsMalformedCredentialEncryptionKey(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadAPIConfig(withValidSecurity(func(key string) string {
+		switch key {
+		case "DATABASE_URL":
+			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
+		case "TEMPORAL_ADDRESS":
+			return "localhost:7233"
+		case "CREDENTIAL_ENCRYPTION_KEY":
+			return "too-short"
+		default:
+			return ""
+		}
+	}))
+	if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "CREDENTIAL_ENCRYPTION_KEY") {
+		t.Fatalf("error = %v, want ErrInvalidConfig mentioning CREDENTIAL_ENCRYPTION_KEY", err)
+	}
+}
+
+func TestLoadWorkerConfigAcceptsValidCredentialEncryptionKey(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadWorkerConfig(func(key string) string {
+		switch key {
+		case "DATABASE_URL":
+			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
+		case "TEMPORAL_ADDRESS":
+			return "localhost:7233"
+		case "OPENFGA_API_URL":
+			return "http://localhost:8080"
+		case "OPENFGA_STORE_ID":
+			return "store-id"
+		case "OPENFGA_MODEL_ID":
+			return "model-id"
+		case "CREDENTIAL_ENCRYPTION_KEY":
+			return "01234567890123456789012345678901"
+		default:
+			return ""
+		}
+	})
+	if err != nil {
+		t.Fatalf("LoadWorkerConfig returned error: %v", err)
+	}
+	if cfg.CredentialEncryptionKey.Value() != "01234567890123456789012345678901" {
+		t.Fatalf("CredentialEncryptionKey.Value() = %q", cfg.CredentialEncryptionKey.Value())
+	}
+}
+
+func TestLoadWorkerConfigRejectsMalformedCredentialEncryptionKey(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadWorkerConfig(func(key string) string {
+		switch key {
+		case "DATABASE_URL":
+			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
+		case "TEMPORAL_ADDRESS":
+			return "localhost:7233"
+		case "OPENFGA_API_URL":
+			return "http://localhost:8080"
+		case "OPENFGA_STORE_ID":
+			return "store-id"
+		case "OPENFGA_MODEL_ID":
+			return "model-id"
+		case "CREDENTIAL_ENCRYPTION_KEY":
+			return "too-short"
+		default:
+			return ""
+		}
+	})
+	if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "CREDENTIAL_ENCRYPTION_KEY") {
+		t.Fatalf("error = %v, want ErrInvalidConfig mentioning CREDENTIAL_ENCRYPTION_KEY", err)
 	}
 }
 

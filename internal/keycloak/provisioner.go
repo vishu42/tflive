@@ -3,13 +3,10 @@ package keycloak
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 const (
 	directoryReaderClientID = "tflive-directory-reader"
-	audienceScopeName       = "tflive-api-audience"
-	audienceMapperName      = "tflive-api-audience"
 )
 
 var directoryReaderRealmManagementRoles = []string{
@@ -58,20 +55,6 @@ type ClientSpec struct {
 	Attributes                   map[string]string
 }
 
-type ClientScopeSpec struct {
-	Name       string
-	Protocol   string
-	Attributes map[string]string
-}
-
-type ProtocolMapperSpec struct {
-	Name            string
-	Protocol        string
-	ProtocolMapper  string
-	ConsentRequired bool
-	Config          map[string]string
-}
-
 type UserSpec struct {
 	Username      string
 	Password      string
@@ -87,16 +70,10 @@ type ResourceRef struct {
 	Name string
 }
 
-type ExampleAccessToken struct {
-	Audience   []string
-	RealmRoles []string
-}
-
 // Result contains only non-sensitive identifiers suitable for operational
 // logs after a successful provisioning run.
 type Result struct {
 	Realm                       string
-	WebClientID                 string
 	APIClientID                 string
 	PlatformAdminUsername       string
 	DirectoryReaderClientID     string
@@ -108,15 +85,10 @@ type provisionBackend interface {
 	EnsureRole(context.Context, string, RoleSpec) (ResourceRef, error)
 	EnsureClient(context.Context, string, ClientSpec) (ResourceRef, error)
 	LookupClient(context.Context, string, string) (ResourceRef, error)
-	EnsureClientScope(context.Context, string, ClientScopeSpec) (ResourceRef, error)
-	LookupClientScope(context.Context, string, string) (ResourceRef, error)
-	EnsureProtocolMapper(context.Context, string, ResourceRef, ProtocolMapperSpec) error
-	EnsureDefaultClientScope(context.Context, string, ResourceRef, ResourceRef) error
 	EnsureUser(context.Context, string, UserSpec) (ResourceRef, error)
 	ClientRole(context.Context, string, ResourceRef, string) (ResourceRef, error)
 	EnsureClientRoleMapping(context.Context, string, ResourceRef, ResourceRef, []ResourceRef) error
 	EnsureClientScopeMapping(context.Context, string, ResourceRef, ResourceRef, []ResourceRef) error
-	ExampleAccessToken(context.Context, string, ResourceRef, ResourceRef) (ExampleAccessToken, error)
 }
 
 func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBackend) (Result, error) {
@@ -125,8 +97,17 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 		sslRequired = "none"
 	}
 	realmSpec := RealmSpec{
-		Name:                cfg.Realm,
-		Enabled:             true,
+		Name:    cfg.Realm,
+		Enabled: true,
+		// Five minutes. It does not govern how long a tflive session lasts —
+		// that is tflive's own, set by TFLIVE_SESSION_ABSOLUTE_TTL and
+		// TFLIVE_SESSION_IDLE_TTL — and the ID token it bounds authenticates
+		// nothing at tflive after the callback, since the middleware works off
+		// the session store. So this is hygiene rather than a control: the one
+		// token we keep is short-lived by default, and nothing is lost by that.
+		// RP-Initiated Logout 1.0 says the OP SHOULD honour an expired
+		// id_token_hint, and a session running up to eight hours means ours is
+		// expired at logout whatever this value says.
 		AccessTokenLifespan: 300,
 		SSLRequired:         sslRequired,
 		RegistrationAllowed: false,
@@ -135,82 +116,36 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 		return Result{}, fmt.Errorf("ensure realm %s: %w", cfg.Realm, err)
 	}
 
+	apiAttributes := disabledGrantAttributes()
+	apiAttributes["pkce.code.challenge.method"] = "S256"
+	apiAttributes["post.logout.redirect.uris"] = cfg.PostLogoutRedirectURI
+	// Keycloak posts the logout notification here when a session it owns ends.
+	// session.required makes it include sid, in both the ID token and the
+	// logout token, which is what lets one device be signed out instead of
+	// every session the user has.
+	apiAttributes["backchannel.logout.url"] = cfg.BackchannelLogoutURI
+	apiAttributes["backchannel.logout.session.required"] = "true"
+	apiAttributes["backchannel.logout.revoke.offline.tokens"] = "false"
 	if _, err := backend.EnsureClient(ctx, cfg.Realm, ClientSpec{
 		ClientID:                     cfg.APIClientID,
 		Name:                         "tflive API",
-		Enabled:                      true,
-		Protocol:                     "openid-connect",
-		BearerOnly:                   true,
-		PublicClient:                 false,
-		StandardFlowEnabled:          false,
-		ImplicitFlowEnabled:          false,
-		DirectAccessGrantsEnabled:    false,
-		ServiceAccountsEnabled:       false,
-		AuthorizationServicesEnabled: false,
-		FullScopeAllowed:             false,
-		Attributes:                   disabledGrantAttributes(),
-	}); err != nil {
-		return Result{}, fmt.Errorf("ensure API client %s: %w", cfg.APIClientID, err)
-	}
-
-	webAttributes := disabledGrantAttributes()
-	webAttributes["pkce.code.challenge.method"] = "S256"
-	webAttributes["post.logout.redirect.uris"] = strings.Join(cfg.RedirectURIs, "##")
-	webClient, err := backend.EnsureClient(ctx, cfg.Realm, ClientSpec{
-		ClientID:                     cfg.WebClientID,
-		Name:                         "tflive web",
+		Secret:                       cfg.APIClientSecret,
 		Enabled:                      true,
 		Protocol:                     "openid-connect",
 		BearerOnly:                   false,
-		PublicClient:                 true,
+		PublicClient:                 false,
 		StandardFlowEnabled:          true,
 		ImplicitFlowEnabled:          false,
 		DirectAccessGrantsEnabled:    false,
 		ServiceAccountsEnabled:       false,
 		AuthorizationServicesEnabled: false,
-		FullScopeAllowed:             true,
-		RedirectURIs:                 append([]string(nil), cfg.RedirectURIs...),
-		WebOrigins:                   append([]string(nil), cfg.WebOrigins...),
-		Attributes:                   webAttributes,
-	})
-	if err != nil {
-		return Result{}, fmt.Errorf("ensure browser client %s: %w", cfg.WebClientID, err)
-	}
-
-	audienceScope, err := backend.EnsureClientScope(ctx, cfg.Realm, ClientScopeSpec{
-		Name:     audienceScopeName,
-		Protocol: "openid-connect",
-		Attributes: map[string]string{
-			"include.in.token.scope": "false",
-		},
-	})
-	if err != nil {
-		return Result{}, fmt.Errorf("ensure client scope %s: %w", audienceScopeName, err)
-	}
-	if err := backend.EnsureProtocolMapper(ctx, cfg.Realm, audienceScope, ProtocolMapperSpec{
-		Name:            audienceMapperName,
-		Protocol:        "openid-connect",
-		ProtocolMapper:  "oidc-audience-mapper",
-		ConsentRequired: false,
-		Config: map[string]string{
-			"included.client.audience":  cfg.APIClientID,
-			"access.token.claim":        "true",
-			"introspection.token.claim": "true",
-			"id.token.claim":            "false",
-			"lightweight.claim":         "false",
-		},
+		FullScopeAllowed:             false,
+		// No WebOrigins: the browser reaches the API through the same origin
+		// that serves the SPA, so no CORS is involved anywhere.
+		RedirectURIs: []string{cfg.CallbackURI},
+		Attributes:   apiAttributes,
 	}); err != nil {
-		return Result{}, fmt.Errorf("ensure audience mapper %s: %w", audienceMapperName, err)
-	}
-	if err := backend.EnsureDefaultClientScope(ctx, cfg.Realm, webClient, audienceScope); err != nil {
-		return Result{}, fmt.Errorf("link audience scope to browser client: %w", err)
-	}
-	rolesScope, err := backend.LookupClientScope(ctx, cfg.Realm, "roles")
-	if err != nil {
-		return Result{}, fmt.Errorf("lookup required client scope roles: %w", err)
-	}
-	if err := backend.EnsureDefaultClientScope(ctx, cfg.Realm, webClient, rolesScope); err != nil {
-		return Result{}, fmt.Errorf("link roles scope to browser client: %w", err)
+		return Result{}, fmt.Errorf("ensure API client %s: %w", cfg.APIClientID, err)
 	}
 
 	platformUser, err := backend.EnsureUser(ctx, cfg.Realm, UserSpec{
@@ -288,16 +223,8 @@ func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBack
 		return Result{}, fmt.Errorf("assign directory reader client scope roles: %w", err)
 	}
 
-	exampleToken, err := backend.ExampleAccessToken(ctx, cfg.Realm, webClient, platformUser)
-	if err != nil {
-		return Result{}, fmt.Errorf("generate effective example access token: %w", err)
-	}
-	if !containsString(exampleToken.Audience, cfg.APIClientID) {
-		return Result{}, fmt.Errorf("effective access token is missing audience %s", cfg.APIClientID)
-	}
 	return Result{
 		Realm:                       cfg.Realm,
-		WebClientID:                 cfg.WebClientID,
 		APIClientID:                 cfg.APIClientID,
 		PlatformAdminUsername:       cfg.PlatformAdminUsername,
 		DirectoryReaderClientID:     directoryReaderClientID,
@@ -311,13 +238,4 @@ func disabledGrantAttributes() map[string]string {
 		"oidc.ciba.grant.enabled":                   "false",
 		"standard.token.exchange.enabled":           "false",
 	}
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }

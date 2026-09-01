@@ -4,8 +4,7 @@ import AppShell from "./AppShell";
 import NotFound from "./NotFound";
 import RoutePlaceholder from "./RoutePlaceholder";
 import RequireCapability from "../auth/RequireCapability";
-import OidcAuthProvider from "../auth/OidcAuthProvider";
-import CallbackPage from "../auth/CallbackPage";
+import SessionProvider from "../auth/SessionProvider";
 import StacksListScreen from "../features/stacks/StacksListScreen";
 import StackDetailShell from "../features/stacks/StackDetailShell";
 import StackTemplateScreen from "../features/stacks/StackTemplateScreen";
@@ -19,7 +18,7 @@ import StackAccessScreen from "../features/stacks/StackAccessScreen";
 import CreateStackScreen from "../features/stacks/CreateStackScreen";
 // The design system gallery is a development-only route, and deliberately a
 // sibling of "/" rather than a child: everything under "/" renders inside
-// OidcAuthProvider, which cannot resolve without Keycloak, so a nested
+// SessionProvider, which cannot resolve without Keycloak, so a nested
 // styleguide would never mount locally.
 //
 // It is imported dynamically inside the DEV branch rather than statically at
@@ -51,7 +50,7 @@ export const routeConfig: RouteObject[] = [
   ...devRoutes,
   {
     path: "/",
-    element: <OidcAuthProvider />,
+    element: <SessionProvider />,
     children: [
       {
         element: <AppShell />,
@@ -102,7 +101,6 @@ export const routeConfig: RouteObject[] = [
           },
           { path: "templates", element: <TemplateRegistryScreen /> },
           { path: "templates/new", element: <TemplateRegistrationScreen /> },
-          { path: "auth/callback", element: <CallbackPage /> },
           { path: "*", element: <NotFound /> }
         ]
       }

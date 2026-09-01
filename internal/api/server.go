@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/queue"
+	"github.com/vishu42/tflive/internal/secrets"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -23,6 +25,7 @@ type Server struct {
 	service  *app.Service
 	tenantID traits.TenantID
 	queue    queue.Reader
+	auth     AuthConfig
 	mux      *http.ServeMux
 	handler  http.Handler
 	debug    bool
@@ -36,6 +39,64 @@ func WithQueueReader(reader queue.Reader) ServerOption {
 	return func(server *Server) { server.queue = reader }
 }
 
+// AuthFlow is the subset of the OIDC flow the handlers use. *authn.Flow
+// satisfies it; the interface exists so handler tests need no live IdP.
+type AuthFlow interface {
+	AuthorizationURL(state, nonce, codeVerifier string) (string, error)
+	Exchange(ctx context.Context, code, codeVerifier string) (string, error)
+	EndSessionURL(idTokenHint, postLogoutRedirectURI string) string
+}
+
+// AuthConfig carries what the browser login routes need.
+type AuthConfig struct {
+	Flow     AuthFlow
+	Verifier authn.Verifier
+	Sealer   *secrets.Cipher
+	// PublicURL is the origin the browser reaches, with no trailing slash. It
+	// is configured rather than derived from Host or X-Forwarded-Proto, which
+	// a caller can spoof.
+	PublicURL     string
+	SecureCookies bool
+	// Sessions persists the app-owned session the callback creates. The
+	// browser is handed a reference to it, never the ID token.
+	Sessions           authn.SessionStore
+	SessionAbsoluteTTL time.Duration
+	SessionIdleTTL     time.Duration
+	// LogoutTokenVerifier authenticates back-channel logout notifications.
+	// *authn.OIDCVerifier satisfies it in production.
+	LogoutTokenVerifier LogoutTokenVerifier
+	// Clock is time.Now when nil. Tests set it.
+	Clock func() time.Time
+}
+
+// WithAuth enables the browser login routes.
+func WithAuth(cfg AuthConfig) ServerOption {
+	return func(server *Server) { server.auth = cfg }
+}
+
+// requireCompleteAuthWiring panics if a WithAuth configuration is missing a
+// dependency the browser login routes assume is present. Registration is
+// gated on Flow alone, so nothing else stops a caller from wiring Flow
+// without, say, Sessions — and the handlers dereference Sessions
+// unconditionally on every request. Catching that gap here, once, at boot,
+// turns a missing dependency into a deterministic startup panic instead of a
+// nil-pointer panic (or, for the TTLs, a session that is born already
+// expired) on the first real request.
+func requireCompleteAuthWiring(auth AuthConfig) {
+	switch {
+	case auth.Verifier == nil:
+		panic("api: WithAuth configured without a Verifier")
+	case auth.Sealer == nil:
+		panic("api: WithAuth configured without a Sealer")
+	case auth.Sessions == nil:
+		panic("api: WithAuth configured without a Sessions store")
+	case auth.SessionAbsoluteTTL <= 0:
+		panic("api: WithAuth configured without a positive SessionAbsoluteTTL")
+	case auth.SessionIdleTTL <= 0:
+		panic("api: WithAuth configured without a positive SessionIdleTTL")
+	}
+}
+
 func NewServer(service *app.Service, tenantID traits.TenantID, options ...ServerOption) *Server {
 	server := &Server{
 		service:  service,
@@ -44,6 +105,16 @@ func NewServer(service *app.Service, tenantID traits.TenantID, options ...Server
 	}
 	for _, option := range options {
 		option(server)
+	}
+
+	// Browser login routes. Registered only when auth is configured, so an
+	// unauthenticated test server does not expose a half-wired flow.
+	if server.auth.Flow != nil {
+		requireCompleteAuthWiring(server.auth)
+		server.mux.HandleFunc("GET /v1/auth/login", server.handleAuthLogin)
+		server.mux.HandleFunc("GET /v1/auth/callback", server.handleAuthCallback)
+		server.mux.HandleFunc("POST /v1/auth/logout", server.handleAuthLogout)
+		server.mux.HandleFunc("POST /v1/auth/backchannel-logout", server.handleBackchannelLogout)
 	}
 
 	// Health routes.
@@ -119,10 +190,20 @@ func NewServer(service *app.Service, tenantID traits.TenantID, options ...Server
 }
 
 // NewAuthenticatedServer protects all /v1 routes and leaves health probes public.
-func NewAuthenticatedServer(service *app.Service, verifier authn.Verifier, tenantID traits.TenantID, debug bool, options ...ServerOption) *Server {
+func NewAuthenticatedServer(service *app.Service, tenantID traits.TenantID, debug bool, options ...ServerOption) *Server {
 	server := NewServer(service, tenantID, options...)
 	server.debug = debug
-	server.handler = authn.RequireAuthentication(verifier, "/healthz")(server.mux)
+	// No verifier here. The middleware authenticates against the session store
+	// alone, so the only place a token is verified is the OIDC callback, which
+	// reaches its verifier through server.auth. This used to take a verifier of
+	// its own for the Bearer path, which had to be kept the same instance as
+	// server.auth.Verifier by hand because nothing in the type system said so.
+	server.handler = authn.RequireAuthentication(
+		server.auth.Sessions,
+		server.auth.SessionIdleTTL,
+		server.auth.Clock,
+		"/healthz", "/v1/auth/login", "/v1/auth/callback", "/v1/auth/logout", "/v1/auth/backchannel-logout",
+	)(server.mux)
 	return server
 }
 
@@ -162,6 +243,13 @@ func (server *Server) requireConfiguredTenant(next http.Handler) http.Handler {
 func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	server.debugf("%s %s", request.Method, request.URL.Path)
 	server.handler.ServeHTTP(response, request)
+}
+
+func (server *Server) now() time.Time {
+	if server.auth.Clock != nil {
+		return server.auth.Clock()
+	}
+	return time.Now().UTC()
 }
 
 func (server *Server) debugf(format string, args ...any) {

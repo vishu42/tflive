@@ -55,6 +55,17 @@ describe("EnvironmentScreen", () => {
     expect(screen.queryByText("secret-value")).toBeNull();
   });
 
+  it("marks itself unsaved once a credential secret is typed, so SessionProvider's proactive re-auth defers", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.stackCredentials("tenant_123", "stack_1"), []);
+
+    renderScreen(queryClient);
+
+    expect(document.querySelector("[data-unsaved='true']")).toBeNull();
+    fireEvent.change(screen.getByLabelText(/Environment credential value/), { target: { value: "secret-value" } });
+    expect(document.querySelector("[data-unsaved='true']")).not.toBeNull();
+  });
+
   it("creates a stack credential through the existing API mutation", async () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.stackCredentials("tenant_123", "stack_1"), []);

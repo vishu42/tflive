@@ -33,7 +33,11 @@ export default function CreateStackScreen() {
   }
 
   return (
-    <section>
+    // Read by SessionProvider's proactive re-auth timer: it defers navigating
+    // away while a `[data-unsaved='true']` element is mounted, so a
+    // half-typed stack name is never wiped out by a background sign-in
+    // redirect.
+    <section data-unsaved={trimmed !== "" ? "true" : undefined}>
       {/* The title sits above the card, not inside it, matching every other
           screen. Nested in the panel it put a 40px page heading directly on top
           of a 14px field label. */}
