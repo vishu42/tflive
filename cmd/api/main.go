@@ -78,6 +78,17 @@ func credentialEncryptor(store appRepositories) app.CredentialEncryptor {
 // A silently swallowed assertion failure here would boot the API clean and
 // only surface at the first login callback, as a nil-pointer panic instead of
 // a startup error naming the actual defect.
+// localAccountStore mirrors sessionStore: the repository is reached through an
+// assertion rather than being added to appRepositories, so a deployment that
+// never enables local auth is not made to satisfy an interface it does not use.
+func localAccountStore(store appRepositories) (authn.LocalAccountStore, error) {
+	accounts, ok := store.(authn.LocalAccountStore)
+	if !ok {
+		return nil, fmt.Errorf("store %T does not implement authn.LocalAccountStore", store)
+	}
+	return accounts, nil
+}
+
 func sessionStore(store appRepositories) (authn.SessionStore, error) {
 	sessions, ok := store.(authn.SessionStore)
 	if !ok {
@@ -148,29 +159,42 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("load api config: %w", err)
 	}
 
-	verifier, err := deps.newVerifier(ctx, authn.OIDCVerifierConfig{
-		IssuerURL: cfg.Security.OIDC.IssuerURL,
-		Audience:  cfg.Security.OIDC.ClientID,
-	})
-	if err != nil {
-		return fmt.Errorf("create token verifier: %w", err)
-	}
-	defer verifier.Close(context.Background())
-
 	sessionSealer, err := secrets.NewCipher(cfg.Security.SessionEncryptionKey.Value())
 	if err != nil {
 		return fmt.Errorf("create session sealer: %w", err)
 	}
 	publicURL := strings.TrimRight(cfg.Security.PublicURL.String(), "/")
-	flow, err := authn.NewFlow(authn.FlowConfig{
-		ClientID:     cfg.Security.OIDC.ClientID,
-		ClientSecret: cfg.Security.OIDC.ClientSecret.Value(),
-		RedirectURI:  publicURL + "/v1/auth/callback",
-		Endpoints:    verifier,
-		HTTPClient:   &http.Client{Timeout: 10 * time.Second},
-	})
-	if err != nil {
-		return fmt.Errorf("create oidc flow: %w", err)
+
+	// The OIDC half is built only when a provider is configured. Constructing a
+	// verifier reaches for a discovery document, so doing it unconditionally
+	// made an IdP-less deployment fail at boot rather than run on local
+	// accounts alone — which is the deployment #211 exists to allow. Both
+	// remain nil in that case, and api.WithAuth registers no OIDC routes.
+	var verifier tokenVerifier
+	var logoutTokenVerifier api.LogoutTokenVerifier
+	var flow api.AuthFlow
+	if cfg.Security.OIDC.IssuerURL != nil {
+		oidcVerifier, err := deps.newVerifier(ctx, authn.OIDCVerifierConfig{
+			IssuerURL: cfg.Security.OIDC.IssuerURL,
+			Audience:  cfg.Security.OIDC.ClientID,
+		})
+		if err != nil {
+			return fmt.Errorf("create token verifier: %w", err)
+		}
+		defer oidcVerifier.Close(context.Background())
+		verifier, logoutTokenVerifier = oidcVerifier, oidcVerifier
+
+		oidcFlow, err := authn.NewFlow(authn.FlowConfig{
+			ClientID:     cfg.Security.OIDC.ClientID,
+			ClientSecret: cfg.Security.OIDC.ClientSecret.Value(),
+			RedirectURI:  publicURL + "/v1/auth/callback",
+			Endpoints:    oidcVerifier,
+			HTTPClient:   &http.Client{Timeout: 10 * time.Second},
+		})
+		if err != nil {
+			return fmt.Errorf("create oidc flow: %w", err)
+		}
+		flow = oidcFlow
 	}
 
 	authorizer, err := deps.newAuthorizer(openfga.Config{
@@ -243,12 +267,24 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire session store: %w", err)
 	}
 
+	// Nil unless asked for, which is what keeps POST /v1/auth/login
+	// unregistered rather than registered and always denying.
+	var localAuthenticator api.LocalAuthenticator
+	if cfg.Security.LocalAuthEnabled {
+		accounts, err := localAccountStore(store)
+		if err != nil {
+			return fmt.Errorf("wire local account store: %w", err)
+		}
+		localAuthenticator = authn.NewLocalAuthenticator(accounts)
+	}
+
 	handler := api.NewAuthenticatedServer(service, cfg.Security.TenantID, cfg.Debug,
 		api.WithQueueReader(store),
 		api.WithAuth(api.AuthConfig{
 			Flow:                flow,
 			Verifier:            verifier,
-			LogoutTokenVerifier: verifier,
+			LocalAuthenticator:  localAuthenticator,
+			LogoutTokenVerifier: logoutTokenVerifier,
 			Sealer:              sessionSealer,
 			PublicURL:           publicURL,
 			SecureCookies:       cfg.Security.Mode == config.RuntimeProduction,

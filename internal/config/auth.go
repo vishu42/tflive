@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -24,7 +25,14 @@ const (
 type SecurityConfig struct {
 	Mode     RuntimeMode
 	TenantID traits.TenantID
-	OIDC     OIDCConfig
+	// OIDC is the zero value when no provider is configured. IssuerURL nil is
+	// the test for that, and it is a supported deployment rather than an
+	// error: local accounts can be the only way in.
+	OIDC OIDCConfig
+	// LocalAuthEnabled turns on tflive's own account table as a sign-in
+	// method. Off unless asked for: an operator who does not know the feature
+	// exists should not be given a password endpoint.
+	LocalAuthEnabled bool
 
 	PublicURL            *url.URL
 	SessionEncryptionKey Secret
@@ -89,12 +97,13 @@ func (cfg OpenFGAConfig) GoString() string {
 
 func (cfg SecurityConfig) String() string {
 	return fmt.Sprintf(
-		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v ClientID:%q ClientSecret:%s} PublicURL:%v SessionEncryptionKey:%s SessionAbsoluteTTL:%s SessionIdleTTL:%s OpenFGA:%s}",
+		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v ClientID:%q ClientSecret:%s} LocalAuthEnabled:%t PublicURL:%v SessionEncryptionKey:%s SessionAbsoluteTTL:%s SessionIdleTTL:%s OpenFGA:%s}",
 		cfg.Mode,
 		cfg.TenantID,
 		cfg.OIDC.IssuerURL,
 		cfg.OIDC.ClientID,
 		cfg.OIDC.ClientSecret,
+		cfg.LocalAuthEnabled,
 		cfg.PublicURL,
 		cfg.SessionEncryptionKey,
 		cfg.SessionAbsoluteTTL,
@@ -121,23 +130,20 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 		return SecurityConfig{}, authConfigError("TFLIVE_TENANT_ID must start with an ASCII alphanumeric character, contain only ASCII alphanumerics, underscore, or hyphen, and be at most 128 characters")
 	}
 
-	issuerURL, err := parseConfigURL("OIDC_ISSUER_URL", getenv("OIDC_ISSUER_URL"))
+	localAuthEnabled, err := optionalBool(getenv, "TFLIVE_LOCAL_AUTH_ENABLED")
 	if err != nil {
 		return SecurityConfig{}, err
 	}
-	if strings.TrimSpace(getenv("OIDC_AUDIENCE")) != "" {
-		return SecurityConfig{}, authConfigError("OIDC_AUDIENCE is retired: set OIDC_CLIENT_ID to the OAuth client ID instead")
+
+	oidc, err := loadOIDCConfig(getenv)
+	if err != nil {
+		return SecurityConfig{}, err
 	}
-	clientID := strings.TrimSpace(getenv("OIDC_CLIENT_ID"))
-	if clientID == "" {
-		return SecurityConfig{}, authConfigError("OIDC_CLIENT_ID is required")
-	}
-	if !safeOpaqueValue(clientID) {
-		return SecurityConfig{}, authConfigError("OIDC_CLIENT_ID must not contain whitespace or control characters")
-	}
-	clientSecret := newSecret(strings.TrimSpace(getenv("OIDC_CLIENT_SECRET")))
-	if clientSecret.Empty() {
-		return SecurityConfig{}, authConfigError("OIDC_CLIENT_SECRET is required")
+	// Refuse to start with no way in. Every route would answer 401 and nothing
+	// would say why, so the failure would look like a broken deployment rather
+	// than an unconfigured one.
+	if oidc.IssuerURL == nil && !localAuthEnabled {
+		return SecurityConfig{}, authConfigError("no authentication method is configured: set OIDC_ISSUER_URL, or TFLIVE_LOCAL_AUTH_ENABLED=true, or both")
 	}
 
 	publicURL, err := parseConfigURL("TFLIVE_PUBLIC_URL", getenv("TFLIVE_PUBLIC_URL"))
@@ -185,7 +191,9 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 		return SecurityConfig{}, authConfigError("OPENFGA_API_URL must use HTTPS in production")
 	}
 	if mode == RuntimeProduction {
-		if issuerURL.Scheme != "https" {
+		// Only when one is configured: a local-only production deployment has
+		// no issuer, and dereferencing the nil here would panic at boot.
+		if oidc.IssuerURL != nil && oidc.IssuerURL.Scheme != "https" {
 			return SecurityConfig{}, authConfigError("OIDC_ISSUER_URL must use HTTPS in production")
 		}
 		if publicURL.Scheme != "https" {
@@ -203,13 +211,10 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 	// still has its own.
 
 	return SecurityConfig{
-		Mode:     mode,
-		TenantID: traits.TenantID(tenantID),
-		OIDC: OIDCConfig{
-			IssuerURL:    issuerURL,
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
-		},
+		Mode:             mode,
+		TenantID:         traits.TenantID(tenantID),
+		OIDC:             oidc,
+		LocalAuthEnabled: localAuthEnabled,
 
 		PublicURL:            publicURL,
 		SessionEncryptionKey: sessionKey,
@@ -218,6 +223,60 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 
 		OpenFGA: openFGA,
 	}, nil
+}
+
+// loadOIDCConfig reads the external provider, or reports the zero value when
+// none is configured.
+//
+// OIDC_ISSUER_URL is what decides. Absent, there is no provider and the client
+// credentials must be absent too; present, it is a provider being configured
+// and the credentials are required. Accepting either half alone would let an
+// operator believe SSO is on when nothing would ever contact the provider.
+func loadOIDCConfig(getenv func(string) string) (OIDCConfig, error) {
+	if strings.TrimSpace(getenv("OIDC_AUDIENCE")) != "" {
+		return OIDCConfig{}, authConfigError("OIDC_AUDIENCE is retired: set OIDC_CLIENT_ID to the OAuth client ID instead")
+	}
+
+	rawIssuer := strings.TrimSpace(getenv("OIDC_ISSUER_URL"))
+	clientID := strings.TrimSpace(getenv("OIDC_CLIENT_ID"))
+	clientSecret := newSecret(strings.TrimSpace(getenv("OIDC_CLIENT_SECRET")))
+
+	if rawIssuer == "" {
+		if clientID != "" || !clientSecret.Empty() {
+			return OIDCConfig{}, authConfigError("OIDC_CLIENT_ID and OIDC_CLIENT_SECRET require OIDC_ISSUER_URL")
+		}
+		return OIDCConfig{}, nil
+	}
+
+	issuerURL, err := parseConfigURL("OIDC_ISSUER_URL", rawIssuer)
+	if err != nil {
+		return OIDCConfig{}, err
+	}
+	if clientID == "" {
+		return OIDCConfig{}, authConfigError("OIDC_CLIENT_ID is required")
+	}
+	if !safeOpaqueValue(clientID) {
+		return OIDCConfig{}, authConfigError("OIDC_CLIENT_ID must not contain whitespace or control characters")
+	}
+	if clientSecret.Empty() {
+		return OIDCConfig{}, authConfigError("OIDC_CLIENT_SECRET is required")
+	}
+	return OIDCConfig{IssuerURL: issuerURL, ClientID: clientID, ClientSecret: clientSecret}, nil
+}
+
+// optionalBool reads a flag that defaults to false. An unparsable value is an
+// error rather than a silent false: "TFLIVE_LOCAL_AUTH_ENABLED=yes" meaning
+// disabled is exactly the surprise a boot-time check exists to prevent.
+func optionalBool(getenv func(string) string, name string) (bool, error) {
+	raw := strings.TrimSpace(getenv(name))
+	if raw == "" {
+		return false, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, authConfigError("%s must be a boolean", name)
+	}
+	return value, nil
 }
 
 func loadOpenFGAConfig(getenv func(string) string) (OpenFGAConfig, error) {

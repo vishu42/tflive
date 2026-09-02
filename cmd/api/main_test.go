@@ -314,6 +314,14 @@ func TestRunWrapsWireServiceFailure(t *testing.T) {
 //
 // Not parallel, because it redirects the global logger. Bound to port 0 so the
 // result no longer depends on what else is running on the machine.
+//
+// Configured local-only, with no IdP. This test is about migrations and
+// wiring, and it runs against defaultAPIDependencies -- so while OIDC was
+// mandatory it also had to reach a live provider's discovery document, and
+// failed with "token verifier unavailable" on any machine where that provider
+// was absent, misconfigured, or simply a different realm. Nothing it asserts
+// needed an IdP; it needed one only because the configuration would not load
+// without it.
 func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
 	dsn := os.Getenv("tflive_POSTGRES_TEST_DSN")
 	if dsn == "" {
@@ -328,7 +336,7 @@ func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	values := apiTestValues()
+	values := localOnlyAPIValues()
 	values["DATABASE_URL"] = dsn
 	values["HTTP_ADDRESS"] = "127.0.0.1:0"
 
@@ -766,4 +774,12 @@ func (store *recordingStore) Enqueue(context.Context, ...queue.Request) error { 
 
 func (store *recordingStore) ListByActor(context.Context, string, string, int) ([]queue.Status, error) {
 	return nil, nil
+}
+
+// LocalAccountByUsername makes recordingStore satisfy authn.LocalAccountStore,
+// which runWithDependencies asserts for when local auth is enabled. It holds no
+// accounts: these tests assert on which routes exist and what they reach, not
+// on any particular credential succeeding.
+func (recordingStore) LocalAccountByUsername(context.Context, string) (authn.LocalAccount, error) {
+	return authn.LocalAccount{}, authn.ErrLocalAccountNotFound
 }
