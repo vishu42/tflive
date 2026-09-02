@@ -39,6 +39,11 @@ services:
       OPENFGA_MODEL_ID: ${OPENFGA_MODEL_ID:?run the provisioning phase first and copy OPENFGA_MODEL_ID into .env}
       ARTIFACT_STORE_KIND: filesystem
       ARTIFACT_STORE_FILESYSTEM_ROOT: /var/lib/tflive/artifacts
+      # Seeds the bootstrap administrator on first boot. Required by the API --
+      # without it the process exits at startup and the service restart-loops.
+      # Defaulted here because this overlay is the local stack; a real
+      # deployment sets it from the environment like every other secret.
+      TFLIVE_ROOT_PASSWORD: ${TFLIVE_ROOT_PASSWORD:-root-local-only}
     restart: on-failure
     ports:
       - "8081:8081"
