@@ -5,6 +5,7 @@ import NotFound from "./NotFound";
 import RoutePlaceholder from "./RoutePlaceholder";
 import RequireCapability from "../auth/RequireCapability";
 import SessionProvider from "../auth/SessionProvider";
+import SignInScreen from "../auth/SignInScreen";
 import StacksListScreen from "../features/stacks/StacksListScreen";
 import StackDetailShell from "../features/stacks/StackDetailShell";
 import StackTemplateScreen from "../features/stacks/StackTemplateScreen";
@@ -18,8 +19,8 @@ import StackAccessScreen from "../features/stacks/StackAccessScreen";
 import CreateStackScreen from "../features/stacks/CreateStackScreen";
 // The design system gallery is a development-only route, and deliberately a
 // sibling of "/" rather than a child: everything under "/" renders inside
-// SessionProvider, which cannot resolve without Keycloak, so a nested
-// styleguide would never mount locally.
+// SessionProvider, which cannot resolve without a signed-in session, so a
+// nested styleguide would never mount locally.
 //
 // It is imported dynamically inside the DEV branch rather than statically at
 // the top of this file. A static import would tree-shake its JavaScript out
@@ -48,6 +49,11 @@ const devRoutes: RouteObject[] = import.meta.env.DEV
 // see docs/superpowers/specs/2026-07-19-capability-gating-primitives-design.md.
 export const routeConfig: RouteObject[] = [
   ...devRoutes,
+  // A sibling of "/", not a child, for the same reason /styleguide is one:
+  // everything under "/" renders inside SessionProvider, which resolves only
+  // with a session — and this is the screen you are shown because you have
+  // none. Nested, it could never mount.
+  { path: "/signin", element: <SignInScreen /> },
   {
     path: "/",
     element: <SessionProvider />,

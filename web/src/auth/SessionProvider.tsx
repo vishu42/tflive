@@ -3,7 +3,7 @@ import { Outlet } from "react-router-dom";
 import { useIsMutating } from "@tanstack/react-query";
 import { ApiRequestError, apiRequestsMade, loginURL, logout as postLogout } from "../api/client";
 import { AuthContext } from "./AuthContext";
-import { clearLoginAttempts, loginLoopDetected, recordLoginAttempt } from "./loginAttempts";
+import { clearLoginAttempts, loginLoopDetected } from "./loginAttempts";
 import { useMeQuery } from "./useMeQuery";
 
 // How long before expiry to re-authenticate. Long enough that the round trip
@@ -30,14 +30,16 @@ export default function SessionProvider() {
 
   const login = useCallback(() => {
     if (navigated.current) return;
-    // Every redirect that comes back still unauthenticated is a lap of the
-    // loop. Stop and explain rather than bouncing the browser forever.
+    // Attempts are recorded by the sign-in screen, on authentications the
+    // server actually accepted -- not here. Arriving at the screen is not a lap
+    // of anything: with a password form the visitor can be sent here simply
+    // because they have not signed in yet, and counting that would end in
+    // telling them their cookies are blocked when nothing has failed.
     if (loginLoopDetected()) {
       setStatus("loop");
       return;
     }
     navigated.current = true;
-    recordLoginAttempt();
     globalThis.location.assign(loginURL());
   }, []);
 
@@ -51,7 +53,6 @@ export default function SessionProvider() {
     clearLoginAttempts();
     setStatus("loading");
     navigated.current = true;
-    recordLoginAttempt();
     globalThis.location.assign(loginURL());
   }, []);
 

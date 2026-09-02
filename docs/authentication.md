@@ -237,16 +237,41 @@ feeds an access decision. Handlers and application services obtain it with
 ## Browser Session
 
 The browser never speaks OIDC. Three API routes run the entire
-authorization-code flow on its behalf, plus one more the IdP calls directly:
+authorization-code flow on its behalf, plus one more the IdP calls directly,
+and two that belong to local sign-in rather than to any provider:
 
 | Route | Purpose |
 |---|---|
-| `GET /v1/auth/login` | Starts the flow: generates `state`, `nonce`, and a PKCE verifier, seals them into the transaction cookie, and redirects to the IdP |
+| `GET /v1/auth/methods` | Unauthenticated; reports which ways in exist, so the sign-in screen renders the ones that do |
+| `POST /v1/auth/login` | Signs in against tflive's own account table and mints the same session row a federated sign-in would |
+| `GET /v1/auth/login` | Starts the OIDC flow: generates `state`, `nonce`, and a PKCE verifier, seals them into the transaction cookie, and redirects to the IdP |
 | `GET /v1/auth/callback` | Redeems the code on the back channel, verifies the resulting ID token, creates a session row, and hands the browser the session cookie |
-| `POST /v1/auth/logout` | Revokes the session row, clears the session cookie, and redirects to the IdP's RP-initiated logout |
+| `POST /v1/auth/logout` | Revokes the session row, clears the session cookie, and redirects to the IdP's RP-initiated logout where there is one |
 | `POST /v1/auth/backchannel-logout` | Unauthenticated; ends sessions on the IdP's own instruction — see "Back-Channel Logout" below |
 
-`/v1/auth/login` takes a `return_to` query parameter, the one place the flow
+The two sign-in routes share a method and differ by verb, because they are the
+same operation by different means and end in the same place: a session row and
+the opaque cookie that names it. Nothing downstream can tell which was used.
+Only `GET /v1/auth/login` and the callback need a provider, so an install with
+no `OIDC_ISSUER_URL` simply does not register them; logout registers either
+way, since ending a session is not an OIDC operation.
+
+`POST /v1/auth/login` is the one authenticated-by-credentials route in the API,
+and it is the only one with no transaction behind it, so it carries its own
+CSRF defence: the body must be declared `application/json`, and `Sec-Fetch-Site`
+or `Origin` must say the request came from this origin. Neither header present
+is a non-browser caller — curl, a script — which carries nobody's ambient
+cookies. Without those checks a cross-site form posting `text/plain` decodes as
+JSON and silently signs the visitor into an attacker's account.
+
+The sign-in screen itself is a client route, `/signin`, not a server-rendered
+page. It reads `/v1/auth/methods`, always renders the password form — root is a
+local account and cannot be locked out, so there is always something to sign in
+with — and shows an SSO button beside it only where a provider is configured.
+Choosing between them is the person's decision; sending the browser straight to
+the IdP would have made it the client's.
+
+`GET /v1/auth/login` takes a `return_to` query parameter, the one place the flow
 accepts untrusted input, and `authn.SafeReturnTo` reduces it to a same-origin
 path or `/`. Absolute, protocol-relative (`//host`, `/\host`),
 userinfo-bearing, control-character, and unnormalized paths are all refused. So
@@ -254,7 +279,9 @@ is anything under `/v1`: no API path is a place for a browser to land, and one
 of them is a trap — `return_to=/v1/auth/login` would make the callback restart
 the login it has just finished, and with an SSO session standing the browser
 loops until it gives up. The SPA's own loop guard cannot catch that, because
-server-side redirects never load a page for it to count.
+server-side redirects never load a page for it to count. `/signin` carries the
+same parameter and applies the same rule to it in the client, because a
+password sign-in navigates to it without the server ever seeing it.
 
 Two cookies carry the interactive flow:
 

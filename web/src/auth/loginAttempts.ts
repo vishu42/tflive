@@ -1,9 +1,15 @@
-// A sign-in that succeeds at the IdP but leaves the browser without a usable
-// session cookie puts the app in a redirect loop: /v1/me answers 401, we
-// navigate to login, the IdP sends us back, /v1/me answers 401 again. The
+// A sign-in the server accepts but that leaves the browser without a usable
+// session cookie puts the app in a loop: /v1/me answers 401, we send the
+// visitor to the sign-in screen, they sign in, /v1/me answers 401 again. The
 // realistic cause is a browser configured to block cookies for this site —
 // the session cookie is a 43-character opaque reference, not a token, so it
 // cannot run into a size limit. Blocking reports no error to script.
+//
+// Only a completed authentication counts: a 204 from the password form, or the
+// trip to the IdP that an SSO button starts. Merely landing on the sign-in
+// screen is not an attempt — with a password form the visitor lands there
+// whenever they are not signed in, and counting that would end in blaming
+// cookies for someone who has simply not typed a password yet.
 //
 // An in-memory guard cannot see this: every redirect reloads the page and
 // resets it, so it stops one bounce and not a loop. sessionStorage survives
@@ -12,8 +18,9 @@
 
 const storageKey = "tflive.auth.loginAttempts";
 
-// Redirects allowed before we stop and explain. Enough to absorb an expiry
-// racing a page load, few enough that the flashing stops quickly.
+// Sign-ins allowed before we stop and explain. Enough to absorb an expiry
+// racing a page load, few enough that the user is not made to retype a
+// password that was never going to stick.
 export const maxLoginAttempts = 3;
 
 // Used when sessionStorage is unavailable — Safari private browsing throws on
@@ -22,10 +29,9 @@ export const maxLoginAttempts = 3;
 // than breaking sign-in outright.
 let inMemoryAttempts = 0;
 
-// One page load can decide to redirect from more than one place: the failing
-// /v1/me request and the provider reacting to that same failure. A lap of the
-// loop is one page load that ended at the login route, so only the first of
-// those counts.
+// One page load can complete at most one sign-in, and a double-submitted form
+// must not spend two of the allowance. Only the first record per page load
+// counts.
 let recordedThisPageLoad = false;
 
 function storage(): Storage | null {
@@ -75,8 +81,8 @@ export function clearLoginAttempts(): void {
   }
 }
 
-// True once the redirects have been spent, meaning another one would only
-// restart the loop.
+// True once the allowance is spent, meaning another sign-in would only restart
+// the loop.
 export function loginLoopDetected(): boolean {
   return readLoginAttempts() >= maxLoginAttempts;
 }

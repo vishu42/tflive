@@ -1027,3 +1027,90 @@
 .upgrade-variable-notes--removed li {
   color: var(--color-warning);
 }
+
+/* ---- Sign in ---- */
+/* The one screen outside the app shell, so it brings its own page frame. It
+   centres on the viewport rather than sitting under a header, which is what
+   marks it as a threshold rather than a place inside the product. */
+.signin-page {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: var(--space-6);
+}
+
+.signin-card {
+  width: 100%;
+  /* Geist keeps its auth cards near 380px: wide enough that a long username is
+     not scrolled, narrow enough that the two fields still read as one column. */
+  max-width: 380px;
+}
+
+.signin-header {
+  margin-bottom: var(--space-6);
+}
+
+.signin-wordmark {
+  margin: 0 0 var(--space-2);
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.signin-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tighter);
+  line-height: var(--leading-tight);
+}
+
+.signin-lede {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.signin-form {
+  display: grid;
+  gap: var(--space-4);
+}
+
+/* The submit and the SSO button both span the card. Everything above them is
+   full width, and a content-width button under a full-width field reads as an
+   afterthought rather than the action the screen exists for. */
+.signin-submit {
+  width: 100%;
+}
+
+/* A rule with the word set into it. The pseudo-elements are the two halves of
+   the line, so the gap tracks the label's own width at any font size. */
+.signin-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-5) 0;
+  color: var(--color-muted-fg);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.signin-divider::before,
+.signin-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
+/* .panel > .secondary-button carries a top margin, for the panels that end in
+   a single action below their content. Here the divider above already sets the
+   separation, and the two margins together open a gap wide enough to read as
+   the SSO button belonging to something else. */
+.signin-card > .signin-divider + .secondary-button {
+  margin-top: 0;
+}

@@ -86,7 +86,7 @@ describe("SessionProvider", () => {
     getMe.mockRejectedValue(new ApiRequestError(401, "unauthorized", "unauthorized"));
     renderProvider(<div data-testid="child">ready</div>);
     await waitFor(() => {
-      expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
+      expect(assign).toHaveBeenCalledWith("/signin?return_to=%2Fstacks");
     });
   });
 
@@ -98,7 +98,7 @@ describe("SessionProvider", () => {
 
     expect(assign).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(61 * 1000);
-    expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
+    expect(assign).toHaveBeenCalledWith("/signin?return_to=%2Fstacks");
   });
 
   // Refetching /v1/me is itself an authenticated request, so a timer that
@@ -204,7 +204,7 @@ describe("SessionProvider", () => {
 
     await vi.advanceTimersByTimeAsync(2 * 1000);
     expect(getMe).toHaveBeenCalledTimes(2);
-    expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
+    expect(assign).toHaveBeenCalledWith("/signin?return_to=%2Fstacks");
   });
 
   it("stops deferring re-authentication once the deferral limit is reached", async () => {
@@ -247,7 +247,7 @@ describe("SessionProvider", () => {
     getMe.mockResolvedValue({ ...me, sessionExpiresAt: new Date(Date.now() - 1000).toISOString() });
     renderProvider(<div data-testid="child">ready</div>);
     await waitFor(() => {
-      expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
+      expect(assign).toHaveBeenCalledWith("/signin?return_to=%2Fstacks");
     });
   });
 
@@ -276,15 +276,18 @@ describe("SessionProvider", () => {
     expect(sessionStorage.getItem(attemptsKey)).toBeNull();
   });
 
-  // A redirect reloads the page, so the count has to live somewhere that
-  // outlives this component for the guard to see a loop rather than a bounce.
-  it("records the login redirect where a page reload cannot erase it", async () => {
+  // Being sent to the sign-in screen is not an attempt at anything. The screen
+  // is a password form, so a visitor who has simply not signed in yet lands
+  // there on every page load; spending the allowance on that would end in
+  // telling them their cookies are blocked when they have typed nothing. The
+  // count is spent by SignInScreen, on sign-ins the server accepted.
+  it("does not spend a login attempt merely on being sent to sign in", async () => {
     getMe.mockRejectedValue(new ApiRequestError(401, "unauthorized", "unauthorized"));
     renderProvider(<div data-testid="child">ready</div>);
     await waitFor(() => {
       expect(assign).toHaveBeenCalled();
     });
-    expect(sessionStorage.getItem(attemptsKey)).toBe("1");
+    expect(sessionStorage.getItem(attemptsKey)).toBeNull();
   });
 
   it("stops redirecting and explains once the attempts are spent", async () => {
@@ -301,8 +304,8 @@ describe("SessionProvider", () => {
     getMe.mockRejectedValue(new ApiRequestError(401, "unauthorized", "unauthorized"));
     renderProvider(<div data-testid="child">ready</div>);
     await user.click(await screen.findByTestId("auth-loop-retry-button"));
-    expect(assign).toHaveBeenCalledWith("/v1/auth/login?return_to=%2Fstacks");
-    expect(readLoginAttempts()).toBe(1);
+    expect(assign).toHaveBeenCalledWith("/signin?return_to=%2Fstacks");
+    expect(readLoginAttempts()).toBe(0);
   });
 
   it("clears the recorded attempts once /v1/me resolves", async () => {

@@ -343,6 +343,27 @@ describe("routeConfig", () => {
     expect(markup).not.toContain('data-testid="route-placeholder"');
   });
 
+  // The sign-in screen is a sibling of "/", not a child, because everything
+  // under "/" renders inside SessionProvider -- which resolves only with a
+  // session, and this is the screen you are shown because you have none.
+  // Nested, it could never mount. SessionProvider is mocked here, so the proof
+  // is that the screen renders with no AuthContext around it at all.
+  it("renders the sign-in screen at /signin outside the session boundary", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const { routeConfig } = await import("./router");
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/signin"] });
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={testRouter} />
+      </QueryClientProvider>
+    );
+
+    expect(markup).toContain('class="signin-page"');
+    expect(markup).toContain("Sign in");
+  });
+
   it("renders the 404 screen for unknown paths", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
