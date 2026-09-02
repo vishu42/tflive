@@ -445,3 +445,161 @@ func TestLogoutRedirectsToTheAppForALocalSession(t *testing.T) {
 		t.Fatalf("Location = %q, want the app root", location)
 	}
 }
+
+// A cross-site page must not be able to sign the visitor into an account it
+// controls. The session cookie is SameSite=Lax, which permits the cookie the
+// response sets, so nothing downstream would notice; the OIDC flow is protected
+// by its sealed state cookie and this route has no equivalent transaction.
+func TestLocalLoginRejectsCrossSiteRequests(t *testing.T) {
+	for name, decorate := range map[string]func(*http.Request){
+		"cross-site fetch metadata": func(request *http.Request) {
+			request.Header.Set("Sec-Fetch-Site", "cross-site")
+		},
+		"sibling-origin fetch metadata": func(request *http.Request) {
+			request.Header.Set("Sec-Fetch-Site", "same-site")
+		},
+		"foreign origin": func(request *http.Request) {
+			request.Header.Set("Origin", "https://evil.test")
+		},
+		"opaque origin": func(request *http.Request) {
+			request.Header.Set("Origin", "null")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			authenticator := &stubLocalAuthenticator{identity: testIdentity()}
+			server := newLocalLoginServer(t, authenticator, newFakeSessionStore(), &apiFakeUserRepository{})
+
+			request := newLocalLoginRequest(`{"username":"root","password":"hunter2"}`)
+			decorate(request)
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403; body = %s", response.Code, response.Body.String())
+			}
+			if authenticator.calls != 0 {
+				t.Fatal("credentials were checked for a cross-site request")
+			}
+			if cookieByName(response, authn.SessionCookieName) != nil {
+				t.Fatal("a cross-site request was given a session cookie")
+			}
+		})
+	}
+}
+
+// The app's own page and a non-browser caller both get through: fetch metadata
+// naming our own origin, an Origin matching the public URL, and neither header
+// at all, which is curl or a script and carries nobody's ambient cookies.
+func TestLocalLoginAcceptsSameOriginAndNonBrowserRequests(t *testing.T) {
+	for name, decorate := range map[string]func(*http.Request){
+		"same-origin fetch metadata": func(request *http.Request) {
+			request.Header.Set("Sec-Fetch-Site", "same-origin")
+			request.Header.Set("Origin", "http://localhost:5173")
+		},
+		"typed address": func(request *http.Request) {
+			request.Header.Set("Sec-Fetch-Site", "none")
+		},
+		"matching origin only": func(request *http.Request) {
+			request.Header.Set("Origin", "http://localhost:5173")
+		},
+		"no browser headers": func(*http.Request) {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := newLocalLoginServer(t, &stubLocalAuthenticator{identity: testIdentity()}, newFakeSessionStore(), &apiFakeUserRepository{})
+
+			request := newLocalLoginRequest(`{"username":"root","password":"hunter2"}`)
+			decorate(request)
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204; body = %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+// An HTML form can only post text/plain, urlencoded, or multipart, and
+// json.Decoder reads a JSON object straight out of a text/plain form body. A
+// cross-origin fetch that does declare JSON is preflighted, so requiring the
+// declared type is the half of the defence that does not depend on a header
+// the request may simply omit.
+func TestLocalLoginRejectsANonJSONContentType(t *testing.T) {
+	for name, contentType := range map[string]string{
+		"form text/plain": "text/plain",
+		"form urlencoded": "application/x-www-form-urlencoded",
+		"form multipart":  "multipart/form-data; boundary=x",
+		"absent":          "",
+		"unparseable":     "application/json;;",
+	} {
+		t.Run(name, func(t *testing.T) {
+			authenticator := &stubLocalAuthenticator{identity: testIdentity()}
+			server := newLocalLoginServer(t, authenticator, newFakeSessionStore(), &apiFakeUserRepository{})
+
+			request := httptest.NewRequest(http.MethodPost, "/v1/auth/login", strings.NewReader(`{"username":"root","password":"hunter2"}`))
+			if contentType != "" {
+				request.Header.Set("Content-Type", contentType)
+			}
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusUnsupportedMediaType {
+				t.Fatalf("status = %d, want 415; body = %s", response.Code, response.Body.String())
+			}
+			if authenticator.calls != 0 {
+				t.Fatal("credentials were checked for a body that was not declared as JSON")
+			}
+		})
+	}
+}
+
+// A charset parameter is legitimate on application/json and must not be read as
+// a different media type.
+func TestLocalLoginAcceptsJSONWithParameters(t *testing.T) {
+	server := newLocalLoginServer(t, &stubLocalAuthenticator{identity: testIdentity()}, newFakeSessionStore(), &apiFakeUserRepository{})
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/login", strings.NewReader(`{"username":"root","password":"hunter2"}`))
+	request.Header.Set("Content-Type", "application/json; charset=utf-8")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body = %s", response.Code, response.Body.String())
+	}
+}
+
+// Sessions are rows and outlive the configuration that created them. An install
+// that had OIDC removed still serves logout for sessions minted while it was
+// on, and those carry an ID token -- which used to be the only condition
+// checked before dereferencing the now-absent Flow.
+func TestLogoutWithAnIDTokenAndNoFlowRedirectsHome(t *testing.T) {
+	sessions := newFakeSessionStore()
+	server := newLocalLoginServer(t, &stubLocalAuthenticator{identity: testIdentity()}, sessions, &apiFakeUserRepository{})
+
+	// A session left behind by the OIDC configuration that has since been
+	// removed: it names an ID token, and there is no Flow to build a hint for.
+	sessionID := "leftover-federated-session"
+	idHash := authn.HashSessionID(sessionID)
+	if err := sessions.CreateSession(context.Background(), authn.Session{
+		IDHash:  idHash,
+		Subject: "keycloak-subject",
+		IDToken: "an.id.token",
+	}); err != nil {
+		t.Fatalf("CreateSession returned error: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
+	request.AddCookie(&http.Cookie{Name: authn.SessionCookieName, Value: sessionID})
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303; body = %s", response.Code, response.Body.String())
+	}
+	if location := response.Header().Get("Location"); location != "http://localhost:5173/" {
+		t.Fatalf("Location = %q, want the app root", location)
+	}
+	if sessions.revoked[idHash] != 1 {
+		t.Fatal("the session row was not revoked")
+	}
+}

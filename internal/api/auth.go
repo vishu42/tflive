@@ -220,7 +220,12 @@ func (server *Server) handleAuthLogout(response http.ResponseWriter, request *ht
 	http.SetCookie(response, authn.ClearedSessionCookie(server.auth.SecureCookies))
 
 	destination := server.auth.PublicURL + "/"
-	if idTokenHint != "" {
+	// Both halves are checked. A session carrying an ID token does not imply a
+	// Flow: the row outlives the configuration that created it, so an install
+	// that had OIDC removed still serves logout requests from sessions minted
+	// while it was on, and dereferencing the absent Flow there would panic on
+	// the one route that is supposed to work for every method.
+	if idTokenHint != "" && server.auth.Flow != nil {
 		if logoutURL := server.auth.Flow.EndSessionURL(idTokenHint, server.auth.PublicURL+"/"); logoutURL != "" {
 			destination = logoutURL
 		}
