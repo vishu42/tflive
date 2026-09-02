@@ -75,10 +75,6 @@ func credentialEncryptor(store appRepositories) app.CredentialEncryptor {
 	return encryptor
 }
 
-// sessionStore requires the wired store to also satisfy authn.SessionStore.
-// A silently swallowed assertion failure here would boot the API clean and
-// only surface at the first login callback, as a nil-pointer panic instead of
-// a startup error naming the actual defect.
 // rootAccountStore is localAccountStore's read-write counterpart: seeding also
 // creates, where signing in only reads.
 func rootAccountStore(store appRepositories) (bootstrap.Accounts, error) {
@@ -100,6 +96,10 @@ func localAccountStore(store appRepositories) (authn.LocalAccountStore, error) {
 	return accounts, nil
 }
 
+// sessionStore requires the wired store to also satisfy authn.SessionStore.
+// A silently swallowed assertion failure here would boot the API clean and
+// only surface at the first login callback, as a nil-pointer panic instead of
+// a startup error naming the actual defect.
 func sessionStore(store appRepositories) (authn.SessionStore, error) {
 	sessions, ok := store.(authn.SessionStore)
 	if !ok {
