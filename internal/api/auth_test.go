@@ -780,3 +780,7 @@ func TestNewServerPanicsWithoutAUserRepository(t *testing.T) {
 	}()
 	NewServer(app.NewService(app.Service{}), "tenant_123", WithAuth(cfg))
 }
+
+func withLocalAuthenticator(authenticator LocalAuthenticator) authTestOption {
+	return func(cfg *AuthConfig) { cfg.LocalAuthenticator = authenticator }
+}

@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -109,59 +111,78 @@ func (server *Server) handleAuthCallback(response http.ResponseWriter, request *
 		return
 	}
 
-	// Project the identity before the session exists, so that a session row
-	// implies a projected user rather than merely coinciding with one. That
-	// ordering is what makes "signed in at least once" a fact the grants UI can
-	// rely on instead of a hope.
-	//
-	// A failure here fails the sign-in. It is tempting to log and continue, as
-	// a failed session touch does in the middleware, but the cases are not
-	// alike: a failed touch shortens a session that still works, whereas a
-	// failed projection would sign someone in who is then invisible to search
-	// and cannot be granted a role, with nothing anywhere saying why. It also
-	// costs nothing to be strict — this is a single-row upsert into the same
-	// database the session row is about to go into, so if it fails, the session
-	// write was going to fail too.
-	if err := server.service.RecordSignIn(request.Context(), app.UserProfile{
-		Sub:         verified.Subject,
-		DisplayName: verified.DisplayName(),
-		Email:       verified.Email,
-	}); err != nil {
-		log.Printf("auth callback: failed to project signed-in user: %v", err)
-		server.writeAuthFailure(response)
-		return
-	}
-
-	sessionID, err := authn.NewSessionID()
-	if err != nil {
-		log.Printf("auth callback: failed to generate session id: %v", err)
-		server.writeAuthFailure(response)
-		return
-	}
-	now := server.now()
-	session := authn.Session{
-		IDHash:            authn.HashSessionID(sessionID),
+	if err := server.establishSession(request.Context(), response, authn.Session{
 		Subject:           verified.Subject,
 		Name:              verified.Name,
 		PreferredUsername: verified.PreferredUsername,
 		Email:             verified.Email,
 		IDPSessionID:      verified.SessionID,
 		IDToken:           rawIDToken,
-		CreatedAt:         now,
-		LastSeenAt:        now,
-		// The IdP's token lifetime deliberately does not appear here. How long
-		// a tflive session lasts is tflive's to decide; the token's exp bounded
-		// only the authentication we just completed.
-		AbsoluteExpiresAt: now.Add(server.auth.SessionAbsoluteTTL),
-	}
-	if err := server.auth.Sessions.CreateSession(request.Context(), session); err != nil {
-		log.Printf("auth callback: failed to persist session: %v", err)
+	}, verified.DisplayName()); err != nil {
+		log.Printf("auth callback: %v", err)
 		server.writeAuthFailure(response)
 		return
 	}
 
-	http.SetCookie(response, authn.SessionCookie(sessionID, server.auth.SecureCookies))
 	http.Redirect(response, request, authn.SafeReturnTo(transaction.ReturnTo), http.StatusFound)
+}
+
+// establishSession is the tail every sign-in ends in, whichever method proved
+// the identity: project the user, mint the session row, hand the browser its
+// cookie. Both callers reach it, so a change to what a session carries cannot
+// land on one path and miss the other.
+//
+// identity supplies only the claim-bearing fields of the session — the caller
+// fills Subject, Name, PreferredUsername, Email, and, for an OIDC sign-in, the
+// IdP's session id and ID token. The lifetimes and the id hash are set here,
+// because they are tflive's to decide rather than the caller's.
+//
+// The projection happens before the session exists, so that a session row
+// implies a projected user rather than merely coinciding with one. That
+// ordering is what makes "signed in at least once" a fact the grants UI can
+// rely on instead of a hope.
+//
+// A failed projection fails the sign-in. It is tempting to log and continue, as
+// a failed session touch does in the middleware, but the cases are not alike: a
+// failed touch shortens a session that still works, whereas a failed projection
+// would sign someone in who is then invisible to search and cannot be granted a
+// role, with nothing anywhere saying why. It also costs nothing to be strict —
+// this is a single-row upsert into the same database the session row is about
+// to go into, so if it fails, the session write was going to fail too.
+func (server *Server) establishSession(
+	ctx context.Context,
+	response http.ResponseWriter,
+	identity authn.Session,
+	displayName string,
+) error {
+	if err := server.service.RecordSignIn(ctx, app.UserProfile{
+		Sub:         identity.Subject,
+		DisplayName: displayName,
+		Email:       identity.Email,
+	}); err != nil {
+		return fmt.Errorf("failed to project signed-in user: %w", err)
+	}
+
+	sessionID, err := authn.NewSessionID()
+	if err != nil {
+		return fmt.Errorf("failed to generate session id: %w", err)
+	}
+	now := server.now()
+	session := identity
+	session.IDHash = authn.HashSessionID(sessionID)
+	session.CreatedAt = now
+	session.LastSeenAt = now
+	// The IdP's token lifetime deliberately does not appear here. How long a
+	// tflive session lasts is tflive's to decide; the token's exp bounded only
+	// the authentication that just completed.
+	session.AbsoluteExpiresAt = now.Add(server.auth.SessionAbsoluteTTL)
+
+	if err := server.auth.Sessions.CreateSession(ctx, session); err != nil {
+		return fmt.Errorf("failed to persist session: %w", err)
+	}
+
+	http.SetCookie(response, authn.SessionCookie(sessionID, server.auth.SecureCookies))
+	return nil
 }
 
 // handleAuthLogout revokes our session and sends the browser on to end the
