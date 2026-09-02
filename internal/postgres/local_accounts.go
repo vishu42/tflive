@@ -33,6 +33,34 @@ func (store *Store) LocalAccountByUsername(ctx context.Context, username string)
 	return account, nil
 }
 
+// LocalAccountBySubject reads one account by its sub.
+//
+// The counterpart to LocalAccountByUsername, for the callers whose subject is
+// the stable identity and whose username is not. Root is the one that matters:
+// its sub is fixed by bootstrap, its username is configurable, so asking "does
+// root exist" by username answers a different question after a rename.
+func (store *Store) LocalAccountBySubject(ctx context.Context, subject string) (authn.LocalAccount, error) {
+	var account authn.LocalAccount
+	err := store.pool.QueryRow(ctx, `
+		select sub, username, password_hash, display_name, email
+		from local_accounts
+		where sub = $1
+	`, subject).Scan(
+		&account.Subject,
+		&account.Username,
+		&account.PasswordHash,
+		&account.DisplayName,
+		&account.Email,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return authn.LocalAccount{}, authn.ErrLocalAccountNotFound
+	}
+	if err != nil {
+		return authn.LocalAccount{}, fmt.Errorf("local account by subject: %w", err)
+	}
+	return account, nil
+}
+
 // EnsureLocalAccount inserts the account if its username is free, and reports
 // whether it did.
 //

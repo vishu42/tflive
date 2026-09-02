@@ -136,3 +136,52 @@ func TestEnsureLocalAccountRejectsADuplicateSubject(t *testing.T) {
 		t.Fatal("EnsureLocalAccount inserted a second account on a taken subject")
 	}
 }
+
+func TestLocalAccountBySubjectReturnsTheStoredAccount(t *testing.T) {
+	ctx := context.Background()
+	store := newLocalAccountTestStore(t, ctx)
+	account := testLocalAccount(t)
+
+	if _, err := store.EnsureLocalAccount(ctx, account, time.Now().UTC()); err != nil {
+		t.Fatalf("EnsureLocalAccount returned error: %v", err)
+	}
+
+	found, err := store.LocalAccountBySubject(ctx, account.Subject)
+	if err != nil {
+		t.Fatalf("LocalAccountBySubject returned error: %v", err)
+	}
+	if found != account {
+		t.Fatalf("LocalAccountBySubject = %+v, want %+v", found, account)
+	}
+}
+
+// The lookup root seeding reconciles by. A renamed root still has to be found,
+// which is exactly what looking it up by username stopped doing.
+func TestLocalAccountBySubjectFindsARenamedAccount(t *testing.T) {
+	ctx := context.Background()
+	store := newLocalAccountTestStore(t, ctx)
+	account := testLocalAccount(t)
+	account.Username = "administrator"
+
+	if _, err := store.EnsureLocalAccount(ctx, account, time.Now().UTC()); err != nil {
+		t.Fatalf("EnsureLocalAccount returned error: %v", err)
+	}
+
+	found, err := store.LocalAccountBySubject(ctx, account.Subject)
+	if err != nil {
+		t.Fatalf("LocalAccountBySubject returned error: %v", err)
+	}
+	if found.Username != "administrator" {
+		t.Fatalf("Username = %q, want administrator", found.Username)
+	}
+}
+
+func TestLocalAccountBySubjectReportsAMissingAccount(t *testing.T) {
+	ctx := context.Background()
+	store := newLocalAccountTestStore(t, ctx)
+
+	_, err := store.LocalAccountBySubject(ctx, "local_nobody")
+	if !errors.Is(err, authn.ErrLocalAccountNotFound) {
+		t.Fatalf("LocalAccountBySubject error = %v, want ErrLocalAccountNotFound", err)
+	}
+}

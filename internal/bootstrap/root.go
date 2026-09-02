@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/vishu42/tflive/internal/authn"
@@ -39,7 +40,7 @@ type RootConfig struct {
 // Accounts is the account store SeedRoot reconciles. *postgres.Store satisfies
 // it.
 type Accounts interface {
-	LocalAccountByUsername(ctx context.Context, username string) (authn.LocalAccount, error)
+	LocalAccountBySubject(ctx context.Context, subject string) (authn.LocalAccount, error)
 	EnsureLocalAccount(ctx context.Context, account authn.LocalAccount, now time.Time) (bool, error)
 }
 
@@ -94,6 +95,18 @@ func SeedRoot(
 // ensureRootAccount creates the account when it is absent and leaves it alone
 // when it is not.
 //
+// Existence is asked by sub, not by username. The sub is fixed and the username
+// is configurable, so the two questions diverge the moment TFLIVE_ROOT_USERNAME
+// changes: asking by username would report root missing, and the insert that
+// followed would collide with the existing row on the primary key and fail
+// every boot from then on, leaving the install unstartable over what is only a
+// cosmetic setting.
+//
+// A changed username is reported rather than applied. Renaming would have to be
+// an update, and this reconcile is add-only for the same reason it does not
+// reset a rotated password: a restart is not where an existing account gets
+// rewritten from configuration.
+//
 // The lookup comes first so the password is hashed only when it will be used.
 // Hashing costs argon2id's full memory and time, and reconciling runs at every
 // boot, so hashing unconditionally would put that cost on every restart to
@@ -105,9 +118,15 @@ func ensureRootAccount(
 	username, subject string,
 	now func() time.Time,
 ) error {
-	_, err := accounts.LocalAccountByUsername(ctx, username)
+	existing, err := accounts.LocalAccountBySubject(ctx, subject)
 	switch {
 	case err == nil:
+		if existing.Username != username {
+			log.Printf(
+				"seed root: root account already exists as %q; TFLIVE_ROOT_USERNAME=%q applies only when the account is created and was not applied",
+				existing.Username, username,
+			)
+		}
 		return nil
 	case !errors.Is(err, authn.ErrLocalAccountNotFound):
 		return fmt.Errorf("seed root: look up root account: %w", err)
@@ -120,7 +139,7 @@ func ensureRootAccount(
 	if err != nil {
 		return fmt.Errorf("seed root: hash root password: %w", err)
 	}
-	if _, err := accounts.EnsureLocalAccount(ctx, authn.LocalAccount{
+	created, err := accounts.EnsureLocalAccount(ctx, authn.LocalAccount{
 		Subject:      subject,
 		Username:     username,
 		PasswordHash: hash,
@@ -128,8 +147,16 @@ func ensureRootAccount(
 		// projection renders DisplayName, so it reads as "root" in a grants
 		// list rather than as a bare sub.
 		DisplayName: DefaultRootUsername,
-	}, now()); err != nil {
+	}, now())
+	if err != nil {
 		return fmt.Errorf("seed root: create root account: %w", err)
+	}
+	// The sub was free, so nothing was written only if the username is taken by
+	// a different account. Seeding cannot proceed: the tuple would be written
+	// for a sub that has no account behind it, and the operator would be left
+	// signing in as somebody else and wondering why they are not root.
+	if !created {
+		return fmt.Errorf("seed root: username %q already belongs to another account; set TFLIVE_ROOT_USERNAME to a free name", username)
 	}
 	return nil
 }

@@ -799,17 +799,26 @@ func (store *recordingStore) ListByActor(context.Context, string, string, int) (
 	return nil, nil
 }
 
-// LocalAccountByUsername and EnsureLocalAccount make recordingStore satisfy
-// authn.LocalAccountStore and bootstrap.Accounts, both of which
-// runWithDependencies asserts for. They keep real state rather than returning
-// fixed answers, because root seeding writes an account and the sign-in tests
-// then read it back.
+// LocalAccountByUsername, LocalAccountBySubject and EnsureLocalAccount make
+// recordingStore satisfy authn.LocalAccountStore and bootstrap.Accounts, both
+// of which runWithDependencies asserts for. They keep real state rather than
+// returning fixed answers, because root seeding writes an account and the
+// sign-in tests then read it back.
 func (store *recordingStore) LocalAccountByUsername(_ context.Context, username string) (authn.LocalAccount, error) {
 	account, ok := store.accounts[username]
 	if !ok {
 		return authn.LocalAccount{}, authn.ErrLocalAccountNotFound
 	}
 	return account, nil
+}
+
+func (store *recordingStore) LocalAccountBySubject(_ context.Context, subject string) (authn.LocalAccount, error) {
+	for _, account := range store.accounts {
+		if account.Subject == subject {
+			return account, nil
+		}
+	}
+	return authn.LocalAccount{}, authn.ErrLocalAccountNotFound
 }
 
 func (store *recordingStore) EnsureLocalAccount(_ context.Context, account authn.LocalAccount, _ time.Time) (bool, error) {

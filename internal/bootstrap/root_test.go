@@ -15,15 +15,18 @@ type fakeAccounts struct {
 	found     bool
 	lookupErr error
 	ensureErr error
+	// usernameTaken models the insert being refused by the username unique
+	// constraint: the sub was free, another account holds the name.
+	usernameTaken bool
 
 	ensured []authn.LocalAccount
 }
 
-func (f *fakeAccounts) LocalAccountByUsername(_ context.Context, username string) (authn.LocalAccount, error) {
+func (f *fakeAccounts) LocalAccountBySubject(_ context.Context, subject string) (authn.LocalAccount, error) {
 	if f.lookupErr != nil {
 		return authn.LocalAccount{}, f.lookupErr
 	}
-	if !f.found || f.account.Username != username {
+	if !f.found || f.account.Subject != subject {
 		return authn.LocalAccount{}, authn.ErrLocalAccountNotFound
 	}
 	return f.account, nil
@@ -32,6 +35,9 @@ func (f *fakeAccounts) LocalAccountByUsername(_ context.Context, username string
 func (f *fakeAccounts) EnsureLocalAccount(_ context.Context, account authn.LocalAccount, _ time.Time) (bool, error) {
 	if f.ensureErr != nil {
 		return false, f.ensureErr
+	}
+	if f.usernameTaken {
+		return false, nil
 	}
 	f.ensured = append(f.ensured, account)
 	return true, nil
@@ -279,5 +285,42 @@ func TestSeedRootDefaultsTheSubject(t *testing.T) {
 	}
 	if accounts.ensured[0].Subject != DefaultRootSubject {
 		t.Fatalf("Subject = %q, want %q", accounts.ensured[0].Subject, DefaultRootSubject)
+	}
+}
+
+// Existence is asked by sub, not by username. Renaming root after first boot
+// used to make the lookup miss and the insert collide with the existing row on
+// the primary key, which failed the boot -- and failed it again on every
+// restart, because the collision was not something a retry could clear.
+func TestSeedRootDoesNotReinsertWhenTheUsernameChanged(t *testing.T) {
+	accounts := &fakeAccounts{
+		found:   true,
+		account: authn.LocalAccount{Subject: DefaultRootSubject, Username: "root", PasswordHash: authn.DummyPasswordHash},
+	}
+
+	config := testRootConfig()
+	config.Username = "administrator"
+
+	if err := SeedRoot(context.Background(), accounts, &fakeAuthorizer{allowed: true}, config, fixedClock()); err != nil {
+		t.Fatalf("SeedRoot returned error: %v", err)
+	}
+	if len(accounts.ensured) != 0 {
+		t.Fatalf("ensured %d accounts over an existing root, want 0", len(accounts.ensured))
+	}
+}
+
+// The sub is free but the name is not, so the insert is refused by the username
+// constraint. Continuing would write the root tuple for a sub with no account
+// behind it, leaving the operator signed in as somebody else and not root.
+func TestSeedRootRejectsAUsernameHeldByAnotherAccount(t *testing.T) {
+	accounts := &fakeAccounts{usernameTaken: true}
+	authorizer := &fakeAuthorizer{}
+
+	err := SeedRoot(context.Background(), accounts, authorizer, testRootConfig(), fixedClock())
+	if err == nil {
+		t.Fatal("SeedRoot returned nil for a username held by another account")
+	}
+	if len(authorizer.written) != 0 {
+		t.Fatalf("wrote %d tuples for an account that was not created, want 0", len(authorizer.written))
 	}
 }
