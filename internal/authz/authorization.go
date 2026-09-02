@@ -170,9 +170,13 @@ func mustSubject(objectType ObjectType, id string) Subject {
 	return subject
 }
 
-// SubjectFromOIDCSub returns the canonical authorization identifier for sub,
-// the "sub" claim of a verified ID token. This is the one identifier tflive
-// does not originate, so the character rules matter most here.
+// SubjectFromOIDCSub returns the canonical authorization identifier for sub.
+//
+// Named for its original and still most common caller, a verified ID token's
+// "sub" claim, where the character rules matter most because that identifier
+// is the one tflive does not originate. Local accounts now reach it too, with
+// subs tflive does choose; the rules are the same either way, which is why
+// they are enforced here rather than at each caller.
 //
 //	SubjectFromOIDCSub("00u1b2c3")      → Subject{"user:00u1b2c3"}, nil
 //	SubjectFromOIDCSub("kc-sub-123")    → Subject{"user:kc-sub-123"}, nil

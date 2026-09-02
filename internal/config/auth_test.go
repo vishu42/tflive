@@ -328,6 +328,7 @@ func validSecurityValues() map[string]string {
 		"OIDC_CLIENT_ID":         "tflive-api",
 		"OIDC_CLIENT_SECRET":     "oidc-client-secret",
 		"SESSION_ENCRYPTION_KEY": "01234567890123456789012345678901",
+		"TFLIVE_ROOT_PASSWORD":   "root-local-only",
 		"OPENFGA_API_URL":        "http://localhost:8080",
 		"OPENFGA_STORE_ID":       "store-id",
 		"OPENFGA_MODEL_ID":       "model-id",

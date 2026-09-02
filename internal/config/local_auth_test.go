@@ -101,3 +101,65 @@ func TestLoadSecurityConfigAllowsLocalOnlyProduction(t *testing.T) {
 		t.Fatalf("loadSecurityConfig returned error: %v", err)
 	}
 }
+
+// The root password is required. #212 fails closed rather than generating one:
+// a generated secret has to be shown somewhere, and the only place a boot can
+// show it is the log, where it outlives the install in whatever collects logs.
+func TestLoadSecurityConfigRequiresARootPassword(t *testing.T) {
+	t.Parallel()
+
+	values := validSecurityValues()
+	delete(values, "TFLIVE_ROOT_PASSWORD")
+
+	_, err := loadSecurityConfig(mapConfigEnv(values))
+	if err == nil {
+		t.Fatal("loadSecurityConfig accepted a configuration with no root password")
+	}
+	if !strings.Contains(err.Error(), "TFLIVE_ROOT_PASSWORD") {
+		t.Fatalf("error = %v, want it to name TFLIVE_ROOT_PASSWORD", err)
+	}
+}
+
+func TestLoadSecurityConfigDefaultsTheRootUsername(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := loadSecurityConfig(mapConfigEnv(validSecurityValues()))
+	if err != nil {
+		t.Fatalf("loadSecurityConfig returned error: %v", err)
+	}
+	if cfg.Root.Username != "root" {
+		t.Fatalf("Root.Username = %q, want root", cfg.Root.Username)
+	}
+}
+
+func TestLoadSecurityConfigReadsTheRootUsername(t *testing.T) {
+	t.Parallel()
+
+	values := validSecurityValues()
+	values["TFLIVE_ROOT_USERNAME"] = "administrator"
+
+	cfg, err := loadSecurityConfig(mapConfigEnv(values))
+	if err != nil {
+		t.Fatalf("loadSecurityConfig returned error: %v", err)
+	}
+	if cfg.Root.Username != "administrator" {
+		t.Fatalf("Root.Username = %q, want administrator", cfg.Root.Username)
+	}
+}
+
+// A config dump must not carry the root password, which is the most valuable
+// secret in the deployment.
+func TestSecurityConfigStringRedactsTheRootPassword(t *testing.T) {
+	t.Parallel()
+
+	values := validSecurityValues()
+	values["TFLIVE_ROOT_PASSWORD"] = "root-password-sentinel"
+
+	cfg, err := loadSecurityConfig(mapConfigEnv(values))
+	if err != nil {
+		t.Fatalf("loadSecurityConfig returned error: %v", err)
+	}
+	if strings.Contains(cfg.String(), "root-password-sentinel") {
+		t.Fatalf("String() leaked the root password: %s", cfg.String())
+	}
+}

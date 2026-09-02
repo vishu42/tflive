@@ -19,6 +19,7 @@ import (
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authorizer"
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/bootstrap"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
@@ -78,6 +79,16 @@ func credentialEncryptor(store appRepositories) app.CredentialEncryptor {
 // A silently swallowed assertion failure here would boot the API clean and
 // only surface at the first login callback, as a nil-pointer panic instead of
 // a startup error naming the actual defect.
+// rootAccountStore is localAccountStore's read-write counterpart: seeding also
+// creates, where signing in only reads.
+func rootAccountStore(store appRepositories) (bootstrap.Accounts, error) {
+	accounts, ok := store.(bootstrap.Accounts)
+	if !ok {
+		return nil, fmt.Errorf("store %T does not implement bootstrap.Accounts", store)
+	}
+	return accounts, nil
+}
+
 // localAccountStore mirrors sessionStore: the repository is reached through an
 // assertion rather than being added to appRepositories, so a deployment that
 // never enables local auth is not made to satisfy an interface it does not use.
@@ -280,6 +291,21 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire local account store: %w", err)
 	}
 	localAuthenticator := authn.NewLocalAuthenticator(accounts)
+
+	// Before serving, not alongside it. A fresh install has zero
+	// administrators and granting admin requires already being one, so until
+	// this has run there is no way to administer anything — and the failure is
+	// silent, because every route simply answers 403.
+	rootAccounts, err := rootAccountStore(store)
+	if err != nil {
+		return fmt.Errorf("wire root account store: %w", err)
+	}
+	if err := bootstrap.SeedRoot(ctx, rootAccounts, authorizer, bootstrap.RootConfig{
+		Username: cfg.Security.Root.Username,
+		Password: cfg.Security.Root.Password.Value(),
+	}, time.Now); err != nil {
+		return fmt.Errorf("seed root account: %w", err)
+	}
 
 	handler := api.NewAuthenticatedServer(service, cfg.Security.TenantID, cfg.Debug,
 		api.WithQueueReader(store),
