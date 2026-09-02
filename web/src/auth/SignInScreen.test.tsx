@@ -69,16 +69,32 @@ describe("safeReturnTo", () => {
   });
 
   // Everything here would send a freshly signed-in browser somewhere it should
-  // not go: an absolute URL and a protocol-relative one both leave the origin,
-  // and /v1/auth/login restarts sign-in the instant it succeeds.
+  // not go: the first group all leave the origin, and /v1/auth/login restarts
+  // sign-in the instant it succeeds. The rows mirror the server's table in
+  // authn.TestSafeReturnTo -- the two are meant to be the same rule, and this
+  // path never reaches the server to be caught there.
   it.each([
     ["absolute URL", "https://evil.test/steal"],
     ["protocol-relative", "//evil.test/steal"],
+    ["backslash-relative", "/\\evil.test"],
+    ["backslash-relative with a path", "/\\evil.test/steal"],
+    ["a tab before the host", "/\t/evil.test"],
+    ["a newline before the host", "/\n/evil.test"],
+    ["a relative path", "stacks"],
+    ["parent traversal", "/../../etc"],
+    ["traversal into the API", "/stacks/../v1/auth/login"],
     ["the API", "/v1/auth/login"],
+    ["the API root", "/v1"],
     ["nothing", null],
     ["empty", ""]
   ])("refuses %s", (_label, raw) => {
     expect(safeReturnTo(raw)).toBe("/");
+  });
+
+  // Only the /v1 segment itself is the API; a path that merely starts with
+  // those characters is an app route like any other.
+  it("keeps a /v1 lookalike path", () => {
+    expect(safeReturnTo("/v10/stacks")).toBe("/v10/stacks");
   });
 });
 
