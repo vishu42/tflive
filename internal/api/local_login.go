@@ -22,6 +22,13 @@ type localLoginRequest struct {
 
 // authMethodsResponse tells the sign-in screen which ways in exist, so it
 // renders the ones that do rather than discovering them by failing (#213).
+//
+// In a real deployment Local is always true — root is a local account that
+// cannot be locked out (#212) — so today only OIDC varies, and the screen is a
+// password form plus an SSO button that appears when a provider is configured.
+// Local is still reported rather than assumed, because a client that reads
+// what the server says needs no change if that ever stops being true, and
+// because the api package does allow a server with no local authenticator.
 type authMethodsResponse struct {
 	Local bool `json:"local"`
 	OIDC  bool `json:"oidc"`

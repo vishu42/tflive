@@ -267,16 +267,19 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire session store: %w", err)
 	}
 
-	// Nil unless asked for, which is what keeps POST /v1/auth/login
-	// unregistered rather than registered and always denying.
-	var localAuthenticator api.LocalAuthenticator
-	if cfg.Security.LocalAuthEnabled {
-		accounts, err := localAccountStore(store)
-		if err != nil {
-			return fmt.Errorf("wire local account store: %w", err)
-		}
-		localAuthenticator = authn.NewLocalAuthenticator(accounts)
+	// Always wired. Root is a local account that is seeded at every boot and
+	// cannot be locked out (#212), so a deployment where the password route is
+	// missing is one where the highest-privileged identity in the model exists
+	// in the table and cannot sign in — the "no reachable administrator" state
+	// #212 refuses to start in, reached through configuration.
+	//
+	// Failing here is therefore fail-closed rather than pedantic: without this
+	// store there is no way into a fresh install at all.
+	accounts, err := localAccountStore(store)
+	if err != nil {
+		return fmt.Errorf("wire local account store: %w", err)
 	}
+	localAuthenticator := authn.NewLocalAuthenticator(accounts)
 
 	handler := api.NewAuthenticatedServer(service, cfg.Security.TenantID, cfg.Debug,
 		api.WithQueueReader(store),

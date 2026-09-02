@@ -17,7 +17,6 @@ func localOnlyAPIValues() map[string]string {
 	delete(values, "OIDC_ISSUER_URL")
 	delete(values, "OIDC_CLIENT_ID")
 	delete(values, "OIDC_CLIENT_SECRET")
-	values["TFLIVE_LOCAL_AUTH_ENABLED"] = "true"
 	return values
 }
 
@@ -42,7 +41,7 @@ func TestRunBuildsNoVerifierWithoutOIDC(t *testing.T) {
 	}
 }
 
-func TestRunServesLocalLoginWhenLocalAuthIsEnabled(t *testing.T) {
+func TestRunServesLocalLoginWithNoOIDC(t *testing.T) {
 	t.Parallel()
 
 	deps := newRecordingAPIDependencies(t)
@@ -82,28 +81,36 @@ func TestRunReportsLocalOnlyAuthMethods(t *testing.T) {
 	}
 }
 
-// The default deployment is unchanged: OIDC configured, local auth off, and
-// no local login route to reach.
-func TestRunLeavesLocalLoginOffByDefault(t *testing.T) {
+// There is no configuration that removes the password route. Root is a local
+// account seeded at every boot and unable to be locked out (#212), so a
+// deployment without this route would hold the highest-privileged identity in
+// the model in a table it cannot sign in from.
+func TestRunAlwaysServesLocalLoginEvenWithOIDCConfigured(t *testing.T) {
 	t.Parallel()
 
+	values := apiTestValues()
+	values["TFLIVE_LOCAL_AUTH_ENABLED"] = "false"
+
 	deps := newRecordingAPIDependencies(t)
-	if err := runWithDependencies(context.Background(), apiTestGetenv(apiTestValues()), deps.apiDependencies); err != nil {
+	if err := runWithDependencies(context.Background(), apiTestGetenv(values), deps.apiDependencies); err != nil {
 		t.Fatalf("runWithDependencies returned error: %v", err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/auth/login", strings.NewReader(`{"username":"root","password":"x"}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/login", strings.NewReader(`{"username":"root","password":"wrong"}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	deps.serverHandler.ServeHTTP(response, request)
 
-	if response.Code == http.StatusUnauthorized || response.Code == http.StatusNoContent {
-		t.Fatalf("status = %d, want the local login route to be absent", response.Code)
+	// 401 means the route exists and reached the authenticator. A 405 would
+	// mean the setting had removed it.
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body = %s", response.Code, response.Body.String())
 	}
 
 	methods := httptest.NewRecorder()
 	deps.serverHandler.ServeHTTP(methods, httptest.NewRequest(http.MethodGet, "/v1/auth/methods", nil))
-	if !strings.Contains(methods.Body.String(), `"local":false`) {
-		t.Fatalf("methods = %s, want local disabled", methods.Body.String())
+	if !strings.Contains(methods.Body.String(), `"local":true`) {
+		t.Fatalf("methods = %s, want local enabled", methods.Body.String())
 	}
 }
 
@@ -112,11 +119,8 @@ func TestRunLeavesLocalLoginOffByDefault(t *testing.T) {
 func TestRunServesBothMethodsTogether(t *testing.T) {
 	t.Parallel()
 
-	values := apiTestValues()
-	values["TFLIVE_LOCAL_AUTH_ENABLED"] = "true"
-
 	deps := newRecordingAPIDependencies(t)
-	if err := runWithDependencies(context.Background(), apiTestGetenv(values), deps.apiDependencies); err != nil {
+	if err := runWithDependencies(context.Background(), apiTestGetenv(apiTestValues()), deps.apiDependencies); err != nil {
 		t.Fatalf("runWithDependencies returned error: %v", err)
 	}
 

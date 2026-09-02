@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -29,10 +28,11 @@ type SecurityConfig struct {
 	// the test for that, and it is a supported deployment rather than an
 	// error: local accounts can be the only way in.
 	OIDC OIDCConfig
-	// LocalAuthEnabled turns on tflive's own account table as a sign-in
-	// method. Off unless asked for: an operator who does not know the feature
-	// exists should not be given a password endpoint.
-	LocalAuthEnabled bool
+	// There is deliberately no local-auth setting. Root is a local account,
+	// seeded at every boot and unable to be locked out (#212), so the password
+	// path is always present; a flag here could only ever lie about that. What
+	// is optional is the external provider above, which is why OIDC alone
+	// carries a "configured or not" state.
 
 	PublicURL            *url.URL
 	SessionEncryptionKey Secret
@@ -97,13 +97,12 @@ func (cfg OpenFGAConfig) GoString() string {
 
 func (cfg SecurityConfig) String() string {
 	return fmt.Sprintf(
-		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v ClientID:%q ClientSecret:%s} LocalAuthEnabled:%t PublicURL:%v SessionEncryptionKey:%s SessionAbsoluteTTL:%s SessionIdleTTL:%s OpenFGA:%s}",
+		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v ClientID:%q ClientSecret:%s} PublicURL:%v SessionEncryptionKey:%s SessionAbsoluteTTL:%s SessionIdleTTL:%s OpenFGA:%s}",
 		cfg.Mode,
 		cfg.TenantID,
 		cfg.OIDC.IssuerURL,
 		cfg.OIDC.ClientID,
 		cfg.OIDC.ClientSecret,
-		cfg.LocalAuthEnabled,
 		cfg.PublicURL,
 		cfg.SessionEncryptionKey,
 		cfg.SessionAbsoluteTTL,
@@ -130,20 +129,11 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 		return SecurityConfig{}, authConfigError("TFLIVE_TENANT_ID must start with an ASCII alphanumeric character, contain only ASCII alphanumerics, underscore, or hyphen, and be at most 128 characters")
 	}
 
-	localAuthEnabled, err := optionalBool(getenv, "TFLIVE_LOCAL_AUTH_ENABLED")
-	if err != nil {
-		return SecurityConfig{}, err
-	}
-
+	// No check for "at least one method configured": local sign-in is always
+	// available, so there is always a way in even with no OIDC at all.
 	oidc, err := loadOIDCConfig(getenv)
 	if err != nil {
 		return SecurityConfig{}, err
-	}
-	// Refuse to start with no way in. Every route would answer 401 and nothing
-	// would say why, so the failure would look like a broken deployment rather
-	// than an unconfigured one.
-	if oidc.IssuerURL == nil && !localAuthEnabled {
-		return SecurityConfig{}, authConfigError("no authentication method is configured: set OIDC_ISSUER_URL, or TFLIVE_LOCAL_AUTH_ENABLED=true, or both")
 	}
 
 	publicURL, err := parseConfigURL("TFLIVE_PUBLIC_URL", getenv("TFLIVE_PUBLIC_URL"))
@@ -211,10 +201,9 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 	// still has its own.
 
 	return SecurityConfig{
-		Mode:             mode,
-		TenantID:         traits.TenantID(tenantID),
-		OIDC:             oidc,
-		LocalAuthEnabled: localAuthEnabled,
+		Mode:     mode,
+		TenantID: traits.TenantID(tenantID),
+		OIDC:     oidc,
 
 		PublicURL:            publicURL,
 		SessionEncryptionKey: sessionKey,
@@ -262,21 +251,6 @@ func loadOIDCConfig(getenv func(string) string) (OIDCConfig, error) {
 		return OIDCConfig{}, authConfigError("OIDC_CLIENT_SECRET is required")
 	}
 	return OIDCConfig{IssuerURL: issuerURL, ClientID: clientID, ClientSecret: clientSecret}, nil
-}
-
-// optionalBool reads a flag that defaults to false. An unparsable value is an
-// error rather than a silent false: "TFLIVE_LOCAL_AUTH_ENABLED=yes" meaning
-// disabled is exactly the surprise a boot-time check exists to prevent.
-func optionalBool(getenv func(string) string, name string) (bool, error) {
-	raw := strings.TrimSpace(getenv(name))
-	if raw == "" {
-		return false, nil
-	}
-	value, err := strconv.ParseBool(raw)
-	if err != nil {
-		return false, authConfigError("%s must be a boolean", name)
-	}
-	return value, nil
 }
 
 func loadOpenFGAConfig(getenv func(string) string) (OpenFGAConfig, error) {

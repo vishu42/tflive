@@ -12,71 +12,36 @@ func localOnlyValues() map[string]string {
 	delete(values, "OIDC_ISSUER_URL")
 	delete(values, "OIDC_CLIENT_ID")
 	delete(values, "OIDC_CLIENT_SECRET")
-	values["TFLIVE_LOCAL_AUTH_ENABLED"] = "true"
 	return values
 }
 
-func TestLoadSecurityConfigDefaultsLocalAuthOff(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := loadSecurityConfig(mapConfigEnv(validSecurityValues()))
-	if err != nil {
-		t.Fatalf("loadSecurityConfig returned error: %v", err)
-	}
-	if cfg.LocalAuthEnabled {
-		t.Fatal("LocalAuthEnabled is true without TFLIVE_LOCAL_AUTH_ENABLED being set")
-	}
-}
-
-func TestLoadSecurityConfigEnablesLocalAuth(t *testing.T) {
+// Local sign-in is not configurable. Root is a local account, seeded at every
+// boot and unable to be locked out (#212), so the password path is always
+// present and there is no setting that could remove it. A flag here would only
+// be able to lie.
+func TestLoadSecurityConfigHasNoLocalAuthSetting(t *testing.T) {
 	t.Parallel()
 
 	values := validSecurityValues()
-	values["TFLIVE_LOCAL_AUTH_ENABLED"] = "true"
-	cfg, err := loadSecurityConfig(mapConfigEnv(values))
-	if err != nil {
+	values["TFLIVE_LOCAL_AUTH_ENABLED"] = "false"
+
+	// Accepted and ignored: an unknown variable is not an error, and the point
+	// is that setting it changes nothing.
+	if _, err := loadSecurityConfig(mapConfigEnv(values)); err != nil {
 		t.Fatalf("loadSecurityConfig returned error: %v", err)
-	}
-	if !cfg.LocalAuthEnabled {
-		t.Fatal("LocalAuthEnabled is false with TFLIVE_LOCAL_AUTH_ENABLED=true")
-	}
-	if cfg.OIDC.IssuerURL == nil {
-		t.Fatal("enabling local auth dropped the OIDC configuration")
 	}
 }
 
 // The goal of #211: boot with local accounts and no IdP configuration at all.
-// Until this passes, "a POC needs no IdP" is unreachable however much of the
-// mechanism exists.
-func TestLoadSecurityConfigAcceptsLocalAuthWithNoOIDC(t *testing.T) {
+func TestLoadSecurityConfigAcceptsNoOIDC(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := loadSecurityConfig(mapConfigEnv(localOnlyValues()))
 	if err != nil {
 		t.Fatalf("loadSecurityConfig returned error: %v", err)
 	}
-	if !cfg.LocalAuthEnabled {
-		t.Fatal("LocalAuthEnabled is false")
-	}
 	if cfg.OIDC.IssuerURL != nil {
 		t.Fatalf("IssuerURL = %v, want nil with no OIDC configured", cfg.OIDC.IssuerURL)
-	}
-}
-
-// An API nobody can sign in to is a worse outcome than a refused boot, and it
-// fails silently: every route answers 401 and nothing says why.
-func TestLoadSecurityConfigRejectsNoAuthenticationMethod(t *testing.T) {
-	t.Parallel()
-
-	values := localOnlyValues()
-	delete(values, "TFLIVE_LOCAL_AUTH_ENABLED")
-
-	_, err := loadSecurityConfig(mapConfigEnv(values))
-	if err == nil {
-		t.Fatal("loadSecurityConfig accepted a configuration with no way to sign in")
-	}
-	if !strings.Contains(err.Error(), "authentication") {
-		t.Fatalf("error = %v, want it to name the missing authentication method", err)
 	}
 }
 
@@ -90,7 +55,6 @@ func TestLoadSecurityConfigStillRequiresClientCredentialsAlongsideAnIssuer(t *te
 			t.Parallel()
 
 			values := validSecurityValues()
-			values["TFLIVE_LOCAL_AUTH_ENABLED"] = "true"
 			delete(values, missing)
 
 			_, err := loadSecurityConfig(mapConfigEnv(values))
@@ -122,21 +86,6 @@ func TestLoadSecurityConfigRejectsClientCredentialsWithoutAnIssuer(t *testing.T)
 	}
 }
 
-func TestLoadSecurityConfigRejectsAnUnparsableLocalAuthFlag(t *testing.T) {
-	t.Parallel()
-
-	values := validSecurityValues()
-	values["TFLIVE_LOCAL_AUTH_ENABLED"] = "yes please"
-
-	_, err := loadSecurityConfig(mapConfigEnv(values))
-	if err == nil {
-		t.Fatal("loadSecurityConfig accepted an unparsable TFLIVE_LOCAL_AUTH_ENABLED")
-	}
-	if !strings.Contains(err.Error(), "TFLIVE_LOCAL_AUTH_ENABLED") {
-		t.Fatalf("error = %v, want it to name the setting", err)
-	}
-}
-
 // Production still requires HTTPS for an issuer that is present, and must not
 // start dereferencing one that is absent.
 func TestLoadSecurityConfigAllowsLocalOnlyProduction(t *testing.T) {
@@ -148,27 +97,7 @@ func TestLoadSecurityConfigAllowsLocalOnlyProduction(t *testing.T) {
 	values["OPENFGA_API_URL"] = "https://openfga.example.com"
 	values["OPENFGA_API_TOKEN"] = "openfga-token"
 
-	cfg, err := loadSecurityConfig(mapConfigEnv(values))
-	if err != nil {
+	if _, err := loadSecurityConfig(mapConfigEnv(values)); err != nil {
 		t.Fatalf("loadSecurityConfig returned error: %v", err)
-	}
-	if !cfg.LocalAuthEnabled {
-		t.Fatal("LocalAuthEnabled is false")
-	}
-}
-
-// The redacting String() is what keeps secrets out of a config dump, so a new
-// field must not be the one that reintroduces a leak.
-func TestSecurityConfigStringReportsLocalAuth(t *testing.T) {
-	t.Parallel()
-
-	values := validSecurityValues()
-	values["TFLIVE_LOCAL_AUTH_ENABLED"] = "true"
-	cfg, err := loadSecurityConfig(mapConfigEnv(values))
-	if err != nil {
-		t.Fatalf("loadSecurityConfig returned error: %v", err)
-	}
-	if !strings.Contains(cfg.String(), "LocalAuthEnabled:true") {
-		t.Fatalf("String() = %s, want it to report LocalAuthEnabled", cfg.String())
 	}
 }
