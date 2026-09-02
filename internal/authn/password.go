@@ -16,8 +16,16 @@ import (
 //
 // Memory is the expensive dimension on purpose — it is what a GPU cannot
 // parallelise away — and it is also the one that costs the server, at
-// passwordMemory per login in flight. That is bounded by the rate limiter on
-// the login route, not by this constant, so the two have to move together.
+// passwordMemoryKiB per verification in flight.
+//
+// Nothing currently bounds how many are in flight. The login route is
+// unauthenticated and not rate limited (deliberately descoped from #211), so
+// concurrent requests multiply this constant directly: sixteen at once is a
+// gigabyte. That is acceptable for the POC and demo deployments this feature
+// exists for, and is not acceptable for an internet-facing one. Whatever fixes
+// it — a rate limiter, or a semaphore capping concurrent verifications — is
+// what makes this constant safe to keep at 64 MiB; until then the two facts
+// belong next to each other rather than in separate files.
 const (
 	passwordSaltBytes = 16
 	passwordKeyBytes  = 32
