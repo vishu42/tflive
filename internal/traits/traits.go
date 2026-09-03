@@ -420,6 +420,11 @@ func snapshotMatchesDesired(revisionID TemplateRevisionID, configJSON json.RawMe
 	if revisionID != stackTemplate.DesiredTemplateRevisionID {
 		return false
 	}
+	// Nil is "no config was ever recorded", which is not the same as "recorded
+	// as empty". A template whose variables are all optional stores '{}' and
+	// compares equal here like any other config; only a row whose run ID is set
+	// while its config snapshot is null reaches this branch, and there is
+	// nothing to vouch for it, so it reads as pending work.
 	if configJSON == nil {
 		return false
 	}
