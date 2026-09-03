@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 // MeResponse is the identity envelope returned by GET /v1/me.
@@ -33,7 +33,7 @@ type GlobalCapabilities struct {
 // MeFromPrincipal maps the authenticated principal and its resolved platform
 // capabilities to a MeResponse. The capabilities are passed in rather than
 // derived here, because answering them is an OpenFGA call the app layer owns.
-func MeFromPrincipal(principal authn.Principal, tenantID traits.TenantID, capabilities GlobalCapabilities) MeResponse {
+func MeFromPrincipal(principal authn.Principal, tenantID domain.TenantID, capabilities GlobalCapabilities) MeResponse {
 	sessionExpiresAt := ""
 	if !principal.ExpiresAt.IsZero() {
 		sessionExpiresAt = principal.ExpiresAt.UTC().Format(time.RFC3339)

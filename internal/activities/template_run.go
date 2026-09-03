@@ -10,14 +10,14 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/logsink"
 	"github.com/vishu42/tflive/internal/runner"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 type StatusRecorder interface {
 	// RecordTemplateRunStatus persists one workflow status transition for a run.
-	RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error
+	RecordTemplateRunStatus(context.Context, domain.TemplateRunStatusActivityInput) error
 }
 
 // TerraformRunner is the activity-local boundary for running Terraform.
@@ -27,18 +27,18 @@ type StatusRecorder interface {
 // processes.
 type TerraformRunner interface {
 	// RunTerraform executes the Terraform command requested by the workflow.
-	RunTerraform(context.Context, traits.RunTerraformActivityInput) error
+	RunTerraform(context.Context, domain.RunTerraformActivityInput) error
 }
 
 // TemplateRunLogStore persists output produced by a template run.
 type TemplateRunLogStore interface {
 	// PutTemplateRunLog stores the output for a run phase so it can be retrieved later.
-	PutTemplateRunLog(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, phase string, body io.Reader) error
+	PutTemplateRunLog(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string, body io.Reader) error
 }
 
 type CredentialReader interface {
 	// ListCredentialsForStackTemplate returns encrypted credentials inherited by a template.
-	ListCredentialsForStackTemplate(context.Context, traits.TenantID, traits.StackTemplateID) ([]traits.CredentialSet, error)
+	ListCredentialsForStackTemplate(context.Context, domain.TenantID, domain.StackTemplateID) ([]domain.CredentialSet, error)
 }
 
 type CredentialDecryptor interface {
@@ -105,7 +105,7 @@ func NewTemplateRunActivitiesWithCredentials(recorder StatusRecorder, runRoot st
 // cannot run directly inside Temporal workflow code. The input includes tenant
 // and run identifiers so the store can update the correct run without relying on
 // process-local state.
-func (activities *TemplateRunActivities) RecordTemplateRunStatus(ctx context.Context, input traits.TemplateRunStatusActivityInput) error {
+func (activities *TemplateRunActivities) RecordTemplateRunStatus(ctx context.Context, input domain.TemplateRunStatusActivityInput) error {
 	if err := activities.recorder.RecordTemplateRunStatus(ctx, input); err != nil {
 		return fmt.Errorf("record template run status: %w", err)
 	}
@@ -120,17 +120,17 @@ func (activities *TemplateRunActivities) RecordTemplateRunStatus(ctx context.Con
 // callers cannot escape the run root with absolute paths or parent-directory
 // traversal. The resulting path is returned to the workflow and then passed back
 // into RunTerraform activity calls.
-func (activities *TemplateRunActivities) PrepareWorkspace(ctx context.Context, input traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+func (activities *TemplateRunActivities) PrepareWorkspace(ctx context.Context, input domain.PrepareWorkspaceActivityInput) (domain.PrepareWorkspaceActivityOutput, error) {
 	workspacePath, err := logsink.RunWorkspacePath(activities.runRoot, input.TenantID, input.RunID)
 	if err != nil {
-		return traits.PrepareWorkspaceActivityOutput{}, err
+		return domain.PrepareWorkspaceActivityOutput{}, err
 	}
 
 	if err := os.MkdirAll(workspacePath, 0o700); err != nil {
-		return traits.PrepareWorkspaceActivityOutput{}, fmt.Errorf("prepare workspace directory: %w", err)
+		return domain.PrepareWorkspaceActivityOutput{}, fmt.Errorf("prepare workspace directory: %w", err)
 	}
 
-	return traits.PrepareWorkspaceActivityOutput{WorkspacePath: workspacePath}, nil
+	return domain.PrepareWorkspaceActivityOutput{WorkspacePath: workspacePath}, nil
 }
 
 // FetchSource clones the template source into the prepared run workspace.
@@ -139,13 +139,13 @@ func (activities *TemplateRunActivities) PrepareWorkspace(ctx context.Context, i
 // returned TerraformPath points at the configured template root inside that
 // clone. Keeping WorkspacePath separate lets log files remain run-scoped even
 // when Terraform executes from a nested module directory.
-func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input traits.FetchSourceActivityInput) (traits.FetchSourceActivityOutput, error) {
+func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input domain.FetchSourceActivityInput) (domain.FetchSourceActivityOutput, error) {
 	rootPath, err := safeTemplateRootPath(input.RootPath)
 	if err != nil {
-		return traits.FetchSourceActivityOutput{}, fmt.Errorf("source root path: %w", err)
+		return domain.FetchSourceActivityOutput{}, fmt.Errorf("source root path: %w", err)
 	}
 	if strings.TrimSpace(input.WorkspacePath) == "" {
-		return traits.FetchSourceActivityOutput{}, fmt.Errorf("workspace path is required")
+		return domain.FetchSourceActivityOutput{}, fmt.Errorf("workspace path is required")
 	}
 
 	sourcePath := filepath.Join(input.WorkspacePath, "source")
@@ -165,18 +165,18 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 	// run resolves its own source.
 	if commitSHA := strings.TrimSpace(input.ResolvedCommitSHA); commitSHA != "" {
 		if err := git.CheckoutCommit(ctx, repoURL, commitSHA, sourcePath); err != nil {
-			return traits.FetchSourceActivityOutput{}, fmt.Errorf("checkout source commit %s: %w", commitSHA, err)
+			return domain.FetchSourceActivityOutput{}, fmt.Errorf("checkout source commit %s: %w", commitSHA, err)
 		}
 	} else if err := git.Clone(ctx, repoURL, input.SourceRef, sourcePath); err != nil {
-		return traits.FetchSourceActivityOutput{}, fmt.Errorf("clone source: %w", err)
+		return domain.FetchSourceActivityOutput{}, fmt.Errorf("clone source: %w", err)
 	}
 
 	terraformPath := filepath.Clean(filepath.Join(sourcePath, rootPath))
 	if err := ensureTemplateRoot(terraformPath); err != nil {
-		return traits.FetchSourceActivityOutput{}, fmt.Errorf("source root %q: %w", rootPath, err)
+		return domain.FetchSourceActivityOutput{}, fmt.Errorf("source root %q: %w", rootPath, err)
 	}
 
-	return traits.FetchSourceActivityOutput{TerraformPath: terraformPath}, nil
+	return domain.FetchSourceActivityOutput{TerraformPath: terraformPath}, nil
 }
 
 // RunTerraform executes one Terraform phase requested by TemplateRunWorkflow.
@@ -185,7 +185,7 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 // delegates command selection, log handling, and subprocess execution to the
 // configured TerraformRunner implementation. It never puts plaintext credentials
 // into workflow input or API responses.
-func (activities *TemplateRunActivities) RunTerraform(ctx context.Context, input traits.RunTerraformActivityInput) error {
+func (activities *TemplateRunActivities) RunTerraform(ctx context.Context, input domain.RunTerraformActivityInput) error {
 	if activities.credentialReader != nil {
 		if activities.credentialDecryptor == nil {
 			return fmt.Errorf("resolve terraform credentials: decryptor is unavailable")
@@ -221,7 +221,7 @@ type localTerraformRunner struct {
 // the same writer for now, preserving command output ordering in a single phase
 // log. The log file is closed after the command completes, and close errors are
 // surfaced only when the command itself succeeded.
-func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input traits.RunTerraformActivityInput) error {
+func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input domain.RunTerraformActivityInput) error {
 	phase, err := logsink.PhaseForTerraformCommand(input.Command)
 	if err != nil {
 		return err
@@ -305,7 +305,7 @@ func credentialValues(environment map[string]string) []string {
 }
 
 // resolveCredentialEnvironment decrypts inherited Stack credentials and applies StackTemplate overrides.
-func resolveCredentialEnvironment(ctx context.Context, reader CredentialReader, decryptor CredentialDecryptor, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID) (map[string]string, error) {
+func resolveCredentialEnvironment(ctx context.Context, reader CredentialReader, decryptor CredentialDecryptor, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID) (map[string]string, error) {
 	credentials, err := reader.ListCredentialsForStackTemplate(ctx, tenantID, stackTemplateID)
 	if err != nil {
 		return nil, err
@@ -334,7 +334,7 @@ func resolveCredentialEnvironment(ctx context.Context, reader CredentialReader, 
 	return environment, nil
 }
 
-func terraformPath(input traits.RunTerraformActivityInput) string {
+func terraformPath(input domain.RunTerraformActivityInput) string {
 	if strings.TrimSpace(input.TerraformPath) != "" {
 		return input.TerraformPath
 	}

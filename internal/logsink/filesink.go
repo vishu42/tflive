@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 type FileSink struct {
@@ -30,7 +30,7 @@ func NewLocalReader(runRoot string) LocalReader {
 }
 
 // RunWorkspacePath returns the local workspace path for one tenant-owned run.
-func RunWorkspacePath(runRoot string, tenantID traits.TenantID, runID traits.TemplateRunID) (string, error) {
+func RunWorkspacePath(runRoot string, tenantID domain.TenantID, runID domain.TemplateRunID) (string, error) {
 	if strings.TrimSpace(runRoot) == "" {
 		return "", fmt.Errorf("run root is required")
 	}
@@ -63,17 +63,17 @@ func (sink FileSink) OpenPhase(phase string) (io.WriteCloser, error) {
 }
 
 // PhaseForTerraformCommand maps a Terraform subprocess command to its log phase.
-func PhaseForTerraformCommand(command traits.TerraformCommandType) (string, error) {
+func PhaseForTerraformCommand(command domain.TerraformCommandType) (string, error) {
 	switch command {
-	case traits.TerraformCommandInit:
+	case domain.TerraformCommandInit:
 		return "init", nil
-	case traits.TerraformCommandSelectWorkspace:
+	case domain.TerraformCommandSelectWorkspace:
 		return "workspace", nil
-	case traits.TerraformCommandPlan:
+	case domain.TerraformCommandPlan:
 		return "plan", nil
-	case traits.TerraformCommandApply:
+	case domain.TerraformCommandApply:
 		return "apply", nil
-	case traits.TerraformCommandDestroy:
+	case domain.TerraformCommandDestroy:
 		return "destroy", nil
 	default:
 		return "", fmt.Errorf("unsupported terraform command %q", command)
@@ -81,7 +81,7 @@ func PhaseForTerraformCommand(command traits.TerraformCommandType) (string, erro
 }
 
 // ReadTemplateRunLog reads one tenant/run phase log from the local run root.
-func (reader LocalReader) ReadTemplateRunLog(_ context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, phase string) ([]byte, error) {
+func (reader LocalReader) ReadTemplateRunLog(_ context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string) ([]byte, error) {
 	workspacePath, err := RunWorkspacePath(reader.runRoot, tenantID, runID)
 	if err != nil {
 		return nil, err

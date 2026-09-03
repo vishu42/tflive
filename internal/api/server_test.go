@@ -15,12 +15,12 @@ import (
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 const apiKeycloakSubject = "6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91"
-const configuredTenantID = traits.TenantID("tenant_123")
+const configuredTenantID = domain.TenantID("tenant_123")
 
 func authenticatedRequest(method, target string, body io.Reader) *http.Request {
 	request := httptest.NewRequest(method, target, body)
@@ -185,8 +185,8 @@ func TestAuthenticatedServerAllowsConfiguredTenantToReachService(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.stacks.list = []traits.Stack{{
-		ID:       traits.StackID("stack_123"),
+	deps.stacks.list = []domain.Stack{{
+		ID:       domain.StackID("stack_123"),
 		TenantID: configuredTenantID,
 		Name:     "Acme Prod",
 		Slug:     "acme-prod",
@@ -288,14 +288,14 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 
 	startedAt := time.Date(2026, 7, 3, 11, 30, 0, 0, time.UTC)
 	deps := newAPITestDependencies()
-	deps.stackTemplates.stackTemplate = traits.StackTemplate{
-		ID:                        traits.StackTemplateID("stack_template_123"),
-		StackID:                   traits.StackID("stack_123"),
-		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+	deps.stackTemplates.stackTemplate = domain.StackTemplate{
+		ID:                        domain.StackTemplateID("stack_template_123"),
+		StackID:                   domain.StackID("stack_123"),
+		DesiredTemplateRevisionID: domain.TemplateRevisionID("template_123"),
 		WorkspaceName:             "smoke-workspace",
-		Lifecycle:                 traits.StackTemplateActive,
+		Lifecycle:                 domain.StackTemplateActive,
 	}
-	deps.runID = traits.TemplateRunID("run_123")
+	deps.runID = domain.TemplateRunID("run_123")
 	deps.now = startedAt
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -310,27 +310,27 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body.String())
 	}
-	if deps.stackTemplates.gotTenantID != traits.TenantID("tenant_123") {
+	if deps.stackTemplates.gotTenantID != domain.TenantID("tenant_123") {
 		t.Fatalf("tenant id = %q", deps.stackTemplates.gotTenantID)
 	}
-	if deps.stackTemplates.gotID != traits.StackTemplateID("stack_template_123") {
+	if deps.stackTemplates.gotID != domain.StackTemplateID("stack_template_123") {
 		t.Fatalf("stack template revision id = %q", deps.stackTemplates.gotID)
 	}
-	if deps.templateRuns.created.Operation != traits.OperationPlan {
+	if deps.templateRuns.created.Operation != domain.OperationPlan {
 		t.Fatalf("operation = %q", deps.templateRuns.created.Operation)
 	}
-	if deps.templateRuns.created.TriggerActor != traits.UserID(apiKeycloakSubject) {
+	if deps.templateRuns.created.TriggerActor != domain.UserID(apiKeycloakSubject) {
 		t.Fatalf("trigger actor = %q, want %q", deps.templateRuns.created.TriggerActor, apiKeycloakSubject)
 	}
 
-	var body traits.TemplateRun
+	var body domain.TemplateRun
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.ID != traits.TemplateRunID("run_123") {
+	if body.ID != domain.TemplateRunID("run_123") {
 		t.Fatalf("id = %q, want run_123", body.ID)
 	}
-	if body.Status != traits.TemplateRunQueued {
+	if body.Status != domain.TemplateRunQueued {
 		t.Fatalf("status = %q, want queued", body.Status)
 	}
 	if !body.StartedAt.Equal(startedAt) {
@@ -342,16 +342,16 @@ func TestStartTemplateRunMapsStalePlanToConflictWithItsOwnCode(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.stackTemplates.stackTemplate = traits.StackTemplate{
-		ID:                        traits.StackTemplateID("stack_template_123"),
-		StackID:                   traits.StackID("stack_123"),
-		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+	deps.stackTemplates.stackTemplate = domain.StackTemplate{
+		ID:                        domain.StackTemplateID("stack_template_123"),
+		StackID:                   domain.StackID("stack_123"),
+		DesiredTemplateRevisionID: domain.TemplateRevisionID("template_123"),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"eu-west-1"}`),
 		WorkspaceName:             "smoke-workspace",
-		Lifecycle:                 traits.StackTemplateActive,
+		Lifecycle:                 domain.StackTemplateActive,
 		// Planned against the config as it was before the last save.
-		LastPlannedRunID:              traits.TemplateRunID("run_plan_1"),
-		LastPlannedTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+		LastPlannedRunID:              domain.TemplateRunID("run_plan_1"),
+		LastPlannedTemplateRevisionID: domain.TemplateRevisionID("template_123"),
 		LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 	}
 	server := NewServer(deps.service(), configuredTenantID)
@@ -385,19 +385,19 @@ func TestStackTemplateResponseCarriesDerivedStatesNotRawConfigs(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.stackTemplates.stackTemplate = traits.StackTemplate{
-		ID:                            traits.StackTemplateID("stack_template_123"),
-		TenantID:                      traits.TenantID("tenant_123"),
-		DesiredTemplateRevisionID:     traits.TemplateRevisionID("template_rev_1"),
-		Lifecycle:                     traits.StackTemplateActive,
-		LastPlannedRunID:              traits.TemplateRunID("run_plan_1"),
-		LastPlannedTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
+	deps.stackTemplates.stackTemplate = domain.StackTemplate{
+		ID:                            domain.StackTemplateID("stack_template_123"),
+		TenantID:                      domain.TenantID("tenant_123"),
+		DesiredTemplateRevisionID:     domain.TemplateRevisionID("template_rev_1"),
+		Lifecycle:                     domain.StackTemplateActive,
+		LastPlannedRunID:              domain.TemplateRunID("run_plan_1"),
+		LastPlannedTemplateRevisionID: domain.TemplateRevisionID("template_rev_1"),
 		LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-west-2"}`),
-		LastAppliedRunID:              traits.TemplateRunID("run_apply_1"),
-		LastAppliedTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
+		LastAppliedRunID:              domain.TemplateRunID("run_apply_1"),
+		LastAppliedTemplateRevisionID: domain.TemplateRevisionID("template_rev_1"),
 		LastAppliedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 	}
-	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
+	deps.templates.variables = []domain.TemplateVariable{{Name: "region", Required: true}}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
@@ -494,7 +494,7 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 
 	requestedAt := time.Date(2026, 7, 6, 11, 30, 0, 0, time.UTC)
 	deps := newAPITestDependencies().withPlatformTier("admin")
-	deps.registrationID = traits.TemplateRegistrationID("template_registration_123")
+	deps.registrationID = domain.TemplateRegistrationID("template_registration_123")
 	deps.now = requestedAt
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -509,7 +509,7 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusAccepted, response.Body.String())
 	}
-	if deps.registrations.created.TenantID != traits.TenantID("tenant_123") {
+	if deps.registrations.created.TenantID != domain.TenantID("tenant_123") {
 		t.Fatalf("tenant id = %q", deps.registrations.created.TenantID)
 	}
 	if deps.registrations.created.RepoOwner != "acme" {
@@ -518,21 +518,21 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 	if deps.registrations.created.SourceRef != "v0.0.1" {
 		t.Fatalf("source ref = %q", deps.registrations.created.SourceRef)
 	}
-	if deps.registrations.created.RequestedBy != traits.UserID(apiKeycloakSubject) {
+	if deps.registrations.created.RequestedBy != domain.UserID(apiKeycloakSubject) {
 		t.Fatalf("requested by = %q, want %q", deps.registrations.created.RequestedBy, apiKeycloakSubject)
 	}
 	if len(deps.work.requests) != 1 || deps.work.requests[0].Kind != app.KindStartTemplateSync {
 		t.Fatalf("queued requests = %#v, want one start_template_sync request", deps.work.requests)
 	}
 
-	var body traits.TemplateRegistration
+	var body domain.TemplateRegistration
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.ID != traits.TemplateRegistrationID("template_registration_123") {
+	if body.ID != domain.TemplateRegistrationID("template_registration_123") {
 		t.Fatalf("id = %q, want template_registration_123", body.ID)
 	}
-	if body.Status != traits.TemplateRegistrationPending {
+	if body.Status != domain.TemplateRegistrationPending {
 		t.Fatalf("status = %q, want pending", body.Status)
 	}
 	if !body.RequestedAt.Equal(requestedAt) {
@@ -581,7 +581,7 @@ func TestCreateStackCallsService(t *testing.T) {
 
 	createdAt := time.Date(2026, 7, 6, 13, 30, 0, 0, time.UTC)
 	deps := newAPITestDependencies().withPlatformTier("admin")
-	deps.stackID = traits.StackID("stack_123")
+	deps.stackID = domain.StackID("stack_123")
 	deps.now = createdAt
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -596,13 +596,13 @@ func TestCreateStackCallsService(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body.String())
 	}
-	if deps.stacks.created.TenantID != traits.TenantID("tenant_123") {
+	if deps.stacks.created.TenantID != domain.TenantID("tenant_123") {
 		t.Fatalf("tenant id = %q, want tenant_123", deps.stacks.created.TenantID)
 	}
 	if deps.stacks.created.Slug != "acme-prod" {
 		t.Fatalf("slug = %q, want acme-prod", deps.stacks.created.Slug)
 	}
-	if deps.stacks.created.CreatedBy != traits.UserID(apiKeycloakSubject) {
+	if deps.stacks.created.CreatedBy != domain.UserID(apiKeycloakSubject) {
 		t.Fatalf("created by = %q, want %q", deps.stacks.created.CreatedBy, apiKeycloakSubject)
 	}
 
@@ -718,8 +718,8 @@ func TestCreateStackEnqueuesProvisioningIntent(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.Status != string(traits.StackStatusProvisioning) {
-		t.Fatalf("status = %q, want %q", body.Status, traits.StackStatusProvisioning)
+	if body.Status != string(domain.StackStatusProvisioning) {
+		t.Fatalf("status = %q, want %q", body.Status, domain.StackStatusProvisioning)
 	}
 }
 
@@ -728,14 +728,14 @@ func TestListStacksReturnsTenantStacks(t *testing.T) {
 
 	createdAt := time.Date(2026, 7, 6, 13, 30, 0, 0, time.UTC)
 	deps := newAPITestDependencies()
-	deps.stacks.list = []traits.Stack{
+	deps.stacks.list = []domain.Stack{
 		{
-			ID:        traits.StackID("stack_123"),
-			TenantID:  traits.TenantID("tenant_123"),
+			ID:        domain.StackID("stack_123"),
+			TenantID:  domain.TenantID("tenant_123"),
 			Name:      "Acme Prod",
 			Slug:      "acme-prod",
 			Tags:      map[string]string{"env": "prod"},
-			CreatedBy: traits.UserID("user_123"),
+			CreatedBy: domain.UserID("user_123"),
 			CreatedAt: createdAt,
 		},
 	}
@@ -748,7 +748,7 @@ func TestListStacksReturnsTenantStacks(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if deps.stacks.gotListTenantID != traits.TenantID("tenant_123") {
+	if deps.stacks.gotListTenantID != domain.TenantID("tenant_123") {
 		t.Fatalf("tenant list lookup = %q, want tenant_123", deps.stacks.gotListTenantID)
 	}
 
@@ -769,19 +769,19 @@ func TestGetStackReturnsStackView(t *testing.T) {
 
 	deps := newAPITestDependencies()
 	deps.stacks.view = app.StackView{
-		Stack: traits.Stack{
-			ID:       traits.StackID("stack_123"),
-			TenantID: traits.TenantID("tenant_123"),
+		Stack: domain.Stack{
+			ID:       domain.StackID("stack_123"),
+			TenantID: domain.TenantID("tenant_123"),
 			Name:     "Acme Prod",
 			Slug:     "acme-prod",
 			Tags:     map[string]string{"env": "prod"},
 		},
 		Templates: []app.StackTemplateView{
-			{StackTemplate: traits.StackTemplate{
-				ID:                        traits.StackTemplateID("stack_template_123"),
-				TenantID:                  traits.TenantID("tenant_123"),
-				StackID:                   traits.StackID("stack_123"),
-				DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+			{StackTemplate: domain.StackTemplate{
+				ID:                        domain.StackTemplateID("stack_template_123"),
+				TenantID:                  domain.TenantID("tenant_123"),
+				StackID:                   domain.StackID("stack_123"),
+				DesiredTemplateRevisionID: domain.TemplateRevisionID("template_123"),
 				WorkspaceName:             "meg_acme_prod_late_123",
 				// A persisted row always has a desired config: the column is
 				// not null and CreateStackTemplate seeds it from the install
@@ -789,7 +789,7 @@ func TestGetStackReturnsStackView(t *testing.T) {
 				// cannot exist, which the removed fallback used to paper over.
 				InstalledConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
 				DesiredConfigJSON:   json.RawMessage(`{"region":"us-east-1"}`),
-				Lifecycle:           traits.StackTemplateActive,
+				Lifecycle:           domain.StackTemplateActive,
 			}},
 		},
 	}
@@ -802,7 +802,7 @@ func TestGetStackReturnsStackView(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if deps.stacks.gotStackID != traits.StackID("stack_123") {
+	if deps.stacks.gotStackID != domain.StackID("stack_123") {
 		t.Fatalf("stack lookup = %q, want stack_123", deps.stacks.gotStackID)
 	}
 
@@ -825,10 +825,10 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.stacks.stack = traits.Stack{ID: traits.StackID("stack_123"), TenantID: traits.TenantID("tenant_123"), Slug: "acme-prod"}
-	deps.templates.template = traits.TemplateRevision{ID: traits.TemplateRevisionID("template_123"), TenantID: traits.TenantID("tenant_123"), Status: traits.TemplateRevisionActive}
-	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
-	deps.stackTemplateID = traits.StackTemplateID("stack_template_a1b2c3d4")
+	deps.stacks.stack = domain.Stack{ID: domain.StackID("stack_123"), TenantID: domain.TenantID("tenant_123"), Slug: "acme-prod"}
+	deps.templates.template = domain.TemplateRevision{ID: domain.TemplateRevisionID("template_123"), TenantID: domain.TenantID("tenant_123"), Status: domain.TemplateRevisionActive}
+	deps.templates.variables = []domain.TemplateVariable{{Name: "region", Required: true}}
+	deps.stackTemplateID = domain.StackTemplateID("stack_template_a1b2c3d4")
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
@@ -842,10 +842,10 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body.String())
 	}
-	if deps.stackTemplateInstaller.created.StackID != traits.StackID("stack_123") {
+	if deps.stackTemplateInstaller.created.StackID != domain.StackID("stack_123") {
 		t.Fatalf("stack id = %q, want stack_123", deps.stackTemplateInstaller.created.StackID)
 	}
-	if deps.stackTemplateInstaller.created.CreatedBy != traits.UserID(apiKeycloakSubject) {
+	if deps.stackTemplateInstaller.created.CreatedBy != domain.UserID(apiKeycloakSubject) {
 		t.Fatalf("created by = %q, want %q", deps.stackTemplateInstaller.created.CreatedBy, apiKeycloakSubject)
 	}
 
@@ -872,13 +872,13 @@ func TestUpdateStackTemplateConfigCallsService(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.stackTemplates.stackTemplate = traits.StackTemplate{
-		ID:                        traits.StackTemplateID("stack_template_123"),
-		TenantID:                  traits.TenantID("tenant_123"),
-		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
-		Lifecycle:                 traits.StackTemplateActive,
+	deps.stackTemplates.stackTemplate = domain.StackTemplate{
+		ID:                        domain.StackTemplateID("stack_template_123"),
+		TenantID:                  domain.TenantID("tenant_123"),
+		DesiredTemplateRevisionID: domain.TemplateRevisionID("template_rev_1"),
+		Lifecycle:                 domain.StackTemplateActive,
 	}
-	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
+	deps.templates.variables = []domain.TemplateVariable{{Name: "region", Required: true}}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
@@ -909,21 +909,21 @@ func TestUpgradeStackTemplateCallsService(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.stackTemplates.stackTemplate = traits.StackTemplate{
-		ID:                        traits.StackTemplateID("stack_template_123"),
-		TenantID:                  traits.TenantID("tenant_123"),
-		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
-		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
+	deps.stackTemplates.stackTemplate = domain.StackTemplate{
+		ID:                        domain.StackTemplateID("stack_template_123"),
+		TenantID:                  domain.TenantID("tenant_123"),
+		SourceTemplateID:          domain.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateRevisionID: domain.TemplateRevisionID("template_rev_1"),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-		Lifecycle:                 traits.StackTemplateActive,
+		Lifecycle:                 domain.StackTemplateActive,
 	}
-	deps.templates.template = traits.TemplateRevision{
-		ID:               traits.TemplateRevisionID("template_rev_2"),
-		TenantID:         traits.TenantID("tenant_123"),
-		SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
-		Status:           traits.TemplateRevisionActive,
+	deps.templates.template = domain.TemplateRevision{
+		ID:               domain.TemplateRevisionID("template_rev_2"),
+		TenantID:         domain.TenantID("tenant_123"),
+		SourceTemplateID: domain.SourceTemplateID("source_template_vpc"),
+		Status:           domain.TemplateRevisionActive,
 	}
-	deps.templates.variables = []traits.TemplateVariable{{Name: "region", Required: true}}
+	deps.templates.variables = []domain.TemplateVariable{{Name: "region", Required: true}}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
@@ -937,7 +937,7 @@ func TestUpgradeStackTemplateCallsService(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if deps.stackTemplates.gotDesiredTemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
+	if deps.stackTemplates.gotDesiredTemplateRevisionID != domain.TemplateRevisionID("template_rev_2") {
 		t.Fatalf("desired template revision update = %q, want template_rev_2", deps.stackTemplates.gotDesiredTemplateRevisionID)
 	}
 
@@ -957,21 +957,21 @@ func TestUpgradeStackTemplateMapsMissingRequiredVariableToConflict(t *testing.T)
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.stackTemplates.stackTemplate = traits.StackTemplate{
-		ID:                        traits.StackTemplateID("stack_template_123"),
-		TenantID:                  traits.TenantID("tenant_123"),
-		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
-		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
+	deps.stackTemplates.stackTemplate = domain.StackTemplate{
+		ID:                        domain.StackTemplateID("stack_template_123"),
+		TenantID:                  domain.TenantID("tenant_123"),
+		SourceTemplateID:          domain.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateRevisionID: domain.TemplateRevisionID("template_rev_1"),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-		Lifecycle:                 traits.StackTemplateActive,
+		Lifecycle:                 domain.StackTemplateActive,
 	}
-	deps.templates.template = traits.TemplateRevision{
-		ID:               traits.TemplateRevisionID("template_rev_2"),
-		TenantID:         traits.TenantID("tenant_123"),
-		SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
-		Status:           traits.TemplateRevisionActive,
+	deps.templates.template = domain.TemplateRevision{
+		ID:               domain.TemplateRevisionID("template_rev_2"),
+		TenantID:         domain.TenantID("tenant_123"),
+		SourceTemplateID: domain.SourceTemplateID("source_template_vpc"),
+		Status:           domain.TemplateRevisionActive,
 	}
-	deps.templates.variables = []traits.TemplateVariable{
+	deps.templates.variables = []domain.TemplateVariable{
 		{Name: "region", Required: true},
 		{Name: "cidr_block", Required: true},
 	}
@@ -994,17 +994,17 @@ func TestUpgradeStackTemplateMapsSourceMismatchToConflict(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.stackTemplates.stackTemplate = traits.StackTemplate{
-		ID:               traits.StackTemplateID("stack_template_123"),
-		TenantID:         traits.TenantID("tenant_123"),
-		SourceTemplateID: traits.SourceTemplateID("source_template_vpc"),
-		Lifecycle:        traits.StackTemplateActive,
+	deps.stackTemplates.stackTemplate = domain.StackTemplate{
+		ID:               domain.StackTemplateID("stack_template_123"),
+		TenantID:         domain.TenantID("tenant_123"),
+		SourceTemplateID: domain.SourceTemplateID("source_template_vpc"),
+		Lifecycle:        domain.StackTemplateActive,
 	}
-	deps.templates.template = traits.TemplateRevision{
-		ID:               traits.TemplateRevisionID("template_rev_2"),
-		TenantID:         traits.TenantID("tenant_123"),
-		SourceTemplateID: traits.SourceTemplateID("source_template_db"),
-		Status:           traits.TemplateRevisionActive,
+	deps.templates.template = domain.TemplateRevision{
+		ID:               domain.TemplateRevisionID("template_rev_2"),
+		TenantID:         domain.TenantID("tenant_123"),
+		SourceTemplateID: domain.SourceTemplateID("source_template_db"),
+		Status:           domain.TemplateRevisionActive,
 	}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -1067,10 +1067,10 @@ func TestGetTemplateRegistrationReturnsRegistration(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies().withPlatformTier("admin")
-	deps.registrations.registration = traits.TemplateRegistration{
-		ID:       traits.TemplateRegistrationID("template_registration_123"),
-		TenantID: traits.TenantID("tenant_123"),
-		Status:   traits.TemplateRegistrationCompleted,
+	deps.registrations.registration = domain.TemplateRegistration{
+		ID:       domain.TemplateRegistrationID("template_registration_123"),
+		TenantID: domain.TenantID("tenant_123"),
+		Status:   domain.TemplateRegistrationCompleted,
 	}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -1081,15 +1081,15 @@ func TestGetTemplateRegistrationReturnsRegistration(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if deps.registrations.gotGetTenantID != traits.TenantID("tenant_123") {
+	if deps.registrations.gotGetTenantID != domain.TenantID("tenant_123") {
 		t.Fatalf("tenant id = %q, want tenant_123", deps.registrations.gotGetTenantID)
 	}
 
-	var body traits.TemplateRegistration
+	var body domain.TemplateRegistration
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.ID != traits.TemplateRegistrationID("template_registration_123") {
+	if body.ID != domain.TemplateRegistrationID("template_registration_123") {
 		t.Fatalf("id = %q, want template_registration_123", body.ID)
 	}
 }
@@ -1099,10 +1099,10 @@ func TestListTemplateRevisionsReturnsTenantTemplateRevisions(t *testing.T) {
 
 	createdAt := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
 	deps := newAPITestDependencies().withPlatformTier("admin")
-	deps.templates.templates = []traits.TemplateRevision{
+	deps.templates.templates = []domain.TemplateRevision{
 		{
-			ID:                traits.TemplateRevisionID("template_123"),
-			TenantID:          traits.TenantID("tenant_123"),
+			ID:                domain.TemplateRevisionID("template_123"),
+			TenantID:          domain.TenantID("tenant_123"),
 			RepoOwner:         "acme",
 			RepoName:          "infra-templates",
 			SourceRef:         "main",
@@ -1110,7 +1110,7 @@ func TestListTemplateRevisionsReturnsTenantTemplateRevisions(t *testing.T) {
 			RootPath:          ".",
 			Name:              "infra-templates",
 			Tags:              []string{"aws"},
-			Status:            traits.TemplateRevisionActive,
+			Status:            domain.TemplateRevisionActive,
 			CreatedAt:         createdAt,
 		},
 	}
@@ -1123,18 +1123,18 @@ func TestListTemplateRevisionsReturnsTenantTemplateRevisions(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if deps.templates.gotListTenantID != traits.TenantID("tenant_123") {
+	if deps.templates.gotListTenantID != domain.TenantID("tenant_123") {
 		t.Fatalf("tenant list lookup = %q, want tenant_123", deps.templates.gotListTenantID)
 	}
 
-	var body []traits.TemplateRevision
+	var body []domain.TemplateRevision
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if len(body) != 1 {
 		t.Fatalf("len(body) = %d, want 1", len(body))
 	}
-	if body[0].ID != traits.TemplateRevisionID("template_123") || body[0].Status != traits.TemplateRevisionActive {
+	if body[0].ID != domain.TemplateRevisionID("template_123") || body[0].Status != domain.TemplateRevisionActive {
 		t.Fatalf("template revision response = %#v", body[0])
 	}
 }
@@ -1144,21 +1144,21 @@ func TestListTemplateRunsReturnsRunsForStackTemplate(t *testing.T) {
 
 	startedAt := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
 	deps := newAPITestDependencies()
-	deps.templateRuns.list = []traits.TemplateRun{
+	deps.templateRuns.list = []domain.TemplateRun{
 		{
-			ID:              traits.TemplateRunID("run_apply_1"),
-			TenantID:        traits.TenantID("tenant_123"),
-			StackTemplateID: traits.StackTemplateID("stack_template_123"),
-			Operation:       traits.OperationApply,
-			Status:          traits.TemplateRunWaitingApproval,
-			TriggerActor:    traits.UserID("user_456"),
+			ID:              domain.TemplateRunID("run_apply_1"),
+			TenantID:        domain.TenantID("tenant_123"),
+			StackTemplateID: domain.StackTemplateID("stack_template_123"),
+			Operation:       domain.OperationApply,
+			Status:          domain.TemplateRunWaitingApproval,
+			TriggerActor:    domain.UserID("user_456"),
 			StartedAt:       startedAt,
 		},
 	}
-	deps.stackTemplates.stackTemplate = traits.StackTemplate{
-		ID:       traits.StackTemplateID("stack_template_123"),
-		TenantID: traits.TenantID("tenant_123"),
-		StackID:  traits.StackID("stack_123"),
+	deps.stackTemplates.stackTemplate = domain.StackTemplate{
+		ID:       domain.StackTemplateID("stack_template_123"),
+		TenantID: domain.TenantID("tenant_123"),
+		StackID:  domain.StackID("stack_123"),
 	}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -1169,15 +1169,15 @@ func TestListTemplateRunsReturnsRunsForStackTemplate(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if deps.templateRuns.gotListStackTemplateID != traits.StackTemplateID("stack_template_123") {
+	if deps.templateRuns.gotListStackTemplateID != domain.StackTemplateID("stack_template_123") {
 		t.Fatalf("stack template lookup = %q, want stack_template_123", deps.templateRuns.gotListStackTemplateID)
 	}
 
-	var body []traits.TemplateRun
+	var body []domain.TemplateRun
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(body) != 1 || body[0].ID != traits.TemplateRunID("run_apply_1") || body[0].Status != traits.TemplateRunWaitingApproval {
+	if len(body) != 1 || body[0].ID != domain.TemplateRunID("run_apply_1") || body[0].Status != domain.TemplateRunWaitingApproval {
 		t.Fatalf("runs = %#v", body)
 	}
 }
@@ -1186,9 +1186,9 @@ func TestGetTemplateRevisionVariablesReturnsVariables(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies().withPlatformTier("admin")
-	deps.templates.variables = []traits.TemplateVariable{
+	deps.templates.variables = []domain.TemplateVariable{
 		{
-			TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+			TemplateRevisionID: domain.TemplateRevisionID("template_123"),
 			Name:               "region",
 			TypeExpression:     "string",
 			Required:           true,
@@ -1203,11 +1203,11 @@ func TestGetTemplateRevisionVariablesReturnsVariables(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if deps.templates.gotVariablesTemplateRevisionID != traits.TemplateRevisionID("template_123") {
+	if deps.templates.gotVariablesTemplateRevisionID != domain.TemplateRevisionID("template_123") {
 		t.Fatalf("template revision id = %q, want template_123", deps.templates.gotVariablesTemplateRevisionID)
 	}
 
-	var body []traits.TemplateVariable
+	var body []domain.TemplateVariable
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -1223,12 +1223,12 @@ func TestGetTemplateRunReturnsRun(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.templateRuns.run = traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
-		Status:          traits.TemplateRunCompleted,
+	deps.templateRuns.run = domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
+		Status:          domain.TemplateRunCompleted,
 	}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -1239,21 +1239,21 @@ func TestGetTemplateRunReturnsRun(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if deps.templateRuns.gotGetTenantID != traits.TenantID("tenant_123") {
+	if deps.templateRuns.gotGetTenantID != domain.TenantID("tenant_123") {
 		t.Fatalf("tenant id = %q, want tenant_123", deps.templateRuns.gotGetTenantID)
 	}
-	if deps.templateRuns.gotGetRunID != traits.TemplateRunID("run_123") {
+	if deps.templateRuns.gotGetRunID != domain.TemplateRunID("run_123") {
 		t.Fatalf("run id = %q, want run_123", deps.templateRuns.gotGetRunID)
 	}
 
-	var body traits.TemplateRun
+	var body domain.TemplateRun
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.ID != traits.TemplateRunID("run_123") {
+	if body.ID != domain.TemplateRunID("run_123") {
 		t.Fatalf("id = %q, want run_123", body.ID)
 	}
-	if body.Status != traits.TemplateRunCompleted {
+	if body.Status != domain.TemplateRunCompleted {
 		t.Fatalf("status = %q, want completed", body.Status)
 	}
 }
@@ -1262,14 +1262,14 @@ func TestGetTemplateRunLogReturnsPlainText(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.templateRuns.run = traits.TemplateRun{
-		ID:       traits.TemplateRunID("run_123"),
-		TenantID: traits.TenantID("tenant_123"),
+	deps.templateRuns.run = domain.TemplateRun{
+		ID:       domain.TemplateRunID("run_123"),
+		TenantID: domain.TenantID("tenant_123"),
 	}
 	deps.logs.content = []byte("terraform plan output\n")
-	deps.logMetadata.log = traits.TemplateRunLog{
-		TenantID:  traits.TenantID("tenant_123"),
-		RunID:     traits.TemplateRunID("run_123"),
+	deps.logMetadata.log = domain.TemplateRunLog{
+		TenantID:  domain.TenantID("tenant_123"),
+		RunID:     domain.TemplateRunID("run_123"),
 		Phase:     "plan",
 		ObjectKey: "tenants/tenant_123/runs/run_123/logs/plan.log",
 	}
@@ -1298,14 +1298,14 @@ func TestListTemplateRunLogsReturnsMetadata(t *testing.T) {
 
 	uploadedAt := time.Date(2026, 7, 6, 10, 15, 0, 0, time.UTC)
 	deps := newAPITestDependencies()
-	deps.templateRuns.run = traits.TemplateRun{
-		ID:       traits.TemplateRunID("run_123"),
-		TenantID: traits.TenantID("tenant_123"),
+	deps.templateRuns.run = domain.TemplateRun{
+		ID:       domain.TemplateRunID("run_123"),
+		TenantID: domain.TenantID("tenant_123"),
 	}
-	deps.logMetadata.logs = []traits.TemplateRunLog{
+	deps.logMetadata.logs = []domain.TemplateRunLog{
 		{
-			TenantID:    traits.TenantID("tenant_123"),
-			RunID:       traits.TemplateRunID("run_123"),
+			TenantID:    domain.TenantID("tenant_123"),
+			RunID:       domain.TemplateRunID("run_123"),
 			Phase:       "init",
 			ObjectKey:   "tenants/tenant_123/runs/run_123/logs/init.log",
 			ContentType: "text/plain; charset=utf-8",
@@ -1322,11 +1322,11 @@ func TestListTemplateRunLogsReturnsMetadata(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if deps.logMetadata.gotListRunID != traits.TemplateRunID("run_123") {
+	if deps.logMetadata.gotListRunID != domain.TemplateRunID("run_123") {
 		t.Fatalf("metadata run ID = %q, want run_123", deps.logMetadata.gotListRunID)
 	}
 
-	var body []traits.TemplateRunLog
+	var body []domain.TemplateRunLog
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -1345,9 +1345,9 @@ func TestListTemplateRunLogsReturnsEmptyArray(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.templateRuns.run = traits.TemplateRun{
-		ID:       traits.TemplateRunID("run_123"),
-		TenantID: traits.TenantID("tenant_123"),
+	deps.templateRuns.run = domain.TemplateRun{
+		ID:       domain.TemplateRunID("run_123"),
+		TenantID: domain.TenantID("tenant_123"),
 	}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -1401,14 +1401,14 @@ func TestGetTemplateRunLogMapsMissingLogToNotFound(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.templateRuns.run = traits.TemplateRun{
-		ID:       traits.TemplateRunID("run_123"),
-		TenantID: traits.TenantID("tenant_123"),
+	deps.templateRuns.run = domain.TemplateRun{
+		ID:       domain.TemplateRunID("run_123"),
+		TenantID: domain.TenantID("tenant_123"),
 	}
 	deps.logs.err = app.ErrNotFound
-	deps.logMetadata.log = traits.TemplateRunLog{
-		TenantID:  traits.TenantID("tenant_123"),
-		RunID:     traits.TemplateRunID("run_123"),
+	deps.logMetadata.log = domain.TemplateRunLog{
+		TenantID:  domain.TenantID("tenant_123"),
+		RunID:     domain.TemplateRunID("run_123"),
 		Phase:     "plan",
 		ObjectKey: "tenants/tenant_123/runs/run_123/logs/plan.log",
 	}
@@ -1440,13 +1440,13 @@ func TestApproveRunCallsService(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNoContent, response.Body.String())
 	}
-	if deps.templateRuns.approval.TenantID != traits.TenantID("tenant_123") {
+	if deps.templateRuns.approval.TenantID != domain.TenantID("tenant_123") {
 		t.Fatalf("tenant id = %q", deps.templateRuns.approval.TenantID)
 	}
-	if deps.templateRuns.approval.RunID != traits.TemplateRunID("run_123") {
+	if deps.templateRuns.approval.RunID != domain.TemplateRunID("run_123") {
 		t.Fatalf("run id = %q", deps.templateRuns.approval.RunID)
 	}
-	if deps.templateRuns.approval.ApprovedBy != traits.UserID(apiKeycloakSubject) {
+	if deps.templateRuns.approval.ApprovedBy != domain.UserID(apiKeycloakSubject) {
 		t.Fatalf("approved by = %q, want %q", deps.templateRuns.approval.ApprovedBy, apiKeycloakSubject)
 	}
 	if len(deps.work.requests) != 1 || deps.work.requests[0].Kind != app.KindSignalRunApproval {
@@ -1458,11 +1458,11 @@ func TestApproveRunAllowsSelfApproval(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.templateRuns.run = traits.TemplateRun{
+	deps.templateRuns.run = domain.TemplateRun{
 		ID:              "run_123",
 		TenantID:        "tenant_123",
 		StackTemplateID: "stack_template_123",
-		TriggerActor:    traits.UserID(apiKeycloakSubject),
+		TriggerActor:    domain.UserID(apiKeycloakSubject),
 	}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -1502,13 +1502,13 @@ func TestCancelRunCallsService(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNoContent, response.Body.String())
 	}
-	if deps.templateRuns.cancellation.TenantID != traits.TenantID("tenant_123") {
+	if deps.templateRuns.cancellation.TenantID != domain.TenantID("tenant_123") {
 		t.Fatalf("tenant id = %q", deps.templateRuns.cancellation.TenantID)
 	}
-	if deps.templateRuns.cancellation.RunID != traits.TemplateRunID("run_123") {
+	if deps.templateRuns.cancellation.RunID != domain.TemplateRunID("run_123") {
 		t.Fatalf("run id = %q", deps.templateRuns.cancellation.RunID)
 	}
-	if deps.templateRuns.cancellation.RequestedBy != traits.UserID(apiKeycloakSubject) {
+	if deps.templateRuns.cancellation.RequestedBy != domain.UserID(apiKeycloakSubject) {
 		t.Fatalf("requested by = %q, want %q", deps.templateRuns.cancellation.RequestedBy, apiKeycloakSubject)
 	}
 	if deps.templateRuns.cancellation.Reason != "testing" {
@@ -1988,7 +1988,7 @@ func TestStackListFiltersMixedDecisions(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.stacks.list = []traits.Stack{
+	deps.stacks.list = []domain.Stack{
 		{ID: "stack_allowed", TenantID: "tenant_123", CreatedAt: time.Unix(2, 0)},
 		{ID: "stack_denied", TenantID: "tenant_123", CreatedAt: time.Unix(1, 0)},
 	}
@@ -2015,9 +2015,9 @@ func TestStackListLaterBatchFailureReturnsNoPartialResponse(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies()
-	deps.stacks.list = make([]traits.Stack, 51)
+	deps.stacks.list = make([]domain.Stack, 51)
 	for i := range deps.stacks.list {
-		deps.stacks.list[i] = traits.Stack{ID: traits.StackID(fmt.Sprintf("stack_%02d", 51-i)), TenantID: "tenant_123", CreatedAt: time.Unix(int64(100-i), 0)}
+		deps.stacks.list[i] = domain.Stack{ID: domain.StackID(fmt.Sprintf("stack_%02d", 51-i)), TenantID: "tenant_123", CreatedAt: time.Unix(int64(100-i), 0)}
 	}
 	deps.authorizer.batchErr = authz.ErrUnavailable
 	deps.authorizer.failBatch = 2
@@ -2094,23 +2094,23 @@ func TestInheritedRouteMissingAndDeniedStatusesMatch(t *testing.T) {
 
 func newPermissionMatrixDependencies() *apiTestDependencies {
 	deps := newAPITestDependencies()
-	stack := traits.Stack{ID: "stack_123", TenantID: "tenant_123", Name: "Acme", Slug: "acme", CreatedAt: time.Unix(1, 0)}
+	stack := domain.Stack{ID: "stack_123", TenantID: "tenant_123", Name: "Acme", Slug: "acme", CreatedAt: time.Unix(1, 0)}
 	deps.stacks.stack = stack
-	deps.stacks.list = []traits.Stack{stack}
+	deps.stacks.list = []domain.Stack{stack}
 	deps.stacks.view = app.StackView{Stack: stack}
-	deps.stackTemplates.stackTemplate = traits.StackTemplate{
+	deps.stackTemplates.stackTemplate = domain.StackTemplate{
 		ID:                        "stack_template_123",
 		TenantID:                  "tenant_123",
 		StackID:                   "stack_123",
 		DesiredTemplateRevisionID: "revision_123",
 		WorkspaceName:             "acme-vpc",
-		Lifecycle:                 traits.StackTemplateActive,
+		Lifecycle:                 domain.StackTemplateActive,
 	}
-	deps.templates.template = traits.TemplateRevision{ID: "revision_123", TenantID: "tenant_123", Status: traits.TemplateRevisionActive}
-	deps.templateRuns.run = traits.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}
-	deps.templateRuns.list = []traits.TemplateRun{deps.templateRuns.run}
-	deps.logMetadata.logs = []traits.TemplateRunLog{{TenantID: "tenant_123", RunID: "run_123", Phase: "plan"}}
-	deps.logMetadata.log = traits.TemplateRunLog{TenantID: "tenant_123", RunID: "run_123", Phase: "plan", ObjectKey: "runs/run_123/plan.log"}
+	deps.templates.template = domain.TemplateRevision{ID: "revision_123", TenantID: "tenant_123", Status: domain.TemplateRevisionActive}
+	deps.templateRuns.run = domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}
+	deps.templateRuns.list = []domain.TemplateRun{deps.templateRuns.run}
+	deps.logMetadata.logs = []domain.TemplateRunLog{{TenantID: "tenant_123", RunID: "run_123", Phase: "plan"}}
+	deps.logMetadata.log = domain.TemplateRunLog{TenantID: "tenant_123", RunID: "run_123", Phase: "plan", ObjectKey: "runs/run_123/plan.log"}
 	deps.logs.content = []byte("plan output")
 	return deps
 }
@@ -2476,10 +2476,10 @@ type apiTestDependencies struct {
 	logMetadata            recordingTemplateRunLogRepository
 	workflows              recordingWorkflowDispatcher
 	users                  apiFakeUserRepository
-	stackID                traits.StackID
-	stackTemplateID        traits.StackTemplateID
-	runID                  traits.TemplateRunID
-	registrationID         traits.TemplateRegistrationID
+	stackID                domain.StackID
+	stackTemplateID        domain.StackTemplateID
+	runID                  domain.TemplateRunID
+	registrationID         domain.TemplateRegistrationID
 	now                    time.Time
 	work                   *apiUnitOfWork
 }
@@ -2487,10 +2487,10 @@ type apiTestDependencies struct {
 func newAPITestDependencies() *apiTestDependencies {
 	return &apiTestDependencies{
 		authorizer:      &apiAuthorizer{},
-		stackID:         traits.StackID("stack_123"),
-		stackTemplateID: traits.StackTemplateID("stack_template_123"),
-		runID:           traits.TemplateRunID("run_123"),
-		registrationID:  traits.TemplateRegistrationID("template_registration_123"),
+		stackID:         domain.StackID("stack_123"),
+		stackTemplateID: domain.StackTemplateID("stack_template_123"),
+		runID:           domain.TemplateRunID("run_123"),
+		registrationID:  domain.TemplateRegistrationID("template_registration_123"),
 		now:             time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC),
 	}
 }
@@ -2544,7 +2544,7 @@ type apiUnitOfWork struct {
 	templateRuns          app.TemplateRunRepository
 	templateRegistrations app.TemplateRegistrationRepository
 	requests              []queue.Request
-	audits                []traits.SecurityAuditEvent
+	audits                []domain.SecurityAuditEvent
 	err                   error
 }
 
@@ -2555,48 +2555,48 @@ func (unit *apiUnitOfWork) InTx(ctx context.Context, fn func(app.TxRepo, queue.E
 	return fn(unit, unit)
 }
 
-func (unit *apiUnitOfWork) CreateStack(ctx context.Context, stack traits.Stack) error {
+func (unit *apiUnitOfWork) CreateStack(ctx context.Context, stack domain.Stack) error {
 	if unit.stacks == nil {
 		return nil
 	}
 	return unit.stacks.CreateStack(ctx, stack)
 }
 
-func (unit *apiUnitOfWork) AppendAuditEvent(_ context.Context, event traits.SecurityAuditEvent) error {
+func (unit *apiUnitOfWork) AppendAuditEvent(_ context.Context, event domain.SecurityAuditEvent) error {
 	unit.audits = append(unit.audits, event)
 	return nil
 }
 
-func (unit *apiUnitOfWork) CreateTemplateRun(ctx context.Context, run traits.TemplateRun) error {
+func (unit *apiUnitOfWork) CreateTemplateRun(ctx context.Context, run domain.TemplateRun) error {
 	if repository, ok := unit.templateRuns.(interface {
-		CreateTemplateRun(context.Context, traits.TemplateRun) error
+		CreateTemplateRun(context.Context, domain.TemplateRun) error
 	}); ok {
 		return repository.CreateTemplateRun(ctx, run)
 	}
 	return nil
 }
 
-func (unit *apiUnitOfWork) CreateTemplateRegistration(ctx context.Context, registration traits.TemplateRegistration) error {
+func (unit *apiUnitOfWork) CreateTemplateRegistration(ctx context.Context, registration domain.TemplateRegistration) error {
 	if repository, ok := unit.templateRegistrations.(interface {
-		CreateTemplateRegistration(context.Context, traits.TemplateRegistration) error
+		CreateTemplateRegistration(context.Context, domain.TemplateRegistration) error
 	}); ok {
 		return repository.CreateTemplateRegistration(ctx, registration)
 	}
 	return nil
 }
 
-func (unit *apiUnitOfWork) ApproveTemplateRun(ctx context.Context, approval traits.TemplateRunApproval) error {
+func (unit *apiUnitOfWork) ApproveTemplateRun(ctx context.Context, approval domain.TemplateRunApproval) error {
 	if repository, ok := unit.templateRuns.(interface {
-		ApproveTemplateRun(context.Context, traits.TemplateRunApproval) error
+		ApproveTemplateRun(context.Context, domain.TemplateRunApproval) error
 	}); ok {
 		return repository.ApproveTemplateRun(ctx, approval)
 	}
 	return nil
 }
 
-func (unit *apiUnitOfWork) RequestTemplateRunCancellation(ctx context.Context, cancellation traits.TemplateRunCancellation) error {
+func (unit *apiUnitOfWork) RequestTemplateRunCancellation(ctx context.Context, cancellation domain.TemplateRunCancellation) error {
 	if repository, ok := unit.templateRuns.(interface {
-		RequestTemplateRunCancellation(context.Context, traits.TemplateRunCancellation) error
+		RequestTemplateRunCancellation(context.Context, domain.TemplateRunCancellation) error
 	}); ok {
 		return repository.RequestTemplateRunCancellation(ctx, cancellation)
 	}
@@ -2698,20 +2698,20 @@ func (authorizer *apiAuthorizer) DeleteRelationships(context.Context, authz.Muta
 }
 
 type recordingStackRepository struct {
-	created         traits.Stack
-	stack           traits.Stack
-	list            []traits.Stack
+	created         domain.Stack
+	stack           domain.Stack
+	list            []domain.Stack
 	view            app.StackView
-	gotTenantID     traits.TenantID
-	gotStackID      traits.StackID
-	gotListTenantID traits.TenantID
+	gotTenantID     domain.TenantID
+	gotStackID      domain.StackID
+	gotListTenantID domain.TenantID
 	createErr       error
 	getErr          error
 	listErr         error
 	getViewErr      error
 }
 
-func (repository *recordingStackRepository) CreateStack(_ context.Context, stack traits.Stack) error {
+func (repository *recordingStackRepository) CreateStack(_ context.Context, stack domain.Stack) error {
 	if repository.createErr != nil {
 		return repository.createErr
 	}
@@ -2719,16 +2719,16 @@ func (repository *recordingStackRepository) CreateStack(_ context.Context, stack
 	return nil
 }
 
-func (repository *recordingStackRepository) GetStack(_ context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error) {
+func (repository *recordingStackRepository) GetStack(_ context.Context, tenantID domain.TenantID, stackID domain.StackID) (domain.Stack, error) {
 	repository.gotTenantID = tenantID
 	repository.gotStackID = stackID
 	if repository.getErr != nil {
-		return traits.Stack{}, repository.getErr
+		return domain.Stack{}, repository.getErr
 	}
 	return repository.stack, nil
 }
 
-func (repository *recordingStackRepository) GetStackWithTemplates(_ context.Context, tenantID traits.TenantID, stackID traits.StackID) (app.StackView, error) {
+func (repository *recordingStackRepository) GetStackWithTemplates(_ context.Context, tenantID domain.TenantID, stackID domain.StackID) (app.StackView, error) {
 	repository.gotTenantID = tenantID
 	repository.gotStackID = stackID
 	if repository.getViewErr != nil {
@@ -2737,7 +2737,7 @@ func (repository *recordingStackRepository) GetStackWithTemplates(_ context.Cont
 	return repository.view, nil
 }
 
-func (repository *recordingStackRepository) ListStacks(_ context.Context, tenantID traits.TenantID) ([]traits.Stack, error) {
+func (repository *recordingStackRepository) ListStacks(_ context.Context, tenantID domain.TenantID) ([]domain.Stack, error) {
 	repository.gotListTenantID = tenantID
 	if repository.listErr != nil {
 		return nil, repository.listErr
@@ -2745,7 +2745,7 @@ func (repository *recordingStackRepository) ListStacks(_ context.Context, tenant
 	return repository.list, nil
 }
 
-func (repository *recordingStackRepository) ListStacksPage(_ context.Context, tenantID traits.TenantID, after *app.StackPageCursor, limit int) ([]traits.Stack, error) {
+func (repository *recordingStackRepository) ListStacksPage(_ context.Context, tenantID domain.TenantID, after *app.StackPageCursor, limit int) ([]domain.Stack, error) {
 	repository.gotListTenantID = tenantID
 	if repository.listErr != nil {
 		return nil, repository.listErr
@@ -2760,23 +2760,23 @@ func (repository *recordingStackRepository) ListStacksPage(_ context.Context, te
 		}
 	}
 	end := min(start+limit, len(repository.list))
-	return append([]traits.Stack(nil), repository.list[start:end]...), nil
+	return append([]domain.Stack(nil), repository.list[start:end]...), nil
 }
 
 type recordingStackTemplateRepository struct {
-	stackTemplate                traits.StackTemplate
-	gotTenantID                  traits.TenantID
-	gotID                        traits.StackTemplateID
+	stackTemplate                domain.StackTemplate
+	gotTenantID                  domain.TenantID
+	gotID                        domain.StackTemplateID
 	gotConfigJSON                json.RawMessage
-	gotDesiredTemplateRevisionID traits.TemplateRevisionID
+	gotDesiredTemplateRevisionID domain.TemplateRevisionID
 	getErr                       error
 }
 
-func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error) {
+func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.Context, tenantID domain.TenantID, id domain.StackTemplateID) (domain.StackTemplate, error) {
 	repository.gotTenantID = tenantID
 	repository.gotID = id
 	if repository.getErr != nil {
-		return traits.StackTemplate{}, repository.getErr
+		return domain.StackTemplate{}, repository.getErr
 	}
 	stackTemplate := repository.stackTemplate
 	if stackTemplate.StackID == "" {
@@ -2785,7 +2785,7 @@ func (repository *recordingStackTemplateRepository) GetStackTemplate(_ context.C
 	return stackTemplate, nil
 }
 
-func (repository *recordingStackTemplateRepository) UpdateStackTemplateConfig(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {
+func (repository *recordingStackTemplateRepository) UpdateStackTemplateConfig(_ context.Context, tenantID domain.TenantID, id domain.StackTemplateID, configJSON json.RawMessage) (domain.StackTemplate, error) {
 	repository.gotTenantID = tenantID
 	repository.gotID = id
 	repository.gotConfigJSON = configJSON
@@ -2794,7 +2794,7 @@ func (repository *recordingStackTemplateRepository) UpdateStackTemplateConfig(_ 
 	return updated, nil
 }
 
-func (repository *recordingStackTemplateRepository) UpdateStackTemplateDesiredRevision(_ context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateID traits.TemplateRevisionID, configJSON json.RawMessage) (traits.StackTemplate, error) {
+func (repository *recordingStackTemplateRepository) UpdateStackTemplateDesiredRevision(_ context.Context, tenantID domain.TenantID, id domain.StackTemplateID, templateID domain.TemplateRevisionID, configJSON json.RawMessage) (domain.StackTemplate, error) {
 	repository.gotTenantID = tenantID
 	repository.gotID = id
 	repository.gotDesiredTemplateRevisionID = templateID
@@ -2806,11 +2806,11 @@ func (repository *recordingStackTemplateRepository) UpdateStackTemplateDesiredRe
 }
 
 type recordingStackTemplateInstaller struct {
-	created   traits.StackTemplate
+	created   domain.StackTemplate
 	createErr error
 }
 
-func (installer *recordingStackTemplateInstaller) CreateStackTemplate(_ context.Context, stackTemplate traits.StackTemplate) error {
+func (installer *recordingStackTemplateInstaller) CreateStackTemplate(_ context.Context, stackTemplate domain.StackTemplate) error {
 	if installer.createErr != nil {
 		return installer.createErr
 	}
@@ -2819,41 +2819,41 @@ func (installer *recordingStackTemplateInstaller) CreateStackTemplate(_ context.
 }
 
 type recordingTemplateRunRepository struct {
-	created                traits.TemplateRun
-	run                    traits.TemplateRun
-	list                   []traits.TemplateRun
-	approval               traits.TemplateRunApproval
-	cancellation           traits.TemplateRunCancellation
-	gotGetTenantID         traits.TenantID
-	gotGetRunID            traits.TemplateRunID
-	gotListTenantID        traits.TenantID
-	gotListStackTemplateID traits.StackTemplateID
+	created                domain.TemplateRun
+	run                    domain.TemplateRun
+	list                   []domain.TemplateRun
+	approval               domain.TemplateRunApproval
+	cancellation           domain.TemplateRunCancellation
+	gotGetTenantID         domain.TenantID
+	gotGetRunID            domain.TemplateRunID
+	gotListTenantID        domain.TenantID
+	gotListStackTemplateID domain.StackTemplateID
 	getErr                 error
 	approvalErr            error
 	cancellationErr        error
 }
 
-func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run traits.TemplateRun) error {
+func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run domain.TemplateRun) error {
 	repository.created = run
 	return nil
 }
 
-func (repository *recordingTemplateRunRepository) ListTemplateRuns(_ context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID) ([]traits.TemplateRun, error) {
+func (repository *recordingTemplateRunRepository) ListTemplateRuns(_ context.Context, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID) ([]domain.TemplateRun, error) {
 	repository.gotListTenantID = tenantID
 	repository.gotListStackTemplateID = stackTemplateID
 	return repository.list, nil
 }
 
-func (repository *recordingTemplateRunRepository) GetTemplateRun(_ context.Context, tenantID traits.TenantID, runID traits.TemplateRunID) (traits.TemplateRun, error) {
+func (repository *recordingTemplateRunRepository) GetTemplateRun(_ context.Context, tenantID domain.TenantID, runID domain.TemplateRunID) (domain.TemplateRun, error) {
 	repository.gotGetTenantID = tenantID
 	repository.gotGetRunID = runID
 	if repository.getErr != nil {
-		return traits.TemplateRun{}, repository.getErr
+		return domain.TemplateRun{}, repository.getErr
 	}
 	return repository.run, nil
 }
 
-func (repository *recordingTemplateRunRepository) ApproveTemplateRun(_ context.Context, approval traits.TemplateRunApproval) error {
+func (repository *recordingTemplateRunRepository) ApproveTemplateRun(_ context.Context, approval domain.TemplateRunApproval) error {
 	if repository.approvalErr != nil {
 		return repository.approvalErr
 	}
@@ -2861,7 +2861,7 @@ func (repository *recordingTemplateRunRepository) ApproveTemplateRun(_ context.C
 	return nil
 }
 
-func (repository *recordingTemplateRunRepository) RequestTemplateRunCancellation(_ context.Context, cancellation traits.TemplateRunCancellation) error {
+func (repository *recordingTemplateRunRepository) RequestTemplateRunCancellation(_ context.Context, cancellation domain.TemplateRunCancellation) error {
 	if repository.cancellationErr != nil {
 		return repository.cancellationErr
 	}
@@ -2869,19 +2869,19 @@ func (repository *recordingTemplateRunRepository) RequestTemplateRunCancellation
 	return nil
 }
 
-func (repository *recordingTemplateRunRepository) ReconcileTemplateRunCancellation(_ context.Context, _ traits.TenantID, _ traits.TemplateRunID, _ string) error {
+func (repository *recordingTemplateRunRepository) ReconcileTemplateRunCancellation(_ context.Context, _ domain.TenantID, _ domain.TemplateRunID, _ string) error {
 	return nil
 }
 
 type recordingTemplateRunLogReader struct {
 	content     []byte
 	err         error
-	gotTenantID traits.TenantID
-	gotRunID    traits.TemplateRunID
+	gotTenantID domain.TenantID
+	gotRunID    domain.TemplateRunID
 	gotPhase    string
 }
 
-func (reader *recordingTemplateRunLogReader) ReadTemplateRunLog(_ context.Context, log traits.TemplateRunLog) ([]byte, error) {
+func (reader *recordingTemplateRunLogReader) ReadTemplateRunLog(_ context.Context, log domain.TemplateRunLog) ([]byte, error) {
 	reader.gotTenantID = log.TenantID
 	reader.gotRunID = log.RunID
 	reader.gotPhase = log.Phase
@@ -2892,28 +2892,28 @@ func (reader *recordingTemplateRunLogReader) ReadTemplateRunLog(_ context.Contex
 }
 
 type recordingTemplateRunLogRepository struct {
-	log             traits.TemplateRunLog
-	logs            []traits.TemplateRunLog
-	gotGetTenantID  traits.TenantID
-	gotGetRunID     traits.TemplateRunID
+	log             domain.TemplateRunLog
+	logs            []domain.TemplateRunLog
+	gotGetTenantID  domain.TenantID
+	gotGetRunID     domain.TemplateRunID
 	gotGetPhase     string
-	gotListTenantID traits.TenantID
-	gotListRunID    traits.TemplateRunID
+	gotListTenantID domain.TenantID
+	gotListRunID    domain.TemplateRunID
 	getErr          error
 	listErr         error
 }
 
-func (repository *recordingTemplateRunLogRepository) GetTemplateRunLog(_ context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, phase string) (traits.TemplateRunLog, error) {
+func (repository *recordingTemplateRunLogRepository) GetTemplateRunLog(_ context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string) (domain.TemplateRunLog, error) {
 	repository.gotGetTenantID = tenantID
 	repository.gotGetRunID = runID
 	repository.gotGetPhase = phase
 	if repository.getErr != nil {
-		return traits.TemplateRunLog{}, repository.getErr
+		return domain.TemplateRunLog{}, repository.getErr
 	}
 	return repository.log, nil
 }
 
-func (repository *recordingTemplateRunLogRepository) ListTemplateRunLogs(_ context.Context, tenantID traits.TenantID, runID traits.TemplateRunID) ([]traits.TemplateRunLog, error) {
+func (repository *recordingTemplateRunLogRepository) ListTemplateRunLogs(_ context.Context, tenantID domain.TenantID, runID domain.TemplateRunID) ([]domain.TemplateRunLog, error) {
 	repository.gotListTenantID = tenantID
 	repository.gotListRunID = runID
 	if repository.listErr != nil {
@@ -2923,17 +2923,17 @@ func (repository *recordingTemplateRunLogRepository) ListTemplateRunLogs(_ conte
 }
 
 type recordingTemplateRegistrationRepository struct {
-	created        traits.TemplateRegistration
-	registration   traits.TemplateRegistration
-	gotGetTenantID traits.TenantID
-	gotGetID       traits.TemplateRegistrationID
+	created        domain.TemplateRegistration
+	registration   domain.TemplateRegistration
+	gotGetTenantID domain.TenantID
+	gotGetID       domain.TemplateRegistrationID
 	createErr      error
 	getErr         error
-	statusInput    traits.TemplateRegistrationStatusActivityInput
+	statusInput    domain.TemplateRegistrationStatusActivityInput
 	statusErr      error
 }
 
-func (repository *recordingTemplateRegistrationRepository) CreateTemplateRegistration(_ context.Context, registration traits.TemplateRegistration) error {
+func (repository *recordingTemplateRegistrationRepository) CreateTemplateRegistration(_ context.Context, registration domain.TemplateRegistration) error {
 	if repository.createErr != nil {
 		return repository.createErr
 	}
@@ -2941,16 +2941,16 @@ func (repository *recordingTemplateRegistrationRepository) CreateTemplateRegistr
 	return nil
 }
 
-func (repository *recordingTemplateRegistrationRepository) GetTemplateRegistration(_ context.Context, tenantID traits.TenantID, id traits.TemplateRegistrationID) (traits.TemplateRegistration, error) {
+func (repository *recordingTemplateRegistrationRepository) GetTemplateRegistration(_ context.Context, tenantID domain.TenantID, id domain.TemplateRegistrationID) (domain.TemplateRegistration, error) {
 	repository.gotGetTenantID = tenantID
 	repository.gotGetID = id
 	if repository.getErr != nil {
-		return traits.TemplateRegistration{}, repository.getErr
+		return domain.TemplateRegistration{}, repository.getErr
 	}
 	return repository.registration, nil
 }
 
-func (repository *recordingTemplateRegistrationRepository) RecordTemplateRegistrationStatus(_ context.Context, input traits.TemplateRegistrationStatusActivityInput) error {
+func (repository *recordingTemplateRegistrationRepository) RecordTemplateRegistrationStatus(_ context.Context, input domain.TemplateRegistrationStatusActivityInput) error {
 	if repository.statusErr != nil {
 		return repository.statusErr
 	}
@@ -2959,27 +2959,27 @@ func (repository *recordingTemplateRegistrationRepository) RecordTemplateRegistr
 }
 
 type recordingTemplateRepository struct {
-	template                       traits.TemplateRevision
-	templates                      []traits.TemplateRevision
-	variables                      []traits.TemplateVariable
-	gotTemplate                    traits.TemplateRevision
-	gotVariables                   []traits.TemplateVariable
-	gotListTenantID                traits.TenantID
-	gotGetTemplateTenantID         traits.TenantID
-	gotGetTemplateRevisionID       traits.TemplateRevisionID
-	gotVariablesTenantID           traits.TenantID
-	gotVariablesTemplateRevisionID traits.TemplateRevisionID
+	template                       domain.TemplateRevision
+	templates                      []domain.TemplateRevision
+	variables                      []domain.TemplateVariable
+	gotTemplate                    domain.TemplateRevision
+	gotVariables                   []domain.TemplateVariable
+	gotListTenantID                domain.TenantID
+	gotGetTemplateTenantID         domain.TenantID
+	gotGetTemplateRevisionID       domain.TemplateRevisionID
+	gotVariablesTenantID           domain.TenantID
+	gotVariablesTemplateRevisionID domain.TemplateRevisionID
 	getTemplateErr                 error
 	listErr                        error
 	upsertErr                      error
 	variablesErr                   error
 }
 
-func (repository *recordingTemplateRepository) UpsertTemplateRevisionWithVariables(_ context.Context, template traits.TemplateRevision, variables []traits.TemplateVariable) (traits.TemplateRevision, error) {
+func (repository *recordingTemplateRepository) UpsertTemplateRevisionWithVariables(_ context.Context, template domain.TemplateRevision, variables []domain.TemplateVariable) (domain.TemplateRevision, error) {
 	repository.gotTemplate = template
 	repository.gotVariables = variables
 	if repository.upsertErr != nil {
-		return traits.TemplateRevision{}, repository.upsertErr
+		return domain.TemplateRevision{}, repository.upsertErr
 	}
 	if repository.template.ID != "" {
 		return repository.template, nil
@@ -2987,16 +2987,16 @@ func (repository *recordingTemplateRepository) UpsertTemplateRevisionWithVariabl
 	return template, nil
 }
 
-func (repository *recordingTemplateRepository) GetTemplateRevision(_ context.Context, tenantID traits.TenantID, templateID traits.TemplateRevisionID) (traits.TemplateRevision, error) {
+func (repository *recordingTemplateRepository) GetTemplateRevision(_ context.Context, tenantID domain.TenantID, templateID domain.TemplateRevisionID) (domain.TemplateRevision, error) {
 	repository.gotGetTemplateTenantID = tenantID
 	repository.gotGetTemplateRevisionID = templateID
 	if repository.getTemplateErr != nil {
-		return traits.TemplateRevision{}, repository.getTemplateErr
+		return domain.TemplateRevision{}, repository.getTemplateErr
 	}
 	return repository.template, nil
 }
 
-func (repository *recordingTemplateRepository) ListTemplateRevisions(_ context.Context, tenantID traits.TenantID) ([]traits.TemplateRevision, error) {
+func (repository *recordingTemplateRepository) ListTemplateRevisions(_ context.Context, tenantID domain.TenantID) ([]domain.TemplateRevision, error) {
 	repository.gotListTenantID = tenantID
 	if repository.listErr != nil {
 		return nil, repository.listErr
@@ -3004,7 +3004,7 @@ func (repository *recordingTemplateRepository) ListTemplateRevisions(_ context.C
 	return repository.templates, nil
 }
 
-func (repository *recordingTemplateRepository) GetTemplateRevisionVariables(_ context.Context, tenantID traits.TenantID, templateID traits.TemplateRevisionID) ([]traits.TemplateVariable, error) {
+func (repository *recordingTemplateRepository) GetTemplateRevisionVariables(_ context.Context, tenantID domain.TenantID, templateID domain.TemplateRevisionID) ([]domain.TemplateVariable, error) {
 	repository.gotVariablesTenantID = tenantID
 	repository.gotVariablesTemplateRevisionID = templateID
 	if repository.variablesErr != nil {
@@ -3014,65 +3014,65 @@ func (repository *recordingTemplateRepository) GetTemplateRevisionVariables(_ co
 }
 
 type recordingWorkflowDispatcher struct {
-	input          traits.TemplateRunWorkflowInput
-	syncInput      traits.TemplateSyncWorkflowInput
-	approvalRunID  traits.TemplateRunID
-	approvalSignal traits.ApprovalSignal
-	cancelRunID    traits.TemplateRunID
-	cancelSignal   traits.CancelSignal
+	input          domain.TemplateRunWorkflowInput
+	syncInput      domain.TemplateSyncWorkflowInput
+	approvalRunID  domain.TemplateRunID
+	approvalSignal domain.ApprovalSignal
+	cancelRunID    domain.TemplateRunID
+	cancelSignal   domain.CancelSignal
 }
 
-func (dispatcher *recordingWorkflowDispatcher) StartTemplateRun(_ context.Context, input traits.TemplateRunWorkflowInput) error {
+func (dispatcher *recordingWorkflowDispatcher) StartTemplateRun(_ context.Context, input domain.TemplateRunWorkflowInput) error {
 	dispatcher.input = input
 	return nil
 }
 
-func (dispatcher *recordingWorkflowDispatcher) StartTemplateSync(_ context.Context, input traits.TemplateSyncWorkflowInput) error {
+func (dispatcher *recordingWorkflowDispatcher) StartTemplateSync(_ context.Context, input domain.TemplateSyncWorkflowInput) error {
 	dispatcher.syncInput = input
 	return nil
 }
 
-func (dispatcher *recordingWorkflowDispatcher) ApproveTemplateRun(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, signal traits.ApprovalSignal) error {
+func (dispatcher *recordingWorkflowDispatcher) ApproveTemplateRun(_ context.Context, _ domain.TenantID, runID domain.TemplateRunID, signal domain.ApprovalSignal) error {
 	dispatcher.approvalRunID = runID
 	dispatcher.approvalSignal = signal
 	return nil
 }
 
-func (dispatcher *recordingWorkflowDispatcher) CancelTemplateRun(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, signal traits.CancelSignal) error {
+func (dispatcher *recordingWorkflowDispatcher) CancelTemplateRun(_ context.Context, _ domain.TenantID, runID domain.TemplateRunID, signal domain.CancelSignal) error {
 	dispatcher.cancelRunID = runID
 	dispatcher.cancelSignal = signal
 	return nil
 }
 
 type fixedStackIDGenerator struct {
-	id traits.StackID
+	id domain.StackID
 }
 
-func (generator fixedStackIDGenerator) NewStackID() traits.StackID {
+func (generator fixedStackIDGenerator) NewStackID() domain.StackID {
 	return generator.id
 }
 
 type fixedStackTemplateIDGenerator struct {
-	id traits.StackTemplateID
+	id domain.StackTemplateID
 }
 
-func (generator fixedStackTemplateIDGenerator) NewStackTemplateID() traits.StackTemplateID {
+func (generator fixedStackTemplateIDGenerator) NewStackTemplateID() domain.StackTemplateID {
 	return generator.id
 }
 
 type fixedTemplateRunIDGenerator struct {
-	runID traits.TemplateRunID
+	runID domain.TemplateRunID
 }
 
-func (generator fixedTemplateRunIDGenerator) NewTemplateRunID() traits.TemplateRunID {
+func (generator fixedTemplateRunIDGenerator) NewTemplateRunID() domain.TemplateRunID {
 	return generator.runID
 }
 
 type fixedTemplateRegistrationIDGenerator struct {
-	id traits.TemplateRegistrationID
+	id domain.TemplateRegistrationID
 }
 
-func (generator fixedTemplateRegistrationIDGenerator) NewTemplateRegistrationID() traits.TemplateRegistrationID {
+func (generator fixedTemplateRegistrationIDGenerator) NewTemplateRegistrationID() domain.TemplateRegistrationID {
 	return generator.id
 }
 

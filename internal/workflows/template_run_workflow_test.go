@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/mock"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	requesterSubject = traits.UserID("6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91")
-	approverSubject  = traits.UserID("cb4afba6-d18d-496f-80ce-8a50b94f09be")
+	requesterSubject = domain.UserID("6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91")
+	approverSubject  = domain.UserID("cb4afba6-d18d-496f-80ce-8a50b94f09be")
 )
 
 // TestTemplateRunWorkflowUsesSessionForWorkspaceActivities protects the worker
@@ -31,12 +31,12 @@ const (
 func TestTemplateRunWorkflowUsesSessionForWorkspaceActivities(t *testing.T) {
 	for _, testCase := range []struct {
 		name                   string
-		operation              traits.OperationType
+		operation              domain.OperationType
 		workspaceActivityCount int
 	}{
-		{name: "plan", operation: traits.OperationPlan, workspaceActivityCount: 5},
-		{name: "apply", operation: traits.OperationApply, workspaceActivityCount: 6},
-		{name: "destroy", operation: traits.OperationDestroy, workspaceActivityCount: 5},
+		{name: "plan", operation: domain.OperationPlan, workspaceActivityCount: 5},
+		{name: "apply", operation: domain.OperationApply, workspaceActivityCount: 6},
+		{name: "destroy", operation: domain.OperationDestroy, workspaceActivityCount: 5},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			env := newTemplateRunWorkflowTestEnvironment(t)
@@ -44,26 +44,26 @@ func TestTemplateRunWorkflowUsesSessionForWorkspaceActivities(t *testing.T) {
 			var workspaceTaskQueues []string
 			var statusTaskQueues []string
 
-			env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
-				Return(func(ctx context.Context, _ traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+			env.OnActivity(domain.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+				Return(func(ctx context.Context, _ domain.PrepareWorkspaceActivityInput) (domain.PrepareWorkspaceActivityOutput, error) {
 					workspaceTaskQueues = append(workspaceTaskQueues, activity.GetInfo(ctx).TaskQueue)
-					return traits.PrepareWorkspaceActivityOutput{WorkspacePath: "run/workspace"}, nil
+					return domain.PrepareWorkspaceActivityOutput{WorkspacePath: "run/workspace"}, nil
 				})
-			env.OnActivity(traits.FetchSourceActivityName, mock.Anything, mock.Anything).
-				Return(func(ctx context.Context, _ traits.FetchSourceActivityInput) (traits.FetchSourceActivityOutput, error) {
+			env.OnActivity(domain.FetchSourceActivityName, mock.Anything, mock.Anything).
+				Return(func(ctx context.Context, _ domain.FetchSourceActivityInput) (domain.FetchSourceActivityOutput, error) {
 					workspaceTaskQueues = append(workspaceTaskQueues, activity.GetInfo(ctx).TaskQueue)
-					return traits.FetchSourceActivityOutput{TerraformPath: "run/workspace/source"}, nil
+					return domain.FetchSourceActivityOutput{TerraformPath: "run/workspace/source"}, nil
 				})
-			env.OnActivity(traits.RunTerraformActivityName, mock.Anything, mock.Anything).
-				Return(func(ctx context.Context, _ traits.RunTerraformActivityInput) error {
+			env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
+				Return(func(ctx context.Context, _ domain.RunTerraformActivityInput) error {
 					workspaceTaskQueues = append(workspaceTaskQueues, activity.GetInfo(ctx).TaskQueue)
 					return nil
 				})
-			env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
-				Return(func(ctx context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
+			env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+				Return(func(ctx context.Context, activityInput domain.TemplateRunStatusActivityInput) error {
 					statusTaskQueues = append(statusTaskQueues, activity.GetInfo(ctx).TaskQueue)
-					if activityInput.Status == traits.TemplateRunWaitingApproval {
-						env.SignalWorkflow(traits.ApprovalSignalName, traits.ApprovalSignal{
+					if activityInput.Status == domain.TemplateRunWaitingApproval {
+						env.SignalWorkflow(domain.ApprovalSignalName, domain.ApprovalSignal{
 							ApprovedBy: approverSubject,
 						})
 					}
@@ -135,10 +135,10 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(traits.OperationPlan)
+	input := templateRunWorkflowInput(domain.OperationPlan)
 	var events []string
-	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+	env.OnActivity(domain.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.PrepareWorkspaceActivityInput) (domain.PrepareWorkspaceActivityOutput, error) {
 			if activityInput.RunID != input.RunID {
 				t.Fatalf("prepare workspace RunID = %q, want %q", activityInput.RunID, input.RunID)
 			}
@@ -146,10 +146,10 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 				t.Fatalf("prepare workspace TenantID = %q, want %q", activityInput.TenantID, input.TenantID)
 			}
 			events = append(events, "prepare_workspace")
-			return traits.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123"}, nil
+			return domain.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123"}, nil
 		})
-	env.OnActivity(traits.FetchSourceActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.FetchSourceActivityInput) (traits.FetchSourceActivityOutput, error) {
+	env.OnActivity(domain.FetchSourceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.FetchSourceActivityInput) (domain.FetchSourceActivityOutput, error) {
 			if activityInput.RunID != input.RunID {
 				t.Fatalf("fetch source RunID = %q, want %q", activityInput.RunID, input.RunID)
 			}
@@ -172,10 +172,10 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 				t.Fatalf("fetch source RootPath = %q, want %q", activityInput.RootPath, input.RootPath)
 			}
 			events = append(events, "fetch_source")
-			return traits.FetchSourceActivityOutput{TerraformPath: "/tmp/tflive/runs/tenant_123/run_123/source/modules/vpc"}, nil
+			return domain.FetchSourceActivityOutput{TerraformPath: "/tmp/tflive/runs/tenant_123/run_123/source/modules/vpc"}, nil
 		})
-	env.OnActivity(traits.RunTerraformActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.RunTerraformActivityInput) error {
+	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.RunTerraformActivityInput) error {
 			if activityInput.RunID != input.RunID {
 				t.Fatalf("run terraform RunID = %q, want %q", activityInput.RunID, input.RunID)
 			}
@@ -197,8 +197,8 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 			events = append(events, "terraform:"+string(activityInput.Command))
 			return nil
 		})
-	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRunStatusActivityInput) error {
 			events = append(events, string(activityInput.Status))
 			return nil
 		})
@@ -207,21 +207,21 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 
 	assertWorkflowCompleted(t, env)
 	want := []string{
-		string(traits.TemplateRunLocked),
+		string(domain.TemplateRunLocked),
 		"prepare_workspace",
-		string(traits.TemplateRunWorkspacePrepared),
+		string(domain.TemplateRunWorkspacePrepared),
 		"fetch_source",
-		string(traits.TemplateRunSourceFetched),
-		string(traits.TemplateRunInitStarted),
-		"terraform:" + string(traits.TerraformCommandInit),
-		string(traits.TemplateRunInitFinished),
-		"terraform:" + string(traits.TerraformCommandSelectWorkspace),
-		string(traits.TemplateRunWorkspaceSelected),
-		string(traits.TemplateRunPlanStarted),
-		"terraform:" + string(traits.TerraformCommandPlan),
-		string(traits.TemplateRunPlanFinished),
-		string(traits.TemplateRunLockReleased),
-		string(traits.TemplateRunCompleted),
+		string(domain.TemplateRunSourceFetched),
+		string(domain.TemplateRunInitStarted),
+		"terraform:" + string(domain.TerraformCommandInit),
+		string(domain.TemplateRunInitFinished),
+		"terraform:" + string(domain.TerraformCommandSelectWorkspace),
+		string(domain.TemplateRunWorkspaceSelected),
+		string(domain.TemplateRunPlanStarted),
+		"terraform:" + string(domain.TerraformCommandPlan),
+		string(domain.TemplateRunPlanFinished),
+		string(domain.TemplateRunLockReleased),
+		string(domain.TemplateRunCompleted),
 	}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events = %#v, want %#v", events, want)
@@ -232,19 +232,19 @@ func TestTemplateRunWorkflowWaitsForApplyApproval(t *testing.T) {
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(traits.OperationApply)
-	var statuses []traits.TemplateRunStatus
-	var commands []traits.TerraformCommandType
+	input := templateRunWorkflowInput(domain.OperationApply)
+	var statuses []domain.TemplateRunStatus
+	var commands []domain.TerraformCommandType
 	mockPrepareWorkspace(t, env)
 	mockFetchSource(t, env)
 	mockRunTerraform(t, env, &commands)
-	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRunStatusActivityInput) error {
 			statuses = append(statuses, activityInput.Status)
 			return nil
 		})
 	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow(traits.ApprovalSignalName, traits.ApprovalSignal{
+		env.SignalWorkflow(domain.ApprovalSignalName, domain.ApprovalSignal{
 			ApprovedBy: approverSubject,
 		})
 	}, 0)
@@ -252,29 +252,29 @@ func TestTemplateRunWorkflowWaitsForApplyApproval(t *testing.T) {
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 
 	assertWorkflowCompleted(t, env)
-	want := []traits.TemplateRunStatus{
-		traits.TemplateRunLocked,
-		traits.TemplateRunWorkspacePrepared,
-		traits.TemplateRunSourceFetched,
-		traits.TemplateRunInitStarted,
-		traits.TemplateRunInitFinished,
-		traits.TemplateRunWorkspaceSelected,
-		traits.TemplateRunPlanStarted,
-		traits.TemplateRunPlanFinished,
-		traits.TemplateRunWaitingApproval,
-		traits.TemplateRunApplyStarted,
-		traits.TemplateRunApplyFinished,
-		traits.TemplateRunLockReleased,
-		traits.TemplateRunCompleted,
+	want := []domain.TemplateRunStatus{
+		domain.TemplateRunLocked,
+		domain.TemplateRunWorkspacePrepared,
+		domain.TemplateRunSourceFetched,
+		domain.TemplateRunInitStarted,
+		domain.TemplateRunInitFinished,
+		domain.TemplateRunWorkspaceSelected,
+		domain.TemplateRunPlanStarted,
+		domain.TemplateRunPlanFinished,
+		domain.TemplateRunWaitingApproval,
+		domain.TemplateRunApplyStarted,
+		domain.TemplateRunApplyFinished,
+		domain.TemplateRunLockReleased,
+		domain.TemplateRunCompleted,
 	}
 	if !reflect.DeepEqual(statuses, want) {
 		t.Fatalf("statuses = %#v, want %#v", statuses, want)
 	}
-	wantCommands := []traits.TerraformCommandType{
-		traits.TerraformCommandInit,
-		traits.TerraformCommandSelectWorkspace,
-		traits.TerraformCommandPlan,
-		traits.TerraformCommandApply,
+	wantCommands := []domain.TerraformCommandType{
+		domain.TerraformCommandInit,
+		domain.TerraformCommandSelectWorkspace,
+		domain.TerraformCommandPlan,
+		domain.TerraformCommandApply,
 	}
 	if !reflect.DeepEqual(commands, wantCommands) {
 		t.Fatalf("commands = %#v, want %#v", commands, wantCommands)
@@ -285,17 +285,17 @@ func TestTemplateRunWorkflowCancelsApplyWhileWaitingApproval(t *testing.T) {
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(traits.OperationApply)
-	var statuses []traits.TemplateRunStatus
-	var commands []traits.TerraformCommandType
+	input := templateRunWorkflowInput(domain.OperationApply)
+	var statuses []domain.TemplateRunStatus
+	var commands []domain.TerraformCommandType
 	mockPrepareWorkspace(t, env)
 	mockFetchSource(t, env)
 	mockRunTerraform(t, env, &commands)
-	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRunStatusActivityInput) error {
 			statuses = append(statuses, activityInput.Status)
-			if activityInput.Status == traits.TemplateRunWaitingApproval {
-				env.SignalWorkflow(traits.CancelSignalName, traits.CancelSignal{
+			if activityInput.Status == domain.TemplateRunWaitingApproval {
+				env.SignalWorkflow(domain.CancelSignalName, domain.CancelSignal{
 					RequestedBy: requesterSubject,
 					Reason:      "superseded",
 				})
@@ -306,25 +306,25 @@ func TestTemplateRunWorkflowCancelsApplyWhileWaitingApproval(t *testing.T) {
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 
 	assertWorkflowCompleted(t, env)
-	want := []traits.TemplateRunStatus{
-		traits.TemplateRunLocked,
-		traits.TemplateRunWorkspacePrepared,
-		traits.TemplateRunSourceFetched,
-		traits.TemplateRunInitStarted,
-		traits.TemplateRunInitFinished,
-		traits.TemplateRunWorkspaceSelected,
-		traits.TemplateRunPlanStarted,
-		traits.TemplateRunPlanFinished,
-		traits.TemplateRunWaitingApproval,
-		traits.TemplateRunCanceled,
+	want := []domain.TemplateRunStatus{
+		domain.TemplateRunLocked,
+		domain.TemplateRunWorkspacePrepared,
+		domain.TemplateRunSourceFetched,
+		domain.TemplateRunInitStarted,
+		domain.TemplateRunInitFinished,
+		domain.TemplateRunWorkspaceSelected,
+		domain.TemplateRunPlanStarted,
+		domain.TemplateRunPlanFinished,
+		domain.TemplateRunWaitingApproval,
+		domain.TemplateRunCanceled,
 	}
 	if !reflect.DeepEqual(statuses, want) {
 		t.Fatalf("statuses = %#v, want %#v", statuses, want)
 	}
-	wantCommands := []traits.TerraformCommandType{
-		traits.TerraformCommandInit,
-		traits.TerraformCommandSelectWorkspace,
-		traits.TerraformCommandPlan,
+	wantCommands := []domain.TerraformCommandType{
+		domain.TerraformCommandInit,
+		domain.TerraformCommandSelectWorkspace,
+		domain.TerraformCommandPlan,
 	}
 	if !reflect.DeepEqual(commands, wantCommands) {
 		t.Fatalf("commands = %#v, want %#v", commands, wantCommands)
@@ -335,19 +335,19 @@ func TestTemplateRunWorkflowCancelsPlanWhenSignalArrivesDuringTerraform(t *testi
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(traits.OperationPlan)
-	var statuses []traits.TemplateRunStatus
-	var commands []traits.TerraformCommandType
+	input := templateRunWorkflowInput(domain.OperationPlan)
+	var statuses []domain.TemplateRunStatus
+	var commands []domain.TerraformCommandType
 	mockPrepareWorkspace(t, env)
 	mockFetchSource(t, env)
 	mockRunTerraform(t, env, &commands)
-	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRunStatusActivityInput) error {
 			statuses = append(statuses, activityInput.Status)
 			return nil
 		})
 	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow(traits.CancelSignalName, traits.CancelSignal{
+		env.SignalWorkflow(domain.CancelSignalName, domain.CancelSignal{
 			RequestedBy: requesterSubject,
 			Reason:      "stop retries",
 		})
@@ -356,11 +356,11 @@ func TestTemplateRunWorkflowCancelsPlanWhenSignalArrivesDuringTerraform(t *testi
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 
 	assertWorkflowCompleted(t, env)
-	if len(statuses) == 0 || statuses[len(statuses)-1] != traits.TemplateRunCanceled {
+	if len(statuses) == 0 || statuses[len(statuses)-1] != domain.TemplateRunCanceled {
 		t.Fatalf("final status = %#v, want canceled", statuses)
 	}
 	for _, status := range statuses {
-		if status == traits.TemplateRunPlanFinished || status == traits.TemplateRunCompleted {
+		if status == domain.TemplateRunPlanFinished || status == domain.TemplateRunCompleted {
 			t.Fatalf("statuses = %#v, canceled plan should not become planned or completed", statuses)
 		}
 	}
@@ -377,17 +377,17 @@ func TestTemplateRunWorkflowCancelsDestroyWhileWaitingApproval(t *testing.T) {
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(traits.OperationDestroy)
-	var statuses []traits.TemplateRunStatus
-	var commands []traits.TerraformCommandType
+	input := templateRunWorkflowInput(domain.OperationDestroy)
+	var statuses []domain.TemplateRunStatus
+	var commands []domain.TerraformCommandType
 	mockPrepareWorkspace(t, env)
 	mockFetchSource(t, env)
 	mockRunTerraform(t, env, &commands)
-	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRunStatusActivityInput) error {
 			statuses = append(statuses, activityInput.Status)
-			if activityInput.Status == traits.TemplateRunWaitingApproval {
-				env.SignalWorkflow(traits.CancelSignalName, traits.CancelSignal{
+			if activityInput.Status == domain.TemplateRunWaitingApproval {
+				env.SignalWorkflow(domain.CancelSignalName, domain.CancelSignal{
 					RequestedBy: requesterSubject,
 					Reason:      "superseded",
 				})
@@ -398,22 +398,22 @@ func TestTemplateRunWorkflowCancelsDestroyWhileWaitingApproval(t *testing.T) {
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 
 	assertWorkflowCompleted(t, env)
-	want := []traits.TemplateRunStatus{
-		traits.TemplateRunLocked,
-		traits.TemplateRunWorkspacePrepared,
-		traits.TemplateRunSourceFetched,
-		traits.TemplateRunInitStarted,
-		traits.TemplateRunInitFinished,
-		traits.TemplateRunWorkspaceSelected,
-		traits.TemplateRunWaitingApproval,
-		traits.TemplateRunCanceled,
+	want := []domain.TemplateRunStatus{
+		domain.TemplateRunLocked,
+		domain.TemplateRunWorkspacePrepared,
+		domain.TemplateRunSourceFetched,
+		domain.TemplateRunInitStarted,
+		domain.TemplateRunInitFinished,
+		domain.TemplateRunWorkspaceSelected,
+		domain.TemplateRunWaitingApproval,
+		domain.TemplateRunCanceled,
 	}
 	if !reflect.DeepEqual(statuses, want) {
 		t.Fatalf("statuses = %#v, want %#v", statuses, want)
 	}
-	wantCommands := []traits.TerraformCommandType{
-		traits.TerraformCommandInit,
-		traits.TerraformCommandSelectWorkspace,
+	wantCommands := []domain.TerraformCommandType{
+		domain.TerraformCommandInit,
+		domain.TerraformCommandSelectWorkspace,
 	}
 	if !reflect.DeepEqual(commands, wantCommands) {
 		t.Fatalf("commands = %#v, want %#v", commands, wantCommands)
@@ -424,19 +424,19 @@ func TestTemplateRunWorkflowRecordsDestroyStatuses(t *testing.T) {
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(traits.OperationDestroy)
-	var statuses []traits.TemplateRunStatus
-	var commands []traits.TerraformCommandType
+	input := templateRunWorkflowInput(domain.OperationDestroy)
+	var statuses []domain.TemplateRunStatus
+	var commands []domain.TerraformCommandType
 	mockPrepareWorkspace(t, env)
 	mockFetchSource(t, env)
 	mockRunTerraform(t, env, &commands)
-	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRunStatusActivityInput) error {
 			statuses = append(statuses, activityInput.Status)
 			return nil
 		})
 	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow(traits.ApprovalSignalName, traits.ApprovalSignal{
+		env.SignalWorkflow(domain.ApprovalSignalName, domain.ApprovalSignal{
 			ApprovedBy: approverSubject,
 		})
 	}, 0)
@@ -444,27 +444,27 @@ func TestTemplateRunWorkflowRecordsDestroyStatuses(t *testing.T) {
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 
 	assertWorkflowCompleted(t, env)
-	want := []traits.TemplateRunStatus{
-		traits.TemplateRunLocked,
-		traits.TemplateRunWorkspacePrepared,
-		traits.TemplateRunSourceFetched,
-		traits.TemplateRunInitStarted,
-		traits.TemplateRunInitFinished,
-		traits.TemplateRunWorkspaceSelected,
-		traits.TemplateRunWaitingApproval,
-		traits.TemplateRunApproved,
-		traits.TemplateRunDestroyStarted,
-		traits.TemplateRunDestroyFinished,
-		traits.TemplateRunLockReleased,
-		traits.TemplateRunCompleted,
+	want := []domain.TemplateRunStatus{
+		domain.TemplateRunLocked,
+		domain.TemplateRunWorkspacePrepared,
+		domain.TemplateRunSourceFetched,
+		domain.TemplateRunInitStarted,
+		domain.TemplateRunInitFinished,
+		domain.TemplateRunWorkspaceSelected,
+		domain.TemplateRunWaitingApproval,
+		domain.TemplateRunApproved,
+		domain.TemplateRunDestroyStarted,
+		domain.TemplateRunDestroyFinished,
+		domain.TemplateRunLockReleased,
+		domain.TemplateRunCompleted,
 	}
 	if !reflect.DeepEqual(statuses, want) {
 		t.Fatalf("statuses = %#v, want %#v", statuses, want)
 	}
-	wantCommands := []traits.TerraformCommandType{
-		traits.TerraformCommandInit,
-		traits.TerraformCommandSelectWorkspace,
-		traits.TerraformCommandDestroy,
+	wantCommands := []domain.TerraformCommandType{
+		domain.TerraformCommandInit,
+		domain.TerraformCommandSelectWorkspace,
+		domain.TerraformCommandDestroy,
 	}
 	if !reflect.DeepEqual(commands, wantCommands) {
 		t.Fatalf("commands = %#v, want %#v", commands, wantCommands)
@@ -480,23 +480,23 @@ func TestTemplateRunWorkflowRejectsUnsupportedOperation(t *testing.T) {
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(traits.OperationType("migrate"))
+	input := templateRunWorkflowInput(domain.OperationType("migrate"))
 	var startedActivityNames []string
 	env.SetOnActivityStartedListener(func(activityInfo *activity.Info, _ context.Context, _ converter.EncodedValues) {
 		startedActivityNames = append(startedActivityNames, activityInfo.ActivityType.Name)
 	})
-	var statuses []traits.TemplateRunStatus
+	var statuses []domain.TemplateRunStatus
 	var summaries []string
-	var commands []traits.TerraformCommandType
+	var commands []domain.TerraformCommandType
 	prepared := false
-	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+	env.OnActivity(domain.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ domain.PrepareWorkspaceActivityInput) (domain.PrepareWorkspaceActivityOutput, error) {
 			prepared = true
-			return traits.PrepareWorkspaceActivityOutput{}, nil
+			return domain.PrepareWorkspaceActivityOutput{}, nil
 		})
 	mockRunTerraform(t, env, &commands)
-	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.TemplateRunStatusActivityInput) error {
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRunStatusActivityInput) error {
 			statuses = append(statuses, activityInput.Status)
 			summaries = append(summaries, activityInput.ErrorSummary)
 			return nil
@@ -520,14 +520,14 @@ func TestTemplateRunWorkflowRejectsUnsupportedOperation(t *testing.T) {
 	if len(commands) != 0 {
 		t.Fatalf("commands = %#v, want no terraform commands", commands)
 	}
-	want := []traits.TemplateRunStatus{traits.TemplateRunFailed}
+	want := []domain.TemplateRunStatus{domain.TemplateRunFailed}
 	if !reflect.DeepEqual(statuses, want) {
 		t.Fatalf("statuses = %#v, want %#v", statuses, want)
 	}
 	if !strings.Contains(summaries[0], "unsupported template run operation") {
 		t.Fatalf("error summary = %q, want the unsupported operation reason", summaries[0])
 	}
-	if !reflect.DeepEqual(startedActivityNames, []string{traits.RecordTemplateRunStatusActivityName}) {
+	if !reflect.DeepEqual(startedActivityNames, []string{domain.RecordTemplateRunStatusActivityName}) {
 		t.Fatalf("started activity names = %#v, want only status persistence without session creation", startedActivityNames)
 	}
 }
@@ -540,28 +540,28 @@ func newTemplateRunWorkflowTestEnvironment(t *testing.T) *testsuite.TestWorkflow
 	env.SetWorkerOptions(worker.Options{EnableSessionWorker: true})
 	env.RegisterWorkflow(TemplateRunWorkflow)
 	env.RegisterActivityWithOptions(
-		func(context.Context, traits.TemplateRunStatusActivityInput) error {
+		func(context.Context, domain.TemplateRunStatusActivityInput) error {
 			return nil
 		},
-		activity.RegisterOptions{Name: traits.RecordTemplateRunStatusActivityName},
+		activity.RegisterOptions{Name: domain.RecordTemplateRunStatusActivityName},
 	)
 	env.RegisterActivityWithOptions(
-		func(context.Context, traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
-			return traits.PrepareWorkspaceActivityOutput{}, nil
+		func(context.Context, domain.PrepareWorkspaceActivityInput) (domain.PrepareWorkspaceActivityOutput, error) {
+			return domain.PrepareWorkspaceActivityOutput{}, nil
 		},
-		activity.RegisterOptions{Name: traits.PrepareWorkspaceActivityName},
+		activity.RegisterOptions{Name: domain.PrepareWorkspaceActivityName},
 	)
 	env.RegisterActivityWithOptions(
-		func(context.Context, traits.FetchSourceActivityInput) (traits.FetchSourceActivityOutput, error) {
-			return traits.FetchSourceActivityOutput{}, nil
+		func(context.Context, domain.FetchSourceActivityInput) (domain.FetchSourceActivityOutput, error) {
+			return domain.FetchSourceActivityOutput{}, nil
 		},
-		activity.RegisterOptions{Name: traits.FetchSourceActivityName},
+		activity.RegisterOptions{Name: domain.FetchSourceActivityName},
 	)
 	env.RegisterActivityWithOptions(
-		func(context.Context, traits.RunTerraformActivityInput) error {
+		func(context.Context, domain.RunTerraformActivityInput) error {
 			return nil
 		},
-		activity.RegisterOptions{Name: traits.RunTerraformActivityName},
+		activity.RegisterOptions{Name: domain.RunTerraformActivityName},
 	)
 	return env
 }
@@ -569,32 +569,32 @@ func newTemplateRunWorkflowTestEnvironment(t *testing.T) *testsuite.TestWorkflow
 func mockPrepareWorkspace(t *testing.T, env *testsuite.TestWorkflowEnvironment) {
 	t.Helper()
 
-	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
-		Return(traits.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123"}, nil)
+	env.OnActivity(domain.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(domain.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123"}, nil)
 }
 
 func mockFetchSource(t *testing.T, env *testsuite.TestWorkflowEnvironment) {
 	t.Helper()
 
-	env.OnActivity(traits.FetchSourceActivityName, mock.Anything, mock.Anything).
-		Return(traits.FetchSourceActivityOutput{TerraformPath: "/tmp/tflive/runs/tenant_123/run_123/source/modules/vpc"}, nil)
+	env.OnActivity(domain.FetchSourceActivityName, mock.Anything, mock.Anything).
+		Return(domain.FetchSourceActivityOutput{TerraformPath: "/tmp/tflive/runs/tenant_123/run_123/source/modules/vpc"}, nil)
 }
 
-func mockRunTerraform(t *testing.T, env *testsuite.TestWorkflowEnvironment, commands *[]traits.TerraformCommandType) {
+func mockRunTerraform(t *testing.T, env *testsuite.TestWorkflowEnvironment, commands *[]domain.TerraformCommandType) {
 	t.Helper()
 
-	env.OnActivity(traits.RunTerraformActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.RunTerraformActivityInput) error {
+	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.RunTerraformActivityInput) error {
 			*commands = append(*commands, activityInput.Command)
 			return nil
 		})
 }
 
-func templateRunWorkflowInput(operation traits.OperationType) traits.TemplateRunWorkflowInput {
-	return traits.TemplateRunWorkflowInput{
-		RunID:           traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
+func templateRunWorkflowInput(operation domain.OperationType) domain.TemplateRunWorkflowInput {
+	return domain.TemplateRunWorkflowInput{
+		RunID:           domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
 		Operation:       operation,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
@@ -625,16 +625,16 @@ func TestTemplateRunWorkflowExhaustsRetriesOnTransientActivityError(t *testing.T
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(traits.OperationPlan)
+	input := templateRunWorkflowInput(domain.OperationPlan)
 
 	var prepareAttempts int
-	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+	env.OnActivity(domain.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ domain.PrepareWorkspaceActivityInput) (domain.PrepareWorkspaceActivityOutput, error) {
 			prepareAttempts++
-			return traits.PrepareWorkspaceActivityOutput{}, errors.New("connection reset")
+			return domain.PrepareWorkspaceActivityOutput{}, errors.New("connection reset")
 		})
 
-	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
 
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 
@@ -653,20 +653,20 @@ func TestTemplateRunWorkflowStopsOnNonRetryableError(t *testing.T) {
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(traits.OperationPlan)
+	input := templateRunWorkflowInput(domain.OperationPlan)
 
 	var prepareAttempts int
-	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
+	env.OnActivity(domain.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ domain.PrepareWorkspaceActivityInput) (domain.PrepareWorkspaceActivityOutput, error) {
 			prepareAttempts++
-			return traits.PrepareWorkspaceActivityOutput{}, temporal.NewNonRetryableApplicationError(
+			return domain.PrepareWorkspaceActivityOutput{}, temporal.NewNonRetryableApplicationError(
 				"invalid configuration",
 				"InvalidConfig",
 				nil,
 			)
 		})
 
-	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
 
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 
@@ -685,18 +685,18 @@ func TestTemplateRunWorkflowPersistsFailedStatusAfterActivityError(t *testing.T)
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(traits.OperationPlan)
-	var statuses []traits.TemplateRunStatusActivityInput
-	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
-			return traits.PrepareWorkspaceActivityOutput{}, temporal.NewNonRetryableApplicationError(
+	input := templateRunWorkflowInput(domain.OperationPlan)
+	var statuses []domain.TemplateRunStatusActivityInput
+	env.OnActivity(domain.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ domain.PrepareWorkspaceActivityInput) (domain.PrepareWorkspaceActivityOutput, error) {
+			return domain.PrepareWorkspaceActivityOutput{}, temporal.NewNonRetryableApplicationError(
 				"invalid configuration",
 				"InvalidConfig",
 				nil,
 			)
 		})
-	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, status traits.TemplateRunStatusActivityInput) error {
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, status domain.TemplateRunStatusActivityInput) error {
 			statuses = append(statuses, status)
 			return nil
 		})
@@ -709,7 +709,7 @@ func TestTemplateRunWorkflowPersistsFailedStatusAfterActivityError(t *testing.T)
 	if err := env.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "invalid configuration") {
 		t.Fatalf("workflow error = %v, want invalid configuration", err)
 	}
-	if len(statuses) == 0 || statuses[len(statuses)-1].Status != traits.TemplateRunFailed {
+	if len(statuses) == 0 || statuses[len(statuses)-1].Status != domain.TemplateRunFailed {
 		t.Fatalf("final statuses = %#v, want failed", statuses)
 	}
 	if !strings.Contains(statuses[len(statuses)-1].ErrorSummary, "invalid configuration") {
@@ -721,18 +721,18 @@ func TestTemplateRunWorkflowPreservesActivityErrorWhenFailurePersistenceFails(t 
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(traits.OperationPlan)
-	env.OnActivity(traits.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
-			return traits.PrepareWorkspaceActivityOutput{}, temporal.NewNonRetryableApplicationError(
+	input := templateRunWorkflowInput(domain.OperationPlan)
+	env.OnActivity(domain.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ domain.PrepareWorkspaceActivityInput) (domain.PrepareWorkspaceActivityOutput, error) {
+			return domain.PrepareWorkspaceActivityOutput{}, temporal.NewNonRetryableApplicationError(
 				"invalid configuration",
 				"InvalidConfig",
 				nil,
 			)
 		})
-	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, status traits.TemplateRunStatusActivityInput) error {
-			if status.Status == traits.TemplateRunFailed {
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, status domain.TemplateRunStatusActivityInput) error {
+			if status.Status == domain.TemplateRunFailed {
 				return errors.New("status database unavailable")
 			}
 			return nil
@@ -757,22 +757,22 @@ func TestTemplateRunWorkflowExhaustsRetriesOnTerraformError(t *testing.T) {
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(traits.OperationPlan)
+	input := templateRunWorkflowInput(domain.OperationPlan)
 
 	mockPrepareWorkspace(t, env)
 	mockFetchSource(t, env)
 
 	var planAttempts int
-	env.OnActivity(traits.RunTerraformActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.RunTerraformActivityInput) error {
-			if activityInput.Command == traits.TerraformCommandPlan {
+	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.RunTerraformActivityInput) error {
+			if activityInput.Command == domain.TerraformCommandPlan {
 				planAttempts++
 				return errors.New("rate limit exceeded")
 			}
 			return nil
 		})
 
-	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
 
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 
@@ -791,16 +791,16 @@ func TestTemplateRunWorkflowNonRetryableTerraformError(t *testing.T) {
 	t.Parallel()
 
 	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(traits.OperationPlan)
+	input := templateRunWorkflowInput(domain.OperationPlan)
 
 	mockPrepareWorkspace(t, env)
 	mockFetchSource(t, env)
 
 	var terraformAttempts int
-	env.OnActivity(traits.RunTerraformActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.RunTerraformActivityInput) error {
+	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.RunTerraformActivityInput) error {
 			terraformAttempts++
-			if activityInput.Command == traits.TerraformCommandPlan {
+			if activityInput.Command == domain.TerraformCommandPlan {
 				return temporal.NewNonRetryableApplicationError(
 					"unsupported terraform command",
 					"UnsupportedCommand",
@@ -810,7 +810,7 @@ func TestTemplateRunWorkflowNonRetryableTerraformError(t *testing.T) {
 			return nil
 		})
 
-	env.OnActivity(traits.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
 
 	env.ExecuteWorkflow(TemplateRunWorkflow, input)
 

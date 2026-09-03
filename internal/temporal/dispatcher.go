@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 )
@@ -34,7 +34,7 @@ func newDispatcher(temporalClient workflowClient, taskQueue string) *Dispatcher 
 // The workflow ID is derived from tenant ID and run ID so repeated callers target
 // the same logical run, and the configured task queue determines which workers
 // can pick up the workflow and its activities.
-func (dispatcher *Dispatcher) StartTemplateRun(ctx context.Context, input traits.TemplateRunWorkflowInput) error {
+func (dispatcher *Dispatcher) StartTemplateRun(ctx context.Context, input domain.TemplateRunWorkflowInput) error {
 	_, err := dispatcher.client.ExecuteWorkflow(
 		ctx,
 		client.StartWorkflowOptions{
@@ -43,7 +43,7 @@ func (dispatcher *Dispatcher) StartTemplateRun(ctx context.Context, input traits
 			WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 			WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
 		},
-		traits.TemplateRunWorkflowName,
+		domain.TemplateRunWorkflowName,
 		input)
 	if err != nil {
 		return fmt.Errorf("start template run workflow: %w", err)
@@ -53,14 +53,14 @@ func (dispatcher *Dispatcher) StartTemplateRun(ctx context.Context, input traits
 }
 
 // StartTemplateSync dispatches one TemplateSyncWorkflow execution to Temporal.
-func (dispatcher *Dispatcher) StartTemplateSync(ctx context.Context, input traits.TemplateSyncWorkflowInput) error {
+func (dispatcher *Dispatcher) StartTemplateSync(ctx context.Context, input domain.TemplateSyncWorkflowInput) error {
 	_, err := dispatcher.client.ExecuteWorkflow(
 		ctx,
 		client.StartWorkflowOptions{
 			ID:        templateSyncWorkflowID(input.TenantID, input.RegistrationID),
 			TaskQueue: dispatcher.taskQueue,
 		},
-		traits.TemplateSyncWorkflowName,
+		domain.TemplateSyncWorkflowName,
 		input)
 	if err != nil {
 		return fmt.Errorf("start template sync workflow: %w", err)
@@ -71,15 +71,15 @@ func (dispatcher *Dispatcher) StartTemplateSync(ctx context.Context, input trait
 
 func (dispatcher *Dispatcher) ApproveTemplateRun(
 	ctx context.Context,
-	tenantID traits.TenantID,
-	runID traits.TemplateRunID,
-	signal traits.ApprovalSignal,
+	tenantID domain.TenantID,
+	runID domain.TemplateRunID,
+	signal domain.ApprovalSignal,
 ) error {
 	if err := dispatcher.client.SignalWorkflow(
 		ctx,
 		templateRunWorkflowID(tenantID, runID),
 		"",
-		traits.ApprovalSignalName,
+		domain.ApprovalSignalName,
 		signal,
 	); err != nil {
 		return fmt.Errorf("signal template run approval: %w", err)
@@ -90,15 +90,15 @@ func (dispatcher *Dispatcher) ApproveTemplateRun(
 
 func (dispatcher *Dispatcher) CancelTemplateRun(
 	ctx context.Context,
-	tenantID traits.TenantID,
-	runID traits.TemplateRunID,
-	signal traits.CancelSignal,
+	tenantID domain.TenantID,
+	runID domain.TemplateRunID,
+	signal domain.CancelSignal,
 ) error {
 	if err := dispatcher.client.SignalWorkflow(
 		ctx,
 		templateRunWorkflowID(tenantID, runID),
 		"",
-		traits.CancelSignalName,
+		domain.CancelSignalName,
 		signal,
 	); err != nil {
 		return fmt.Errorf("signal template run cancellation: %w", err)
@@ -107,10 +107,10 @@ func (dispatcher *Dispatcher) CancelTemplateRun(
 	return nil
 }
 
-func templateRunWorkflowID(tenantID traits.TenantID, runID traits.TemplateRunID) string {
+func templateRunWorkflowID(tenantID domain.TenantID, runID domain.TemplateRunID) string {
 	return fmt.Sprintf("template-run/%s/%s", tenantID, runID)
 }
 
-func templateSyncWorkflowID(tenantID traits.TenantID, registrationID traits.TemplateRegistrationID) string {
+func templateSyncWorkflowID(tenantID domain.TenantID, registrationID domain.TemplateRegistrationID) string {
 	return fmt.Sprintf("template-sync/%s/%s", tenantID, registrationID)
 }

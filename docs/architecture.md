@@ -225,7 +225,7 @@ cmd/
   tflive-worker/
 
 internal/
-  traits/
+  domain/
   app/
   api/
   auth/
@@ -249,7 +249,7 @@ Package ownership:
 
 - `cmd/tflive-api`: API server boot, config loading, dependency wiring, and HTTP server startup.
 - `cmd/tflive-worker`: worker boot, config loading, Temporal worker registration, outbox-dispatch lifecycle, and activity dependency wiring.
-- `internal/traits`: shared product and workflow traits, including IDs, statuses, operation types, validation helpers, entities such as `Tenant`, `Template`, `Stack`, `StackTemplate`, `TemplateRun`, `StackRun`, and `CredentialSet`, plus Temporal workflow payloads, signal names, query names, and constants. Keep this package focused on stable cross-boundary data contracts; concrete behavior and side effects belong in the packages that own them.
+- `internal/domain`: the product's core entities and shared contracts, including IDs, statuses, operation types, validation helpers, entities such as `Tenant`, `Template`, `Stack`, `StackTemplate`, `TemplateRun`, `StackRun`, and `CredentialSet`, plus Temporal workflow payloads, signal names, query names, and constants. Keep this package focused on stable cross-boundary data contracts; concrete behavior and side effects belong in the packages that own them.
 - `internal/app`: application use cases such as creating stacks, registering templates, adding templates to stacks, starting runs, approving runs, canceling runs, listing runs, and fetching log metadata. This package owns use-case interfaces for persistence, workflow dispatch, events, locks, artifacts, and secrets; concrete adapters implement those interfaces outside `app`.
 - `internal/api`: HTTP handlers, request and response DTOs, routing, SSE endpoints, API validation, and mapping API input into app commands.
 - `internal/auth`: mock identity for MVP, tenant/user context extraction, and the future authentication boundary.
@@ -270,14 +270,14 @@ Package ownership:
 
 Temporal workflows should stay thin and deterministic. Workflows decide sequence; activities perform side effects through interfaces.
 
-Workflow code may import `traits` and Temporal SDK packages, but it should not import concrete adapters such as `postgres`, `githubapp`, `secrets`, `artifacts`, or `logsink`.
+Workflow code may import `domain` and Temporal SDK packages, but it should not import concrete adapters such as `postgres`, `githubapp`, `secrets`, `artifacts`, or `logsink`.
 
 Package dataflow:
 
 ```text
-                   shared product and workflow traits
+                   core entities and shared contracts
                       +----------------------+
-                      | internal/traits      |
+                      | internal/domain      |
                       +----------+-----------+
                                  ^
                                  |

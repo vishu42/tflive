@@ -7,7 +7,7 @@ import (
 
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 func requirePrincipal(ctx context.Context) (authn.Principal, error) {
@@ -99,7 +99,7 @@ func checkPlatform(ctx context.Context, authorizer authz.Authorizer, relation au
 //	principal holds platform admin, any stack                  → nil (from the model)
 //	stackID = "bad:id"                                         → denied
 //	OpenFGA unreachable                                        → authz.ErrUnavailable
-func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID, relation authz.Relation, denied error) error {
+func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID domain.StackID, relation authz.Relation, denied error) error {
 	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
 	if err != nil {
 		return err
@@ -125,7 +125,7 @@ func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID tr
 	return nil
 }
 
-func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repository StackRepository, tenantID traits.TenantID) ([]traits.Stack, error) {
+func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repository StackRepository, tenantID domain.TenantID) ([]domain.Stack, error) {
 	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
 	if err != nil {
 		return nil, err
@@ -146,7 +146,7 @@ func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repo
 	}
 	const pageSize = 50
 	var cursor *StackPageCursor
-	var accessible []traits.Stack
+	var accessible []domain.Stack
 	for {
 		candidates, err := repository.ListStacksPage(ctx, tenantID, cursor, pageSize)
 		if err != nil {
@@ -158,7 +158,7 @@ func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repo
 		if len(candidates) > pageSize {
 			return nil, fmt.Errorf("%w: stack candidate page exceeds limit", authz.ErrMalformedResponse)
 		}
-		if cursor != nil && !stackPageOrderBefore(traits.Stack{ID: cursor.ID, CreatedAt: cursor.CreatedAt}, candidates[0]) {
+		if cursor != nil && !stackPageOrderBefore(domain.Stack{ID: cursor.ID, CreatedAt: cursor.CreatedAt}, candidates[0]) {
 			return nil, fmt.Errorf("%w: stack candidate page did not advance", authz.ErrMalformedResponse)
 		}
 		for i := 1; i < len(candidates); i++ {
@@ -198,33 +198,33 @@ func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repo
 	}
 }
 
-func stackPageOrderBefore(left, right traits.Stack) bool {
+func stackPageOrderBefore(left, right domain.Stack) bool {
 	if !left.CreatedAt.Equal(right.CreatedAt) {
 		return left.CreatedAt.After(right.CreatedAt)
 	}
 	return left.ID > right.ID
 }
 
-func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID, relation authz.Relation, denied error) (traits.StackTemplate, error) {
+func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID, relation authz.Relation, denied error) (domain.StackTemplate, error) {
 	// Fails an unauthenticated or unconfigured request before the repository
 	// read; authorizeStack below re-derives the principal for the Check.
 	if _, err := requirePrincipalAndAuthorizer(ctx, service.Authorizer); err != nil {
-		return traits.StackTemplate{}, err
+		return domain.StackTemplate{}, err
 	}
 	stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, tenantID, stackTemplateID)
 	if errors.Is(err, ErrNotFound) {
-		return traits.StackTemplate{}, denied
+		return domain.StackTemplate{}, denied
 	}
 	if err != nil {
-		return traits.StackTemplate{}, err
+		return domain.StackTemplate{}, err
 	}
 	if _, err := authz.ObjectFromID(authz.TypeStack, string(stackTemplate.StackID)); errors.Is(err, authz.ErrInvalidInput) {
-		return traits.StackTemplate{}, fmt.Errorf("%w: stack template has invalid owning stack ID", authz.ErrMalformedResponse)
+		return domain.StackTemplate{}, fmt.Errorf("%w: stack template has invalid owning stack ID", authz.ErrMalformedResponse)
 	} else if err != nil {
-		return traits.StackTemplate{}, err
+		return domain.StackTemplate{}, err
 	}
 	if err := authorizeStack(ctx, service.Authorizer, stackTemplate.StackID, relation, denied); err != nil {
-		return traits.StackTemplate{}, err
+		return domain.StackTemplate{}, err
 	}
 	return stackTemplate, nil
 }
@@ -235,16 +235,16 @@ func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID tr
 // with ErrNotFound and write no audit event.
 func (service *Service) operableStackTemplate(
 	ctx context.Context,
-	actor traits.UserID,
-	tenantID traits.TenantID,
-	stackTemplateID traits.StackTemplateID,
-) (traits.StackTemplate, error) {
+	actor domain.UserID,
+	tenantID domain.TenantID,
+	stackTemplateID domain.StackTemplateID,
+) (domain.StackTemplate, error) {
 	stackTemplate, err := service.authorizedStackTemplate(ctx, tenantID, stackTemplateID, authz.RelationCanOperate, ErrForbidden)
 	if err != nil {
 		// No StackID: the refusal can precede resolving which stack owns the
 		// template, so naming one here would sometimes be a guess.
 		service.auditFailedAccess(ctx, actor, tenantID, "")
-		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
+		return domain.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
 	}
 	return stackTemplate, nil
 }
@@ -346,7 +346,7 @@ func batchCheckObject(
 	return result.Results, nil
 }
 
-func ResolveStackCapabilities(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID) (StackCapabilities, error) {
+func ResolveStackCapabilities(ctx context.Context, authorizer authz.Authorizer, stackID domain.StackID) (StackCapabilities, error) {
 	// Checked before the stack ID is parsed, so an anonymous caller still gets
 	// ErrUnauthenticated rather than a complaint about the ID. batchCheckObject
 	// repeats this; it is a pure read of the context.
@@ -364,9 +364,9 @@ func ResolveStackCapabilities(ctx context.Context, authorizer authz.Authorizer, 
 	return stackCapabilitiesFrom(results), nil
 }
 
-func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer, stacks []traits.Stack) (map[traits.StackID]StackCapabilities, error) {
+func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer, stacks []domain.Stack) (map[domain.StackID]StackCapabilities, error) {
 	if len(stacks) == 0 {
-		return map[traits.StackID]StackCapabilities{}, nil
+		return map[domain.StackID]StackCapabilities{}, nil
 	}
 	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
 	if err != nil {
@@ -381,7 +381,7 @@ func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer,
 	// tenant into one.
 	if administrator {
 		all := StackCapabilities{CanView: true, CanOperate: true, CanApprove: true, CanManageAccess: true}
-		result := make(map[traits.StackID]StackCapabilities, len(stacks))
+		result := make(map[domain.StackID]StackCapabilities, len(stacks))
 		for _, s := range stacks {
 			result[s.ID] = all
 		}
@@ -411,7 +411,7 @@ func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer,
 	// One stack's relations occupy one contiguous run, in the order they were
 	// appended above, so each run decodes with the same function the
 	// single-stack resolver uses.
-	caps := make(map[traits.StackID]StackCapabilities, len(stacks))
+	caps := make(map[domain.StackID]StackCapabilities, len(stacks))
 	for i, s := range stacks {
 		base := i * len(stackCapabilityRelations)
 		caps[s.ID] = stackCapabilitiesFrom(result.Results[base : base+len(stackCapabilityRelations)])
@@ -419,19 +419,19 @@ func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer,
 	return caps, nil
 }
 
-func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, relation authz.Relation, denied error) (traits.TemplateRun, error) {
+func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, relation authz.Relation, denied error) (domain.TemplateRun, error) {
 	if _, err := requirePrincipalAndAuthorizer(ctx, service.Authorizer); err != nil {
-		return traits.TemplateRun{}, err
+		return domain.TemplateRun{}, err
 	}
 	run, err := service.TemplateRuns.GetTemplateRun(ctx, tenantID, runID)
 	if errors.Is(err, ErrNotFound) {
-		return traits.TemplateRun{}, denied
+		return domain.TemplateRun{}, denied
 	}
 	if err != nil {
-		return traits.TemplateRun{}, err
+		return domain.TemplateRun{}, err
 	}
 	if _, err := service.authorizedStackTemplate(ctx, tenantID, run.StackTemplateID, relation, denied); err != nil {
-		return traits.TemplateRun{}, err
+		return domain.TemplateRun{}, err
 	}
 	return run, nil
 }

@@ -183,20 +183,35 @@ textarea {
    between the element and the label, so without an explicit gap the glyph sits
    flush against the first letter. Flex also centres the icon against the cap
    height instead of dropping it to the text baseline. */
+/* One rule owns the spacing between a panel's children. Before this each panel
+   supplied its own — a margin on the list here, a trailing margin on the button
+   row there — so anything carrying none of its own collided with its neighbour:
+   .muted is margin: 0, which left the danger zone's warning flush against the
+   Destroy button.
+
+   :not(:first-child) rather than * + * so this outranks the margin: 0 that
+   utilities set on themselves — .muted is exactly that, and at equal
+   specificity it wins on source order and the gap silently vanishes. */
+.panel > :not(:first-child) {
+  margin-top: var(--space-4);
+}
+
+/* Headings keep the wider gap they had before that rule existed. The element
+   selector puts this one rung above the rule above, which it has to clear. */
+.panel > h2 + :not(:first-child) {
+  margin-top: var(--space-5);
+}
+
 .panel h2 {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin: 0 0 var(--space-5);
+  margin: 0;
   font-family: var(--font-body);
   font-weight: 600;
   font-size: var(--text-xl);
   letter-spacing: var(--tracking-tight);
   line-height: var(--leading-snug);
-}
-
-.panel > .secondary-button {
-  margin-top: var(--space-5);
 }
 
 /* Gradient border with no wrapper element: the card colour paints the

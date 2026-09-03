@@ -3,14 +3,14 @@ package runner
 import (
 	"fmt"
 
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 // CommandError identifies which Terraform command failed. Callers can recover
 // it with errors.As to branch on the failing command instead of parsing the
 // error message.
 type CommandError struct {
-	Command traits.TerraformCommandType
+	Command domain.TerraformCommandType
 	Err     error
 }
 

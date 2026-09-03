@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 var _ app.UnitOfWork = (*Store)(nil)
@@ -20,12 +20,12 @@ func TestInTxCommitsDomainWriteAndIntentTogether(t *testing.T) {
 	ctx := context.Background()
 	store, pool := newQueueStore(t, ctx)
 
-	stack := traits.Stack{
-		ID:        traits.StackID("stack_intx_ok"),
-		TenantID:  traits.TenantID("t1"),
+	stack := domain.Stack{
+		ID:        domain.StackID("stack_intx_ok"),
+		TenantID:  domain.TenantID("t1"),
 		Name:      "intx",
 		Slug:      "intx",
-		CreatedBy: traits.UserID("user:me"),
+		CreatedBy: domain.UserID("user:me"),
 		CreatedAt: time.Now().UTC(),
 	}
 
@@ -62,12 +62,12 @@ func TestInTxRollsBackBothOnError(t *testing.T) {
 	ctx := context.Background()
 	store, pool := newQueueStore(t, ctx)
 
-	stack := traits.Stack{
-		ID:        traits.StackID("stack_intx_rollback"),
-		TenantID:  traits.TenantID("t1"),
+	stack := domain.Stack{
+		ID:        domain.StackID("stack_intx_rollback"),
+		TenantID:  domain.TenantID("t1"),
 		Name:      "rollback",
 		Slug:      "rollback",
-		CreatedBy: traits.UserID("user:me"),
+		CreatedBy: domain.UserID("user:me"),
 		CreatedAt: time.Now().UTC(),
 	}
 	sentinel := errors.New("caller failed after enqueue")
@@ -108,14 +108,14 @@ func TestInTxWritesAuditEventTransactionally(t *testing.T) {
 	store, pool := newQueueStore(t, ctx)
 
 	err := store.InTx(ctx, func(repo app.TxRepo, enqueuer queue.Enqueuer) error {
-		if err := repo.AppendAuditEvent(ctx, traits.SecurityAuditEvent{
+		if err := repo.AppendAuditEvent(ctx, domain.SecurityAuditEvent{
 			ActorSubject: "user:me",
-			Action:       traits.AuditActionGrant,
+			Action:       domain.AuditActionGrant,
 			TargetUser:   "user:them",
-			TenantID:     traits.TenantID("t1"),
-			StackID:      traits.StackID("stack_audit"),
+			TenantID:     domain.TenantID("t1"),
+			StackID:      domain.StackID("stack_audit"),
 			NewRole:      "operator",
-			Outcome:      traits.AuditOutcomeSuccess,
+			Outcome:      domain.AuditOutcomeSuccess,
 		}); err != nil {
 			return err
 		}

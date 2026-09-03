@@ -8,48 +8,48 @@ import (
 
 	"go.temporal.io/api/serviceerror"
 
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 type recordingWorkflowIntentDispatcher struct {
-	startRunInput  traits.TemplateRunWorkflowInput
-	startSyncInput traits.TemplateSyncWorkflowInput
-	approval       traits.ApprovalSignal
-	cancellation   traits.CancelSignal
+	startRunInput  domain.TemplateRunWorkflowInput
+	startSyncInput domain.TemplateSyncWorkflowInput
+	approval       domain.ApprovalSignal
+	cancellation   domain.CancelSignal
 	startRunErr    error
 	startSyncErr   error
 	approvalErr    error
 	cancelErr      error
 }
 
-func (d *recordingWorkflowIntentDispatcher) StartTemplateRun(_ context.Context, input traits.TemplateRunWorkflowInput) error {
+func (d *recordingWorkflowIntentDispatcher) StartTemplateRun(_ context.Context, input domain.TemplateRunWorkflowInput) error {
 	d.startRunInput = input
 	return d.startRunErr
 }
 
-func (d *recordingWorkflowIntentDispatcher) StartTemplateSync(_ context.Context, input traits.TemplateSyncWorkflowInput) error {
+func (d *recordingWorkflowIntentDispatcher) StartTemplateSync(_ context.Context, input domain.TemplateSyncWorkflowInput) error {
 	d.startSyncInput = input
 	return d.startSyncErr
 }
 
-func (d *recordingWorkflowIntentDispatcher) ApproveTemplateRun(_ context.Context, _ traits.TenantID, _ traits.TemplateRunID, signal traits.ApprovalSignal) error {
+func (d *recordingWorkflowIntentDispatcher) ApproveTemplateRun(_ context.Context, _ domain.TenantID, _ domain.TemplateRunID, signal domain.ApprovalSignal) error {
 	d.approval = signal
 	return d.approvalErr
 }
 
-func (d *recordingWorkflowIntentDispatcher) CancelTemplateRun(_ context.Context, _ traits.TenantID, _ traits.TemplateRunID, signal traits.CancelSignal) error {
+func (d *recordingWorkflowIntentDispatcher) CancelTemplateRun(_ context.Context, _ domain.TenantID, _ domain.TemplateRunID, signal domain.CancelSignal) error {
 	d.cancellation = signal
 	return d.cancelErr
 }
 
 type recordingCancellationReconciler struct {
 	err     error
-	runID   traits.TemplateRunID
+	runID   domain.TemplateRunID
 	summary string
 }
 
-func (r *recordingCancellationReconciler) ReconcileTemplateRunCancellation(_ context.Context, _ traits.TenantID, runID traits.TemplateRunID, summary string) error {
+func (r *recordingCancellationReconciler) ReconcileTemplateRunCancellation(_ context.Context, _ domain.TenantID, runID domain.TemplateRunID, summary string) error {
 	r.runID = runID
 	r.summary = summary
 	return r.err
@@ -97,7 +97,7 @@ func TestSignalRunCancellationHandlerReconcilesNotFound(t *testing.T) {
 	dispatcher := &recordingWorkflowIntentDispatcher{cancelErr: serviceerror.NewNotFound("closed")}
 	reconciler := &recordingCancellationReconciler{}
 	handler := NewSignalRunCancellationHandler(dispatcher, reconciler)
-	payload := SignalRunCancellationPayload{TenantID: "tenant_1", RunID: "run_1", Signal: traits.CancelSignal{RequestedBy: "user_1", Reason: "stop"}}
+	payload := SignalRunCancellationPayload{TenantID: "tenant_1", RunID: "run_1", Signal: domain.CancelSignal{RequestedBy: "user_1", Reason: "stop"}}
 
 	followUps, err := handler.Deliver(context.Background(), queue.Item{Payload: marshalWorkflowIntentPayload(t, payload)})
 	if err != nil {

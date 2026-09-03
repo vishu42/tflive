@@ -1,5 +1,6 @@
 import type { Stack, StackTemplate, TemplateRevision, TemplateVariable } from "../../api/types";
 import { findSelectedID } from "../../shared/listSelection";
+import type { StatusTone } from "../../shared/statusTone";
 
 export function findSelectedStackTemplate(stackTemplates: StackTemplate[], selectedStackTemplateID: string): StackTemplate | null {
   return findSelectedID(stackTemplates, selectedStackTemplateID);
@@ -7,7 +8,7 @@ export function findSelectedStackTemplate(stackTemplates: StackTemplate[], selec
 
 export function stackTemplateLabel(stackTemplate: StackTemplate): string {
   const name = stackTemplate.display_name || stackTemplate.workspace_name;
-  return `${name} @ ${stackTemplate.source_ref} (${stackTemplate.lifecycle})`;
+  return `${name} @ ${stackTemplate.source_ref}`;
 }
 
 export function canUpgradeStackTemplate(stackTemplate: StackTemplate | null, templateRevision: TemplateRevision | null): boolean {
@@ -127,7 +128,74 @@ export function planStaleReason(stackTemplate: StackTemplate | null): string {
   if (stackTemplate?.plan_state !== "stale") {
     return "";
   }
-  return "Config or revision changed since this plan — re-plan before applying";
+  return "Config or revision changed since this plan - re-plan before applying";
+}
+
+export interface StackTemplateStatus {
+  label: string;
+  tone: StatusTone;
+  /** What the state means, for the detail panel. The list row shows only the
+      icon, so this is where the vocabulary is actually taught. */
+  description: string;
+}
+
+// stackTemplateStatus answers "is desired state live?" for one row of the list.
+// It is deliberately a projection of live_state alone: plan_state answers a
+// different question — "can I act now?" — and the Apply button already carries
+// that, with planStaleReason putting the reason on the disabled control.
+//
+// lifecycle is read first because a template being torn down keeps the
+// last_applied_* pointers of the apply that put it live, so live_state would
+// report a destroying template as applied.
+//
+// The tone is returned rather than derived through statusTone(): that helper
+// classifies API status strings, and would read "changed" and "destroying" as
+// settled.
+export function stackTemplateStatus(stackTemplate: StackTemplate): StackTemplateStatus {
+  if (stackTemplate.lifecycle === "destroying") {
+    return {
+      label: "destroying",
+      tone: "progress",
+      description: "A destroy run is tearing this template's resources down."
+    };
+  }
+  // Only an interrupted destroy sets this lifecycle — a failed apply leaves the
+  // template active — so the label says destroy rather than claiming the
+  // infrastructure itself failed.
+  if (stackTemplate.lifecycle === "failed") {
+    return {
+      label: "destroy failed",
+      tone: "failed",
+      description: "A destroy run stopped before it finished. Some resources may still exist."
+    };
+  }
+  switch (stackTemplate.live_state) {
+    case "matches":
+      // The last apply's intent equals desired. It does not claim reality still
+      // matches — that is drift, and it needs a refresh to observe — so this
+      // says applied rather than in sync.
+      return {
+        label: "applied",
+        tone: "settled",
+        description: "The last apply ran the revision and config that are desired now."
+      };
+    case "differs":
+      // Live infrastructure no longer matches what was asked for, so this is
+      // the one row state that wants attention. It keeps the warning tone and
+      // "not applied" takes a muted one: a template nobody has applied yet is
+      // not a problem to be drawn to.
+      return {
+        label: "changed",
+        tone: "waiting",
+        description: "The revision or config changed after the last apply. Plan, then apply, to bring it live."
+      };
+    default:
+      return {
+        label: "not applied",
+        tone: "canceled",
+        description: "Nothing has been applied yet, so this template has no live resources."
+      };
+  }
 }
 
 function areStringRecordEqual(left: Record<string, string>, right: Record<string, string>): boolean {

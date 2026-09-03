@@ -14,13 +14,13 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/config"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 func TestLogKeyScopesByTenantRunAndPhase(t *testing.T) {
 	t.Parallel()
 
-	key, err := LogKey(traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"), "plan")
+	key, err := LogKey(domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"), "plan")
 	if err != nil {
 		t.Fatalf("LogKey returned error: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestLogKeyScopesByTenantRunAndPhase(t *testing.T) {
 func TestLogKeyRejectsUnsafeComponents(t *testing.T) {
 	t.Parallel()
 
-	_, err := LogKey(traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"), "../plan")
+	_, err := LogKey(domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"), "../plan")
 	if err == nil {
 		t.Fatal("LogKey returned nil error for unsafe phase")
 	}
@@ -92,12 +92,12 @@ func TestLogStoreReadsAndWritesPhaseLogs(t *testing.T) {
 	store := NewLogStore(NewFilesystemStore(t.TempDir()))
 	ctx := context.Background()
 
-	err := store.PutTemplateRunLog(ctx, traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"), "plan", strings.NewReader("plan output\n"))
+	err := store.PutTemplateRunLog(ctx, domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"), "plan", strings.NewReader("plan output\n"))
 	if err != nil {
 		t.Fatalf("PutTemplateRunLog returned error: %v", err)
 	}
 
-	content, err := store.ReadTemplateRunLog(ctx, traits.TemplateRunLog{
+	content, err := store.ReadTemplateRunLog(ctx, domain.TemplateRunLog{
 		ObjectKey: "tenants/tenant_123/runs/run_123/logs/plan.log",
 	})
 	if err != nil {
@@ -117,14 +117,14 @@ func TestLogStoreRecordsMetadataAfterWritingPhaseLog(t *testing.T) {
 		return time.Date(2026, 7, 6, 10, 15, 0, 0, time.UTC)
 	}
 
-	err := store.PutTemplateRunLog(context.Background(), traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"), "plan", strings.NewReader("plan output\n"))
+	err := store.PutTemplateRunLog(context.Background(), domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"), "plan", strings.NewReader("plan output\n"))
 	if err != nil {
 		t.Fatalf("PutTemplateRunLog returned error: %v", err)
 	}
 
-	want := traits.TemplateRunLog{
-		TenantID:    traits.TenantID("tenant_123"),
-		RunID:       traits.TemplateRunID("run_123"),
+	want := domain.TemplateRunLog{
+		TenantID:    domain.TenantID("tenant_123"),
+		RunID:       domain.TemplateRunID("run_123"),
 		Phase:       "plan",
 		ObjectKey:   "tenants/tenant_123/runs/run_123/logs/plan.log",
 		ContentType: "text/plain; charset=utf-8",
@@ -176,11 +176,11 @@ func TestS3StorePutsAndGetsObject(t *testing.T) {
 }
 
 type recordingLogMetadataRecorder struct {
-	log traits.TemplateRunLog
+	log domain.TemplateRunLog
 	err error
 }
 
-func (recorder *recordingLogMetadataRecorder) RecordTemplateRunLog(_ context.Context, log traits.TemplateRunLog) error {
+func (recorder *recordingLogMetadataRecorder) RecordTemplateRunLog(_ context.Context, log domain.TemplateRunLog) error {
 	recorder.log = log
 	return recorder.err
 }

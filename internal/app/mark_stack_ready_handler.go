@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 // KindMarkStackReady records that a stack has finished provisioning. It is the
@@ -59,7 +59,7 @@ func (handler *MarkStackReadyHandler) Deliver(ctx context.Context, item queue.It
 	if err := json.Unmarshal(item.Payload, &parsed); err != nil {
 		return nil, fmt.Errorf("decode mark stack ready payload: %w", err)
 	}
-	if err := handler.provisioner.MarkStackReady(ctx, traits.TenantID(parsed.TenantID), traits.StackID(parsed.StackID)); err != nil {
+	if err := handler.provisioner.MarkStackReady(ctx, domain.TenantID(parsed.TenantID), domain.StackID(parsed.StackID)); err != nil {
 		return nil, err
 	}
 	return nil, nil

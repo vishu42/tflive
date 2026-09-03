@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/config"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 const logContentType = "text/plain; charset=utf-8"
@@ -29,7 +29,7 @@ type ObjectStore interface {
 }
 
 type LogMetadataRecorder interface {
-	RecordTemplateRunLog(ctx context.Context, log traits.TemplateRunLog) error
+	RecordTemplateRunLog(ctx context.Context, log domain.TemplateRunLog) error
 }
 
 type LogStore struct {
@@ -46,7 +46,7 @@ func NewRecordedLogStore(store ObjectStore, recorder LogMetadataRecorder) LogSto
 	return LogStore{store: store, recorder: recorder, now: time.Now}
 }
 
-func (store LogStore) PutTemplateRunLog(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, phase string, body io.Reader) error {
+func (store LogStore) PutTemplateRunLog(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string, body io.Reader) error {
 	key, err := LogKey(tenantID, runID, phase)
 	if err != nil {
 		return err
@@ -64,7 +64,7 @@ func (store LogStore) PutTemplateRunLog(ctx context.Context, tenantID traits.Ten
 		if now == nil {
 			now = time.Now
 		}
-		log := traits.TemplateRunLog{
+		log := domain.TemplateRunLog{
 			TenantID:    tenantID,
 			RunID:       runID,
 			Phase:       phase,
@@ -80,7 +80,7 @@ func (store LogStore) PutTemplateRunLog(ctx context.Context, tenantID traits.Ten
 	return nil
 }
 
-func (store LogStore) ReadTemplateRunLog(ctx context.Context, log traits.TemplateRunLog) ([]byte, error) {
+func (store LogStore) ReadTemplateRunLog(ctx context.Context, log domain.TemplateRunLog) ([]byte, error) {
 	content, err := store.store.GetObject(ctx, log.ObjectKey)
 	if err != nil {
 		return nil, fmt.Errorf("get template run log: %w", err)
@@ -88,7 +88,7 @@ func (store LogStore) ReadTemplateRunLog(ctx context.Context, log traits.Templat
 	return content, nil
 }
 
-func LogKey(tenantID traits.TenantID, runID traits.TemplateRunID, phase string) (string, error) {
+func LogKey(tenantID domain.TenantID, runID domain.TemplateRunID, phase string) (string, error) {
 	if !safePathComponent(string(tenantID)) || !safePathComponent(string(runID)) || !safePathComponent(phase) {
 		return "", fmt.Errorf("tenant ID, run ID, and phase must be safe path components")
 	}

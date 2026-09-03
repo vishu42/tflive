@@ -8,14 +8,14 @@ import (
 	"testing"
 
 	"github.com/vishu42/tflive/internal/app"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 )
 
 const (
-	requesterSubject = traits.UserID("6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91")
-	approverSubject  = traits.UserID("cb4afba6-d18d-496f-80ce-8a50b94f09be")
+	requesterSubject = domain.UserID("6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91")
+	approverSubject  = domain.UserID("cb4afba6-d18d-496f-80ce-8a50b94f09be")
 )
 
 var _ app.WorkflowDispatcher = (*Dispatcher)(nil)
@@ -25,11 +25,11 @@ func TestStartTemplateRunExecutesWorkflow(t *testing.T) {
 
 	workflowClient := &recordingWorkflowClient{}
 	dispatcher := newDispatcher(workflowClient, "terraform-runs")
-	input := traits.TemplateRunWorkflowInput{
-		RunID:           traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationApply,
+	input := domain.TemplateRunWorkflowInput{
+		RunID:           domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 	}
@@ -50,7 +50,7 @@ func TestStartTemplateRunExecutesWorkflow(t *testing.T) {
 	if workflowClient.executeOptions.WorkflowIDConflictPolicy != enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING {
 		t.Fatalf("workflow ID conflict policy = %v, want use existing", workflowClient.executeOptions.WorkflowIDConflictPolicy)
 	}
-	if workflowClient.executeWorkflow != traits.TemplateRunWorkflowName {
+	if workflowClient.executeWorkflow != domain.TemplateRunWorkflowName {
 		t.Fatalf("workflow name = %#v", workflowClient.executeWorkflow)
 	}
 	if len(workflowClient.executeArgs) != 1 {
@@ -66,9 +66,9 @@ func TestStartTemplateSyncExecutesWorkflow(t *testing.T) {
 
 	workflowClient := &recordingWorkflowClient{}
 	dispatcher := newDispatcher(workflowClient, "terraform-runs")
-	input := traits.TemplateSyncWorkflowInput{
-		RegistrationID: traits.TemplateRegistrationID("template_registration_123"),
-		TenantID:       traits.TenantID("tenant_123"),
+	input := domain.TemplateSyncWorkflowInput{
+		RegistrationID: domain.TemplateRegistrationID("template_registration_123"),
+		TenantID:       domain.TenantID("tenant_123"),
 		RepoOwner:      "acme",
 		RepoName:       "infra-templates",
 		SourceRef:      "v0.0.1",
@@ -85,7 +85,7 @@ func TestStartTemplateSyncExecutesWorkflow(t *testing.T) {
 	if workflowClient.executeOptions.TaskQueue != "terraform-runs" {
 		t.Fatalf("task queue = %q", workflowClient.executeOptions.TaskQueue)
 	}
-	if workflowClient.executeWorkflow != traits.TemplateSyncWorkflowName {
+	if workflowClient.executeWorkflow != domain.TemplateSyncWorkflowName {
 		t.Fatalf("workflow name = %#v", workflowClient.executeWorkflow)
 	}
 	if len(workflowClient.executeArgs) != 1 {
@@ -101,12 +101,12 @@ func TestApproveTemplateRunSignalsWorkflow(t *testing.T) {
 
 	workflowClient := &recordingWorkflowClient{}
 	dispatcher := newDispatcher(workflowClient, "terraform-runs")
-	signal := traits.ApprovalSignal{ApprovedBy: approverSubject}
+	signal := domain.ApprovalSignal{ApprovedBy: approverSubject}
 
 	err := dispatcher.ApproveTemplateRun(
 		context.Background(),
-		traits.TenantID("tenant_123"),
-		traits.TemplateRunID("run_123"),
+		domain.TenantID("tenant_123"),
+		domain.TemplateRunID("run_123"),
 		signal,
 	)
 	if err != nil {
@@ -119,7 +119,7 @@ func TestApproveTemplateRunSignalsWorkflow(t *testing.T) {
 	if workflowClient.signalRunID != "" {
 		t.Fatalf("signal run ID = %q, want empty", workflowClient.signalRunID)
 	}
-	if workflowClient.signalName != traits.ApprovalSignalName {
+	if workflowClient.signalName != domain.ApprovalSignalName {
 		t.Fatalf("signal name = %q", workflowClient.signalName)
 	}
 	if !reflect.DeepEqual(workflowClient.signalArg, signal) {
@@ -132,15 +132,15 @@ func TestCancelTemplateRunSignalsWorkflow(t *testing.T) {
 
 	workflowClient := &recordingWorkflowClient{}
 	dispatcher := newDispatcher(workflowClient, "terraform-runs")
-	signal := traits.CancelSignal{
+	signal := domain.CancelSignal{
 		RequestedBy: requesterSubject,
 		Reason:      "superseded by a newer run",
 	}
 
 	err := dispatcher.CancelTemplateRun(
 		context.Background(),
-		traits.TenantID("tenant_123"),
-		traits.TemplateRunID("run_123"),
+		domain.TenantID("tenant_123"),
+		domain.TemplateRunID("run_123"),
 		signal,
 	)
 	if err != nil {
@@ -153,7 +153,7 @@ func TestCancelTemplateRunSignalsWorkflow(t *testing.T) {
 	if workflowClient.signalRunID != "" {
 		t.Fatalf("signal run ID = %q, want empty", workflowClient.signalRunID)
 	}
-	if workflowClient.signalName != traits.CancelSignalName {
+	if workflowClient.signalName != domain.CancelSignalName {
 		t.Fatalf("signal name = %q", workflowClient.signalName)
 	}
 	if !reflect.DeepEqual(workflowClient.signalArg, signal) {
@@ -167,9 +167,9 @@ func TestStartTemplateRunWrapsClientError(t *testing.T) {
 	clientErr := errors.New("temporal unavailable")
 	dispatcher := newDispatcher(&recordingWorkflowClient{executeErr: clientErr}, "terraform-runs")
 
-	err := dispatcher.StartTemplateRun(context.Background(), traits.TemplateRunWorkflowInput{
-		RunID:    traits.TemplateRunID("run_123"),
-		TenantID: traits.TenantID("tenant_123"),
+	err := dispatcher.StartTemplateRun(context.Background(), domain.TemplateRunWorkflowInput{
+		RunID:    domain.TemplateRunID("run_123"),
+		TenantID: domain.TenantID("tenant_123"),
 	})
 	if !errors.Is(err, clientErr) {
 		t.Fatalf("error = %v, want wrapped client error", err)
@@ -185,9 +185,9 @@ func TestStartTemplateSyncWrapsClientError(t *testing.T) {
 	clientErr := errors.New("temporal unavailable")
 	dispatcher := newDispatcher(&recordingWorkflowClient{executeErr: clientErr}, "terraform-runs")
 
-	err := dispatcher.StartTemplateSync(context.Background(), traits.TemplateSyncWorkflowInput{
-		RegistrationID: traits.TemplateRegistrationID("template_registration_123"),
-		TenantID:       traits.TenantID("tenant_123"),
+	err := dispatcher.StartTemplateSync(context.Background(), domain.TemplateSyncWorkflowInput{
+		RegistrationID: domain.TemplateRegistrationID("template_registration_123"),
+		TenantID:       domain.TenantID("tenant_123"),
 	})
 	if !errors.Is(err, clientErr) {
 		t.Fatalf("error = %v, want wrapped client error", err)
@@ -205,9 +205,9 @@ func TestApproveTemplateRunWrapsClientError(t *testing.T) {
 
 	err := dispatcher.ApproveTemplateRun(
 		context.Background(),
-		traits.TenantID("tenant_123"),
-		traits.TemplateRunID("run_123"),
-		traits.ApprovalSignal{ApprovedBy: approverSubject},
+		domain.TenantID("tenant_123"),
+		domain.TemplateRunID("run_123"),
+		domain.ApprovalSignal{ApprovedBy: approverSubject},
 	)
 	if !errors.Is(err, clientErr) {
 		t.Fatalf("error = %v, want wrapped client error", err)
@@ -225,9 +225,9 @@ func TestCancelTemplateRunWrapsClientError(t *testing.T) {
 
 	err := dispatcher.CancelTemplateRun(
 		context.Background(),
-		traits.TenantID("tenant_123"),
-		traits.TemplateRunID("run_123"),
-		traits.CancelSignal{RequestedBy: requesterSubject},
+		domain.TenantID("tenant_123"),
+		domain.TemplateRunID("run_123"),
+		domain.CancelSignal{RequestedBy: requesterSubject},
 	)
 	if !errors.Is(err, clientErr) {
 		t.Fatalf("error = %v, want wrapped client error", err)
@@ -240,7 +240,7 @@ func TestCancelTemplateRunWrapsClientError(t *testing.T) {
 func TestTemplateRunWorkflowID(t *testing.T) {
 	t.Parallel()
 
-	got := templateRunWorkflowID(traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"))
+	got := templateRunWorkflowID(domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"))
 	if got != "template-run/tenant_123/run_123" {
 		t.Fatalf("workflow ID = %q", got)
 	}
@@ -249,7 +249,7 @@ func TestTemplateRunWorkflowID(t *testing.T) {
 func TestTemplateSyncWorkflowID(t *testing.T) {
 	t.Parallel()
 
-	got := templateSyncWorkflowID(traits.TenantID("tenant_123"), traits.TemplateRegistrationID("template_registration_123"))
+	got := templateSyncWorkflowID(domain.TenantID("tenant_123"), domain.TemplateRegistrationID("template_registration_123"))
 	if got != "template-sync/tenant_123/template_registration_123" {
 		t.Fatalf("workflow ID = %q", got)
 	}

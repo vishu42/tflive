@@ -3,7 +3,7 @@ package workflows
 import (
 	"time"
 
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -23,7 +23,7 @@ var syncRetryPolicy = &temporal.RetryPolicy{
 	},
 }
 
-func TemplateSyncWorkflow(ctx workflow.Context, input traits.TemplateSyncWorkflowInput) error {
+func TemplateSyncWorkflow(ctx workflow.Context, input domain.TemplateSyncWorkflowInput) error {
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 5 * time.Minute,
 		RetryPolicy:         syncRetryPolicy,
@@ -34,16 +34,16 @@ func TemplateSyncWorkflow(ctx workflow.Context, input traits.TemplateSyncWorkflo
 		input: input,
 	}
 
-	if err := run.recordStatus(traits.TemplateRegistrationStatusActivityInput{
-		Status: traits.TemplateRegistrationRunning,
+	if err := run.recordStatus(domain.TemplateRegistrationStatusActivityInput{
+		Status: domain.TemplateRegistrationRunning,
 	}); err != nil {
 		return err
 	}
 
 	output, err := run.syncTemplate()
 	if err != nil {
-		if recordErr := run.recordStatus(traits.TemplateRegistrationStatusActivityInput{
-			Status:       traits.TemplateRegistrationFailed,
+		if recordErr := run.recordStatus(domain.TemplateRegistrationStatusActivityInput{
+			Status:       domain.TemplateRegistrationFailed,
 			ErrorSummary: err.Error(),
 		}); recordErr != nil {
 			return recordErr
@@ -53,9 +53,9 @@ func TemplateSyncWorkflow(ctx workflow.Context, input traits.TemplateSyncWorkflo
 
 	status := output.Status
 	if status == "" {
-		status = traits.TemplateRegistrationCompleted
+		status = domain.TemplateRegistrationCompleted
 	}
-	return run.recordStatus(traits.TemplateRegistrationStatusActivityInput{
+	return run.recordStatus(domain.TemplateRegistrationStatusActivityInput{
 		Status:             status,
 		TemplateRevisionID: output.TemplateRevisionID,
 		ResolvedCommitSHA:  output.ResolvedCommitSHA,
@@ -65,11 +65,11 @@ func TemplateSyncWorkflow(ctx workflow.Context, input traits.TemplateSyncWorkflo
 
 type templateSyncWorkflow struct {
 	ctx   workflow.Context
-	input traits.TemplateSyncWorkflowInput
+	input domain.TemplateSyncWorkflowInput
 }
 
-func (run *templateSyncWorkflow) syncTemplate() (traits.TemplateSyncActivityOutput, error) {
-	input := traits.TemplateSyncActivityInput{
+func (run *templateSyncWorkflow) syncTemplate() (domain.TemplateSyncActivityOutput, error) {
+	input := domain.TemplateSyncActivityInput{
 		RegistrationID: run.input.RegistrationID,
 		TenantID:       run.input.TenantID,
 		RepoOwner:      run.input.RepoOwner,
@@ -77,21 +77,21 @@ func (run *templateSyncWorkflow) syncTemplate() (traits.TemplateSyncActivityOutp
 		SourceRef:      run.input.SourceRef,
 		RootPath:       run.input.RootPath,
 	}
-	var output traits.TemplateSyncActivityOutput
+	var output domain.TemplateSyncActivityOutput
 	err := workflow.ExecuteActivity(
 		run.ctx,
-		traits.SyncTemplateActivityName,
+		domain.SyncTemplateActivityName,
 		input,
 	).Get(run.ctx, &output)
 	return output, err
 }
 
-func (run *templateSyncWorkflow) recordStatus(input traits.TemplateRegistrationStatusActivityInput) error {
+func (run *templateSyncWorkflow) recordStatus(input domain.TemplateRegistrationStatusActivityInput) error {
 	input.RegistrationID = run.input.RegistrationID
 	input.TenantID = run.input.TenantID
 	return workflow.ExecuteActivity(
 		run.ctx,
-		traits.RecordTemplateRegistrationStatusActivityName,
+		domain.RecordTemplateRegistrationStatusActivityName,
 		input,
 	).Get(run.ctx, nil)
 }

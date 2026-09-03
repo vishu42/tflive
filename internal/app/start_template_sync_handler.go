@@ -5,15 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 const KindStartTemplateSync queue.Kind = "start_template_sync"
 
 // StartTemplateSyncPayload is the complete input required to start template sync.
 // It intentionally has no JSON tags: persisted JSON uses its Go field names.
-type StartTemplateSyncPayload traits.TemplateSyncWorkflowInput
+type StartTemplateSyncPayload domain.TemplateSyncWorkflowInput
 
 var StartTemplateSyncSpec = queue.Spec{Kind: KindStartTemplateSync, Mode: queue.ModeJob, Key: startTemplateSyncKey}
 
@@ -41,7 +41,7 @@ func (handler *StartTemplateSyncHandler) Deliver(ctx context.Context, item queue
 	if err := json.Unmarshal(item.Payload, &payload); err != nil {
 		return nil, fmt.Errorf("decode start template sync payload: %w", err)
 	}
-	if err := handler.dispatcher.StartTemplateSync(ctx, traits.TemplateSyncWorkflowInput(payload)); err != nil {
+	if err := handler.dispatcher.StartTemplateSync(ctx, domain.TemplateSyncWorkflowInput(payload)); err != nil {
 		return nil, err
 	}
 	return nil, nil

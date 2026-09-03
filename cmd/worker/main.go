@@ -13,12 +13,12 @@ import (
 	"github.com/vishu42/tflive/internal/authorizer"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/temporal"
-	"github.com/vishu42/tflive/internal/traits"
 	"github.com/vishu42/tflive/internal/workflows"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
@@ -45,7 +45,7 @@ type workerStore interface {
 	queue.Enqueuer
 	app.StackStatusRepository
 	interface {
-		ReconcileTemplateRunCancellation(context.Context, traits.TenantID, traits.TemplateRunID, string) error
+		ReconcileTemplateRunCancellation(context.Context, domain.TenantID, domain.TemplateRunID, string) error
 	}
 }
 
@@ -148,10 +148,10 @@ func defaultWorkerDependencies() workerDependencies {
 		},
 		registerWorkflow: func(worker temporalWorker) {
 			worker.RegisterWorkflowWithOptions(workflows.TemplateRunWorkflow, workflow.RegisterOptions{
-				Name: traits.TemplateRunWorkflowName,
+				Name: domain.TemplateRunWorkflowName,
 			})
 			worker.RegisterWorkflowWithOptions(workflows.TemplateSyncWorkflow, workflow.RegisterOptions{
-				Name: traits.TemplateSyncWorkflowName,
+				Name: domain.TemplateSyncWorkflowName,
 			})
 		},
 		registerActivities: func(worker temporalWorker, store workerStore, runRoot string, logStore activities.TemplateRunLogStore) {
@@ -159,24 +159,24 @@ func defaultWorkerDependencies() workerDependencies {
 			decryptor, _ := store.(activities.CredentialDecryptor)
 			templateRunActivities := activities.NewTemplateRunActivitiesWithCredentials(store, runRoot, logStore, reader, decryptor)
 			worker.RegisterActivityWithOptions(templateRunActivities.PrepareWorkspace, activity.RegisterOptions{
-				Name: traits.PrepareWorkspaceActivityName,
+				Name: domain.PrepareWorkspaceActivityName,
 			})
 			worker.RegisterActivityWithOptions(templateRunActivities.FetchSource, activity.RegisterOptions{
-				Name: traits.FetchSourceActivityName,
+				Name: domain.FetchSourceActivityName,
 			})
 			worker.RegisterActivityWithOptions(templateRunActivities.RunTerraform, activity.RegisterOptions{
-				Name: traits.RunTerraformActivityName,
+				Name: domain.RunTerraformActivityName,
 			})
 			worker.RegisterActivityWithOptions(templateRunActivities.RecordTemplateRunStatus, activity.RegisterOptions{
-				Name: traits.RecordTemplateRunStatusActivityName,
+				Name: domain.RecordTemplateRunStatusActivityName,
 			})
 
 			templateSyncActivities := activities.NewTemplateSyncActivities(store)
 			worker.RegisterActivityWithOptions(templateSyncActivities.RecordTemplateRegistrationStatus, activity.RegisterOptions{
-				Name: traits.RecordTemplateRegistrationStatusActivityName,
+				Name: domain.RecordTemplateRegistrationStatusActivityName,
 			})
 			worker.RegisterActivityWithOptions(templateSyncActivities.SyncTemplate, activity.RegisterOptions{
-				Name: traits.SyncTemplateActivityName,
+				Name: domain.SyncTemplateActivityName,
 			})
 		},
 		newLogStore: func(cfg config.ArtifactStoreConfig, recorder artifacts.LogMetadataRecorder) (activities.TemplateRunLogStore, error) {

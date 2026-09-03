@@ -521,7 +521,7 @@
 .credentials-list {
   display: grid;
   gap: var(--space-2);
-  margin: var(--space-4) 0;
+  margin: 0;
 }
 
 .credential-row {
@@ -715,8 +715,9 @@
 }
 
 .stack-template-items button {
-  display: grid;
-  gap: var(--space-1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   width: 100%;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -756,23 +757,41 @@
   font-size: var(--text-xs);
 }
 
+/* Template names are long enough that a name and a labelled pill do not fit on
+   one row, and stacking them cost a whole second line per row for a word. The
+   row keeps just the state icon; the panel on the right names the state and
+   says what it means. */
+.stack-template-items .stack-template-item__dot {
+  flex: none;
+  /* Takes its colour from the shared .status-tone--* modifier so tones stay
+     defined in one place, but drops the tint those carry for pills: behind a
+     bare glyph it reads as a stray swatch. */
+  background: none;
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+/* ---- Selected template's state, above the revision action ---- */
+.stack-template-state {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  background: var(--color-card);
+}
+
+.stack-template-state p {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
 .stack-template-right-column {
   align-content: start;
   display: grid;
   gap: var(--space-6);
   min-width: 0;
-}
-
-.lifecycle-badge {
-  display: inline-flex;
-  align-items: center;
-  border-radius: var(--radius-full);
-  padding: var(--space-1) var(--space-3);
-  color: var(--color-warning);
-  background: var(--color-warning-soft);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  text-transform: uppercase;
 }
 
 /* ---- Metadata grids ---- */
@@ -916,7 +935,11 @@
   display: flex;
   gap: var(--space-3);
   justify-content: space-between;
-  padding: var(--space-3) var(--space-4);
+  /* 12px of vertical padding made a 64px band around a 36px control. This is
+     as tight as the row goes without the button fouling it: the button is
+     --control-height plus its own 1px borders, so a zero-padding row would
+     have its corners clipped by this one's radius. */
+  padding: var(--space-1) var(--space-4);
 }
 
 .stack-template-revision-action p {
@@ -953,10 +976,10 @@
   gap: var(--space-2);
 }
 
-/* .button-row's trailing margin separates it from panel content below it;
-   here it is the last thing in the panel. */
-.template-run-controls .button-row,
-.danger-zone .button-row {
+/* .button-row's trailing margin separates it from content below it outside a
+   panel. Inside one, .panel > * + * already spaces whatever follows, and the
+   two together left a doubled gap. */
+.panel .button-row {
   margin-bottom: 0;
 }
 
@@ -1107,10 +1130,9 @@
   background: var(--color-border);
 }
 
-/* .panel > .secondary-button carries a top margin, for the panels that end in
-   a single action below their content. Here the divider above already sets the
-   separation, and the two margins together open a gap wide enough to read as
-   the SSO button belonging to something else. */
+/* .panel > * + * spaces a trailing action from the content above it. Here the
+   divider already sets that separation, and the two together open a gap wide
+   enough to read as the SSO button belonging to something else. */
 .signin-card > .signin-divider + .secondary-button {
   margin-top: 0;
 }

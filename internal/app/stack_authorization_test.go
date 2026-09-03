@@ -9,7 +9,7 @@ import (
 
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 func TestCreateStackRequiresCreatorRole(t *testing.T) {
@@ -47,8 +47,8 @@ func TestCreateStackEnqueuesProvisioningInsteadOfCallingOpenFGA(t *testing.T) {
 	if authorizer.calls != 0 {
 		t.Fatalf("authorization calls = %d, want 0 — delivery belongs to the controller", authorizer.calls)
 	}
-	if stack.Status != traits.StackStatusProvisioning {
-		t.Fatalf("status = %q, want %q — the stack is not usable until the tuple lands", stack.Status, traits.StackStatusProvisioning)
+	if stack.Status != domain.StackStatusProvisioning {
+		t.Fatalf("status = %q, want %q — the stack is not usable until the tuple lands", stack.Status, domain.StackStatusProvisioning)
 	}
 	if len(work.requests) != 1 {
 		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
@@ -67,8 +67,8 @@ func TestCreateStackEnqueuesProvisioningInsteadOfCallingOpenFGA(t *testing.T) {
 	if stacks.calls != 1 {
 		t.Fatalf("stack calls = %d, want 1", stacks.calls)
 	}
-	if stacks.created.Status != traits.StackStatusProvisioning {
-		t.Fatalf("persisted status = %q, want %q", stacks.created.Status, traits.StackStatusProvisioning)
+	if stacks.created.Status != domain.StackStatusProvisioning {
+		t.Fatalf("persisted status = %q, want %q", stacks.created.Status, domain.StackStatusProvisioning)
 	}
 }
 
@@ -128,27 +128,27 @@ func TestCreateStackRejectsInvalidOpenFGASubjectBeforePersistence(t *testing.T) 
 
 type authorizationStackRepository struct {
 	calls   int
-	created traits.Stack
-	stack   traits.Stack
+	created domain.Stack
+	stack   domain.Stack
 	getErr  error
 }
 
-func (repository *authorizationStackRepository) CreateStack(_ context.Context, stack traits.Stack) error {
+func (repository *authorizationStackRepository) CreateStack(_ context.Context, stack domain.Stack) error {
 	repository.calls++
 	repository.created = stack
 	return nil
 }
 
-func (repository *authorizationStackRepository) GetStack(context.Context, traits.TenantID, traits.StackID) (traits.Stack, error) {
+func (repository *authorizationStackRepository) GetStack(context.Context, domain.TenantID, domain.StackID) (domain.Stack, error) {
 	return repository.stack, repository.getErr
 }
-func (repository *authorizationStackRepository) GetStackWithTemplates(context.Context, traits.TenantID, traits.StackID) (StackView, error) {
+func (repository *authorizationStackRepository) GetStackWithTemplates(context.Context, domain.TenantID, domain.StackID) (StackView, error) {
 	return StackView{}, nil
 }
-func (repository *authorizationStackRepository) ListStacks(context.Context, traits.TenantID) ([]traits.Stack, error) {
+func (repository *authorizationStackRepository) ListStacks(context.Context, domain.TenantID) ([]domain.Stack, error) {
 	return nil, nil
 }
-func (repository *authorizationStackRepository) ListStacksPage(context.Context, traits.TenantID, *StackPageCursor, int) ([]traits.Stack, error) {
+func (repository *authorizationStackRepository) ListStacksPage(context.Context, domain.TenantID, *StackPageCursor, int) ([]domain.Stack, error) {
 	return nil, nil
 }
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 func TestFileSinkWritesAndAppendsPhaseLog(t *testing.T) {
@@ -66,14 +66,14 @@ func TestPhaseForTerraformCommand(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		command traits.TerraformCommandType
+		command domain.TerraformCommandType
 		want    string
 	}{
-		{command: traits.TerraformCommandInit, want: "init"},
-		{command: traits.TerraformCommandSelectWorkspace, want: "workspace"},
-		{command: traits.TerraformCommandPlan, want: "plan"},
-		{command: traits.TerraformCommandApply, want: "apply"},
-		{command: traits.TerraformCommandDestroy, want: "destroy"},
+		{command: domain.TerraformCommandInit, want: "init"},
+		{command: domain.TerraformCommandSelectWorkspace, want: "workspace"},
+		{command: domain.TerraformCommandPlan, want: "plan"},
+		{command: domain.TerraformCommandApply, want: "apply"},
+		{command: domain.TerraformCommandDestroy, want: "destroy"},
 	}
 
 	for _, tt := range tests {
@@ -101,8 +101,8 @@ func TestLocalReaderReadsTenantRunPhaseLog(t *testing.T) {
 
 	content, err := NewLocalReader(runRoot).ReadTemplateRunLog(
 		context.Background(),
-		traits.TenantID("tenant_123"),
-		traits.TemplateRunID("run_123"),
+		domain.TenantID("tenant_123"),
+		domain.TemplateRunID("run_123"),
 		"plan",
 	)
 	if err != nil {
@@ -118,7 +118,7 @@ func TestRunWorkspacePathMatchesWorkspaceLayout(t *testing.T) {
 
 	runRoot := t.TempDir()
 
-	path, err := RunWorkspacePath(runRoot, traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"))
+	path, err := RunWorkspacePath(runRoot, domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"))
 	if err != nil {
 		t.Fatalf("RunWorkspacePath returned error: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestRunWorkspacePathMatchesWorkspaceLayout(t *testing.T) {
 func TestRunWorkspacePathRejectsUnsafePathComponents(t *testing.T) {
 	t.Parallel()
 
-	_, err := RunWorkspacePath(t.TempDir(), traits.TenantID("tenant_123"), traits.TemplateRunID("../run"))
+	_, err := RunWorkspacePath(t.TempDir(), domain.TenantID("tenant_123"), domain.TemplateRunID("../run"))
 	if err == nil {
 		t.Fatal("RunWorkspacePath returned nil error for unsafe run ID")
 	}
@@ -146,7 +146,7 @@ func TestLocalReaderRejectsUnsafePathComponents(t *testing.T) {
 
 	reader := NewLocalReader(t.TempDir())
 
-	_, err := reader.ReadTemplateRunLog(context.Background(), traits.TenantID("../tenant"), traits.TemplateRunID("run_123"), "plan")
+	_, err := reader.ReadTemplateRunLog(context.Background(), domain.TenantID("../tenant"), domain.TemplateRunID("run_123"), "plan")
 	if err == nil {
 		t.Fatal("ReadTemplateRunLog returned nil error for unsafe tenant")
 	}
@@ -154,7 +154,7 @@ func TestLocalReaderRejectsUnsafePathComponents(t *testing.T) {
 		t.Fatalf("error = %q, want safe path context", err.Error())
 	}
 
-	_, err = reader.ReadTemplateRunLog(context.Background(), traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"), "../plan")
+	_, err = reader.ReadTemplateRunLog(context.Background(), domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"), "../plan")
 	if err == nil {
 		t.Fatal("ReadTemplateRunLog returned nil error for unsafe phase")
 	}
@@ -168,8 +168,8 @@ func TestLocalReaderReturnsNotExistForMissingLog(t *testing.T) {
 
 	_, err := NewLocalReader(t.TempDir()).ReadTemplateRunLog(
 		context.Background(),
-		traits.TenantID("tenant_123"),
-		traits.TemplateRunID("run_123"),
+		domain.TenantID("tenant_123"),
+		domain.TemplateRunID("run_123"),
 		"plan",
 	)
 	if !errors.Is(err, os.ErrNotExist) {

@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/mock"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
 )
@@ -17,23 +17,23 @@ func TestTemplateSyncWorkflowRecordsCompletedRegistration(t *testing.T) {
 
 	env := newTemplateSyncWorkflowTestEnvironment(t)
 	input := templateSyncWorkflowInput()
-	var statuses []traits.TemplateRegistrationStatus
-	env.OnActivity(traits.RecordTemplateRegistrationStatusActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.TemplateRegistrationStatusActivityInput) error {
+	var statuses []domain.TemplateRegistrationStatus
+	env.OnActivity(domain.RecordTemplateRegistrationStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRegistrationStatusActivityInput) error {
 			statuses = append(statuses, activityInput.Status)
 			if activityInput.RegistrationID != input.RegistrationID {
 				t.Fatalf("registration ID = %q, want %q", activityInput.RegistrationID, input.RegistrationID)
 			}
 			return nil
 		})
-	env.OnActivity(traits.SyncTemplateActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.TemplateSyncActivityInput) (traits.TemplateSyncActivityOutput, error) {
+	env.OnActivity(domain.SyncTemplateActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateSyncActivityInput) (domain.TemplateSyncActivityOutput, error) {
 			if activityInput.SourceRef != "v0.0.1" {
 				t.Fatalf("source ref = %q, want v0.0.1", activityInput.SourceRef)
 			}
-			return traits.TemplateSyncActivityOutput{
-				Status:             traits.TemplateRegistrationCompleted,
-				TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+			return domain.TemplateSyncActivityOutput{
+				Status:             domain.TemplateRegistrationCompleted,
+				TemplateRevisionID: domain.TemplateRevisionID("template_123"),
 				ResolvedCommitSHA:  "abc123",
 			}, nil
 		})
@@ -41,9 +41,9 @@ func TestTemplateSyncWorkflowRecordsCompletedRegistration(t *testing.T) {
 	env.ExecuteWorkflow(TemplateSyncWorkflow, input)
 
 	assertWorkflowCompleted(t, env)
-	want := []traits.TemplateRegistrationStatus{
-		traits.TemplateRegistrationRunning,
-		traits.TemplateRegistrationCompleted,
+	want := []domain.TemplateRegistrationStatus{
+		domain.TemplateRegistrationRunning,
+		domain.TemplateRegistrationCompleted,
 	}
 	if !reflect.DeepEqual(statuses, want) {
 		t.Fatalf("statuses = %#v, want %#v", statuses, want)
@@ -55,22 +55,22 @@ func TestTemplateSyncWorkflowRecordsInvalidRegistration(t *testing.T) {
 
 	env := newTemplateSyncWorkflowTestEnvironment(t)
 	input := templateSyncWorkflowInput()
-	var terminal traits.TemplateRegistrationStatusActivityInput
-	env.OnActivity(traits.RecordTemplateRegistrationStatusActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.TemplateRegistrationStatusActivityInput) error {
+	var terminal domain.TemplateRegistrationStatusActivityInput
+	env.OnActivity(domain.RecordTemplateRegistrationStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRegistrationStatusActivityInput) error {
 			terminal = activityInput
 			return nil
 		})
-	env.OnActivity(traits.SyncTemplateActivityName, mock.Anything, mock.Anything).
-		Return(traits.TemplateSyncActivityOutput{
-			Status:       traits.TemplateRegistrationInvalid,
+	env.OnActivity(domain.SyncTemplateActivityName, mock.Anything, mock.Anything).
+		Return(domain.TemplateSyncActivityOutput{
+			Status:       domain.TemplateRegistrationInvalid,
 			ErrorSummary: "sensitive variables are not supported: password",
 		}, nil)
 
 	env.ExecuteWorkflow(TemplateSyncWorkflow, input)
 
 	assertWorkflowCompleted(t, env)
-	if terminal.Status != traits.TemplateRegistrationInvalid {
+	if terminal.Status != domain.TemplateRegistrationInvalid {
 		t.Fatalf("terminal status = %q, want invalid", terminal.Status)
 	}
 	if terminal.ErrorSummary != "sensitive variables are not supported: password" {
@@ -84,14 +84,14 @@ func TestTemplateSyncWorkflowRecordsFailedRegistration(t *testing.T) {
 	env := newTemplateSyncWorkflowTestEnvironment(t)
 	input := templateSyncWorkflowInput()
 	syncErr := errors.New("clone process failed")
-	var statuses []traits.TemplateRegistrationStatus
-	env.OnActivity(traits.RecordTemplateRegistrationStatusActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput traits.TemplateRegistrationStatusActivityInput) error {
+	var statuses []domain.TemplateRegistrationStatus
+	env.OnActivity(domain.RecordTemplateRegistrationStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRegistrationStatusActivityInput) error {
 			statuses = append(statuses, activityInput.Status)
 			return nil
 		})
-	env.OnActivity(traits.SyncTemplateActivityName, mock.Anything, mock.Anything).
-		Return(traits.TemplateSyncActivityOutput{}, syncErr)
+	env.OnActivity(domain.SyncTemplateActivityName, mock.Anything, mock.Anything).
+		Return(domain.TemplateSyncActivityOutput{}, syncErr)
 
 	env.ExecuteWorkflow(TemplateSyncWorkflow, input)
 
@@ -101,9 +101,9 @@ func TestTemplateSyncWorkflowRecordsFailedRegistration(t *testing.T) {
 	if err := env.GetWorkflowError(); err == nil {
 		t.Fatal("workflow error is nil, want sync error")
 	}
-	want := []traits.TemplateRegistrationStatus{
-		traits.TemplateRegistrationRunning,
-		traits.TemplateRegistrationFailed,
+	want := []domain.TemplateRegistrationStatus{
+		domain.TemplateRegistrationRunning,
+		domain.TemplateRegistrationFailed,
 	}
 	if !reflect.DeepEqual(statuses, want) {
 		t.Fatalf("statuses = %#v, want %#v", statuses, want)
@@ -117,24 +117,24 @@ func newTemplateSyncWorkflowTestEnvironment(t *testing.T) *testsuite.TestWorkflo
 	env := suite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(TemplateSyncWorkflow)
 	env.RegisterActivityWithOptions(
-		func(context.Context, traits.TemplateRegistrationStatusActivityInput) error {
+		func(context.Context, domain.TemplateRegistrationStatusActivityInput) error {
 			return nil
 		},
-		activity.RegisterOptions{Name: traits.RecordTemplateRegistrationStatusActivityName},
+		activity.RegisterOptions{Name: domain.RecordTemplateRegistrationStatusActivityName},
 	)
 	env.RegisterActivityWithOptions(
-		func(context.Context, traits.TemplateSyncActivityInput) (traits.TemplateSyncActivityOutput, error) {
-			return traits.TemplateSyncActivityOutput{}, nil
+		func(context.Context, domain.TemplateSyncActivityInput) (domain.TemplateSyncActivityOutput, error) {
+			return domain.TemplateSyncActivityOutput{}, nil
 		},
-		activity.RegisterOptions{Name: traits.SyncTemplateActivityName},
+		activity.RegisterOptions{Name: domain.SyncTemplateActivityName},
 	)
 	return env
 }
 
-func templateSyncWorkflowInput() traits.TemplateSyncWorkflowInput {
-	return traits.TemplateSyncWorkflowInput{
-		RegistrationID: traits.TemplateRegistrationID("template_registration_123"),
-		TenantID:       traits.TenantID("tenant_123"),
+func templateSyncWorkflowInput() domain.TemplateSyncWorkflowInput {
+	return domain.TemplateSyncWorkflowInput{
+		RegistrationID: domain.TemplateRegistrationID("template_registration_123"),
+		TenantID:       domain.TenantID("tenant_123"),
 		RepoOwner:      "acme",
 		RepoName:       "infra-templates",
 		SourceRef:      "v0.0.1",

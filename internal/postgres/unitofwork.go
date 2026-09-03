@@ -6,8 +6,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 // txRepo is the transaction-scoped subset of Store handed to an InTx callback.
@@ -15,27 +15,27 @@ type txRepo struct {
 	tx pgx.Tx
 }
 
-func (repo *txRepo) CreateStack(ctx context.Context, stack traits.Stack) error {
+func (repo *txRepo) CreateStack(ctx context.Context, stack domain.Stack) error {
 	return insertStack(ctx, repo.tx, stack)
 }
 
-func (repo *txRepo) AppendAuditEvent(ctx context.Context, event traits.SecurityAuditEvent) error {
+func (repo *txRepo) AppendAuditEvent(ctx context.Context, event domain.SecurityAuditEvent) error {
 	return appendAuditEvent(ctx, repo.tx, event)
 }
 
-func (repo *txRepo) CreateTemplateRun(ctx context.Context, run traits.TemplateRun) error {
+func (repo *txRepo) CreateTemplateRun(ctx context.Context, run domain.TemplateRun) error {
 	return createTemplateRun(ctx, repo.tx, run)
 }
 
-func (repo *txRepo) CreateTemplateRegistration(ctx context.Context, registration traits.TemplateRegistration) error {
+func (repo *txRepo) CreateTemplateRegistration(ctx context.Context, registration domain.TemplateRegistration) error {
 	return createTemplateRegistration(ctx, repo.tx, registration)
 }
 
-func (repo *txRepo) ApproveTemplateRun(ctx context.Context, approval traits.TemplateRunApproval) error {
+func (repo *txRepo) ApproveTemplateRun(ctx context.Context, approval domain.TemplateRunApproval) error {
 	return approveTemplateRun(ctx, repo.tx, approval)
 }
 
-func (repo *txRepo) RequestTemplateRunCancellation(ctx context.Context, cancellation traits.TemplateRunCancellation) error {
+func (repo *txRepo) RequestTemplateRunCancellation(ctx context.Context, cancellation domain.TemplateRunCancellation) error {
 	return requestTemplateRunCancellation(ctx, repo.tx, cancellation)
 }
 

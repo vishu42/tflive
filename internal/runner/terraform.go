@@ -9,13 +9,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 type TerraformCommand struct {
 	WorkspacePath string
 	WorkspaceName string
-	Command       traits.TerraformCommandType
+	Command       domain.TerraformCommandType
 	ConfigJSON    json.RawMessage
 	// Environment contains resolved provider credentials for this subprocess only.
 	Environment map[string]string
@@ -61,15 +61,15 @@ func (runner *LocalProcessRunner) Run(ctx context.Context, input TerraformComman
 	}
 
 	switch input.Command {
-	case traits.TerraformCommandInit:
+	case domain.TerraformCommandInit:
 		return runner.run(ctx, input, sortedEnvironment(input.Environment), "init", "-input=false", "-no-color")
-	case traits.TerraformCommandSelectWorkspace:
+	case domain.TerraformCommandSelectWorkspace:
 		return runner.selectWorkspace(ctx, input)
-	case traits.TerraformCommandPlan:
+	case domain.TerraformCommandPlan:
 		return runner.runWithTerraformVariables(ctx, input, "plan", "-input=false", "-no-color")
-	case traits.TerraformCommandApply:
+	case domain.TerraformCommandApply:
 		return runner.runWithTerraformVariables(ctx, input, "apply", "-input=false", "-auto-approve", "-no-color")
-	case traits.TerraformCommandDestroy:
+	case domain.TerraformCommandDestroy:
 		return runner.runWithTerraformVariables(ctx, input, "destroy", "-input=false", "-auto-approve", "-no-color")
 	default:
 		return fmt.Errorf("unsupported terraform command %q", input.Command)
@@ -111,7 +111,7 @@ func (runner *LocalProcessRunner) selectWorkspace(ctx context.Context, input Ter
 		"-no-color",
 		input.WorkspaceName,
 	); err != nil {
-		return &CommandError{Command: traits.TerraformCommandSelectWorkspace, Err: fmt.Errorf("select or new: %w", err)}
+		return &CommandError{Command: domain.TerraformCommandSelectWorkspace, Err: fmt.Errorf("select or new: %w", err)}
 	}
 	return nil
 }

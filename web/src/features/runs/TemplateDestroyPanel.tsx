@@ -129,9 +129,6 @@ function DestroyControl({
           {disabledReason}
         </p>
       )}
-      {confirmDestroy && (
-        <p className="muted">This will permanently destroy all infrastructure managed by this template. This cannot be undone.</p>
-      )}
     </div>
   );
 }

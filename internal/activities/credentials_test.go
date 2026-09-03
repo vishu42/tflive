@@ -5,11 +5,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 type testCredentialReader struct {
-	credentials []traits.CredentialSet
+	credentials []domain.CredentialSet
 }
 
 // TestRedactingWriterRemovesCredentialValues verifies that command output never exposes exact secret values.
@@ -30,7 +30,7 @@ type nopWriteCloser struct{ *bytes.Buffer }
 func (writer nopWriteCloser) Close() error { return nil }
 
 // ListCredentialsForStackTemplate returns fixture credentials to the resolver under test.
-func (reader testCredentialReader) ListCredentialsForStackTemplate(context.Context, traits.TenantID, traits.StackTemplateID) ([]traits.CredentialSet, error) {
+func (reader testCredentialReader) ListCredentialsForStackTemplate(context.Context, domain.TenantID, domain.StackTemplateID) ([]domain.CredentialSet, error) {
 	return reader.credentials, nil
 }
 
@@ -43,7 +43,7 @@ func (testCredentialDecryptor) Decrypt(value string) (string, error) {
 
 // TestResolveCredentialEnvironmentTemplateOverridesStack verifies inheritance and template precedence.
 func TestResolveCredentialEnvironmentTemplateOverridesStack(t *testing.T) {
-	environment, err := resolveCredentialEnvironment(context.Background(), testCredentialReader{credentials: []traits.CredentialSet{
+	environment, err := resolveCredentialEnvironment(context.Background(), testCredentialReader{credentials: []domain.CredentialSet{
 		{StackID: "stack_123", Name: "CLOUD_REGION", Ciphertext: "stack-region"},
 		{StackID: "stack_123", Name: "CLOUD_TOKEN", Ciphertext: "stack-token"},
 		{StackTemplateID: "template_123", Name: "CLOUD_TOKEN", Ciphertext: "template-token"},

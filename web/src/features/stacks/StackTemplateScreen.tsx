@@ -12,6 +12,7 @@ import {
 import { tenantID } from "../../config";
 import RequireCapability from "../../auth/RequireCapability";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
+import { statusGlyph } from "../../shared/statusTone";
 import StackTemplateConfigPanel from "./StackTemplateConfigPanel";
 import CredentialsPanel from "./CredentialsPanel";
 import TemplateRunActions from "../runs/TemplateRunActions";
@@ -23,6 +24,7 @@ import {
   findSelectedStackTemplate,
   isDestroyingStackTemplate,
   stackTemplateLabel,
+  stackTemplateStatus,
   variableValuesFromConfig
 } from "./stackWorkflow";
 
@@ -67,6 +69,7 @@ export default function StackTemplateScreen() {
   }
 
   const destroying = isDestroyingStackTemplate(installedTemplate);
+  const installedStatus = installedTemplate ? stackTemplateStatus(installedTemplate) : null;
   const updateStackTemplateConfigMutation = useUpdateStackTemplateConfigMutation(tenantID, stackId);
   const templateCredentialsQuery = useStackTemplateCredentialsQuery(tenantID, installedTemplate?.id ?? "");
   const createTemplateCredentialMutation = useCreateStackTemplateCredentialMutation(tenantID, installedTemplate?.id ?? "");
@@ -180,26 +183,45 @@ export default function StackTemplateScreen() {
               </p>
             ) : (
               <div className="stack-template-items" data-testid="stack-template-items">
-                {stackTemplates.map((item) => (
-                  <button
-                    className={item.id === installedTemplate?.id ? "active" : ""}
-                    key={item.id}
-                    onClick={() => handleSelectStackTemplate(item.id)}
-                    type="button"
-                  >
-                    <span>{stackTemplateLabel(item)}</span>
-                    {item.lifecycle === "destroying" && (
-                      <small className="lifecycle-badge destroying">Destroying…</small>
-                    )}
-                    <small>{item.desired_template_revision_id}</small>
-                  </button>
-                ))}
+                {stackTemplates.map((item) => {
+                  const status = stackTemplateStatus(item);
+                  return (
+                    <button
+                      className={item.id === installedTemplate?.id ? "active" : ""}
+                      key={item.id}
+                      onClick={() => handleSelectStackTemplate(item.id)}
+                      type="button"
+                    >
+                      <span
+                        className={`stack-template-item__dot status-tone--${status.tone}`}
+                        data-testid={`stack-template-status-${item.id}`}
+                        role="img"
+                        aria-label={status.label}
+                        title={status.label}
+                      >
+                        {statusGlyph(status.tone)}
+                      </span>
+                      <span>{stackTemplateLabel(item)}</span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
         </section>
         {installedTemplate && (
           <div className="stack-template-right-column" data-testid="stack-template-right-column">
+            {installedStatus && (
+              <section className="stack-template-state" data-testid="stack-template-state">
+                <span className={`status-tone status-tone--${installedStatus.tone}`}>
+                  <span className="status-tone__glyph" aria-hidden="true">
+                    {statusGlyph(installedStatus.tone)}
+                  </span>
+                  {installedStatus.label}
+                </span>
+                <p className="muted">{installedStatus.description}</p>
+              </section>
+            )}
             <section className="stack-template-revision-action" data-testid="stack-template-revision-action">
               <p className="muted">
                 <RefreshCw size={16} />

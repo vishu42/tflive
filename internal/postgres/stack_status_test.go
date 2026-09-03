@@ -11,18 +11,18 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/app"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
-func statusTestStack(id, slug string, status traits.StackStatus) traits.Stack {
-	return traits.Stack{
-		ID:        traits.StackID(id),
-		TenantID:  traits.TenantID("tenant_123"),
+func statusTestStack(id, slug string, status domain.StackStatus) domain.Stack {
+	return domain.Stack{
+		ID:        domain.StackID(id),
+		TenantID:  domain.TenantID("tenant_123"),
 		Name:      "Acme " + slug,
 		Slug:      slug,
 		Status:    status,
 		Tags:      map[string]string{},
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Date(2026, 8, 6, 13, 30, 0, 0, time.UTC),
 	}
 }
@@ -34,7 +34,7 @@ func TestCreateStackRoundTripsProvisioningStatus(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 
-	if err := store.CreateStack(ctx, statusTestStack("stack_provisioning", "provisioning", traits.StackStatusProvisioning)); err != nil {
+	if err := store.CreateStack(ctx, statusTestStack("stack_provisioning", "provisioning", domain.StackStatusProvisioning)); err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
 	// A caller that says nothing about provisioning gets the terminal status.
@@ -46,16 +46,16 @@ func TestCreateStackRoundTripsProvisioningStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStack returned error: %v", err)
 	}
-	if provisioning.Status != traits.StackStatusProvisioning {
-		t.Fatalf("status = %q, want %q", provisioning.Status, traits.StackStatusProvisioning)
+	if provisioning.Status != domain.StackStatusProvisioning {
+		t.Fatalf("status = %q, want %q", provisioning.Status, domain.StackStatusProvisioning)
 	}
 
 	defaulted, err := store.GetStack(ctx, "tenant_123", "stack_default")
 	if err != nil {
 		t.Fatalf("GetStack returned error: %v", err)
 	}
-	if defaulted.Status != traits.StackStatusReady {
-		t.Fatalf("status = %q, want %q", defaulted.Status, traits.StackStatusReady)
+	if defaulted.Status != domain.StackStatusReady {
+		t.Fatalf("status = %q, want %q", defaulted.Status, domain.StackStatusReady)
 	}
 }
 
@@ -66,7 +66,7 @@ func TestMarkStackReadyIsIdempotent(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 
-	if err := store.CreateStack(ctx, statusTestStack("stack_123", "acme-prod", traits.StackStatusProvisioning)); err != nil {
+	if err := store.CreateStack(ctx, statusTestStack("stack_123", "acme-prod", domain.StackStatusProvisioning)); err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
 
@@ -78,8 +78,8 @@ func TestMarkStackReadyIsIdempotent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetStack returned error: %v", err)
 		}
-		if stack.Status != traits.StackStatusReady {
-			t.Fatalf("status after attempt %d = %q, want %q", attempt, stack.Status, traits.StackStatusReady)
+		if stack.Status != domain.StackStatusReady {
+			t.Fatalf("status after attempt %d = %q, want %q", attempt, stack.Status, domain.StackStatusReady)
 		}
 	}
 }
@@ -91,7 +91,7 @@ func TestMarkStackReadyIsTenantScoped(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 
-	if err := store.CreateStack(ctx, statusTestStack("stack_123", "acme-prod", traits.StackStatusProvisioning)); err != nil {
+	if err := store.CreateStack(ctx, statusTestStack("stack_123", "acme-prod", domain.StackStatusProvisioning)); err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
 
@@ -102,7 +102,7 @@ func TestMarkStackReadyIsTenantScoped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStack returned error: %v", err)
 	}
-	if stack.Status != traits.StackStatusProvisioning {
+	if stack.Status != domain.StackStatusProvisioning {
 		t.Fatalf("status = %q, want it untouched by another tenant", stack.Status)
 	}
 }
@@ -182,13 +182,13 @@ func TestStackStatusMigrationBackfillsFromPendingQueueRows(t *testing.T) {
 	store := NewStore(pool)
 	for _, want := range []struct {
 		id     string
-		status traits.StackStatus
+		status domain.StackStatus
 	}{
-		{id: "stack_pending", status: traits.StackStatusProvisioning},
-		{id: "stack_delivered", status: traits.StackStatusReady},
-		{id: "stack_untouched", status: traits.StackStatusReady},
+		{id: "stack_pending", status: domain.StackStatusProvisioning},
+		{id: "stack_delivered", status: domain.StackStatusReady},
+		{id: "stack_untouched", status: domain.StackStatusReady},
 	} {
-		stack, err := store.GetStack(ctx, "tenant_123", traits.StackID(want.id))
+		stack, err := store.GetStack(ctx, "tenant_123", domain.StackID(want.id))
 		if err != nil {
 			t.Fatalf("GetStack(%s) returned error: %v", want.id, err)
 		}
