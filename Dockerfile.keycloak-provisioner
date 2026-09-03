@@ -2,6 +2,11 @@ FROM golang:1.25.14-alpine3.23 AS build
 
 WORKDIR /src
 COPY go.mod go.sum ./
+# Unlike the other images, this build copies only what the binary needs rather
+# than the whole tree. That list is exactly `go list -deps
+# ./cmd/keycloak-provisioner | grep tflive`, so a new internal import anywhere
+# under internal/keycloak has to be added here or the build fails at COPY time.
+COPY internal/strval ./internal/strval
 COPY internal/keycloak ./internal/keycloak
 COPY cmd/keycloak-provisioner ./cmd/keycloak-provisioner
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/keycloak-provisioner ./cmd/keycloak-provisioner
