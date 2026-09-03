@@ -2914,3 +2914,83 @@ func TestDefaultIDGeneratorsMintPrefixedRandomIDs(t *testing.T) {
 		})
 	}
 }
+
+// Every mutating command that reaches a stack template through
+// operableStackTemplate must record the refusal, not just refuse. Only
+// AddTemplateToStack had such a test, so three of the four copies of the audit
+// block this replaced were unguarded — dropping the audit call from any of them
+// would have left the suite green.
+func TestOperableStackTemplateCommandsAuditRefusals(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		call func(*Service, context.Context) error
+	}{
+		{"StartTemplateRun", func(service *Service, ctx context.Context) error {
+			_, err := service.StartTemplateRun(ctx, StartTemplateRunCommand{
+				TenantID:        traits.TenantID("tenant_123"),
+				StackTemplateID: traits.StackTemplateID("stack_template_123"),
+				Operation:       traits.OperationApply,
+			})
+			return err
+		}},
+		{"UpdateStackTemplateConfig", func(service *Service, ctx context.Context) error {
+			_, err := service.UpdateStackTemplateConfig(ctx, UpdateStackTemplateConfigCommand{
+				TenantID:        traits.TenantID("tenant_123"),
+				StackTemplateID: traits.StackTemplateID("stack_template_123"),
+				ConfigJSON:      json.RawMessage(`{"region":"us-east-1"}`),
+			})
+			return err
+		}},
+		{"UpgradeStackTemplate", func(service *Service, ctx context.Context) error {
+			_, err := service.UpgradeStackTemplate(ctx, UpgradeStackTemplateCommand{
+				TenantID:                 traits.TenantID("tenant_123"),
+				StackTemplateID:          traits.StackTemplateID("stack_template_123"),
+				TargetTemplateRevisionID: traits.TemplateRevisionID("template_456"),
+			})
+			return err
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			audit := &recordingAuditRepository{}
+			service := NewService(Service{
+				Authorizer: &denyingAuthorizer{},
+				StackTemplates: &recordingStackTemplateRepository{
+					stackTemplate: traits.StackTemplate{
+						ID:        traits.StackTemplateID("stack_template_123"),
+						Lifecycle: traits.StackTemplateActive,
+					},
+				},
+				Audit: audit,
+				Clock: fixedClock{now: time.Now()},
+			})
+
+			err := test.call(service, authenticatedContext())
+			if !errors.Is(err, ErrForbidden) {
+				t.Fatalf("error = %v, want ErrForbidden", err)
+			}
+
+			if len(audit.events) != 1 {
+				t.Fatalf("audit events = %d, want 1", len(audit.events))
+			}
+			event := audit.events[0]
+			if event.Action != traits.AuditActionFailedAccessAttempt {
+				t.Fatalf("action = %q, want %q", event.Action, traits.AuditActionFailedAccessAttempt)
+			}
+			if event.Outcome != traits.AuditOutcomeFailure {
+				t.Fatalf("outcome = %q, want %q", event.Outcome, traits.AuditOutcomeFailure)
+			}
+			if event.ActorSubject != keycloakSubject {
+				t.Fatalf("actor_subject = %q, want %q", event.ActorSubject, keycloakSubject)
+			}
+			if event.TenantID != traits.TenantID("tenant_123") {
+				t.Fatalf("tenant_id = %q, want %q", event.TenantID, "tenant_123")
+			}
+		})
+	}
+}

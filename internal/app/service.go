@@ -290,6 +290,23 @@ func (service *Service) auditError(ctx context.Context, event traits.SecurityAud
 	}
 }
 
+// auditFailedAccess records one refused access attempt. stackID is empty where
+// the refusal happened before any stack was resolved, which is every refusal
+// reached through a stack template.
+//
+// This exists because the event was previously built at each call site, and the
+// copies had already begun to differ in whether they named the StackID field at
+// all.
+func (service *Service) auditFailedAccess(ctx context.Context, actor traits.UserID, tenantID traits.TenantID, stackID traits.StackID) {
+	service.auditError(ctx, traits.SecurityAuditEvent{
+		ActorSubject: string(actor),
+		Action:       traits.AuditActionFailedAccessAttempt,
+		TenantID:     tenantID,
+		StackID:      stackID,
+		Outcome:      traits.AuditOutcomeFailure,
+	})
+}
+
 // RegisterTemplateCommand asks the app to register a Terraform template source.
 type RegisterTemplateCommand struct {
 	TenantID  traits.TenantID
@@ -631,13 +648,7 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 	}
 
 	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanOperate, ErrForbidden); err != nil {
-		service.auditError(ctx, traits.SecurityAuditEvent{
-			ActorSubject: string(actor),
-			Action:       traits.AuditActionFailedAccessAttempt,
-			TenantID:     command.TenantID,
-			StackID:      command.StackID,
-			Outcome:      traits.AuditOutcomeFailure,
-		})
+		service.auditFailedAccess(ctx, actor, command.TenantID, command.StackID)
 		return traits.StackTemplate{}, err
 	}
 	stack, err := service.Stacks.GetStack(ctx, command.TenantID, command.StackID)
@@ -694,16 +705,9 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 		return traits.TemplateRun{}, err
 	}
 
-	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.RelationCanOperate, ErrForbidden)
+	stackTemplate, err := service.operableStackTemplate(ctx, actor, command.TenantID, command.StackTemplateID)
 	if err != nil {
-		service.auditError(ctx, traits.SecurityAuditEvent{
-			ActorSubject: string(actor),
-			Action:       traits.AuditActionFailedAccessAttempt,
-			TenantID:     command.TenantID,
-			StackID:      "",
-			Outcome:      traits.AuditOutcomeFailure,
-		})
-		return traits.TemplateRun{}, fmt.Errorf("get stack template: %w", err)
+		return traits.TemplateRun{}, err
 	}
 	if stackTemplate.Lifecycle != traits.StackTemplateActive {
 		return traits.TemplateRun{}, fmt.Errorf("%w: lifecycle is %q", ErrStackTemplateNotRunnable, stackTemplate.Lifecycle)
@@ -950,15 +954,9 @@ func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command U
 		return traits.StackTemplate{}, err
 	}
 
-	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.RelationCanOperate, ErrForbidden)
+	stackTemplate, err := service.operableStackTemplate(ctx, actor, command.TenantID, command.StackTemplateID)
 	if err != nil {
-		service.auditError(ctx, traits.SecurityAuditEvent{
-			ActorSubject: string(actor),
-			Action:       traits.AuditActionFailedAccessAttempt,
-			TenantID:     command.TenantID,
-			Outcome:      traits.AuditOutcomeFailure,
-		})
-		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
+		return traits.StackTemplate{}, err
 	}
 	if stackTemplate.Lifecycle != traits.StackTemplateActive {
 		return traits.StackTemplate{}, fmt.Errorf("%w: lifecycle is %q", ErrStackTemplateUpgradeInvalid, stackTemplate.Lifecycle)
@@ -994,15 +992,9 @@ func (service *Service) UpgradeStackTemplate(ctx context.Context, command Upgrad
 		return traits.StackTemplate{}, err
 	}
 
-	stackTemplate, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.RelationCanOperate, ErrForbidden)
+	stackTemplate, err := service.operableStackTemplate(ctx, actor, command.TenantID, command.StackTemplateID)
 	if err != nil {
-		service.auditError(ctx, traits.SecurityAuditEvent{
-			ActorSubject: string(actor),
-			Action:       traits.AuditActionFailedAccessAttempt,
-			TenantID:     command.TenantID,
-			Outcome:      traits.AuditOutcomeFailure,
-		})
-		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
+		return traits.StackTemplate{}, err
 	}
 	if stackTemplate.Lifecycle != traits.StackTemplateActive {
 		return traits.StackTemplate{}, fmt.Errorf("%w: lifecycle is %q", ErrStackTemplateUpgradeInvalid, stackTemplate.Lifecycle)
