@@ -13,7 +13,7 @@ import (
 
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/vishu42/tflive/internal/secrets"
+	"github.com/vishu42/tflive/internal/encryption"
 )
 
 type stubFlow struct {
@@ -185,7 +185,7 @@ func (f *fakeSessionStore) DeleteSessionsExpiredBefore(_ context.Context, cutoff
 
 func newAuthTestServer(t *testing.T, flow *stubFlow, verifier authn.Verifier, options ...authTestOption) *Server {
 	t.Helper()
-	sealer, err := secrets.NewCipher("01234567890123456789012345678901")
+	sealer, err := encryption.NewCipher("01234567890123456789012345678901")
 	if err != nil {
 		t.Fatalf("NewCipher returned error: %v", err)
 	}
@@ -223,7 +223,7 @@ func newAuthTestServerWithUsers(
 	options ...authTestOption,
 ) *Server {
 	t.Helper()
-	sealer, err := secrets.NewCipher("01234567890123456789012345678901")
+	sealer, err := encryption.NewCipher("01234567890123456789012345678901")
 	if err != nil {
 		t.Fatalf("NewCipher returned error: %v", err)
 	}
@@ -248,7 +248,7 @@ func newAuthTestServerWithUsers(
 // that need a different transaction still build one with callbackRequest.
 func runCallback(t *testing.T, server *Server, nonce string) *httptest.ResponseRecorder {
 	t.Helper()
-	sealer, err := secrets.NewCipher("01234567890123456789012345678901")
+	sealer, err := encryption.NewCipher("01234567890123456789012345678901")
 	if err != nil {
 		t.Fatalf("NewCipher returned error: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestAuthLoginRedirectsAndSetsTransactionCookie(t *testing.T) {
 func TestAuthLoginRejectsOffOriginReturnTo(t *testing.T) {
 	flow := &stubFlow{authorizationURL: "https://idp.test/authorize"}
 	server := newAuthTestServer(t, flow, stubVerifier{})
-	sealer, _ := secrets.NewCipher("01234567890123456789012345678901")
+	sealer, _ := encryption.NewCipher("01234567890123456789012345678901")
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/auth/login?return_to=https://evil.test/steal", nil)
 	response := httptest.NewRecorder()
@@ -326,7 +326,7 @@ func TestAuthLoginRejectsOffOriginReturnTo(t *testing.T) {
 	}
 }
 
-func callbackRequest(t *testing.T, sealer *secrets.Cipher, transaction authn.Transaction, query url.Values) *http.Request {
+func callbackRequest(t *testing.T, sealer *encryption.Cipher, transaction authn.Transaction, query url.Values) *http.Request {
 	t.Helper()
 	sealed, err := authn.SealTransaction(sealer, transaction)
 	if err != nil {
@@ -426,7 +426,7 @@ func TestCallbackSessionLifetimeIgnoresTokenExpiry(t *testing.T) {
 }
 
 func TestAuthCallbackFailuresAreIndistinguishable(t *testing.T) {
-	sealer, _ := secrets.NewCipher("01234567890123456789012345678901")
+	sealer, _ := encryption.NewCipher("01234567890123456789012345678901")
 	good := authn.Transaction{State: "state-1", Nonce: "nonce-1", CodeVerifier: "verifier-1", ReturnTo: "/stacks"}
 
 	var bodies []string
@@ -649,7 +649,7 @@ func TestAuthRoutesArePublic(t *testing.T) {
 	// The middleware must let the login routes through: a user with no session
 	// cannot obtain one from behind an authentication gate.
 	flow := &stubFlow{authorizationURL: "https://idp.test/authorize"}
-	sealer, _ := secrets.NewCipher("01234567890123456789012345678901")
+	sealer, _ := encryption.NewCipher("01234567890123456789012345678901")
 	server := NewAuthenticatedServer(app.NewService(app.Service{Users: &apiFakeUserRepository{}}), "tenant_123", false,
 		WithAuth(AuthConfig{
 			Flow:               flow,
@@ -759,7 +759,7 @@ func TestAuthCallbackFailsWhenProjectionWriteFails(t *testing.T) {
 // session store. The wiring check exists to say so once at boot rather than
 // nil-panic on the first login.
 func TestNewServerPanicsWithoutAUserRepository(t *testing.T) {
-	sealer, err := secrets.NewCipher("01234567890123456789012345678901")
+	sealer, err := encryption.NewCipher("01234567890123456789012345678901")
 	if err != nil {
 		t.Fatalf("NewCipher returned error: %v", err)
 	}

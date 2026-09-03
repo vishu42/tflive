@@ -11,7 +11,7 @@ import (
 
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/vishu42/tflive/internal/secrets"
+	"github.com/vishu42/tflive/internal/encryption"
 )
 
 type stubLocalAuthenticator struct {
@@ -48,7 +48,7 @@ func newLocalLoginServer(
 ) *Server {
 	t.Helper()
 
-	sealer, err := secrets.NewCipher("01234567890123456789012345678901")
+	sealer, err := encryption.NewCipher("01234567890123456789012345678901")
 	if err != nil {
 		t.Fatalf("NewCipher returned error: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestLocalLoginRejectsAMalformedBody(t *testing.T) {
 // distinction discloses nothing: /v1/auth/methods states which methods are
 // live, because the sign-in screen has to know.
 func TestLocalLoginIsNotRegisteredWithoutAnAuthenticator(t *testing.T) {
-	sealer, err := secrets.NewCipher("01234567890123456789012345678901")
+	sealer, err := encryption.NewCipher("01234567890123456789012345678901")
 	if err != nil {
 		t.Fatalf("NewCipher returned error: %v", err)
 	}

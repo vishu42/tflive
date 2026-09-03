@@ -8,7 +8,7 @@ import (
 
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/bootstrap"
-	"github.com/vishu42/tflive/internal/secrets"
+	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/strval"
 	"github.com/vishu42/tflive/internal/traits"
 )
@@ -169,7 +169,7 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 	if sessionKey.Empty() {
 		return SecurityConfig{}, authConfigError("SESSION_ENCRYPTION_KEY is required")
 	}
-	if _, err := secrets.NewCipher(sessionKey.Value()); err != nil {
+	if _, err := encryption.NewCipher(sessionKey.Value()); err != nil {
 		return SecurityConfig{}, authConfigError("SESSION_ENCRYPTION_KEY must be a 32-byte raw, base64, or hex key")
 	}
 

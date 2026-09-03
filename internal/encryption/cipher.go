@@ -1,4 +1,4 @@
-package secrets
+package encryption
 
 import (
 	"crypto/aes"

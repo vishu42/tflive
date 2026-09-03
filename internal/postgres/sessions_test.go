@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/vishu42/tflive/internal/secrets"
+	"github.com/vishu42/tflive/internal/encryption"
 )
 
 func newSessionTestStore(t *testing.T, ctx context.Context) *Store {
@@ -17,7 +17,7 @@ func newSessionTestStore(t *testing.T, ctx context.Context) *Store {
 	// schema and never applies migrations, so the sessions table would not
 	// exist.
 	pool := openMigratedTestPool(t, ctx)
-	cipher, err := secrets.NewCipher("717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3")
+	cipher, err := encryption.NewCipher("717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3")
 	if err != nil {
 		t.Fatalf("new cipher: %v", err)
 	}

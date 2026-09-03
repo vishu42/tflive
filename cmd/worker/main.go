@@ -13,10 +13,10 @@ import (
 	"github.com/vishu42/tflive/internal/authorizer"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/secrets"
 	"github.com/vishu42/tflive/internal/temporal"
 	"github.com/vishu42/tflive/internal/traits"
 	"github.com/vishu42/tflive/internal/workflows"
@@ -66,7 +66,7 @@ type workerDependencies struct {
 	// migratePostgres applies the schema migrations required before activities can record state.
 	migratePostgres func(context.Context, postgresPool) error
 	// newStore builds the persistence adapter shared by worker activities.
-	newStore func(postgresPool, *secrets.Cipher) (workerStore, error)
+	newStore func(postgresPool, *encryption.Cipher) (workerStore, error)
 	// dialTemporal connects to the Temporal namespace where the worker polls for tasks.
 	dialTemporal func(context.Context, temporal.Config) (client.Client, error)
 	// newWorker creates the Temporal worker bound to the configured task queue.
@@ -116,7 +116,7 @@ func defaultWorkerDependencies() workerDependencies {
 			}
 			return postgres.Migrate(ctx, pgxPool)
 		},
-		newStore: func(pool postgresPool, cipher *secrets.Cipher) (workerStore, error) {
+		newStore: func(pool postgresPool, cipher *encryption.Cipher) (workerStore, error) {
 			pgxPool, ok := pool.(*pgxpool.Pool)
 			if !ok {
 				return nil, fmt.Errorf("unexpected postgres pool type %T", pool)
@@ -214,9 +214,9 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 		return fmt.Errorf("migrate postgres: %w", err)
 	}
 
-	var credentialCipher *secrets.Cipher
+	var credentialCipher *encryption.Cipher
 	if !cfg.CredentialEncryptionKey.Empty() {
-		credentialCipher, err = secrets.NewCipher(cfg.CredentialEncryptionKey.Value())
+		credentialCipher, err = encryption.NewCipher(cfg.CredentialEncryptionKey.Value())
 		if err != nil {
 			return fmt.Errorf("create credential cipher: %w", err)
 		}

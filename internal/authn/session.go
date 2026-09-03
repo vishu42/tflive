@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/vishu42/tflive/internal/secrets"
+	"github.com/vishu42/tflive/internal/encryption"
 )
 
 const (
@@ -51,7 +51,7 @@ var ErrTransactionExpired = errors.New("login transaction expired")
 
 // SealTransaction encrypts a transaction for storage in a cookie. IssuedAt is
 // stamped here, overwriting whatever the caller set.
-func SealTransaction(cipher *secrets.Cipher, transaction Transaction) (string, error) {
+func SealTransaction(cipher *encryption.Cipher, transaction Transaction) (string, error) {
 	transaction.IssuedAt = time.Now().Unix()
 	encoded, err := json.Marshal(transaction)
 	if err != nil {
@@ -63,7 +63,7 @@ func SealTransaction(cipher *secrets.Cipher, transaction Transaction) (string, e
 // OpenTransaction authenticates and decodes a sealed transaction. Any failure
 // means the value was forged, truncated, sealed under a different key, or
 // sealed too long ago to still represent a login in progress.
-func OpenTransaction(cipher *secrets.Cipher, sealed string) (Transaction, error) {
+func OpenTransaction(cipher *encryption.Cipher, sealed string) (Transaction, error) {
 	plaintext, err := cipher.Decrypt(sealed)
 	if err != nil {
 		return Transaction{}, err
