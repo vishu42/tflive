@@ -5,11 +5,11 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/bootstrap"
 	"github.com/vishu42/tflive/internal/secrets"
+	"github.com/vishu42/tflive/internal/strval"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -250,7 +250,7 @@ func loadRootConfig(getenv func(string) string) (RootConfig, error) {
 	if username == "" {
 		username = bootstrap.DefaultRootUsername
 	}
-	if !safeOpaqueValue(username) {
+	if !strval.SafeOpaque(username) {
 		return RootConfig{}, authConfigError("TFLIVE_ROOT_USERNAME must not contain whitespace or control characters")
 	}
 
@@ -294,7 +294,7 @@ func loadOIDCConfig(getenv func(string) string) (OIDCConfig, error) {
 	if clientID == "" {
 		return OIDCConfig{}, authConfigError("OIDC_CLIENT_ID is required")
 	}
-	if !safeOpaqueValue(clientID) {
+	if !strval.SafeOpaque(clientID) {
 		return OIDCConfig{}, authConfigError("OIDC_CLIENT_ID must not contain whitespace or control characters")
 	}
 	if clientSecret.Empty() {
@@ -312,18 +312,18 @@ func loadOpenFGAConfig(getenv func(string) string) (OpenFGAConfig, error) {
 	if storeID == "" {
 		return OpenFGAConfig{}, authConfigError("OPENFGA_STORE_ID is required")
 	}
-	if !safeOpaqueValue(storeID) {
+	if !strval.SafeOpaque(storeID) {
 		return OpenFGAConfig{}, authConfigError("OPENFGA_STORE_ID must not contain whitespace or control characters")
 	}
 	modelID := strings.TrimSpace(getenv("OPENFGA_MODEL_ID"))
 	if modelID == "" {
 		return OpenFGAConfig{}, authConfigError("OPENFGA_MODEL_ID is required")
 	}
-	if !safeOpaqueValue(modelID) {
+	if !strval.SafeOpaque(modelID) {
 		return OpenFGAConfig{}, authConfigError("OPENFGA_MODEL_ID must not contain whitespace or control characters")
 	}
 	token := newSecret(getenv("OPENFGA_API_TOKEN"))
-	if !token.Empty() && !safeOpaqueValue(token.Value()) {
+	if !token.Empty() && !strval.SafeOpaque(token.Value()) {
 		return OpenFGAConfig{}, authConfigError("OPENFGA_API_TOKEN must not contain whitespace or control characters")
 	}
 	timeout := DefaultOpenFGAHTTPTimeout
@@ -389,12 +389,6 @@ func asciiAlphanumeric(character byte) bool {
 	return character >= 'a' && character <= 'z' ||
 		character >= 'A' && character <= 'Z' ||
 		character >= '0' && character <= '9'
-}
-
-func safeOpaqueValue(value string) bool {
-	return value != "" && strings.IndexFunc(value, func(character rune) bool {
-		return unicode.IsSpace(character) || unicode.IsControl(character)
-	}) == -1
 }
 
 func optionalPositiveDuration(getenv func(string) string, name string, fallback time.Duration) (time.Duration, error) {

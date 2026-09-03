@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+
+	"github.com/vishu42/tflive/internal/strval"
 )
 
 const (
@@ -232,7 +234,7 @@ func redactSecrets(message string, secrets []string) string {
 	}
 	sort.SliceStable(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
 	for _, secret := range ordered {
-		message = strings.ReplaceAll(message, secret, "[REDACTED]")
+		message = strval.Redact(message, secret)
 	}
 	return message
 }

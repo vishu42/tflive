@@ -59,13 +59,24 @@ var ErrSessionNotFound = errors.New("session not found")
 // defect rather than an expected runtime state.
 var ErrSessionEncryptionUnavailable = errors.New("session encryption is unavailable")
 
-// NewSessionID returns the opaque value handed to the browser.
-func NewSessionID() (string, error) {
+// NewOpaqueToken returns 32 bytes of CSPRNG output in base64url: a value with
+// no structure to parse and no keyspace worth searching, for anything handed to
+// a browser and later compared for equality.
+//
+// Session IDs and the OIDC state and nonce are all this same value. They were
+// minted by two identical functions in two packages before this one, which is
+// exactly the kind of thing that survives being weakened in one place only.
+func NewOpaqueToken() (string, error) {
 	buffer := make([]byte, 32)
 	if _, err := rand.Read(buffer); err != nil {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(buffer), nil
+}
+
+// NewSessionID returns the opaque value handed to the browser.
+func NewSessionID() (string, error) {
+	return NewOpaqueToken()
 }
 
 // HashSessionID reduces a session ID to what the database stores. The input is

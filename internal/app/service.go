@@ -16,6 +16,7 @@ import (
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/queue"
+	"github.com/vishu42/tflive/internal/strval"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -1418,18 +1419,9 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 	return GrantView{
 		UserSub:     command.UserSub,
 		Role:        command.Role,
-		DisplayName: firstNonEmptyString(target.DisplayName, command.UserSub),
+		DisplayName: strval.FirstNonEmpty(target.DisplayName, command.UserSub),
 		Email:       target.Email,
 	}, nil
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStackRoleCommand) error {

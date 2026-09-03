@@ -6,7 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
+
+	"github.com/vishu42/tflive/internal/strval"
 )
 
 const (
@@ -101,7 +102,5 @@ func (cfg Config) ValidateVerify() error {
 // model, or continuation-token identifier: non-empty and free of whitespace
 // and control characters, so it cannot corrupt a URL path or a request body.
 func SafeOpaqueIdentifier(value string) bool {
-	return value != "" && strings.IndexFunc(value, func(character rune) bool {
-		return unicode.IsSpace(character) || unicode.IsControl(character)
-	}) == -1
+	return strval.SafeOpaque(value)
 }
