@@ -2225,53 +2225,51 @@ func (systemClock) Now() time.Time {
 	return time.Now().UTC()
 }
 
+// randomID mints one identifier: the kind's prefix followed by 16 bytes of
+// CSPRNG output in hex. Every generator below is this function plus a prefix,
+// so the shape of a tflive identifier is defined in exactly one place.
+//
+// A failed read falls back to a timestamp rather than failing the call: the
+// generator interfaces return no error, and the callers minting these IDs are
+// mid-command with nowhere to report one.
+func randomID[ID ~string](prefix string) ID {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return ID(fmt.Sprintf("%s_%d", prefix, time.Now().UTC().UnixNano()))
+	}
+	return ID(prefix + "_" + hex.EncodeToString(bytes[:]))
+}
+
+// The generators are distinct types only because each satisfies a different
+// single-method interface on Service; they carry no logic of their own.
+
 type randomTemplateRunIDGenerator struct{}
 
 func (randomTemplateRunIDGenerator) NewTemplateRunID() traits.TemplateRunID {
-	var bytes [16]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		return traits.TemplateRunID(fmt.Sprintf("run_%d", time.Now().UTC().UnixNano()))
-	}
-	return traits.TemplateRunID("run_" + hex.EncodeToString(bytes[:]))
+	return randomID[traits.TemplateRunID]("run")
 }
 
 type randomTemplateRegistrationIDGenerator struct{}
 
 func (randomTemplateRegistrationIDGenerator) NewTemplateRegistrationID() traits.TemplateRegistrationID {
-	var bytes [16]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		return traits.TemplateRegistrationID(fmt.Sprintf("template_registration_%d", time.Now().UTC().UnixNano()))
-	}
-	return traits.TemplateRegistrationID("template_registration_" + hex.EncodeToString(bytes[:]))
+	return randomID[traits.TemplateRegistrationID]("template_registration")
 }
 
 type randomStackIDGenerator struct{}
 
 func (randomStackIDGenerator) NewStackID() traits.StackID {
-	var bytes [16]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		return traits.StackID(fmt.Sprintf("stack_%d", time.Now().UTC().UnixNano()))
-	}
-	return traits.StackID("stack_" + hex.EncodeToString(bytes[:]))
+	return randomID[traits.StackID]("stack")
 }
 
 type randomStackTemplateIDGenerator struct{}
 
 func (randomStackTemplateIDGenerator) NewStackTemplateID() traits.StackTemplateID {
-	var bytes [16]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		return traits.StackTemplateID(fmt.Sprintf("stack_template_%d", time.Now().UTC().UnixNano()))
-	}
-	return traits.StackTemplateID("stack_template_" + hex.EncodeToString(bytes[:]))
+	return randomID[traits.StackTemplateID]("stack_template")
 }
 
 type randomCredentialSetIDGenerator struct{}
 
 // NewCredentialSetID creates a random identifier for a persisted credential record.
 func (randomCredentialSetIDGenerator) NewCredentialSetID() traits.CredentialSetID {
-	var bytes [16]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		return traits.CredentialSetID(fmt.Sprintf("credential_%d", time.Now().UTC().UnixNano()))
-	}
-	return traits.CredentialSetID("credential_" + hex.EncodeToString(bytes[:]))
+	return randomID[traits.CredentialSetID]("credential")
 }

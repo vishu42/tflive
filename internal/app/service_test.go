@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -2875,5 +2877,40 @@ func TestAssignStackRoleWithoutUnitOfWorkFails(t *testing.T) {
 	})
 	if !errors.Is(err, authz.ErrUnavailable) {
 		t.Fatalf("error = %v, want ErrUnavailable", err)
+	}
+}
+
+// TestDefaultIDGeneratorsMintPrefixedRandomIDs locks the identifier shape the
+// five default generators share. They now differ only in the prefix handed to
+// randomID, so a wrong prefix is the one mistake the collapse made possible and
+// the one this test is here to catch.
+func TestDefaultIDGeneratorsMintPrefixedRandomIDs(t *testing.T) {
+	t.Parallel()
+
+	generators := map[string]func() string{
+		"run":                   func() string { return string(randomTemplateRunIDGenerator{}.NewTemplateRunID()) },
+		"template_registration": func() string { return string(randomTemplateRegistrationIDGenerator{}.NewTemplateRegistrationID()) },
+		"stack":                 func() string { return string(randomStackIDGenerator{}.NewStackID()) },
+		"stack_template":        func() string { return string(randomStackTemplateIDGenerator{}.NewStackTemplateID()) },
+		"credential":            func() string { return string(randomCredentialSetIDGenerator{}.NewCredentialSetID()) },
+	}
+
+	for prefix, generate := range generators {
+		t.Run(prefix, func(t *testing.T) {
+			t.Parallel()
+
+			id := generate()
+			suffix, found := strings.CutPrefix(id, prefix+"_")
+			if !found {
+				t.Fatalf("id = %q, want prefix %q", id, prefix+"_")
+			}
+			// 16 random bytes, hex-encoded.
+			if decoded, err := hex.DecodeString(suffix); err != nil || len(decoded) != 16 {
+				t.Fatalf("id = %q, want %q followed by 32 hex characters", id, prefix+"_")
+			}
+			if second := generate(); second == id {
+				t.Fatalf("two %s ids are both %q, want distinct values", prefix, id)
+			}
+		})
 	}
 }
