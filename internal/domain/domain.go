@@ -395,7 +395,7 @@ func (stackTemplate StackTemplate) PlanState() PlanState {
 	if stackTemplate.LastPlannedRunID == "" {
 		return PlanNone
 	}
-	if snapshotMatchesDesired(stackTemplate.LastPlannedTemplateRevisionID, stackTemplate.LastPlannedConfigJSON, stackTemplate) {
+	if stackTemplate.matchesDesired(stackTemplate.plannedSnapshot()) {
 		return PlanMatches
 	}
 	return PlanStale
@@ -408,18 +408,43 @@ func (stackTemplate StackTemplate) LiveState() LiveState {
 	if stackTemplate.LastAppliedRunID == "" {
 		return LiveNever
 	}
-	if snapshotMatchesDesired(stackTemplate.LastAppliedTemplateRevisionID, stackTemplate.LastAppliedConfigJSON, stackTemplate) {
+	if stackTemplate.matchesDesired(stackTemplate.appliedSnapshot()) {
 		return LiveMatches
 	}
 	return LiveDiffers
 }
 
-// snapshotMatchesDesired compares a recorded (revision, config) pair against
-// desired. Both halves matter: a revision-only change leaves the config
-// identical on both sides, and on an all-optional template both sides are '{}',
-// so a config-only check would pass while the module version changed underneath.
-func snapshotMatchesDesired(revisionID TemplateRevisionID, configJSON json.RawMessage, stackTemplate StackTemplate) bool {
-	if revisionID != stackTemplate.DesiredTemplateRevisionID {
+// snapshot is one recorded (revision, config) pair. A stack template carries
+// three of them — desired, planned, and applied — and every state it can be in
+// is the distance between two, so a snapshot travels as one value rather than
+// as two fields that a caller could pair up wrongly.
+type snapshot struct {
+	revisionID TemplateRevisionID
+	configJSON json.RawMessage
+}
+
+// plannedSnapshot is what the latest completed plan ran against.
+func (stackTemplate StackTemplate) plannedSnapshot() snapshot {
+	return snapshot{
+		revisionID: stackTemplate.LastPlannedTemplateRevisionID,
+		configJSON: stackTemplate.LastPlannedConfigJSON,
+	}
+}
+
+// appliedSnapshot is what the last successful apply put live.
+func (stackTemplate StackTemplate) appliedSnapshot() snapshot {
+	return snapshot{
+		revisionID: stackTemplate.LastAppliedTemplateRevisionID,
+		configJSON: stackTemplate.LastAppliedConfigJSON,
+	}
+}
+
+// matchesDesired compares a recorded snapshot against desired. Both halves
+// matter: a revision-only change leaves the config identical on both sides, and
+// on an all-optional template both sides are '{}', so a config-only check would
+// pass while the module version changed underneath.
+func (stackTemplate StackTemplate) matchesDesired(recorded snapshot) bool {
+	if recorded.revisionID != stackTemplate.DesiredTemplateRevisionID {
 		return false
 	}
 	// Nil is "no config was ever recorded", which is not the same as "recorded
@@ -427,10 +452,10 @@ func snapshotMatchesDesired(revisionID TemplateRevisionID, configJSON json.RawMe
 	// compares equal here like any other config; only a row whose run ID is set
 	// while its config snapshot is null reaches this branch, and there is
 	// nothing to vouch for it, so it reads as pending work.
-	if configJSON == nil {
+	if recorded.configJSON == nil {
 		return false
 	}
-	return sameJSONConfig(configJSON, stackTemplate.DesiredConfig())
+	return sameJSONConfig(recorded.configJSON, stackTemplate.DesiredConfig())
 }
 
 // sameJSONConfig compares two configs by parsed structure. Comparing the bytes
