@@ -935,7 +935,11 @@
   display: flex;
   gap: var(--space-3);
   justify-content: space-between;
-  padding: var(--space-3) var(--space-4);
+  /* 12px of vertical padding made a 64px band around a 36px control. This is
+     as tight as the row goes without the button fouling it: the button is
+     --control-height plus its own 1px borders, so a zero-padding row would
+     have its corners clipped by this one's radius. */
+  padding: var(--space-1) var(--space-4);
 }
 
 .stack-template-revision-action p {
