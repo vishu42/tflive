@@ -19,6 +19,7 @@ import (
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authorizer"
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/bootstrap"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
@@ -72,6 +73,27 @@ func credentialRepository(store appRepositories) app.CredentialRepository {
 func credentialEncryptor(store appRepositories) app.CredentialEncryptor {
 	encryptor, _ := store.(app.CredentialEncryptor)
 	return encryptor
+}
+
+// rootAccountStore is localAccountStore's read-write counterpart: seeding also
+// creates, where signing in only reads.
+func rootAccountStore(store appRepositories) (bootstrap.Accounts, error) {
+	accounts, ok := store.(bootstrap.Accounts)
+	if !ok {
+		return nil, fmt.Errorf("store %T does not implement bootstrap.Accounts", store)
+	}
+	return accounts, nil
+}
+
+// localAccountStore mirrors sessionStore: the repository is reached through an
+// assertion rather than being added to appRepositories, so a deployment that
+// never enables local auth is not made to satisfy an interface it does not use.
+func localAccountStore(store appRepositories) (authn.LocalAccountStore, error) {
+	accounts, ok := store.(authn.LocalAccountStore)
+	if !ok {
+		return nil, fmt.Errorf("store %T does not implement authn.LocalAccountStore", store)
+	}
+	return accounts, nil
 }
 
 // sessionStore requires the wired store to also satisfy authn.SessionStore.
@@ -148,29 +170,42 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("load api config: %w", err)
 	}
 
-	verifier, err := deps.newVerifier(ctx, authn.OIDCVerifierConfig{
-		IssuerURL: cfg.Security.OIDC.IssuerURL,
-		Audience:  cfg.Security.OIDC.ClientID,
-	})
-	if err != nil {
-		return fmt.Errorf("create token verifier: %w", err)
-	}
-	defer verifier.Close(context.Background())
-
 	sessionSealer, err := secrets.NewCipher(cfg.Security.SessionEncryptionKey.Value())
 	if err != nil {
 		return fmt.Errorf("create session sealer: %w", err)
 	}
 	publicURL := strings.TrimRight(cfg.Security.PublicURL.String(), "/")
-	flow, err := authn.NewFlow(authn.FlowConfig{
-		ClientID:     cfg.Security.OIDC.ClientID,
-		ClientSecret: cfg.Security.OIDC.ClientSecret.Value(),
-		RedirectURI:  publicURL + "/v1/auth/callback",
-		Endpoints:    verifier,
-		HTTPClient:   &http.Client{Timeout: 10 * time.Second},
-	})
-	if err != nil {
-		return fmt.Errorf("create oidc flow: %w", err)
+
+	// The OIDC half is built only when a provider is configured. Constructing a
+	// verifier reaches for a discovery document, so doing it unconditionally
+	// made an IdP-less deployment fail at boot rather than run on local
+	// accounts alone — which is the deployment #211 exists to allow. Both
+	// remain nil in that case, and api.WithAuth registers no OIDC routes.
+	var verifier tokenVerifier
+	var logoutTokenVerifier api.LogoutTokenVerifier
+	var flow api.AuthFlow
+	if cfg.Security.OIDC.IssuerURL != nil {
+		oidcVerifier, err := deps.newVerifier(ctx, authn.OIDCVerifierConfig{
+			IssuerURL: cfg.Security.OIDC.IssuerURL,
+			Audience:  cfg.Security.OIDC.ClientID,
+		})
+		if err != nil {
+			return fmt.Errorf("create token verifier: %w", err)
+		}
+		defer oidcVerifier.Close(context.Background())
+		verifier, logoutTokenVerifier = oidcVerifier, oidcVerifier
+
+		oidcFlow, err := authn.NewFlow(authn.FlowConfig{
+			ClientID:     cfg.Security.OIDC.ClientID,
+			ClientSecret: cfg.Security.OIDC.ClientSecret.Value(),
+			RedirectURI:  publicURL + "/v1/auth/callback",
+			Endpoints:    oidcVerifier,
+			HTTPClient:   &http.Client{Timeout: 10 * time.Second},
+		})
+		if err != nil {
+			return fmt.Errorf("create oidc flow: %w", err)
+		}
+		flow = oidcFlow
 	}
 
 	authorizer, err := deps.newAuthorizer(openfga.Config{
@@ -243,12 +278,42 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("wire session store: %w", err)
 	}
 
+	// Always wired. Root is a local account that is seeded at every boot and
+	// cannot be locked out (#212), so a deployment where the password route is
+	// missing is one where the highest-privileged identity in the model exists
+	// in the table and cannot sign in — the "no reachable administrator" state
+	// #212 refuses to start in, reached through configuration.
+	//
+	// Failing here is therefore fail-closed rather than pedantic: without this
+	// store there is no way into a fresh install at all.
+	accounts, err := localAccountStore(store)
+	if err != nil {
+		return fmt.Errorf("wire local account store: %w", err)
+	}
+	localAuthenticator := authn.NewLocalAuthenticator(accounts)
+
+	// Before serving, not alongside it. A fresh install has zero
+	// administrators and granting admin requires already being one, so until
+	// this has run there is no way to administer anything — and the failure is
+	// silent, because every route simply answers 403.
+	rootAccounts, err := rootAccountStore(store)
+	if err != nil {
+		return fmt.Errorf("wire root account store: %w", err)
+	}
+	if err := bootstrap.SeedRoot(ctx, rootAccounts, authorizer, bootstrap.RootConfig{
+		Username: cfg.Security.Root.Username,
+		Password: cfg.Security.Root.Password.Value(),
+	}, time.Now); err != nil {
+		return fmt.Errorf("seed root account: %w", err)
+	}
+
 	handler := api.NewAuthenticatedServer(service, cfg.Security.TenantID, cfg.Debug,
 		api.WithQueueReader(store),
 		api.WithAuth(api.AuthConfig{
 			Flow:                flow,
 			Verifier:            verifier,
-			LogoutTokenVerifier: verifier,
+			LocalAuthenticator:  localAuthenticator,
+			LogoutTokenVerifier: logoutTokenVerifier,
 			Sealer:              sessionSealer,
 			PublicURL:           publicURL,
 			SecureCookies:       cfg.Security.Mode == config.RuntimeProduction,

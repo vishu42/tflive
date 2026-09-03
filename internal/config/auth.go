@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/vishu42/tflive/internal/authn"
+	"github.com/vishu42/tflive/internal/bootstrap"
 	"github.com/vishu42/tflive/internal/secrets"
 	"github.com/vishu42/tflive/internal/traits"
 )
@@ -24,7 +25,20 @@ const (
 type SecurityConfig struct {
 	Mode     RuntimeMode
 	TenantID traits.TenantID
-	OIDC     OIDCConfig
+	// OIDC is the zero value when no provider is configured. IssuerURL nil is
+	// the test for that, and it is a supported deployment rather than an
+	// error: local accounts can be the only way in.
+	OIDC OIDCConfig
+	// Root is the account a fresh install is administered from (#212). It is
+	// not optional: seeding is what makes an install administrable at all,
+	// since granting admin requires already being one.
+	Root RootConfig
+
+	// There is deliberately no local-auth setting. Root is a local account,
+	// seeded at every boot and unable to be locked out (#212), so the password
+	// path is always present; a flag here could only ever lie about that. What
+	// is optional is the external provider above, which is why OIDC alone
+	// carries a "configured or not" state.
 
 	PublicURL            *url.URL
 	SessionEncryptionKey Secret
@@ -32,6 +46,16 @@ type SecurityConfig struct {
 	SessionIdleTTL       time.Duration
 
 	OpenFGA OpenFGAConfig
+}
+
+// RootConfig is the seeded bootstrap administrator.
+type RootConfig struct {
+	// Username defaults to "root".
+	Username string
+	// Password is used only when the account does not yet exist: reconciling
+	// is add-only, so a rotated password is not reset from configuration on
+	// the next restart.
+	Password Secret
 }
 
 type OIDCConfig struct {
@@ -89,12 +113,14 @@ func (cfg OpenFGAConfig) GoString() string {
 
 func (cfg SecurityConfig) String() string {
 	return fmt.Sprintf(
-		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v ClientID:%q ClientSecret:%s} PublicURL:%v SessionEncryptionKey:%s SessionAbsoluteTTL:%s SessionIdleTTL:%s OpenFGA:%s}",
+		"SecurityConfig{Mode:%q TenantID:%q OIDC:{IssuerURL:%v ClientID:%q ClientSecret:%s} Root:{Username:%q Password:%s} PublicURL:%v SessionEncryptionKey:%s SessionAbsoluteTTL:%s SessionIdleTTL:%s OpenFGA:%s}",
 		cfg.Mode,
 		cfg.TenantID,
 		cfg.OIDC.IssuerURL,
 		cfg.OIDC.ClientID,
 		cfg.OIDC.ClientSecret,
+		cfg.Root.Username,
+		cfg.Root.Password,
 		cfg.PublicURL,
 		cfg.SessionEncryptionKey,
 		cfg.SessionAbsoluteTTL,
@@ -121,23 +147,16 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 		return SecurityConfig{}, authConfigError("TFLIVE_TENANT_ID must start with an ASCII alphanumeric character, contain only ASCII alphanumerics, underscore, or hyphen, and be at most 128 characters")
 	}
 
-	issuerURL, err := parseConfigURL("OIDC_ISSUER_URL", getenv("OIDC_ISSUER_URL"))
+	// No check for "at least one method configured": local sign-in is always
+	// available, so there is always a way in even with no OIDC at all.
+	oidc, err := loadOIDCConfig(getenv)
 	if err != nil {
 		return SecurityConfig{}, err
 	}
-	if strings.TrimSpace(getenv("OIDC_AUDIENCE")) != "" {
-		return SecurityConfig{}, authConfigError("OIDC_AUDIENCE is retired: set OIDC_CLIENT_ID to the OAuth client ID instead")
-	}
-	clientID := strings.TrimSpace(getenv("OIDC_CLIENT_ID"))
-	if clientID == "" {
-		return SecurityConfig{}, authConfigError("OIDC_CLIENT_ID is required")
-	}
-	if !safeOpaqueValue(clientID) {
-		return SecurityConfig{}, authConfigError("OIDC_CLIENT_ID must not contain whitespace or control characters")
-	}
-	clientSecret := newSecret(strings.TrimSpace(getenv("OIDC_CLIENT_SECRET")))
-	if clientSecret.Empty() {
-		return SecurityConfig{}, authConfigError("OIDC_CLIENT_SECRET is required")
+
+	root, err := loadRootConfig(getenv)
+	if err != nil {
+		return SecurityConfig{}, err
 	}
 
 	publicURL, err := parseConfigURL("TFLIVE_PUBLIC_URL", getenv("TFLIVE_PUBLIC_URL"))
@@ -185,7 +204,9 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 		return SecurityConfig{}, authConfigError("OPENFGA_API_URL must use HTTPS in production")
 	}
 	if mode == RuntimeProduction {
-		if issuerURL.Scheme != "https" {
+		// Only when one is configured: a local-only production deployment has
+		// no issuer, and dereferencing the nil here would panic at boot.
+		if oidc.IssuerURL != nil && oidc.IssuerURL.Scheme != "https" {
 			return SecurityConfig{}, authConfigError("OIDC_ISSUER_URL must use HTTPS in production")
 		}
 		if publicURL.Scheme != "https" {
@@ -205,11 +226,8 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 	return SecurityConfig{
 		Mode:     mode,
 		TenantID: traits.TenantID(tenantID),
-		OIDC: OIDCConfig{
-			IssuerURL:    issuerURL,
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
-		},
+		OIDC:     oidc,
+		Root:     root,
 
 		PublicURL:            publicURL,
 		SessionEncryptionKey: sessionKey,
@@ -218,6 +236,71 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 
 		OpenFGA: openFGA,
 	}, nil
+}
+
+// loadRootConfig reads the seeded bootstrap administrator.
+//
+// The password is required rather than generated. A generated one has to be
+// surfaced somewhere, and the only place a boot can surface it is the log,
+// where it then outlives the install in whatever collects logs and is read by
+// everyone with access to them. Requiring it keeps the most valuable secret in
+// the deployment in the same place as every other one.
+func loadRootConfig(getenv func(string) string) (RootConfig, error) {
+	username := strings.TrimSpace(getenv("TFLIVE_ROOT_USERNAME"))
+	if username == "" {
+		username = bootstrap.DefaultRootUsername
+	}
+	if !safeOpaqueValue(username) {
+		return RootConfig{}, authConfigError("TFLIVE_ROOT_USERNAME must not contain whitespace or control characters")
+	}
+
+	// Not trimmed: leading and trailing space is legitimate in a password, and
+	// silently removing it would make the configured secret differ from the
+	// one that was set.
+	password := newSecret(getenv("TFLIVE_ROOT_PASSWORD"))
+	if password.Empty() {
+		return RootConfig{}, authConfigError("TFLIVE_ROOT_PASSWORD is required: it seeds the administrator a fresh install is set up from")
+	}
+	return RootConfig{Username: username, Password: password}, nil
+}
+
+// loadOIDCConfig reads the external provider, or reports the zero value when
+// none is configured.
+//
+// OIDC_ISSUER_URL is what decides. Absent, there is no provider and the client
+// credentials must be absent too; present, it is a provider being configured
+// and the credentials are required. Accepting either half alone would let an
+// operator believe SSO is on when nothing would ever contact the provider.
+func loadOIDCConfig(getenv func(string) string) (OIDCConfig, error) {
+	if strings.TrimSpace(getenv("OIDC_AUDIENCE")) != "" {
+		return OIDCConfig{}, authConfigError("OIDC_AUDIENCE is retired: set OIDC_CLIENT_ID to the OAuth client ID instead")
+	}
+
+	rawIssuer := strings.TrimSpace(getenv("OIDC_ISSUER_URL"))
+	clientID := strings.TrimSpace(getenv("OIDC_CLIENT_ID"))
+	clientSecret := newSecret(strings.TrimSpace(getenv("OIDC_CLIENT_SECRET")))
+
+	if rawIssuer == "" {
+		if clientID != "" || !clientSecret.Empty() {
+			return OIDCConfig{}, authConfigError("OIDC_CLIENT_ID and OIDC_CLIENT_SECRET require OIDC_ISSUER_URL")
+		}
+		return OIDCConfig{}, nil
+	}
+
+	issuerURL, err := parseConfigURL("OIDC_ISSUER_URL", rawIssuer)
+	if err != nil {
+		return OIDCConfig{}, err
+	}
+	if clientID == "" {
+		return OIDCConfig{}, authConfigError("OIDC_CLIENT_ID is required")
+	}
+	if !safeOpaqueValue(clientID) {
+		return OIDCConfig{}, authConfigError("OIDC_CLIENT_ID must not contain whitespace or control characters")
+	}
+	if clientSecret.Empty() {
+		return OIDCConfig{}, authConfigError("OIDC_CLIENT_SECRET is required")
+	}
+	return OIDCConfig{IssuerURL: issuerURL, ClientID: clientID, ClientSecret: clientSecret}, nil
 }
 
 func loadOpenFGAConfig(getenv func(string) string) (OpenFGAConfig, error) {

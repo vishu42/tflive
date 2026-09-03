@@ -47,11 +47,27 @@ type AuthFlow interface {
 	EndSessionURL(idTokenHint, postLogoutRedirectURI string) string
 }
 
+// LocalAuthenticator checks a username and password against the accounts
+// tflive owns. *authn.LocalAuthenticator satisfies it.
+//
+// It is separate from Verifier because the two answer different questions: a
+// Verifier decides whether a token an IdP issued is genuine, this decides
+// whether a password matches. Neither is a fallback for the other, and a
+// deployment may wire either, both, or -- for an unauthenticated test server --
+// neither.
+type LocalAuthenticator interface {
+	Authenticate(ctx context.Context, username, password string) (authn.Identity, error)
+}
+
 // AuthConfig carries what the browser login routes need.
 type AuthConfig struct {
 	Flow     AuthFlow
 	Verifier authn.Verifier
-	Sealer   *secrets.Cipher
+	// LocalAuthenticator enables the local sign-in route. Nil means local
+	// accounts are off, and the route is not registered at all: there is then
+	// no local credential path to reach, rather than one that always denies.
+	LocalAuthenticator LocalAuthenticator
+	Sealer             *secrets.Cipher
 	// PublicURL is the origin the browser reaches, with no trailing slash. It
 	// is configured rather than derived from Host or X-Forwarded-Proto, which
 	// a caller can spoof.
@@ -93,8 +109,11 @@ func requireCompleteAuthWiring(service *app.Service, auth AuthConfig) {
 		panic("api: WithAuth configured without a Service")
 	case service.Users == nil:
 		panic("api: WithAuth configured without a Service user repository")
-	case auth.Verifier == nil:
-		panic("api: WithAuth configured without a Verifier")
+	// Only the OIDC half needs a Verifier: it is what the callback checks the
+	// ID token with. A local-only deployment has no token to verify and must
+	// not be forced to wire one.
+	case auth.Flow != nil && auth.Verifier == nil:
+		panic("api: WithAuth configured with a Flow but without a Verifier")
 	case auth.Sealer == nil:
 		panic("api: WithAuth configured without a Sealer")
 	case auth.Sessions == nil:
@@ -118,12 +137,29 @@ func NewServer(service *app.Service, tenantID traits.TenantID, options ...Server
 
 	// Browser login routes. Registered only when auth is configured, so an
 	// unauthenticated test server does not expose a half-wired flow.
-	if server.auth.Flow != nil {
+	//
+	// The two sign-in methods register independently. A deployment with local
+	// accounts and no IdP has no Flow, and gating everything on Flow -- as this
+	// did while OIDC was the only way in -- would leave it with no way to end a
+	// session, because logout would not exist.
+	if server.auth.Flow != nil || server.auth.LocalAuthenticator != nil {
 		requireCompleteAuthWiring(server.service, server.auth)
+		// Ending a session is not an OIDC operation. Revoking the row and
+		// clearing the cookie is the same work for both methods; only the
+		// onward redirect to the provider needs a Flow, and handleAuthLogout
+		// already degrades to the local redirect without one.
+		server.mux.HandleFunc("POST /v1/auth/logout", server.handleAuthLogout)
+		// Which methods are live, so the sign-in screen renders the ones that
+		// exist instead of discovering them by failing (#213).
+		server.mux.HandleFunc("GET /v1/auth/methods", server.handleAuthMethods)
+	}
+	if server.auth.Flow != nil {
 		server.mux.HandleFunc("GET /v1/auth/login", server.handleAuthLogin)
 		server.mux.HandleFunc("GET /v1/auth/callback", server.handleAuthCallback)
-		server.mux.HandleFunc("POST /v1/auth/logout", server.handleAuthLogout)
 		server.mux.HandleFunc("POST /v1/auth/backchannel-logout", server.handleBackchannelLogout)
+	}
+	if server.auth.LocalAuthenticator != nil {
+		server.mux.HandleFunc("POST /v1/auth/login", server.handleLocalLogin)
 	}
 
 	// Health routes.
@@ -212,6 +248,9 @@ func NewAuthenticatedServer(service *app.Service, tenantID traits.TenantID, debu
 		server.auth.SessionIdleTTL,
 		server.auth.Clock,
 		"/healthz", "/v1/auth/login", "/v1/auth/callback", "/v1/auth/logout", "/v1/auth/backchannel-logout",
+		// Sign-in has to be reachable before there is a session, and the
+		// methods list is read by the sign-in screen for the same reason.
+		"/v1/auth/methods",
 	)(server.mux)
 	return server
 }

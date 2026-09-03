@@ -114,7 +114,11 @@ func TestLoadSecurityConfigRejectsMissingAndMalformedValues(t *testing.T) {
 		{name: "tenant prefix", key: "TFLIVE_TENANT_ID", value: "-tenant", want: "TFLIVE_TENANT_ID must start"},
 		{name: "tenant slash", key: "TFLIVE_TENANT_ID", value: "tenant/123", want: "TFLIVE_TENANT_ID must start"},
 		{name: "tenant too long", key: "TFLIVE_TENANT_ID", value: strings.Repeat("a", 129), want: "TFLIVE_TENANT_ID must start"},
-		{name: "missing issuer", key: "OIDC_ISSUER_URL", value: "", want: "OIDC_ISSUER_URL is required"},
+		// An absent issuer is no longer an error by itself -- it is how a
+		// local-only deployment opts out of OIDC (#211). It is an error only
+		// when client credentials name a provider that would never be
+		// contacted, which is what the rest of this fixture supplies.
+		{name: "client credentials without issuer", key: "OIDC_ISSUER_URL", value: "", want: "OIDC_CLIENT_ID and OIDC_CLIENT_SECRET require OIDC_ISSUER_URL"},
 		{name: "relative issuer", key: "OIDC_ISSUER_URL", value: "/realms/tflive", want: "OIDC_ISSUER_URL must be an absolute HTTP or HTTPS URL"},
 		{name: "issuer user info", key: "OIDC_ISSUER_URL", value: "https://client:client-secret-sentinel@id.example.com/realms/tflive", want: "OIDC_ISSUER_URL must not include user information"},
 		{name: "issuer query", key: "OIDC_ISSUER_URL", value: "https://id.example.com/realms/tflive?x=1", want: "OIDC_ISSUER_URL must not include a query"},
@@ -324,6 +328,7 @@ func validSecurityValues() map[string]string {
 		"OIDC_CLIENT_ID":         "tflive-api",
 		"OIDC_CLIENT_SECRET":     "oidc-client-secret",
 		"SESSION_ENCRYPTION_KEY": "01234567890123456789012345678901",
+		"TFLIVE_ROOT_PASSWORD":   "root-local-only",
 		"OPENFGA_API_URL":        "http://localhost:8080",
 		"OPENFGA_STORE_ID":       "store-id",
 		"OPENFGA_MODEL_ID":       "model-id",
