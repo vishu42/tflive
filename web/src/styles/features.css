@@ -715,8 +715,9 @@
 }
 
 .stack-template-items button {
-  display: grid;
-  gap: var(--space-1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   width: 100%;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -756,23 +757,41 @@
   font-size: var(--text-xs);
 }
 
+/* Template names are long enough that a name and a labelled pill do not fit on
+   one row, and stacking them cost a whole second line per row for a word. The
+   row keeps just the state icon; the panel on the right names the state and
+   says what it means. */
+.stack-template-items .stack-template-item__dot {
+  flex: none;
+  /* Takes its colour from the shared .status-tone--* modifier so tones stay
+     defined in one place, but drops the tint those carry for pills: behind a
+     bare glyph it reads as a stray swatch. */
+  background: none;
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+/* ---- Selected template's state, above the revision action ---- */
+.stack-template-state {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  background: var(--color-card);
+}
+
+.stack-template-state p {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
 .stack-template-right-column {
   align-content: start;
   display: grid;
   gap: var(--space-6);
   min-width: 0;
-}
-
-.lifecycle-badge {
-  display: inline-flex;
-  align-items: center;
-  border-radius: var(--radius-full);
-  padding: var(--space-1) var(--space-3);
-  color: var(--color-warning);
-  background: var(--color-warning-soft);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  text-transform: uppercase;
 }
 
 /* ---- Metadata grids ---- */

@@ -9,6 +9,7 @@ import {
   isDestroyingStackTemplate,
   partitionUpgradeVariables,
   stackTemplateLabel,
+  stackTemplateStatus,
   upgradeCandidateRevisions,
   upsertStackTemplate,
   variableValuesFromConfig
@@ -24,14 +25,16 @@ describe("stack workflow helpers", () => {
     expect(findSelectedStackTemplate(stackTemplates, "missing_stack_template")).toBeNull();
   });
 
-  it("formats stack template rows from display_name, ref, and lifecycle", () => {
+  // The lifecycle suffix is gone from the label: it read "(active)" on every row
+  // a user ever sees, and the status pill carries lifecycle now.
+  it("formats stack template rows from display_name and ref", () => {
     const withDisplayName = stackTemplate({
       display_name: "infra-templates/modules/vpc",
       source_ref: "release-2026-07",
       lifecycle: "active"
     });
 
-    expect(stackTemplateLabel(withDisplayName)).toBe("infra-templates/modules/vpc @ release-2026-07 (active)");
+    expect(stackTemplateLabel(withDisplayName)).toBe("infra-templates/modules/vpc @ release-2026-07");
   });
 
   it("falls back to workspace_name when display_name is empty", () => {
@@ -41,7 +44,66 @@ describe("stack workflow helpers", () => {
       lifecycle: "active"
     });
 
-    expect(stackTemplateLabel(withoutDisplayName)).toBe("meg_prod_a4de3e48 @ main (active)");
+    expect(stackTemplateLabel(withoutDisplayName)).toBe("meg_prod_a4de3e48 @ main");
+  });
+
+  // One case per cell of the stack template state matrix. Only three outcomes
+  // exist, and covering all nine is the point: it pins down that plan_state is
+  // not consulted, so a later change that reads it fails here.
+  describe("stack template status pill", () => {
+    const planStates = ["none", "stale", "matches"] as const;
+
+    it.each(planStates)("reports applied when live matches, whatever the plan state (%s)", (planState) => {
+      const status = stackTemplateStatus(stackTemplate({ lifecycle: "active", live_state: "matches", plan_state: planState }));
+
+      expect(status).toMatchObject({ label: "applied", tone: "settled" });
+    });
+
+    it.each(planStates)("reports changed when live differs, whatever the plan state (%s)", (planState) => {
+      const status = stackTemplateStatus(stackTemplate({ lifecycle: "active", live_state: "differs", plan_state: planState }));
+
+      expect(status).toMatchObject({ label: "changed", tone: "waiting" });
+    });
+
+    // Includes "ready for first apply" (plan matches, nothing live). A reviewed
+    // plan does not make a template applied, so it reads the same as a fresh
+    // install; readiness belongs to the Apply button, not this pill.
+    it.each(planStates)("reports not applied when nothing is live, whatever the plan state (%s)", (planState) => {
+      const status = stackTemplateStatus(stackTemplate({ lifecycle: "active", live_state: "never", plan_state: planState }));
+
+      expect(status).toMatchObject({ label: "not applied", tone: "canceled" });
+    });
+
+    // A template being torn down keeps the last_applied_* pointers of the apply
+    // that put it live, so live_state alone would call this one applied.
+    it("reports destroying ahead of a live state that still says matches", () => {
+      const status = stackTemplateStatus(stackTemplate({ lifecycle: "destroying", live_state: "matches", plan_state: "matches" }));
+
+      expect(status).toMatchObject({ label: "destroying", tone: "progress" });
+    });
+
+    // The row shows only an icon, so the description is the only place the
+    // state is explained. Every state needs its own, or the panel says nothing.
+    it("describes every state distinctly", () => {
+      const descriptions = [
+        stackTemplateStatus(stackTemplate({ lifecycle: "active", live_state: "matches" })),
+        stackTemplateStatus(stackTemplate({ lifecycle: "active", live_state: "differs" })),
+        stackTemplateStatus(stackTemplate({ lifecycle: "active", live_state: "never" })),
+        stackTemplateStatus(stackTemplate({ lifecycle: "destroying", live_state: "matches" })),
+        stackTemplateStatus(stackTemplate({ lifecycle: "failed", live_state: "matches" }))
+      ].map((status) => status.description);
+
+      expect(descriptions.every((text) => text.length > 0)).toBe(true);
+      expect(new Set(descriptions).size).toBe(descriptions.length);
+    });
+
+    // The failed lifecycle is only ever reached from destroying, so the label
+    // says which operation failed rather than implying the apply did.
+    it("names an interrupted destroy rather than reporting a bare failure", () => {
+      const status = stackTemplateStatus(stackTemplate({ lifecycle: "failed", live_state: "matches", plan_state: "matches" }));
+
+      expect(status).toMatchObject({ label: "destroy failed", tone: "failed" });
+    });
   });
 
   it("allows upgrades only to a different active revision from the same source template", () => {

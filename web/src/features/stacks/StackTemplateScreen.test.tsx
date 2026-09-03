@@ -419,7 +419,7 @@ describe("StackTemplateScreen", () => {
     expect(screen.getByTestId("change-stack-template-revision-link")).toBeTruthy();
   });
 
-  it("shows Destroying badge when lifecycle is destroying", () => {
+  it("marks a destroying template in the list and says so in the panel", () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient, allAllowed);
     queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"),
@@ -427,7 +427,44 @@ describe("StackTemplateScreen", () => {
 
     renderScreen(queryClient);
 
-    expect(screen.getByText("Destroying…")).toBeTruthy();
+    expect(screen.getByTestId("stack-template-status-st_1").getAttribute("aria-label")).toBe("destroying");
+    expect(screen.getByTestId("stack-template-state").textContent).toContain("destroying");
+  });
+
+  // The row carries the state as an icon only — names are too long to share the
+  // line with a labelled pill. The icon's accessible name is the whole label,
+  // so the state stays readable to assistive tech and on hover.
+  it("reports applied state on each row from live_state", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient, allAllowed);
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"),
+      stackView(allAllowed, [
+        stackTemplate({ id: "st_1", live_state: "matches" }),
+        stackTemplate({ id: "st_2", live_state: "differs" }),
+        stackTemplate({ id: "st_3", live_state: "never" })
+      ]));
+
+    renderScreen(queryClient);
+
+    expect(screen.getByTestId("stack-template-status-st_1").getAttribute("aria-label")).toBe("applied");
+    expect(screen.getByTestId("stack-template-status-st_2").getAttribute("aria-label")).toBe("changed");
+    expect(screen.getByTestId("stack-template-status-st_3").getAttribute("aria-label")).toBe("not applied");
+    expect(screen.queryByText("rev_1")).toBeNull();
+  });
+
+  // The list is icons only, so the selected template's state has to be named
+  // and explained somewhere. That is this panel's whole job.
+  it("names and explains the selected template's state", () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient, allAllowed);
+    queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"),
+      stackView(allAllowed, [stackTemplate({ id: "st_1", live_state: "differs" })]));
+
+    renderScreen(queryClient);
+
+    const panel = screen.getByTestId("stack-template-state");
+    expect(panel.textContent).toContain("changed");
+    expect(panel.textContent).toContain("Plan, then apply");
   });
 
   it("disables revision selection while the installed template is destroying", () => {
