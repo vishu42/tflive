@@ -315,6 +315,11 @@
 .templates-groups {
   display: grid;
   gap: var(--space-6);
+  /* Groups size to their contents. As a stretched grid item — which is what it
+     becomes in the install picker's left pane — align-content resolves to
+     stretch and inflates these auto rows to fill the taller column, opening a
+     gap inside a group that reads as a missing row. */
+  align-content: start;
 }
 
 .templates-group__heading {

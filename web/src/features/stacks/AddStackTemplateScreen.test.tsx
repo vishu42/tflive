@@ -101,7 +101,9 @@ describe("AddStackTemplateScreen", () => {
 
     expect(screen.getByTestId("template-group-hashicorp/vpc")).toBeTruthy();
     expect(screen.getByTestId("template-group-my-org/rds")).toBeTruthy();
-    expect(screen.getByTestId("template-group-count-hashicorp/vpc").textContent).toBe("1");
+    // No count pill here: it would count templates while the rows count
+    // installable revisions, two adjacent numbers meaning different things.
+    expect(screen.queryByTestId("template-group-count-hashicorp/vpc")).toBeNull();
   });
 
   it("shows one row per template, named after the template", () => {

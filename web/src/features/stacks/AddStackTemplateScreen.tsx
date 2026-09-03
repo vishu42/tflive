@@ -160,12 +160,13 @@ export default function AddStackTemplateScreen() {
           <div className="templates-groups">
             {repositoryGroups.map((group) => (
               <section className="templates-group" key={group.key} data-testid={`template-group-${group.key}`}>
+                {/* No count pill here, unlike the registry. It counts
+                    templates while the rows count installable revisions, and
+                    two small numbers a few pixels apart reading "1" then
+                    "2 revisions" invite the guess that they disagree. */}
                 <h2 className="templates-group__heading">
                   <span className="templates-group__repo">
                     {group.repoOwner}/{group.repoName}
-                  </span>
-                  <span className="templates-group__count" data-testid={`template-group-count-${group.key}`}>
-                    {group.sourceTemplates.length}
                   </span>
                 </h2>
                 <ul className="template-choices">
@@ -289,9 +290,11 @@ export default function AddStackTemplateScreen() {
                 </div>
               </section>
             ) : (
-              <section className="panel" data-testid="add-stack-template-unchosen">
-                <p className="muted">Choose a template to configure and install it.</p>
-              </section>
+              // Not a panel: a full card of chrome around one sentence
+              // outweighed the sentence.
+              <p className="muted" data-testid="add-stack-template-unchosen">
+                Choose a template to configure and install it.
+              </p>
             )}
           </div>
         </div>
