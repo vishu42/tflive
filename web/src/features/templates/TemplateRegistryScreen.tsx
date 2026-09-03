@@ -4,15 +4,25 @@ import { useTemplateRevisionsQuery } from "../../api/queries";
 import { tenantID } from "../../config";
 import HeroGraphic from "../../shared/HeroGraphic";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
-import { statusGlyph, statusTone } from "../../shared/statusTone";
+import { statusGlyph } from "../../shared/statusTone";
 import { useInView } from "../../shared/useInView";
-import { groupTemplateRevisionsByRepository, templateRevisionRefLabel } from "./templateWorkflow";
+import {
+  groupTemplatesByRepository,
+  revisionCountLabel,
+  shortCommitSHA,
+  templateRootPathLabel,
+  unsettledStatusTone
+} from "./templateWorkflow";
 
-// /templates lists registered template revisions and nothing else; the
-// registration form lives at /templates/new. Selection is URL state
-// (?selected=<revisionID>) rather than component state so that the
-// registration screen can hand back the revision it just minted, and so a
-// highlighted row survives a reload or a shared link.
+// /templates lists one row per template, not per revision: a template
+// accumulates a revision for every distinct commit its ref resolves to, so
+// listing revisions here grows a wall of rows that differ only by SHA. The
+// commits live behind the row, at /templates/:sourceTemplateId.
+//
+// Selection is URL state (?selected=<revisionID>) rather than component state
+// so that the registration screen can hand back the revision it just minted,
+// and so a highlighted row survives a reload or a shared link. The param names
+// a revision, so the row highlighted is the template that revision belongs to.
 export default function TemplateRegistryScreen() {
   const [searchParams] = useSearchParams();
   const selectedTemplateRevisionID = searchParams.get("selected") ?? "";
@@ -76,41 +86,53 @@ export default function TemplateRegistryScreen() {
         </section>
       ) : (
         <div className="templates-groups" data-testid="templates-list">
-          {groupTemplateRevisionsByRepository(templateRevisions).map((group) => (
+          {groupTemplatesByRepository(templateRevisions).map((group) => (
             <section className="templates-group" key={group.key} data-testid={`template-group-${group.key}`}>
               <h2 className="templates-group__heading">
                 <span className="templates-group__repo">
                   {group.repoOwner}/{group.repoName}
                 </span>
                 <span className="templates-group__count" data-testid={`template-group-count-${group.key}`}>
-                  {group.templateRevisions.length}
+                  {group.sourceTemplates.length}
                 </span>
               </h2>
               <ul className="templates-list">
-                {group.templateRevisions.map((templateRevision) => {
-                  const selected = templateRevision.id === selectedTemplateRevisionID;
-                  const tone = statusTone(templateRevision.status);
-                  // The heading already names the repository, so the row shows
-                  // only what separates one revision from another.
-                  const details = [templateRevision.name.trim(), templateRevision.root_path]
-                    .filter((part) => part !== "")
-                    .join(" · ");
+                {group.sourceTemplates.map((sourceTemplate) => {
+                  const selected = sourceTemplate.revisions.some(
+                    (revision) => revision.id === selectedTemplateRevisionID
+                  );
+                  const { status } = sourceTemplate.latestRevision;
+                  const unsettledTone = unsettledStatusTone(status);
+                  const rootPath = templateRootPathLabel(sourceTemplate.rootPath, sourceTemplate.name);
                   return (
                     <li
-                      key={templateRevision.id}
-                      data-testid={`template-row-${templateRevision.id}`}
+                      key={sourceTemplate.sourceTemplateID}
+                      data-testid={`template-row-${sourceTemplate.sourceTemplateID}`}
                       data-selected={selected ? "true" : undefined}
                       aria-current={selected ? "true" : undefined}
                     >
                       <div className="templates-list__main">
-                        <span className="templates-list__name">{templateRevisionRefLabel(templateRevision)}</span>
-                        {details !== "" && <small className="muted">{details}</small>}
+                        <Link
+                          className="templates-list__name"
+                          to={`/templates/${encodeURIComponent(sourceTemplate.sourceTemplateID)}`}
+                        >
+                          {sourceTemplate.name}
+                        </Link>
+                        {rootPath !== "" && <small className="muted">{rootPath}</small>}
                       </div>
-                      <span className={`status-tone status-tone--${tone}`}>
-                        <span className="status-tone__glyph" aria-hidden="true">
-                          {statusGlyph(tone)}
+                      <span className="templates-list__meta">
+                        {unsettledTone !== null && (
+                          <span className={`status-tone status-tone--${unsettledTone}`}>
+                            <span className="status-tone__glyph" aria-hidden="true">
+                              {statusGlyph(unsettledTone)}
+                            </span>
+                            {status}
+                          </span>
+                        )}
+                        <span className="templates-list__rev">
+                          {sourceTemplate.sourceRef} · {shortCommitSHA(sourceTemplate.latestRevision.resolved_commit_sha)}{" "}
+                          · {revisionCountLabel(sourceTemplate.revisions.length)}
                         </span>
-                        {templateRevision.status}
                       </span>
                     </li>
                   );

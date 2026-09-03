@@ -14,6 +14,7 @@ import UpgradeStackTemplateScreen from "../features/stacks/UpgradeStackTemplateS
 import EnvironmentScreen from "../features/stacks/EnvironmentScreen";
 import TemplateRegistryScreen from "../features/templates/TemplateRegistryScreen";
 import TemplateRegistrationScreen from "../features/templates/TemplateRegistrationScreen";
+import TemplateDetailScreen from "../features/templates/TemplateDetailScreen";
 import RunDetailScreen from "../features/runs/RunDetailScreen";
 import StackAccessScreen from "../features/stacks/StackAccessScreen";
 import CreateStackScreen from "../features/stacks/CreateStackScreen";
@@ -107,6 +108,9 @@ export const routeConfig: RouteObject[] = [
           },
           { path: "templates", element: <TemplateRegistryScreen /> },
           { path: "templates/new", element: <TemplateRegistrationScreen /> },
+          // After "templates/new", so the static segment is matched first
+          // rather than being read as a source template id.
+          { path: "templates/:sourceTemplateId", element: <TemplateDetailScreen /> },
           { path: "*", element: <NotFound /> }
         ]
       }
