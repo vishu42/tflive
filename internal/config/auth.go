@@ -8,9 +8,9 @@ import (
 
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/bootstrap"
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/strval"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 const DefaultOpenFGAHTTPTimeout = 10 * time.Second
@@ -24,7 +24,7 @@ const (
 
 type SecurityConfig struct {
 	Mode     RuntimeMode
-	TenantID traits.TenantID
+	TenantID domain.TenantID
 	// OIDC is the zero value when no provider is configured. IssuerURL nil is
 	// the test for that, and it is a supported deployment rather than an
 	// error: local accounts can be the only way in.
@@ -225,7 +225,7 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 
 	return SecurityConfig{
 		Mode:     mode,
-		TenantID: traits.TenantID(tenantID),
+		TenantID: domain.TenantID(tenantID),
 		OIDC:     oidc,
 		Root:     root,
 

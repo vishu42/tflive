@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/vishu42/tflive/internal/authz"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 // This file holds the domain half of stack provisioning: what it means to
@@ -15,19 +15,19 @@ import (
 
 // StackStatusRepository flips a provisioned stack to its terminal status.
 type StackStatusRepository interface {
-	MarkStackReady(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) error
+	MarkStackReady(ctx context.Context, tenantID domain.TenantID, stackID domain.StackID) error
 }
 
 // StackProvisioner is the slice of Service the provisioning handlers need.
 type StackProvisioner interface {
 	GrantStackOwner(ctx context.Context, command GrantStackOwnerCommand) error
-	MarkStackReady(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) error
+	MarkStackReady(ctx context.Context, tenantID domain.TenantID, stackID domain.StackID) error
 }
 
 // GrantStackOwnerCommand grants the founding owner their role on a new stack.
 type GrantStackOwnerCommand struct {
-	TenantID traits.TenantID
-	StackID  traits.StackID
+	TenantID domain.TenantID
+	StackID  domain.StackID
 	Subject  string
 }
 
@@ -84,7 +84,7 @@ func (service *Service) GrantStackOwner(ctx context.Context, command GrantStackO
 }
 
 // MarkStackReady records that a stack has finished provisioning.
-func (service *Service) MarkStackReady(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) error {
+func (service *Service) MarkStackReady(ctx context.Context, tenantID domain.TenantID, stackID domain.StackID) error {
 	if service.StackStatuses == nil {
 		return fmt.Errorf("%w: stack status repository not configured", authz.ErrUnavailable)
 	}

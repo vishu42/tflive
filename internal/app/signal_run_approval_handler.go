@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 const KindSignalRunApproval queue.Kind = "signal_run_approval"
@@ -14,9 +14,9 @@ const KindSignalRunApproval queue.Kind = "signal_run_approval"
 // SignalRunApprovalPayload carries the complete approval event for one run.
 // It intentionally has no JSON tags: persisted JSON uses its Go field names.
 type SignalRunApprovalPayload struct {
-	TenantID traits.TenantID
-	RunID    traits.TemplateRunID
-	Signal   traits.ApprovalSignal
+	TenantID domain.TenantID
+	RunID    domain.TemplateRunID
+	Signal   domain.ApprovalSignal
 }
 
 var SignalRunApprovalSpec = queue.Spec{Kind: KindSignalRunApproval, Mode: queue.ModeJob, Key: signalRunApprovalKey}

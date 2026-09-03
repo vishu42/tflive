@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/runner"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 func TestRecordTemplateRunStatusDelegatesToRecorder(t *testing.T) {
@@ -19,12 +19,12 @@ func TestRecordTemplateRunStatusDelegatesToRecorder(t *testing.T) {
 
 	recorder := &recordingStatusRecorder{}
 	activities := NewTemplateRunActivities(recorder, t.TempDir())
-	input := traits.TemplateRunStatusActivityInput{
-		RunID:           traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationApply,
-		Status:          traits.TemplateRunPlanFinished,
+	input := domain.TemplateRunStatusActivityInput{
+		RunID:           domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
+		Status:          domain.TemplateRunPlanFinished,
 	}
 
 	if err := activities.RecordTemplateRunStatus(context.Background(), input); err != nil {
@@ -42,10 +42,10 @@ func TestRecordTemplateRunStatusWrapsRecorderError(t *testing.T) {
 	recorderErr := errors.New("database unavailable")
 	activities := NewTemplateRunActivities(&recordingStatusRecorder{err: recorderErr}, t.TempDir())
 
-	err := activities.RecordTemplateRunStatus(context.Background(), traits.TemplateRunStatusActivityInput{
-		RunID:    traits.TemplateRunID("run_123"),
-		TenantID: traits.TenantID("tenant_123"),
-		Status:   traits.TemplateRunFailed,
+	err := activities.RecordTemplateRunStatus(context.Background(), domain.TemplateRunStatusActivityInput{
+		RunID:    domain.TemplateRunID("run_123"),
+		TenantID: domain.TenantID("tenant_123"),
+		Status:   domain.TemplateRunFailed,
 	})
 	if !errors.Is(err, recorderErr) {
 		t.Fatalf("error = %v, want recorderErr", err)
@@ -60,9 +60,9 @@ func TestPrepareWorkspaceCreatesRunDirectory(t *testing.T) {
 
 	runRoot := t.TempDir()
 	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, runRoot)
-	input := traits.PrepareWorkspaceActivityInput{
-		RunID:    traits.TemplateRunID("run_123"),
-		TenantID: traits.TenantID("tenant_123"),
+	input := domain.PrepareWorkspaceActivityInput{
+		RunID:    domain.TemplateRunID("run_123"),
+		TenantID: domain.TenantID("tenant_123"),
 	}
 
 	output, err := activities.PrepareWorkspace(context.Background(), input)
@@ -88,9 +88,9 @@ func TestPrepareWorkspaceRejectsEmptyRoot(t *testing.T) {
 
 	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, "")
 
-	_, err := activities.PrepareWorkspace(context.Background(), traits.PrepareWorkspaceActivityInput{
-		RunID:    traits.TemplateRunID("run_123"),
-		TenantID: traits.TenantID("tenant_123"),
+	_, err := activities.PrepareWorkspace(context.Background(), domain.PrepareWorkspaceActivityInput{
+		RunID:    domain.TemplateRunID("run_123"),
+		TenantID: domain.TenantID("tenant_123"),
 	})
 	if err == nil {
 		t.Fatal("PrepareWorkspace returned nil error, want error")
@@ -105,9 +105,9 @@ func TestPrepareWorkspaceRejectsUnsafePathComponents(t *testing.T) {
 
 	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, t.TempDir())
 
-	_, err := activities.PrepareWorkspace(context.Background(), traits.PrepareWorkspaceActivityInput{
-		RunID:    traits.TemplateRunID("run_123"),
-		TenantID: traits.TenantID("../tenant_123"),
+	_, err := activities.PrepareWorkspace(context.Background(), domain.PrepareWorkspaceActivityInput{
+		RunID:    domain.TemplateRunID("run_123"),
+		TenantID: domain.TenantID("../tenant_123"),
 	})
 	if err == nil {
 		t.Fatal("PrepareWorkspace returned nil error, want error")
@@ -133,9 +133,9 @@ func TestFetchSourceChecksOutTheResolvedCommitRatherThanTheRef(t *testing.T) {
 		git:             git,
 	}
 
-	output, err := activities.FetchSource(context.Background(), traits.FetchSourceActivityInput{
-		RunID:         traits.TemplateRunID("run_123"),
-		TenantID:      traits.TenantID("tenant_123"),
+	output, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		RunID:         domain.TemplateRunID("run_123"),
+		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
 		RepoOwner:     "acme",
 		RepoName:      "infra-templates",
@@ -183,9 +183,9 @@ func TestFetchSourceFallsBackToTheRefWhenNoCommitWasResolved(t *testing.T) {
 		git:             git,
 	}
 
-	output, err := activities.FetchSource(context.Background(), traits.FetchSourceActivityInput{
-		RunID:         traits.TemplateRunID("run_123"),
-		TenantID:      traits.TenantID("tenant_123"),
+	output, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		RunID:         domain.TemplateRunID("run_123"),
+		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
 		RepoOwner:     "acme",
 		RepoName:      "infra-templates",
@@ -219,9 +219,9 @@ func TestFetchSourceRejectsUnsafeRootPath(t *testing.T) {
 		git:             git,
 	}
 
-	_, err := activities.FetchSource(context.Background(), traits.FetchSourceActivityInput{
-		RunID:         traits.TemplateRunID("run_123"),
-		TenantID:      traits.TenantID("tenant_123"),
+	_, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		RunID:         domain.TemplateRunID("run_123"),
+		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: t.TempDir(),
 		RepoOwner:     "acme",
 		RepoName:      "infra-templates",
@@ -241,12 +241,12 @@ func TestRunTerraformDelegatesToRunner(t *testing.T) {
 
 	runner := &recordingTerraformRunner{}
 	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, t.TempDir(), runner)
-	input := traits.RunTerraformActivityInput{
-		RunID:         traits.TemplateRunID("run_123"),
-		TenantID:      traits.TenantID("tenant_123"),
+	input := domain.RunTerraformActivityInput{
+		RunID:         domain.TemplateRunID("run_123"),
+		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandPlan,
+		Command:       domain.TerraformCommandPlan,
 	}
 
 	if err := activities.RunTerraform(context.Background(), input); err != nil {
@@ -270,12 +270,12 @@ func TestLocalTerraformRunnerWritesCommandLogFile(t *testing.T) {
 		runner: runner.NewLocalProcessRunnerWithExecutor(executor),
 	}
 
-	err := terraformRunner.RunTerraform(context.Background(), traits.RunTerraformActivityInput{
-		RunID:         traits.TemplateRunID("run_123"),
-		TenantID:      traits.TenantID("tenant_123"),
+	err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+		RunID:         domain.TemplateRunID("run_123"),
+		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandPlan,
+		Command:       domain.TerraformCommandPlan,
 		ConfigJSON:    []byte(`{"region":"us-east-1"}`),
 	})
 	if err != nil {
@@ -308,21 +308,21 @@ func TestLocalTerraformRunnerUploadsCommandLogFile(t *testing.T) {
 		logStore: logStore,
 	}
 
-	err := terraformRunner.RunTerraform(context.Background(), traits.RunTerraformActivityInput{
-		RunID:         traits.TemplateRunID("run_123"),
-		TenantID:      traits.TenantID("tenant_123"),
+	err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+		RunID:         domain.TemplateRunID("run_123"),
+		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandPlan,
+		Command:       domain.TerraformCommandPlan,
 	})
 	if err != nil {
 		t.Fatalf("RunTerraform returned error: %v", err)
 	}
 
-	if logStore.tenantID != traits.TenantID("tenant_123") {
+	if logStore.tenantID != domain.TenantID("tenant_123") {
 		t.Fatalf("tenantID = %q, want tenant_123", logStore.tenantID)
 	}
-	if logStore.runID != traits.TemplateRunID("run_123") {
+	if logStore.runID != domain.TemplateRunID("run_123") {
 		t.Fatalf("runID = %q, want run_123", logStore.runID)
 	}
 	if logStore.phase != "plan" {
@@ -348,12 +348,12 @@ func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
 		logStore: logStore,
 	}
 
-	err := terraformRunner.RunTerraform(context.Background(), traits.RunTerraformActivityInput{
-		RunID:         traits.TemplateRunID("run_123"),
-		TenantID:      traits.TenantID("tenant_123"),
+	err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+		RunID:         domain.TemplateRunID("run_123"),
+		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandPlan,
+		Command:       domain.TerraformCommandPlan,
 	})
 	if !errors.Is(err, runnerErr) {
 		t.Fatalf("error = %v, want runnerErr", err)
@@ -369,12 +369,12 @@ func TestRunTerraformWrapsRunnerError(t *testing.T) {
 	runnerErr := errors.New("terraform failed")
 	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, t.TempDir(), &recordingTerraformRunner{err: runnerErr})
 
-	err := activities.RunTerraform(context.Background(), traits.RunTerraformActivityInput{
-		RunID:         traits.TemplateRunID("run_123"),
-		TenantID:      traits.TenantID("tenant_123"),
+	err := activities.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+		RunID:         domain.TemplateRunID("run_123"),
+		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandApply,
+		Command:       domain.TerraformCommandApply,
 	})
 	if !errors.Is(err, runnerErr) {
 		t.Fatalf("error = %v, want runnerErr", err)
@@ -385,21 +385,21 @@ func TestRunTerraformWrapsRunnerError(t *testing.T) {
 }
 
 type recordingStatusRecorder struct {
-	input traits.TemplateRunStatusActivityInput
+	input domain.TemplateRunStatusActivityInput
 	err   error
 }
 
-func (recorder *recordingStatusRecorder) RecordTemplateRunStatus(_ context.Context, input traits.TemplateRunStatusActivityInput) error {
+func (recorder *recordingStatusRecorder) RecordTemplateRunStatus(_ context.Context, input domain.TemplateRunStatusActivityInput) error {
 	recorder.input = input
 	return recorder.err
 }
 
 type recordingTerraformRunner struct {
-	input traits.RunTerraformActivityInput
+	input domain.RunTerraformActivityInput
 	err   error
 }
 
-func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input traits.RunTerraformActivityInput) error {
+func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input domain.RunTerraformActivityInput) error {
 	runner.input = input
 	return runner.err
 }
@@ -437,14 +437,14 @@ func (runner *recordingSourceGitRunner) ResolveHead(context.Context, string) (st
 }
 
 type recordingTemplateRunLogStore struct {
-	tenantID traits.TenantID
-	runID    traits.TemplateRunID
+	tenantID domain.TenantID
+	runID    domain.TemplateRunID
 	phase    string
 	content  string
 	err      error
 }
 
-func (store *recordingTemplateRunLogStore) PutTemplateRunLog(_ context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, phase string, body io.Reader) error {
+func (store *recordingTemplateRunLogStore) PutTemplateRunLog(_ context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string, body io.Reader) error {
 	store.tenantID = tenantID
 	store.runID = runID
 	store.phase = phase

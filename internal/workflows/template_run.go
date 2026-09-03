@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -45,7 +45,7 @@ var defaultRunRetryPolicy = &temporal.RetryPolicy{
 // If recording that failure also fails, the run's persisted status will not
 // match reality, so both errors are surfaced: the original wrapped with %w to
 // stay matchable by callers, the persistence error appended as context.
-func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowInput) error {
+func TemplateRunWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowInput) error {
 	// Baseline options for every activity scheduled on this context. RunTerraform
 	// overrides them for the long-running commands; see terraformRetryPolicy.
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -95,7 +95,7 @@ func TemplateRunWorkflow(ctx workflow.Context, input traits.TemplateRunWorkflowI
 type templateRunWorkflow struct {
 	ctx           workflow.Context
 	sessionCtx    workflow.Context
-	input         traits.TemplateRunWorkflowInput
+	input         domain.TemplateRunWorkflowInput
 	workspacePath string
 	terraformPath string
 }
@@ -117,11 +117,11 @@ func (run *templateRunWorkflow) execute(operation func() error) error {
 // single Failed status, with the reason attached as the run's error summary.
 func (run *templateRunWorkflow) operation() (func() error, error) {
 	switch run.input.Operation {
-	case traits.OperationPlan:
+	case domain.OperationPlan:
 		return run.planOnly, nil
-	case traits.OperationApply:
+	case domain.OperationApply:
 		return run.apply, nil
-	case traits.OperationDestroy:
+	case domain.OperationDestroy:
 		return run.destroy, nil
 	default:
 		return nil, fmt.Errorf("unsupported template run operation %q", run.input.Operation)
@@ -129,25 +129,25 @@ func (run *templateRunWorkflow) operation() (func() error, error) {
 }
 
 func (run *templateRunWorkflow) prepareWorkspace() error {
-	if err := run.recordStatus(traits.TemplateRunLocked); err != nil {
+	if err := run.recordStatus(domain.TemplateRunLocked); err != nil {
 		return err
 	}
 	if err := run.prepareLocalWorkspace(); err != nil {
 		return err
 	}
-	if err := run.recordStatus(traits.TemplateRunWorkspacePrepared); err != nil {
+	if err := run.recordStatus(domain.TemplateRunWorkspacePrepared); err != nil {
 		return err
 	}
 	if err := run.fetchSource(); err != nil {
 		return err
 	}
-	if err := run.recordStatus(traits.TemplateRunSourceFetched); err != nil {
+	if err := run.recordStatus(domain.TemplateRunSourceFetched); err != nil {
 		return err
 	}
-	if err := run.runTerraform(traits.TerraformCommandInit); err != nil {
+	if err := run.runTerraform(domain.TerraformCommandInit); err != nil {
 		return err
 	}
-	return run.runTerraform(traits.TerraformCommandSelectWorkspace)
+	return run.runTerraform(domain.TerraformCommandSelectWorkspace)
 }
 
 // prepareLocalWorkspace schedules the worker-side activity that creates the
@@ -157,14 +157,14 @@ func (run *templateRunWorkflow) prepareWorkspace() error {
 // the workflow helper and reused by later RunTerraform activities as their
 // working directory.
 func (run *templateRunWorkflow) prepareLocalWorkspace() error {
-	input := traits.PrepareWorkspaceActivityInput{
+	input := domain.PrepareWorkspaceActivityInput{
 		RunID:    run.input.RunID,
 		TenantID: run.input.TenantID,
 	}
-	var output traits.PrepareWorkspaceActivityOutput
+	var output domain.PrepareWorkspaceActivityOutput
 	if err := workflow.ExecuteActivity(
 		run.sessionCtx,
-		traits.PrepareWorkspaceActivityName,
+		domain.PrepareWorkspaceActivityName,
 		input,
 	).Get(run.sessionCtx, &output); err != nil {
 		return err
@@ -174,7 +174,7 @@ func (run *templateRunWorkflow) prepareLocalWorkspace() error {
 }
 
 func (run *templateRunWorkflow) fetchSource() error {
-	input := traits.FetchSourceActivityInput{
+	input := domain.FetchSourceActivityInput{
 		RunID:             run.input.RunID,
 		TenantID:          run.input.TenantID,
 		WorkspacePath:     run.workspacePath,
@@ -184,10 +184,10 @@ func (run *templateRunWorkflow) fetchSource() error {
 		ResolvedCommitSHA: run.input.ResolvedCommitSHA,
 		RootPath:          run.input.RootPath,
 	}
-	var output traits.FetchSourceActivityOutput
+	var output domain.FetchSourceActivityOutput
 	if err := workflow.ExecuteActivity(
 		run.sessionCtx,
-		traits.FetchSourceActivityName,
+		domain.FetchSourceActivityName,
 		input,
 	).Get(run.sessionCtx, &output); err != nil {
 		return err
@@ -198,18 +198,18 @@ func (run *templateRunWorkflow) fetchSource() error {
 
 // planOnly stops after planning; unlike apply, it never waits for approval.
 func (run *templateRunWorkflow) planOnly() error {
-	if err := run.runTerraform(traits.TerraformCommandPlan); err != nil {
+	if err := run.runTerraform(domain.TerraformCommandPlan); err != nil {
 		return err
 	}
 	return run.complete()
 }
 
 func (run *templateRunWorkflow) apply() error {
-	if err := run.runTerraform(traits.TerraformCommandPlan); err != nil {
+	if err := run.runTerraform(domain.TerraformCommandPlan); err != nil {
 		return err
 	}
 
-	if err := run.recordStatus(traits.TemplateRunWaitingApproval); err != nil {
+	if err := run.recordStatus(domain.TemplateRunWaitingApproval); err != nil {
 		return err
 	}
 
@@ -221,14 +221,14 @@ func (run *templateRunWorkflow) apply() error {
 		return run.cancel()
 	}
 
-	if err := run.runTerraform(traits.TerraformCommandApply); err != nil {
+	if err := run.runTerraform(domain.TerraformCommandApply); err != nil {
 		return err
 	}
 	return run.complete()
 }
 
 func (run *templateRunWorkflow) destroy() error {
-	if err := run.recordStatus(traits.TemplateRunWaitingApproval); err != nil {
+	if err := run.recordStatus(domain.TemplateRunWaitingApproval); err != nil {
 		return err
 	}
 
@@ -240,28 +240,28 @@ func (run *templateRunWorkflow) destroy() error {
 		return run.cancel()
 	}
 
-	if err := run.recordStatus(traits.TemplateRunApproved); err != nil {
+	if err := run.recordStatus(domain.TemplateRunApproved); err != nil {
 		return err
 	}
-	if err := run.runTerraform(traits.TerraformCommandDestroy); err != nil {
+	if err := run.runTerraform(domain.TerraformCommandDestroy); err != nil {
 		return err
 	}
 	return run.complete()
 }
 
 func (run *templateRunWorkflow) waitForApproval() (bool, error) {
-	approvalCh := workflow.GetSignalChannel(run.ctx, traits.ApprovalSignalName)
-	cancelCh := workflow.GetSignalChannel(run.ctx, traits.CancelSignalName)
+	approvalCh := workflow.GetSignalChannel(run.ctx, domain.ApprovalSignalName)
+	cancelCh := workflow.GetSignalChannel(run.ctx, domain.CancelSignalName)
 	selector := workflow.NewSelector(run.ctx)
 	approved := false
 
 	selector.AddReceive(approvalCh, func(channel workflow.ReceiveChannel, _ bool) {
-		var signal traits.ApprovalSignal
+		var signal domain.ApprovalSignal
 		channel.Receive(run.ctx, &signal)
 		approved = true
 	})
 	selector.AddReceive(cancelCh, func(channel workflow.ReceiveChannel, _ bool) {
-		var signal traits.CancelSignal
+		var signal domain.CancelSignal
 		channel.Receive(run.ctx, &signal)
 		approved = false
 	})
@@ -282,14 +282,14 @@ func (run *templateRunWorkflow) waitForApproval() (bool, error) {
 // LockReleased have no reader and no work happening before the next write
 // overwrites them, so only the terminal status is recorded here.
 func (run *templateRunWorkflow) cancel() error {
-	return run.recordStatus(traits.TemplateRunCanceled)
+	return run.recordStatus(domain.TemplateRunCanceled)
 }
 
 func (run *templateRunWorkflow) complete() error {
-	if err := run.recordStatus(traits.TemplateRunLockReleased); err != nil {
+	if err := run.recordStatus(domain.TemplateRunLockReleased); err != nil {
 		return err
 	}
-	return run.recordStatus(traits.TemplateRunCompleted)
+	return run.recordStatus(domain.TemplateRunCompleted)
 }
 
 // terraformRetryPolicy is applied to long-running Terraform commands (plan,
@@ -311,22 +311,22 @@ var terraformRetryPolicy = &temporal.RetryPolicy{
 // Terraform command. Not every command has a before status — select_workspace
 // has no meaningful "about to" signal — so before is left zero-valued there.
 type terraformCommandStatuses struct {
-	before traits.TemplateRunStatus
-	after  traits.TemplateRunStatus
+	before domain.TemplateRunStatus
+	after  domain.TemplateRunStatus
 }
 
-var terraformCommandStatusTable = map[traits.TerraformCommandType]terraformCommandStatuses{
-	traits.TerraformCommandInit:            {before: traits.TemplateRunInitStarted, after: traits.TemplateRunInitFinished},
-	traits.TerraformCommandSelectWorkspace: {after: traits.TemplateRunWorkspaceSelected},
-	traits.TerraformCommandPlan:            {before: traits.TemplateRunPlanStarted, after: traits.TemplateRunPlanFinished},
-	traits.TerraformCommandApply:           {before: traits.TemplateRunApplyStarted, after: traits.TemplateRunApplyFinished},
-	traits.TerraformCommandDestroy:         {before: traits.TemplateRunDestroyStarted, after: traits.TemplateRunDestroyFinished},
+var terraformCommandStatusTable = map[domain.TerraformCommandType]terraformCommandStatuses{
+	domain.TerraformCommandInit:            {before: domain.TemplateRunInitStarted, after: domain.TemplateRunInitFinished},
+	domain.TerraformCommandSelectWorkspace: {after: domain.TemplateRunWorkspaceSelected},
+	domain.TerraformCommandPlan:            {before: domain.TemplateRunPlanStarted, after: domain.TemplateRunPlanFinished},
+	domain.TerraformCommandApply:           {before: domain.TemplateRunApplyStarted, after: domain.TemplateRunApplyFinished},
+	domain.TerraformCommandDestroy:         {before: domain.TemplateRunDestroyStarted, after: domain.TemplateRunDestroyFinished},
 }
 
 // runTerraform executes one Terraform command, recording the before/after
 // status from terraformCommandStatusTable around it. Callers only record
 // statuses that aren't tied to a specific command (e.g. approval statuses).
-func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType) error {
+func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType) error {
 	statuses := terraformCommandStatusTable[command]
 	if statuses.before != "" {
 		if err := run.recordStatus(statuses.before); err != nil {
@@ -334,7 +334,7 @@ func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType
 		}
 	}
 
-	input := traits.RunTerraformActivityInput{
+	input := domain.RunTerraformActivityInput{
 		RunID:           run.input.RunID,
 		TenantID:        run.input.TenantID,
 		StackTemplateID: run.input.StackTemplateID,
@@ -358,10 +358,10 @@ func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType
 
 	future := workflow.ExecuteActivity(
 		terraformCtx,
-		traits.RunTerraformActivityName,
+		domain.RunTerraformActivityName,
 		input,
 	)
-	cancelCh := workflow.GetSignalChannel(run.ctx, traits.CancelSignalName)
+	cancelCh := workflow.GetSignalChannel(run.ctx, domain.CancelSignalName)
 	selector := workflow.NewSelector(run.ctx)
 
 	var activityErr error
@@ -370,7 +370,7 @@ func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType
 		activityErr = f.Get(run.ctx, nil)
 	})
 	selector.AddReceive(cancelCh, func(channel workflow.ReceiveChannel, _ bool) {
-		var signal traits.CancelSignal
+		var signal domain.CancelSignal
 		channel.Receive(run.ctx, &signal)
 		cancelActivity()
 		canceled = true
@@ -393,19 +393,19 @@ func (run *templateRunWorkflow) runTerraform(command traits.TerraformCommandType
 	return nil
 }
 
-func (run *templateRunWorkflow) recordStatus(status traits.TemplateRunStatus) error {
+func (run *templateRunWorkflow) recordStatus(status domain.TemplateRunStatus) error {
 	return run.recordStatusWithSummary(status, "")
 }
 
 func (run *templateRunWorkflow) recordFailure(rootErr error) error {
 	return run.recordStatusWithSummary(
-		traits.TemplateRunFailed,
+		domain.TemplateRunFailed,
 		fmt.Sprintf("template run activity failed: %v", rootErr),
 	)
 }
 
-func (run *templateRunWorkflow) recordStatusWithSummary(status traits.TemplateRunStatus, errorSummary string) error {
-	input := traits.TemplateRunStatusActivityInput{
+func (run *templateRunWorkflow) recordStatusWithSummary(status domain.TemplateRunStatus, errorSummary string) error {
+	input := domain.TemplateRunStatusActivityInput{
 		RunID:           run.input.RunID,
 		TenantID:        run.input.TenantID,
 		StackTemplateID: run.input.StackTemplateID,
@@ -415,7 +415,7 @@ func (run *templateRunWorkflow) recordStatusWithSummary(status traits.TemplateRu
 	}
 	return workflow.ExecuteActivity(
 		run.ctx,
-		traits.RecordTemplateRunStatusActivityName,
+		domain.RecordTemplateRunStatusActivityName,
 		input,
 	).Get(run.ctx, nil)
 }

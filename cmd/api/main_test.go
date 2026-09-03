@@ -18,10 +18,10 @@ import (
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 func TestRunRequiresDatabaseURL(t *testing.T) {
@@ -619,103 +619,103 @@ type recordingStore struct {
 	ensureAccountErr error
 }
 
-func (recordingStore) CreateStack(context.Context, traits.Stack) error {
+func (recordingStore) CreateStack(context.Context, domain.Stack) error {
 	return nil
 }
 
-func (recordingStore) GetStack(context.Context, traits.TenantID, traits.StackID) (traits.Stack, error) {
-	return traits.Stack{}, nil
+func (recordingStore) GetStack(context.Context, domain.TenantID, domain.StackID) (domain.Stack, error) {
+	return domain.Stack{}, nil
 }
 
-func (recordingStore) ListStacks(context.Context, traits.TenantID) ([]traits.Stack, error) {
+func (recordingStore) ListStacks(context.Context, domain.TenantID) ([]domain.Stack, error) {
 	return nil, nil
 }
 
-func (recordingStore) ListStacksPage(context.Context, traits.TenantID, *app.StackPageCursor, int) ([]traits.Stack, error) {
+func (recordingStore) ListStacksPage(context.Context, domain.TenantID, *app.StackPageCursor, int) ([]domain.Stack, error) {
 	return nil, nil
 }
 
-func (recordingStore) GetStackWithTemplates(context.Context, traits.TenantID, traits.StackID) (app.StackView, error) {
+func (recordingStore) GetStackWithTemplates(context.Context, domain.TenantID, domain.StackID) (app.StackView, error) {
 	return app.StackView{}, nil
 }
 
-func (recordingStore) GetStackTemplate(context.Context, traits.TenantID, traits.StackTemplateID) (traits.StackTemplate, error) {
-	return traits.StackTemplate{}, nil
+func (recordingStore) GetStackTemplate(context.Context, domain.TenantID, domain.StackTemplateID) (domain.StackTemplate, error) {
+	return domain.StackTemplate{}, nil
 }
 
-func (recordingStore) UpdateStackTemplateConfig(context.Context, traits.TenantID, traits.StackTemplateID, json.RawMessage) (traits.StackTemplate, error) {
-	return traits.StackTemplate{}, nil
+func (recordingStore) UpdateStackTemplateConfig(context.Context, domain.TenantID, domain.StackTemplateID, json.RawMessage) (domain.StackTemplate, error) {
+	return domain.StackTemplate{}, nil
 }
 
-func (recordingStore) UpdateStackTemplateDesiredRevision(context.Context, traits.TenantID, traits.StackTemplateID, traits.TemplateRevisionID, json.RawMessage) (traits.StackTemplate, error) {
-	return traits.StackTemplate{}, nil
+func (recordingStore) UpdateStackTemplateDesiredRevision(context.Context, domain.TenantID, domain.StackTemplateID, domain.TemplateRevisionID, json.RawMessage) (domain.StackTemplate, error) {
+	return domain.StackTemplate{}, nil
 }
 
-func (recordingStore) CreateStackTemplate(context.Context, traits.StackTemplate) error {
+func (recordingStore) CreateStackTemplate(context.Context, domain.StackTemplate) error {
 	return nil
 }
 
-func (recordingStore) GetTemplateRevision(context.Context, traits.TenantID, traits.TemplateRevisionID) (traits.TemplateRevision, error) {
-	return traits.TemplateRevision{}, nil
+func (recordingStore) GetTemplateRevision(context.Context, domain.TenantID, domain.TemplateRevisionID) (domain.TemplateRevision, error) {
+	return domain.TemplateRevision{}, nil
 }
 
-func (recordingStore) ListTemplateRevisions(context.Context, traits.TenantID) ([]traits.TemplateRevision, error) {
+func (recordingStore) ListTemplateRevisions(context.Context, domain.TenantID) ([]domain.TemplateRevision, error) {
 	return nil, nil
 }
 
-func (recordingStore) CreateTemplateRun(context.Context, traits.TemplateRun) error {
+func (recordingStore) CreateTemplateRun(context.Context, domain.TemplateRun) error {
 	return nil
 }
 
-func (recordingStore) CreateTemplateRegistration(context.Context, traits.TemplateRegistration) error {
+func (recordingStore) CreateTemplateRegistration(context.Context, domain.TemplateRegistration) error {
 	return nil
 }
 
-func (recordingStore) ApproveTemplateRun(context.Context, traits.TemplateRunApproval) error {
+func (recordingStore) ApproveTemplateRun(context.Context, domain.TemplateRunApproval) error {
 	return nil
 }
 
-func (recordingStore) RequestTemplateRunCancellation(context.Context, traits.TemplateRunCancellation) error {
+func (recordingStore) RequestTemplateRunCancellation(context.Context, domain.TemplateRunCancellation) error {
 	return nil
 }
 
-func (recordingStore) GetTemplateRun(context.Context, traits.TenantID, traits.TemplateRunID) (traits.TemplateRun, error) {
-	return traits.TemplateRun{}, nil
+func (recordingStore) GetTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID) (domain.TemplateRun, error) {
+	return domain.TemplateRun{}, nil
 }
 
-func (recordingStore) ListTemplateRuns(context.Context, traits.TenantID, traits.StackTemplateID) ([]traits.TemplateRun, error) {
+func (recordingStore) ListTemplateRuns(context.Context, domain.TenantID, domain.StackTemplateID) ([]domain.TemplateRun, error) {
 	return nil, nil
 }
 
-func (recordingStore) GetTemplateRunLog(context.Context, traits.TenantID, traits.TemplateRunID, string) (traits.TemplateRunLog, error) {
-	return traits.TemplateRunLog{}, nil
+func (recordingStore) GetTemplateRunLog(context.Context, domain.TenantID, domain.TemplateRunID, string) (domain.TemplateRunLog, error) {
+	return domain.TemplateRunLog{}, nil
 }
 
-func (recordingStore) ListTemplateRunLogs(context.Context, traits.TenantID, traits.TemplateRunID) ([]traits.TemplateRunLog, error) {
+func (recordingStore) ListTemplateRunLogs(context.Context, domain.TenantID, domain.TemplateRunID) ([]domain.TemplateRunLog, error) {
 	return nil, nil
 }
 
-func (recordingStore) ReconcileTemplateRunCancellation(context.Context, traits.TenantID, traits.TemplateRunID, string) error {
+func (recordingStore) ReconcileTemplateRunCancellation(context.Context, domain.TenantID, domain.TemplateRunID, string) error {
 	return nil
 }
 
-func (recordingStore) GetTemplateRegistration(context.Context, traits.TenantID, traits.TemplateRegistrationID) (traits.TemplateRegistration, error) {
-	return traits.TemplateRegistration{}, nil
+func (recordingStore) GetTemplateRegistration(context.Context, domain.TenantID, domain.TemplateRegistrationID) (domain.TemplateRegistration, error) {
+	return domain.TemplateRegistration{}, nil
 }
 
-func (recordingStore) RecordTemplateRegistrationStatus(context.Context, traits.TemplateRegistrationStatusActivityInput) error {
+func (recordingStore) RecordTemplateRegistrationStatus(context.Context, domain.TemplateRegistrationStatusActivityInput) error {
 	return nil
 }
 
-func (recordingStore) UpsertTemplateRevisionWithVariables(context.Context, traits.TemplateRevision, []traits.TemplateVariable) (traits.TemplateRevision, error) {
-	return traits.TemplateRevision{}, nil
+func (recordingStore) UpsertTemplateRevisionWithVariables(context.Context, domain.TemplateRevision, []domain.TemplateVariable) (domain.TemplateRevision, error) {
+	return domain.TemplateRevision{}, nil
 }
 
-func (recordingStore) GetTemplateRevisionVariables(context.Context, traits.TenantID, traits.TemplateRevisionID) ([]traits.TemplateVariable, error) {
+func (recordingStore) GetTemplateRevisionVariables(context.Context, domain.TenantID, domain.TemplateRevisionID) ([]domain.TemplateVariable, error) {
 	return nil, nil
 }
 
-func (recordingStore) AppendAuditEvent(context.Context, traits.SecurityAuditEvent) error {
+func (recordingStore) AppendAuditEvent(context.Context, domain.SecurityAuditEvent) error {
 	return nil
 }
 
@@ -783,7 +783,7 @@ func (recordingStore) DeleteSessionsExpiredBefore(context.Context, time.Time) (i
 
 type recordingTemplateRunLogReader struct{}
 
-func (recordingTemplateRunLogReader) ReadTemplateRunLog(context.Context, traits.TemplateRunLog) ([]byte, error) {
+func (recordingTemplateRunLogReader) ReadTemplateRunLog(context.Context, domain.TemplateRunLog) ([]byte, error) {
 	return nil, nil
 }
 

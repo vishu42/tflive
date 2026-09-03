@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/authz"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 // The tier now lives in OpenFGA, not in the token: testPlatformAuthorizer
@@ -72,7 +72,7 @@ func TestSearchUsersReturnsResults(t *testing.T) {
 	})
 
 	users, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
-		TenantID: traits.TenantID("tenant_1"),
+		TenantID: domain.TenantID("tenant_1"),
 		Query:    "ali",
 		First:    0,
 		Max:      20,
@@ -97,7 +97,7 @@ func TestSearchUsersRequiresPlatformAdmin(t *testing.T) {
 	})
 
 	_, err := service.SearchUsers(contextWithOrdinaryUser(), SearchUsersCommand{
-		TenantID: traits.TenantID("tenant_1"),
+		TenantID: domain.TenantID("tenant_1"),
 		Query:    "test",
 		First:    0,
 		Max:      20,
@@ -116,7 +116,7 @@ func TestSearchUsersRequiresAuthentication(t *testing.T) {
 	})
 
 	_, err := service.SearchUsers(context.Background(), SearchUsersCommand{
-		TenantID: traits.TenantID("tenant_1"),
+		TenantID: domain.TenantID("tenant_1"),
 		Query:    "test",
 		First:    0,
 		Max:      20,
@@ -135,7 +135,7 @@ func TestSearchUsersRejectsEmptyQuery(t *testing.T) {
 	})
 
 	_, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
-		TenantID: traits.TenantID("tenant_1"),
+		TenantID: domain.TenantID("tenant_1"),
 		Query:    "",
 		First:    0,
 		Max:      20,
@@ -168,7 +168,7 @@ func TestSearchUsersRejectsInvalidPagination(t *testing.T) {
 			})
 
 			_, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
-				TenantID: traits.TenantID("tenant_1"),
+				TenantID: domain.TenantID("tenant_1"),
 				Query:    "test",
 				First:    test.first,
 				Max:      test.max,
@@ -190,7 +190,7 @@ func TestSearchUsersRepositoryError(t *testing.T) {
 	})
 
 	_, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
-		TenantID: traits.TenantID("tenant_1"),
+		TenantID: domain.TenantID("tenant_1"),
 		Query:    "test",
 		First:    0,
 		Max:      20,
@@ -209,7 +209,7 @@ func TestSearchUsersEmptyResults(t *testing.T) {
 	})
 
 	users, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
-		TenantID: traits.TenantID("tenant_1"),
+		TenantID: domain.TenantID("tenant_1"),
 		Query:    "noone",
 		First:    0,
 		Max:      20,
@@ -263,8 +263,8 @@ func TestAssignStackRoleRejectsUserThatNeverSignedIn(t *testing.T) {
 	})
 
 	_, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
-		TenantID: traits.TenantID("tenant_123"),
-		StackID:  traits.StackID("stack_abc"),
+		TenantID: domain.TenantID("tenant_123"),
+		StackID:  domain.StackID("stack_abc"),
 		UserSub:  "never-signed-in",
 		Role:     "operator",
 	})
@@ -289,8 +289,8 @@ func TestAssignStackRoleReturnsProjectedDisplayFields(t *testing.T) {
 	})
 
 	view, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
-		TenantID: traits.TenantID("tenant_123"),
-		StackID:  traits.StackID("stack_abc"),
+		TenantID: domain.TenantID("tenant_123"),
+		StackID:  domain.StackID("stack_abc"),
 		UserSub:  "user_456",
 		Role:     "operator",
 	})
@@ -322,7 +322,7 @@ func TestUserProjectionEntryPointsRequireARepository(t *testing.T) {
 		},
 		"SearchUsers": func(service *Service) error {
 			_, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
-				TenantID: traits.TenantID("tenant_123"),
+				TenantID: domain.TenantID("tenant_123"),
 				Query:    "ali",
 				Max:      20,
 			})
@@ -330,15 +330,15 @@ func TestUserProjectionEntryPointsRequireARepository(t *testing.T) {
 		},
 		"ListStackGrants": func(service *Service) error {
 			_, err := service.ListStackGrants(adminContext(), ListStackGrantsCommand{
-				TenantID: traits.TenantID("tenant_123"),
-				StackID:  traits.StackID("stack_abc"),
+				TenantID: domain.TenantID("tenant_123"),
+				StackID:  domain.StackID("stack_abc"),
 			})
 			return err
 		},
 		"AssignStackRole": func(service *Service) error {
 			_, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
-				TenantID: traits.TenantID("tenant_123"),
-				StackID:  traits.StackID("stack_abc"),
+				TenantID: domain.TenantID("tenant_123"),
+				StackID:  domain.StackID("stack_abc"),
 				UserSub:  "user_456",
 				Role:     "operator",
 			})

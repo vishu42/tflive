@@ -10,14 +10,14 @@ import (
 
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 func TestGetStackChecksViewPermission(t *testing.T) {
 	t.Parallel()
 
 	authorizer := &permissionAuthorizer{allowed: true}
-	stacks := &recordingStackRepository{view: StackView{Stack: traits.Stack{ID: "stack_123"}}}
+	stacks := &recordingStackRepository{view: StackView{Stack: domain.Stack{ID: "stack_123"}}}
 	service := NewService(Service{Authorizer: authorizer, Stacks: stacks})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
 
@@ -47,9 +47,9 @@ func TestGetStackDenialReturnsNotFound(t *testing.T) {
 func TestListStacksBatchesCompleteTenantScan(t *testing.T) {
 	t.Parallel()
 
-	all := make([]traits.Stack, 55)
+	all := make([]domain.Stack, 55)
 	for i := range all {
-		all[i] = traits.Stack{ID: traits.StackID(fmt.Sprintf("stack_%02d", i)), CreatedAt: time.Unix(int64(100-i), 0)}
+		all[i] = domain.Stack{ID: domain.StackID(fmt.Sprintf("stack_%02d", i)), CreatedAt: time.Unix(int64(100-i), 0)}
 	}
 	repository := &pagedStackRepository{stacks: all}
 	authorizer := &permissionAuthorizer{batchDecision: func(index int) bool { return index%2 == 0 }}
@@ -74,9 +74,9 @@ func TestListStacksBatchesCompleteTenantScan(t *testing.T) {
 func TestListStacksReturnsNoPartialResults(t *testing.T) {
 	t.Parallel()
 
-	all := make([]traits.Stack, 55)
+	all := make([]domain.Stack, 55)
 	for i := range all {
-		all[i] = traits.Stack{ID: traits.StackID(fmt.Sprintf("stack_%02d", i)), CreatedAt: time.Unix(int64(100-i), 0)}
+		all[i] = domain.Stack{ID: domain.StackID(fmt.Sprintf("stack_%02d", i)), CreatedAt: time.Unix(int64(100-i), 0)}
 	}
 	authorizer := &permissionAuthorizer{failBatch: 2, batchErr: authz.ErrUnavailable}
 	service := NewService(Service{Authorizer: authorizer, Stacks: &pagedStackRepository{stacks: all}})
@@ -95,7 +95,7 @@ func TestListStacksRejectsMismatchedBatchResults(t *testing.T) {
 	t.Parallel()
 
 	authorizer := &permissionAuthorizer{truncateBatchResult: true}
-	service := NewService(Service{Authorizer: authorizer, Stacks: &pagedStackRepository{stacks: []traits.Stack{{ID: "stack_1"}}}})
+	service := NewService(Service{Authorizer: authorizer, Stacks: &pagedStackRepository{stacks: []domain.Stack{{ID: "stack_1"}}}})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
 
 	_, err := service.ListStacks(ctx, ListStacksCommand{TenantID: "tenant_123"})
@@ -123,9 +123,9 @@ func TestListStacksSkipsAuthorizationForEmptyTenant(t *testing.T) {
 func TestListStacksRejectsNonAdvancingPage(t *testing.T) {
 	t.Parallel()
 
-	all := make([]traits.Stack, 50)
+	all := make([]domain.Stack, 50)
 	for i := range all {
-		all[i] = traits.Stack{ID: traits.StackID(fmt.Sprintf("stack_%02d", 50-i)), CreatedAt: time.Unix(100, 0)}
+		all[i] = domain.Stack{ID: domain.StackID(fmt.Sprintf("stack_%02d", 50-i)), CreatedAt: time.Unix(100, 0)}
 	}
 	service := NewService(Service{
 		Authorizer: &permissionAuthorizer{},
@@ -142,9 +142,9 @@ func TestListStacksRejectsNonAdvancingPage(t *testing.T) {
 func TestListStacksRejectsOversizedPage(t *testing.T) {
 	t.Parallel()
 
-	all := make([]traits.Stack, 51)
+	all := make([]domain.Stack, 51)
 	for i := range all {
-		all[i] = traits.Stack{ID: traits.StackID(fmt.Sprintf("stack_%02d", 51-i)), CreatedAt: time.Unix(100, 0)}
+		all[i] = domain.Stack{ID: domain.StackID(fmt.Sprintf("stack_%02d", 51-i)), CreatedAt: time.Unix(100, 0)}
 	}
 	service := NewService(Service{Authorizer: &permissionAuthorizer{}, Stacks: &pagedStackRepository{stacks: all, ignoreLimit: true}})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
@@ -158,7 +158,7 @@ func TestListStacksRejectsOversizedPage(t *testing.T) {
 func TestListStacksRejectsOutOfOrderPage(t *testing.T) {
 	t.Parallel()
 
-	stacks := []traits.Stack{
+	stacks := []domain.Stack{
 		{ID: "stack_a", CreatedAt: time.Unix(100, 0)},
 		{ID: "stack_b", CreatedAt: time.Unix(100, 0)},
 	}
@@ -174,7 +174,7 @@ func TestListStacksRejectsOutOfOrderPage(t *testing.T) {
 func TestListStacksRejectsMalformedCandidateIDAsDependencyFailure(t *testing.T) {
 	t.Parallel()
 
-	service := NewService(Service{Authorizer: &permissionAuthorizer{}, Stacks: &pagedStackRepository{stacks: []traits.Stack{{ID: "bad:id"}}}})
+	service := NewService(Service{Authorizer: &permissionAuthorizer{}, Stacks: &pagedStackRepository{stacks: []domain.Stack{{ID: "bad:id"}}}})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
 
 	_, err := service.ListStacks(ctx, ListStacksCommand{TenantID: "tenant_123"})
@@ -201,7 +201,7 @@ func TestInheritedAuthorizationRequiresPrincipalBeforeRepositoryRead(t *testing.
 func TestStartTemplateRunDenialReturnsForbiddenBeforeMutation(t *testing.T) {
 	t.Parallel()
 
-	templates := &recordingStackTemplateRepository{stackTemplate: traits.StackTemplate{
+	templates := &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{
 		ID:       "stack_template_123",
 		TenantID: "tenant_123",
 		StackID:  "stack_123",
@@ -215,7 +215,7 @@ func TestStartTemplateRunDenialReturnsForbiddenBeforeMutation(t *testing.T) {
 	_, err := service.StartTemplateRun(ctx, StartTemplateRunCommand{
 		TenantID:        "tenant_123",
 		StackTemplateID: "stack_template_123",
-		Operation:       traits.OperationPlan,
+		Operation:       domain.OperationPlan,
 	})
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("error = %v, want ErrForbidden", err)
@@ -333,7 +333,7 @@ func TestResolveStackCapabilitiesMapsEachRelationPositionally(t *testing.T) {
 func TestResolveStacksCapabilitiesMapsEachStackAndRelationPositionally(t *testing.T) {
 	t.Parallel()
 
-	stacks := []traits.Stack{{ID: "stack_a"}, {ID: "stack_b"}}
+	stacks := []domain.Stack{{ID: "stack_a"}, {ID: "stack_b"}}
 
 	for stackIndex, stack := range stacks {
 		for relationIndex, name := range stackCapabilityRelationNames {
@@ -470,23 +470,23 @@ func (authorizer *permissionAuthorizer) DeleteRelationships(context.Context, aut
 }
 
 type pagedStackRepository struct {
-	stacks      []traits.Stack
+	stacks      []domain.Stack
 	pageCalls   int
 	repeatPage  bool
 	ignoreLimit bool
 }
 
-func (*pagedStackRepository) CreateStack(context.Context, traits.Stack) error { return nil }
-func (*pagedStackRepository) GetStack(context.Context, traits.TenantID, traits.StackID) (traits.Stack, error) {
-	return traits.Stack{}, nil
+func (*pagedStackRepository) CreateStack(context.Context, domain.Stack) error { return nil }
+func (*pagedStackRepository) GetStack(context.Context, domain.TenantID, domain.StackID) (domain.Stack, error) {
+	return domain.Stack{}, nil
 }
-func (*pagedStackRepository) GetStackWithTemplates(context.Context, traits.TenantID, traits.StackID) (StackView, error) {
+func (*pagedStackRepository) GetStackWithTemplates(context.Context, domain.TenantID, domain.StackID) (StackView, error) {
 	return StackView{}, nil
 }
-func (repository *pagedStackRepository) ListStacks(context.Context, traits.TenantID) ([]traits.Stack, error) {
+func (repository *pagedStackRepository) ListStacks(context.Context, domain.TenantID) ([]domain.Stack, error) {
 	return repository.stacks, nil
 }
-func (repository *pagedStackRepository) ListStacksPage(_ context.Context, _ traits.TenantID, after *StackPageCursor, limit int) ([]traits.Stack, error) {
+func (repository *pagedStackRepository) ListStacksPage(_ context.Context, _ domain.TenantID, after *StackPageCursor, limit int) ([]domain.Stack, error) {
 	repository.pageCalls++
 	start := 0
 	if after != nil && !repository.repeatPage {
@@ -501,5 +501,5 @@ func (repository *pagedStackRepository) ListStacksPage(_ context.Context, _ trai
 	if !repository.ignoreLimit {
 		end = min(start+limit, end)
 	}
-	return append([]traits.Stack(nil), repository.stacks[start:end]...), nil
+	return append([]domain.Stack(nil), repository.stacks[start:end]...), nil
 }

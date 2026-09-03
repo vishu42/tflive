@@ -1,4 +1,4 @@
-package traits
+package domain
 
 import "testing"
 
@@ -217,7 +217,7 @@ func TestTemplateSyncWorkflowInputUsesRegistrationSource(t *testing.T) {
 	t.Parallel()
 
 	input := TemplateSyncWorkflowInput{
-		RegistrationID: traitsTemplateRegistrationID("template_registration_123"),
+		RegistrationID: templateRegistrationID("template_registration_123"),
 		TenantID:       TenantID("tenant_123"),
 		RepoOwner:      "acme",
 		RepoName:       "infra",
@@ -233,7 +233,7 @@ func TestTemplateSyncWorkflowInputUsesRegistrationSource(t *testing.T) {
 	}
 }
 
-func traitsTemplateRegistrationID(id string) TemplateRegistrationID {
+func templateRegistrationID(id string) TemplateRegistrationID {
 	return TemplateRegistrationID(id)
 }
 

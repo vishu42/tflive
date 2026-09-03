@@ -1,4 +1,4 @@
-package traits
+package domain
 
 import (
 	"encoding/json"

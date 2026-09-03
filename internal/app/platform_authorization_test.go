@@ -7,7 +7,7 @@ import (
 
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 // platformAuthorizer stands in for the tuples #212 seeds, answering platform
@@ -138,7 +138,7 @@ func TestPlatformCapabilitiesComeFromOpenFGANotRealmRoles(t *testing.T) {
 		Users:      &fakeUserRepository{users: []UserProfile{}},
 		Authorizer: newPlatformAuthorizer(platformAdmin("granted-subject")),
 	})
-	command := SearchUsersCommand{TenantID: traits.TenantID("tenant_1"), Query: "a", Max: 20}
+	command := SearchUsersCommand{TenantID: domain.TenantID("tenant_1"), Query: "a", Max: 20}
 
 	ungranted := authn.ContextWithPrincipal(context.Background(), authn.Principal{
 		Subject: "ungranted-subject",
@@ -165,11 +165,11 @@ func TestPlatformViewerReadsTheCatalogButCannotPublishToIt(t *testing.T) {
 	})
 	ctx := platformContext("viewer-subject")
 
-	if _, err := service.ListTemplateRevisions(ctx, ListTemplateRevisionsCommand{TenantID: traits.TenantID("tenant_1")}); err != nil {
+	if _, err := service.ListTemplateRevisions(ctx, ListTemplateRevisionsCommand{TenantID: domain.TenantID("tenant_1")}); err != nil {
 		t.Fatalf("ListTemplateRevisions error = %v, want nil", err)
 	}
 	_, err := service.RegisterTemplate(ctx, RegisterTemplateCommand{
-		TenantID:  traits.TenantID("tenant_1"),
+		TenantID:  domain.TenantID("tenant_1"),
 		RepoOwner: "acme",
 		RepoName:  "infra",
 		SourceRef: "main",
@@ -187,7 +187,7 @@ func TestPlatformAdminReachesAStackThroughTheModel(t *testing.T) {
 	t.Parallel()
 
 	authorizer := newPlatformAuthorizer(platformAdmin("admin-subject"))
-	err := authorizeStack(platformContext("admin-subject"), authorizer, traits.StackID("stack_abc"), authz.RelationCanOperate, ErrForbidden)
+	err := authorizeStack(platformContext("admin-subject"), authorizer, domain.StackID("stack_abc"), authz.RelationCanOperate, ErrForbidden)
 	if err != nil {
 		t.Fatalf("authorizeStack error = %v, want nil", err)
 	}
@@ -212,8 +212,8 @@ func TestGrantStackOwnerWritesTheParentEdgeWithTheOwnerGrant(t *testing.T) {
 	service := NewService(Service{Authorizer: authorizer})
 
 	if err := service.GrantStackOwner(context.Background(), GrantStackOwnerCommand{
-		TenantID: traits.TenantID("tenant_123"),
-		StackID:  traits.StackID("stack_abc"),
+		TenantID: domain.TenantID("tenant_123"),
+		StackID:  domain.StackID("stack_abc"),
 		Subject:  "user_123",
 	}); err != nil {
 		t.Fatalf("GrantStackOwner error = %v", err)

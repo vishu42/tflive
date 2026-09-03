@@ -5,15 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 const KindStartTemplateRun queue.Kind = "start_template_run"
 
 // StartTemplateRunPayload is the complete input required to start a template run.
 // It intentionally has no JSON tags: persisted JSON uses its Go field names.
-type StartTemplateRunPayload traits.TemplateRunWorkflowInput
+type StartTemplateRunPayload domain.TemplateRunWorkflowInput
 
 var StartTemplateRunSpec = queue.Spec{Kind: KindStartTemplateRun, Mode: queue.ModeJob, Key: startTemplateRunKey}
 
@@ -41,7 +41,7 @@ func (handler *StartTemplateRunHandler) Deliver(ctx context.Context, item queue.
 	if err := json.Unmarshal(item.Payload, &payload); err != nil {
 		return nil, fmt.Errorf("decode start template run payload: %w", err)
 	}
-	if err := handler.dispatcher.StartTemplateRun(ctx, traits.TemplateRunWorkflowInput(payload)); err != nil {
+	if err := handler.dispatcher.StartTemplateRun(ctx, domain.TemplateRunWorkflowInput(payload)); err != nil {
 		return nil, err
 	}
 	return nil, nil

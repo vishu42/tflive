@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 func TestLocalProcessRunnerRunsTerraformPlan(t *testing.T) {
@@ -21,7 +21,7 @@ func TestLocalProcessRunnerRunsTerraformPlan(t *testing.T) {
 	err := runner.Run(context.Background(), TerraformCommand{
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandPlan,
+		Command:       domain.TerraformCommandPlan,
 	})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -47,7 +47,7 @@ func TestLocalProcessRunnerInjectsCredentialEnvironment(t *testing.T) {
 	err := runner.Run(context.Background(), TerraformCommand{
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandPlan,
+		Command:       domain.TerraformCommandPlan,
 		Environment:   map[string]string{"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret"},
 	})
 	if err != nil {
@@ -87,7 +87,7 @@ func TestLocalProcessRunnerRunsTerraformApply(t *testing.T) {
 	err := runner.Run(context.Background(), TerraformCommand{
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandApply,
+		Command:       domain.TerraformCommandApply,
 	})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -118,7 +118,7 @@ func TestLocalProcessRunnerRunsTerraformDestroy(t *testing.T) {
 	err := runner.Run(context.Background(), TerraformCommand{
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandDestroy,
+		Command:       domain.TerraformCommandDestroy,
 	})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -141,22 +141,22 @@ func TestLocalProcessRunnerSetsTerraformVariablesForPlanAndApply(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		command traits.TerraformCommandType
+		command domain.TerraformCommandType
 		args    []string
 	}{
 		{
 			name:    "plan",
-			command: traits.TerraformCommandPlan,
+			command: domain.TerraformCommandPlan,
 			args:    []string{"plan", "-input=false", "-no-color"},
 		},
 		{
 			name:    "apply",
-			command: traits.TerraformCommandApply,
+			command: domain.TerraformCommandApply,
 			args:    []string{"apply", "-input=false", "-auto-approve", "-no-color"},
 		},
 		{
 			name:    "destroy",
-			command: traits.TerraformCommandDestroy,
+			command: domain.TerraformCommandDestroy,
 			args:    []string{"destroy", "-input=false", "-auto-approve", "-no-color"},
 		},
 	}
@@ -203,7 +203,7 @@ func TestLocalProcessRunnerSelectsExistingWorkspace(t *testing.T) {
 	err := runner.Run(context.Background(), TerraformCommand{
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandSelectWorkspace,
+		Command:       domain.TerraformCommandSelectWorkspace,
 	})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -232,7 +232,7 @@ func TestLocalProcessRunnerCreatesMissingWorkspace(t *testing.T) {
 	err := runner.Run(context.Background(), TerraformCommand{
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandSelectWorkspace,
+		Command:       domain.TerraformCommandSelectWorkspace,
 	})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -267,7 +267,7 @@ func TestLocalProcessRunnerWrapsWorkspaceCreationErrorWithTofuContext(t *testing
 	err := runner.Run(context.Background(), TerraformCommand{
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandSelectWorkspace,
+		Command:       domain.TerraformCommandSelectWorkspace,
 	})
 	if !errors.Is(err, createErr) {
 		t.Fatalf("error = %v, want createErr", err)
@@ -276,8 +276,8 @@ func TestLocalProcessRunnerWrapsWorkspaceCreationErrorWithTofuContext(t *testing
 	if !errors.As(err, &cmdErr) {
 		t.Fatalf("error = %v, want *CommandError", err)
 	}
-	if cmdErr.Command != traits.TerraformCommandSelectWorkspace {
-		t.Fatalf("cmdErr.Command = %q, want %q", cmdErr.Command, traits.TerraformCommandSelectWorkspace)
+	if cmdErr.Command != domain.TerraformCommandSelectWorkspace {
+		t.Fatalf("cmdErr.Command = %q, want %q", cmdErr.Command, domain.TerraformCommandSelectWorkspace)
 	}
 }
 
@@ -291,7 +291,7 @@ func TestLocalProcessRunnerWrapsCommandErrors(t *testing.T) {
 	err := runner.Run(context.Background(), TerraformCommand{
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandPlan,
+		Command:       domain.TerraformCommandPlan,
 	})
 	if !errors.Is(err, commandErr) {
 		t.Fatalf("error = %v, want commandErr", err)
@@ -300,8 +300,8 @@ func TestLocalProcessRunnerWrapsCommandErrors(t *testing.T) {
 	if !errors.As(err, &cmdErr) {
 		t.Fatalf("error = %v, want *CommandError", err)
 	}
-	if cmdErr.Command != traits.TerraformCommandPlan {
-		t.Fatalf("cmdErr.Command = %q, want %q", cmdErr.Command, traits.TerraformCommandPlan)
+	if cmdErr.Command != domain.TerraformCommandPlan {
+		t.Fatalf("cmdErr.Command = %q, want %q", cmdErr.Command, domain.TerraformCommandPlan)
 	}
 }
 
@@ -319,7 +319,7 @@ func TestLocalProcessRunnerPassesOutputWritersToExecutor(t *testing.T) {
 	err := runner.Run(context.Background(), TerraformCommand{
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandPlan,
+		Command:       domain.TerraformCommandPlan,
 		Stdout:        &stdout,
 		Stderr:        &stderr,
 	})
@@ -342,7 +342,7 @@ func TestLocalProcessRunnerRequiresWorkspacePath(t *testing.T) {
 
 	err := runner.Run(context.Background(), TerraformCommand{
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-		Command:       traits.TerraformCommandPlan,
+		Command:       domain.TerraformCommandPlan,
 	})
 	if err == nil {
 		t.Fatal("Run returned nil error, want error")

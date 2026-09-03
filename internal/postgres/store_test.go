@@ -15,13 +15,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 const (
-	requesterSubject = traits.UserID("6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91")
-	approverSubject  = traits.UserID("cb4afba6-d18d-496f-80ce-8a50b94f09be")
+	requesterSubject = domain.UserID("6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91")
+	approverSubject  = domain.UserID("cb4afba6-d18d-496f-80ce-8a50b94f09be")
 )
 
 var (
@@ -34,7 +34,7 @@ var (
 	_ app.TemplateRevisionRepository         = (*Store)(nil)
 	_ app.AuditRepository                    = (*Store)(nil)
 	_ interface {
-		RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error
+		RecordTemplateRunStatus(context.Context, domain.TemplateRunStatusActivityInput) error
 	} = (*Store)(nil)
 )
 
@@ -194,7 +194,7 @@ func TestRetireWorkflowOutboxBackfillsPendingStarts(t *testing.T) {
 		t.Fatalf("read backfilled work queue row: %v", err)
 	}
 
-	var input traits.TemplateRunWorkflowInput
+	var input domain.TemplateRunWorkflowInput
 	if err := json.Unmarshal(payload, &input); err != nil {
 		t.Fatalf("decode work queue payload: %v", err)
 	}
@@ -216,8 +216,8 @@ func TestRetireWorkflowOutboxBackfillsPendingStarts(t *testing.T) {
 	if input.StackTemplateID != "stack-template-pending" {
 		t.Fatalf("StackTemplateID = %q, want stack-template-pending", input.StackTemplateID)
 	}
-	if input.Operation != traits.OperationPlan {
-		t.Fatalf("Operation = %q, want %q", input.Operation, traits.OperationPlan)
+	if input.Operation != domain.OperationPlan {
+		t.Fatalf("Operation = %q, want %q", input.Operation, domain.OperationPlan)
 	}
 	if input.SelectedRef != "main" {
 		t.Fatalf("SelectedRef = %q, want main", input.SelectedRef)
@@ -494,9 +494,9 @@ func TestTemplateSourceMigrationBackfillsLegacyStackTemplateRevisionPointers(t *
 		t.Fatalf("apply migration 0006: %v", err)
 	}
 
-	var sourceTemplateID traits.SourceTemplateID
-	var desiredTemplateRevisionID traits.TemplateRevisionID
-	var lastAppliedTemplateRevisionID traits.TemplateRevisionID
+	var sourceTemplateID domain.SourceTemplateID
+	var desiredTemplateRevisionID domain.TemplateRevisionID
+	var lastAppliedTemplateRevisionID domain.TemplateRevisionID
 	var desiredConfigJSON []byte
 	var componentKey string
 	err = pool.QueryRow(ctx, `
@@ -521,10 +521,10 @@ func TestTemplateSourceMigrationBackfillsLegacyStackTemplateRevisionPointers(t *
 	if sourceTemplateID == "" {
 		t.Fatal("source template ID was not backfilled")
 	}
-	if desiredTemplateRevisionID != traits.TemplateRevisionID("template_rev_1") {
+	if desiredTemplateRevisionID != domain.TemplateRevisionID("template_rev_1") {
 		t.Fatalf("desired template revision ID = %q, want template_rev_1", desiredTemplateRevisionID)
 	}
-	if lastAppliedTemplateRevisionID != traits.TemplateRevisionID("template_rev_1") {
+	if lastAppliedTemplateRevisionID != domain.TemplateRevisionID("template_rev_1") {
 		t.Fatalf("last applied template revision ID = %q, want template_rev_1", lastAppliedTemplateRevisionID)
 	}
 	if string(desiredConfigJSON) != `{"region": "us-east-1"}` {
@@ -543,15 +543,15 @@ func TestCreateAndGetTemplateRegistration(t *testing.T) {
 	store := NewStore(pool)
 	requestedAt := time.Date(2026, 7, 6, 11, 30, 0, 123456000, time.UTC)
 
-	registration := traits.TemplateRegistration{
-		ID:          traits.TemplateRegistrationID("template_registration_123"),
-		TenantID:    traits.TenantID("tenant_123"),
+	registration := domain.TemplateRegistration{
+		ID:          domain.TemplateRegistrationID("template_registration_123"),
+		TenantID:    domain.TenantID("tenant_123"),
 		RepoOwner:   "acme",
 		RepoName:    "infra-templates",
 		SourceRef:   "v0.0.1",
 		RootPath:    "modules/vpc",
-		Status:      traits.TemplateRegistrationPending,
-		RequestedBy: traits.UserID("user_123"),
+		Status:      domain.TemplateRegistrationPending,
+		RequestedBy: domain.UserID("user_123"),
 		RequestedAt: requestedAt,
 	}
 
@@ -559,7 +559,7 @@ func TestCreateAndGetTemplateRegistration(t *testing.T) {
 		t.Fatalf("CreateTemplateRegistration returned error: %v", err)
 	}
 
-	got, err := store.GetTemplateRegistration(ctx, traits.TenantID("tenant_123"), traits.TemplateRegistrationID("template_registration_123"))
+	got, err := store.GetTemplateRegistration(ctx, domain.TenantID("tenant_123"), domain.TemplateRegistrationID("template_registration_123"))
 	if err != nil {
 		t.Fatalf("GetTemplateRegistration returned error: %v", err)
 	}
@@ -570,7 +570,7 @@ func TestCreateAndGetTemplateRegistration(t *testing.T) {
 		t.Fatalf("registration = %#v, want %#v", got, registration)
 	}
 
-	_, err = store.GetTemplateRegistration(ctx, traits.TenantID("tenant_456"), traits.TemplateRegistrationID("template_registration_123"))
+	_, err = store.GetTemplateRegistration(ctx, domain.TenantID("tenant_456"), domain.TemplateRegistrationID("template_registration_123"))
 	if !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("other tenant error = %v, want app.ErrNotFound", err)
 	}
@@ -582,40 +582,40 @@ func TestRecordTemplateRegistrationStatusUpdatesTerminalFields(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	registration := traits.TemplateRegistration{
-		ID:          traits.TemplateRegistrationID("template_registration_123"),
-		TenantID:    traits.TenantID("tenant_123"),
+	registration := domain.TemplateRegistration{
+		ID:          domain.TemplateRegistrationID("template_registration_123"),
+		TenantID:    domain.TenantID("tenant_123"),
 		RepoOwner:   "acme",
 		RepoName:    "infra-templates",
 		SourceRef:   "v0.0.1",
 		RootPath:    "modules/vpc",
-		Status:      traits.TemplateRegistrationPending,
-		RequestedBy: traits.UserID("user_123"),
+		Status:      domain.TemplateRegistrationPending,
+		RequestedBy: domain.UserID("user_123"),
 		RequestedAt: time.Date(2026, 7, 6, 11, 30, 0, 0, time.UTC),
 	}
 	if err := store.CreateTemplateRegistration(ctx, registration); err != nil {
 		t.Fatalf("CreateTemplateRegistration returned error: %v", err)
 	}
 
-	err := store.RecordTemplateRegistrationStatus(ctx, traits.TemplateRegistrationStatusActivityInput{
-		RegistrationID:     traits.TemplateRegistrationID("template_registration_123"),
-		TenantID:           traits.TenantID("tenant_123"),
-		Status:             traits.TemplateRegistrationCompleted,
-		TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+	err := store.RecordTemplateRegistrationStatus(ctx, domain.TemplateRegistrationStatusActivityInput{
+		RegistrationID:     domain.TemplateRegistrationID("template_registration_123"),
+		TenantID:           domain.TenantID("tenant_123"),
+		Status:             domain.TemplateRegistrationCompleted,
+		TemplateRevisionID: domain.TemplateRevisionID("template_123"),
 		ResolvedCommitSHA:  "abc123",
 	})
 	if err != nil {
 		t.Fatalf("RecordTemplateRegistrationStatus returned error: %v", err)
 	}
 
-	got, err := store.GetTemplateRegistration(ctx, traits.TenantID("tenant_123"), traits.TemplateRegistrationID("template_registration_123"))
+	got, err := store.GetTemplateRegistration(ctx, domain.TenantID("tenant_123"), domain.TemplateRegistrationID("template_registration_123"))
 	if err != nil {
 		t.Fatalf("GetTemplateRegistration returned error: %v", err)
 	}
-	if got.Status != traits.TemplateRegistrationCompleted {
+	if got.Status != domain.TemplateRegistrationCompleted {
 		t.Fatalf("status = %q, want completed", got.Status)
 	}
-	if got.TemplateRevisionID != traits.TemplateRevisionID("template_123") {
+	if got.TemplateRevisionID != domain.TemplateRevisionID("template_123") {
 		t.Fatalf("template id = %q, want template_123", got.TemplateRevisionID)
 	}
 	if got.ResolvedCommitSHA != "abc123" {
@@ -633,31 +633,31 @@ func TestUpsertTemplateRevisionWithVariablesCreatesAndReusesImmutableRevision(t 
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 	createdAt := time.Date(2026, 7, 6, 12, 0, 0, 123456000, time.UTC)
-	template := traits.TemplateRevision{
-		ID:                traits.TemplateRevisionID("template_123"),
-		TenantID:          traits.TenantID("tenant_123"),
+	template := domain.TemplateRevision{
+		ID:                domain.TemplateRevisionID("template_123"),
+		TenantID:          domain.TenantID("tenant_123"),
 		RepoOwner:         "acme",
 		RepoName:          "infra-templates",
 		SourceRef:         "v0.0.1",
 		ResolvedCommitSHA: "abc123",
 		RootPath:          "modules/vpc",
-		SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
+		SourceTemplateID:  domain.SourceTemplateID("source_template_vpc"),
 		Name:              "vpc",
 		Description:       "Creates a VPC",
 		Tags:              []string{"network", "aws"},
-		Status:            traits.TemplateRevisionActive,
+		Status:            domain.TemplateRevisionActive,
 		CreatedAt:         createdAt,
 	}
-	variables := []traits.TemplateVariable{
+	variables := []domain.TemplateVariable{
 		{
-			TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+			TemplateRevisionID: domain.TemplateRevisionID("template_123"),
 			Name:               "region",
 			TypeExpression:     "string",
 			Description:        "AWS region",
 			Required:           true,
 		},
 		{
-			TemplateRevisionID: traits.TemplateRevisionID("template_123"),
+			TemplateRevisionID: domain.TemplateRevisionID("template_123"),
 			Name:               "cidr",
 			TypeExpression:     "string",
 			HasDefault:         true,
@@ -669,30 +669,30 @@ func TestUpsertTemplateRevisionWithVariablesCreatesAndReusesImmutableRevision(t 
 	if err != nil {
 		t.Fatalf("UpsertTemplateRevisionWithVariables returned error: %v", err)
 	}
-	if created.ID != traits.TemplateRevisionID("template_123") {
+	if created.ID != domain.TemplateRevisionID("template_123") {
 		t.Fatalf("created template revision ID = %q, want template_123", created.ID)
 	}
 
-	reused, err := store.UpsertTemplateRevisionWithVariables(ctx, traits.TemplateRevision{
-		ID:                traits.TemplateRevisionID("template_456"),
-		TenantID:          traits.TenantID("tenant_123"),
+	reused, err := store.UpsertTemplateRevisionWithVariables(ctx, domain.TemplateRevision{
+		ID:                domain.TemplateRevisionID("template_456"),
+		TenantID:          domain.TenantID("tenant_123"),
 		RepoOwner:         "acme",
 		RepoName:          "infra-templates",
 		SourceRef:         "v0.0.1",
 		ResolvedCommitSHA: "abc123",
 		RootPath:          "modules/vpc",
-		SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
+		SourceTemplateID:  domain.SourceTemplateID("source_template_vpc"),
 		Name:              "vpc moved tag",
-		Status:            traits.TemplateRevisionActive,
+		Status:            domain.TemplateRevisionActive,
 	}, nil)
 	if err != nil {
 		t.Fatalf("second UpsertTemplateRevisionWithVariables returned error: %v", err)
 	}
-	if reused.ID != traits.TemplateRevisionID("template_123") {
+	if reused.ID != domain.TemplateRevisionID("template_123") {
 		t.Fatalf("reused template revision ID = %q, want template_123", reused.ID)
 	}
 
-	gotVariables, err := store.GetTemplateRevisionVariables(ctx, traits.TenantID("tenant_123"), traits.TemplateRevisionID("template_123"))
+	gotVariables, err := store.GetTemplateRevisionVariables(ctx, domain.TenantID("tenant_123"), domain.TemplateRevisionID("template_123"))
 	if err != nil {
 		t.Fatalf("GetTemplateRevisionVariables returned error: %v", err)
 	}
@@ -710,23 +710,23 @@ func TestGetTemplateRevisionVariablesReturnsNotFoundForOtherTenant(t *testing.T)
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	_, err := store.UpsertTemplateRevisionWithVariables(ctx, traits.TemplateRevision{
-		ID:                traits.TemplateRevisionID("template_123"),
-		TenantID:          traits.TenantID("tenant_123"),
+	_, err := store.UpsertTemplateRevisionWithVariables(ctx, domain.TemplateRevision{
+		ID:                domain.TemplateRevisionID("template_123"),
+		TenantID:          domain.TenantID("tenant_123"),
 		RepoOwner:         "acme",
 		RepoName:          "infra-templates",
 		SourceRef:         "v0.0.1",
 		ResolvedCommitSHA: "abc123",
 		RootPath:          "modules/vpc",
-		SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
+		SourceTemplateID:  domain.SourceTemplateID("source_template_vpc"),
 		Name:              "vpc",
-		Status:            traits.TemplateRevisionActive,
+		Status:            domain.TemplateRevisionActive,
 	}, nil)
 	if err != nil {
 		t.Fatalf("UpsertTemplateRevisionWithVariables returned error: %v", err)
 	}
 
-	_, err = store.GetTemplateRevisionVariables(ctx, traits.TenantID("tenant_456"), traits.TemplateRevisionID("template_123"))
+	_, err = store.GetTemplateRevisionVariables(ctx, domain.TenantID("tenant_456"), domain.TemplateRevisionID("template_123"))
 	if !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("error = %v, want app.ErrNotFound", err)
 	}
@@ -740,14 +740,14 @@ func TestCreateAndGetStack(t *testing.T) {
 	store := NewStore(pool)
 	createdAt := time.Date(2026, 7, 6, 13, 30, 0, 123456000, time.UTC)
 
-	stack := traits.Stack{
-		ID:                   traits.StackID("stack_123"),
-		TenantID:             traits.TenantID("tenant_123"),
+	stack := domain.Stack{
+		ID:                   domain.StackID("stack_123"),
+		TenantID:             domain.TenantID("tenant_123"),
 		Name:                 "Acme Prod",
 		Slug:                 "acme-prod",
 		Tags:                 map[string]string{"env": "prod"},
-		DefaultCredentialIDs: []traits.CredentialSetID{traits.CredentialSetID("credential_123")},
-		CreatedBy:            traits.UserID("user_123"),
+		DefaultCredentialIDs: []domain.CredentialSetID{domain.CredentialSetID("credential_123")},
+		CreatedBy:            domain.UserID("user_123"),
 		CreatedAt:            createdAt,
 	}
 
@@ -755,7 +755,7 @@ func TestCreateAndGetStack(t *testing.T) {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
 
-	got, err := store.GetStack(ctx, traits.TenantID("tenant_123"), traits.StackID("stack_123"))
+	got, err := store.GetStack(ctx, domain.TenantID("tenant_123"), domain.StackID("stack_123"))
 	if err != nil {
 		t.Fatalf("GetStack returned error: %v", err)
 	}
@@ -766,7 +766,7 @@ func TestCreateAndGetStack(t *testing.T) {
 	if got.Tags["env"] != "prod" {
 		t.Fatalf("tags = %#v", got.Tags)
 	}
-	if len(got.DefaultCredentialIDs) != 1 || got.DefaultCredentialIDs[0] != traits.CredentialSetID("credential_123") {
+	if len(got.DefaultCredentialIDs) != 1 || got.DefaultCredentialIDs[0] != domain.CredentialSetID("credential_123") {
 		t.Fatalf("default credential IDs = %#v", got.DefaultCredentialIDs)
 	}
 	if !got.CreatedAt.Equal(createdAt) {
@@ -781,12 +781,12 @@ func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 
-	first := traits.Stack{
-		ID:        traits.StackID("stack_123"),
-		TenantID:  traits.TenantID("tenant_123"),
+	first := domain.Stack{
+		ID:        domain.StackID("stack_123"),
+		TenantID:  domain.TenantID("tenant_123"),
 		Name:      "Acme Prod",
 		Slug:      "acme-prod",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := store.CreateStack(ctx, first); err != nil {
@@ -794,7 +794,7 @@ func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
 	}
 
 	second := first
-	second.ID = traits.StackID("stack_456")
+	second.ID = domain.StackID("stack_456")
 	err := store.CreateStack(ctx, second)
 	if !errors.Is(err, app.ErrDuplicateStackSlug) {
 		t.Fatalf("error = %v, want app.ErrDuplicateStackSlug", err)
@@ -807,37 +807,37 @@ func TestListStacksReturnsTenantScopedStacksNewestFirst(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	older := traits.Stack{
-		ID:        traits.StackID("stack_a"),
-		TenantID:  traits.TenantID("tenant_123"),
+	older := domain.Stack{
+		ID:        domain.StackID("stack_a"),
+		TenantID:  domain.TenantID("tenant_123"),
 		Name:      "Older Stack",
 		Slug:      "older-stack",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
 	}
-	newer := traits.Stack{
-		ID:        traits.StackID("stack_b"),
-		TenantID:  traits.TenantID("tenant_123"),
+	newer := domain.Stack{
+		ID:        domain.StackID("stack_b"),
+		TenantID:  domain.TenantID("tenant_123"),
 		Name:      "Newer Stack",
 		Slug:      "newer-stack",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
 	}
-	otherTenant := traits.Stack{
-		ID:        traits.StackID("stack_other"),
-		TenantID:  traits.TenantID("tenant_456"),
+	otherTenant := domain.Stack{
+		ID:        domain.StackID("stack_other"),
+		TenantID:  domain.TenantID("tenant_456"),
 		Name:      "Other Stack",
 		Slug:      "other-stack",
-		CreatedBy: traits.UserID("user_456"),
+		CreatedBy: domain.UserID("user_456"),
 		CreatedAt: time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
 	}
-	for _, stack := range []traits.Stack{older, newer, otherTenant} {
+	for _, stack := range []domain.Stack{older, newer, otherTenant} {
 		if err := store.CreateStack(ctx, stack); err != nil {
 			t.Fatalf("CreateStack(%s) returned error: %v", stack.ID, err)
 		}
 	}
 
-	stacks, err := store.ListStacks(ctx, traits.TenantID("tenant_123"))
+	stacks, err := store.ListStacks(ctx, domain.TenantID("tenant_123"))
 	if err != nil {
 		t.Fatalf("ListStacks returned error: %v", err)
 	}
@@ -856,37 +856,37 @@ func TestListStacksPageReturnsTenantStacksWithStableKeyset(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	older := traits.Stack{
-		ID:        traits.StackID("stack_a"),
-		TenantID:  traits.TenantID("tenant_123"),
+	older := domain.Stack{
+		ID:        domain.StackID("stack_a"),
+		TenantID:  domain.TenantID("tenant_123"),
 		Name:      "Older Stack",
 		Slug:      "older-stack",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
 	}
-	newer := traits.Stack{
-		ID:        traits.StackID("stack_b"),
-		TenantID:  traits.TenantID("tenant_123"),
+	newer := domain.Stack{
+		ID:        domain.StackID("stack_b"),
+		TenantID:  domain.TenantID("tenant_123"),
 		Name:      "Newer Stack",
 		Slug:      "newer-stack",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
 	}
-	otherTenant := traits.Stack{
-		ID:        traits.StackID("stack_other"),
-		TenantID:  traits.TenantID("tenant_456"),
+	otherTenant := domain.Stack{
+		ID:        domain.StackID("stack_other"),
+		TenantID:  domain.TenantID("tenant_456"),
 		Name:      "Other Stack",
 		Slug:      "other-stack",
-		CreatedBy: traits.UserID("user_456"),
+		CreatedBy: domain.UserID("user_456"),
 		CreatedAt: time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
 	}
-	for _, stack := range []traits.Stack{older, newer, otherTenant} {
+	for _, stack := range []domain.Stack{older, newer, otherTenant} {
 		if err := store.CreateStack(ctx, stack); err != nil {
 			t.Fatalf("CreateStack(%s) returned error: %v", stack.ID, err)
 		}
 	}
 
-	stacks, err := store.ListStacksPage(ctx, traits.TenantID("tenant_123"), nil, 1)
+	stacks, err := store.ListStacksPage(ctx, domain.TenantID("tenant_123"), nil, 1)
 	if err != nil {
 		t.Fatalf("ListStacksPage first page returned error: %v", err)
 	}
@@ -894,7 +894,7 @@ func TestListStacksPageReturnsTenantStacksWithStableKeyset(t *testing.T) {
 		t.Fatalf("first page = %#v, want newer stack", stacks)
 	}
 	cursor := &app.StackPageCursor{CreatedAt: stacks[0].CreatedAt, ID: stacks[0].ID}
-	stacks, err = store.ListStacksPage(ctx, traits.TenantID("tenant_123"), cursor, 1)
+	stacks, err = store.ListStacksPage(ctx, domain.TenantID("tenant_123"), cursor, 1)
 	if err != nil {
 		t.Fatalf("ListStacksPage second page returned error: %v", err)
 	}
@@ -902,7 +902,7 @@ func TestListStacksPageReturnsTenantStacksWithStableKeyset(t *testing.T) {
 		t.Fatalf("second page = %#v, want older stack", stacks)
 	}
 	cursor = &app.StackPageCursor{CreatedAt: stacks[0].CreatedAt, ID: stacks[0].ID}
-	stacks, err = store.ListStacksPage(ctx, traits.TenantID("tenant_123"), cursor, 1)
+	stacks, err = store.ListStacksPage(ctx, domain.TenantID("tenant_123"), cursor, 1)
 	if err != nil {
 		t.Fatalf("ListStacksPage final page returned error: %v", err)
 	}
@@ -917,7 +917,7 @@ func TestListStacksPageRejectsNonPositiveLimit(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	if _, err := store.ListStacksPage(ctx, traits.TenantID("tenant_123"), nil, 0); err == nil {
+	if _, err := store.ListStacksPage(ctx, domain.TenantID("tenant_123"), nil, 0); err == nil {
 		t.Fatal("ListStacksPage() error = nil, want invalid limit error")
 	}
 }
@@ -929,33 +929,33 @@ func TestGetTemplateRevisionReturnsTenantScopedRevision(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 	createdAt := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
-	template := traits.TemplateRevision{
-		ID:                traits.TemplateRevisionID("template_123"),
-		TenantID:          traits.TenantID("tenant_123"),
+	template := domain.TemplateRevision{
+		ID:                domain.TemplateRevisionID("template_123"),
+		TenantID:          domain.TenantID("tenant_123"),
 		RepoOwner:         "acme",
 		RepoName:          "infra-templates",
 		SourceRef:         "main",
 		ResolvedCommitSHA: "abc123",
 		RootPath:          ".",
-		SourceTemplateID:  traits.SourceTemplateID("source_template_vpc"),
+		SourceTemplateID:  domain.SourceTemplateID("source_template_vpc"),
 		Name:              "vpc",
 		Tags:              []string{"network"},
-		Status:            traits.TemplateRevisionActive,
+		Status:            domain.TemplateRevisionActive,
 		CreatedAt:         createdAt,
 	}
 	if _, err := store.UpsertTemplateRevisionWithVariables(ctx, template, nil); err != nil {
 		t.Fatalf("UpsertTemplateRevisionWithVariables returned error: %v", err)
 	}
 
-	got, err := store.GetTemplateRevision(ctx, traits.TenantID("tenant_123"), traits.TemplateRevisionID("template_123"))
+	got, err := store.GetTemplateRevision(ctx, domain.TenantID("tenant_123"), domain.TemplateRevisionID("template_123"))
 	if err != nil {
 		t.Fatalf("GetTemplateRevision returned error: %v", err)
 	}
-	if got.ID != traits.TemplateRevisionID("template_123") || got.Status != traits.TemplateRevisionActive || got.Tags[0] != "network" {
+	if got.ID != domain.TemplateRevisionID("template_123") || got.Status != domain.TemplateRevisionActive || got.Tags[0] != "network" {
 		t.Fatalf("template = %#v", got)
 	}
 
-	_, err = store.GetTemplateRevision(ctx, traits.TenantID("tenant_456"), traits.TemplateRevisionID("template_123"))
+	_, err = store.GetTemplateRevision(ctx, domain.TenantID("tenant_456"), domain.TemplateRevisionID("template_123"))
 	if !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("other tenant error = %v, want app.ErrNotFound", err)
 	}
@@ -967,52 +967,52 @@ func TestListTemplateRevisionsReturnsTenantScopedRevisionsNewestFirst(t *testing
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	older := traits.TemplateRevision{
-		ID:                traits.TemplateRevisionID("template_older"),
-		TenantID:          traits.TenantID("tenant_123"),
+	older := domain.TemplateRevision{
+		ID:                domain.TemplateRevisionID("template_older"),
+		TenantID:          domain.TenantID("tenant_123"),
 		RepoOwner:         "acme",
 		RepoName:          "infra-templates",
 		SourceRef:         "v0.0.1",
 		ResolvedCommitSHA: "abc123",
 		RootPath:          ".",
-		SourceTemplateID:  traits.SourceTemplateID("source_template_older"),
+		SourceTemplateID:  domain.SourceTemplateID("source_template_older"),
 		Name:              "older",
-		Status:            traits.TemplateRevisionActive,
+		Status:            domain.TemplateRevisionActive,
 		CreatedAt:         time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC),
 	}
-	newer := traits.TemplateRevision{
-		ID:                traits.TemplateRevisionID("template_newer"),
-		TenantID:          traits.TenantID("tenant_123"),
+	newer := domain.TemplateRevision{
+		ID:                domain.TemplateRevisionID("template_newer"),
+		TenantID:          domain.TenantID("tenant_123"),
 		RepoOwner:         "acme",
 		RepoName:          "infra-templates",
 		SourceRef:         "v0.0.2",
 		ResolvedCommitSHA: "def456",
 		RootPath:          ".",
-		SourceTemplateID:  traits.SourceTemplateID("source_template_newer"),
+		SourceTemplateID:  domain.SourceTemplateID("source_template_newer"),
 		Name:              "newer",
-		Status:            traits.TemplateRevisionActive,
+		Status:            domain.TemplateRevisionActive,
 		CreatedAt:         time.Date(2026, 7, 6, 11, 0, 0, 0, time.UTC),
 	}
-	otherTenant := traits.TemplateRevision{
-		ID:                traits.TemplateRevisionID("template_other"),
-		TenantID:          traits.TenantID("tenant_456"),
+	otherTenant := domain.TemplateRevision{
+		ID:                domain.TemplateRevisionID("template_other"),
+		TenantID:          domain.TenantID("tenant_456"),
 		RepoOwner:         "acme",
 		RepoName:          "infra-templates",
 		SourceRef:         "v0.0.3",
 		ResolvedCommitSHA: "ghi789",
 		RootPath:          ".",
-		SourceTemplateID:  traits.SourceTemplateID("source_template_other"),
+		SourceTemplateID:  domain.SourceTemplateID("source_template_other"),
 		Name:              "other",
-		Status:            traits.TemplateRevisionActive,
+		Status:            domain.TemplateRevisionActive,
 		CreatedAt:         time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
 	}
-	for _, template := range []traits.TemplateRevision{older, newer, otherTenant} {
+	for _, template := range []domain.TemplateRevision{older, newer, otherTenant} {
 		if _, err := store.UpsertTemplateRevisionWithVariables(ctx, template, nil); err != nil {
 			t.Fatalf("UpsertTemplateRevisionWithVariables(%s) returned error: %v", template.ID, err)
 		}
 	}
 
-	templates, err := store.ListTemplateRevisions(ctx, traits.TenantID("tenant_123"))
+	templates, err := store.ListTemplateRevisions(ctx, domain.TenantID("tenant_123"))
 	if err != nil {
 		t.Fatalf("ListTemplateRevisions returned error: %v", err)
 	}
@@ -1020,7 +1020,7 @@ func TestListTemplateRevisionsReturnsTenantScopedRevisionsNewestFirst(t *testing
 	if len(templates) != 2 {
 		t.Fatalf("len(templates) = %d, want 2: %#v", len(templates), templates)
 	}
-	if templates[0].ID != traits.TemplateRevisionID("template_newer") || templates[1].ID != traits.TemplateRevisionID("template_older") {
+	if templates[0].ID != domain.TemplateRevisionID("template_newer") || templates[1].ID != domain.TemplateRevisionID("template_older") {
 		t.Fatalf("template order = %#v", templates)
 	}
 }
@@ -1032,46 +1032,46 @@ func TestCreateStackTemplateAndGetStackWithTemplates(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 
-	stack := traits.Stack{
-		ID:        traits.StackID("stack_123"),
-		TenantID:  traits.TenantID("tenant_123"),
+	stack := domain.Stack{
+		ID:        domain.StackID("stack_123"),
+		TenantID:  domain.TenantID("tenant_123"),
 		Name:      "Acme Prod",
 		Slug:      "acme-prod",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := store.CreateStack(ctx, stack); err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
 
-	stackTemplate := traits.StackTemplate{
-		ID:                        traits.StackTemplateID("stack_template_123"),
-		TenantID:                  traits.TenantID("tenant_123"),
-		StackID:                   traits.StackID("stack_123"),
-		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_123"),
+	stackTemplate := domain.StackTemplate{
+		ID:                        domain.StackTemplateID("stack_template_123"),
+		TenantID:                  domain.TenantID("tenant_123"),
+		StackID:                   domain.StackID("stack_123"),
+		DesiredTemplateRevisionID: domain.TemplateRevisionID("template_123"),
 		WorkspaceName:             "meg_acme_prod_late_123",
 		InstalledConfigJSON:       json.RawMessage(`{"region":"us-east-1"}`),
-		CreatedBy:                 traits.UserID("installer_123"),
-		Lifecycle:                 traits.StackTemplateActive,
+		CreatedBy:                 domain.UserID("installer_123"),
+		Lifecycle:                 domain.StackTemplateActive,
 	}
 	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
 		t.Fatalf("CreateStackTemplate returned error: %v", err)
 	}
 
-	view, err := store.GetStackWithTemplates(ctx, traits.TenantID("tenant_123"), traits.StackID("stack_123"))
+	view, err := store.GetStackWithTemplates(ctx, domain.TenantID("tenant_123"), domain.StackID("stack_123"))
 	if err != nil {
 		t.Fatalf("GetStackWithTemplates returned error: %v", err)
 	}
-	if view.Stack.ID != traits.StackID("stack_123") {
+	if view.Stack.ID != domain.StackID("stack_123") {
 		t.Fatalf("view stack ID = %q, want stack_123", view.Stack.ID)
 	}
 	if len(view.Templates) != 1 {
 		t.Fatalf("len(view.Templates) = %d, want 1", len(view.Templates))
 	}
-	if view.Templates[0].TenantID != traits.TenantID("tenant_123") {
+	if view.Templates[0].TenantID != domain.TenantID("tenant_123") {
 		t.Fatalf("template tenant ID = %q, want tenant_123", view.Templates[0].TenantID)
 	}
-	if view.Templates[0].CreatedBy != traits.UserID("installer_123") {
+	if view.Templates[0].CreatedBy != domain.UserID("installer_123") {
 		t.Fatalf("template created by = %q, want installer_123", view.Templates[0].CreatedBy)
 	}
 	if string(view.Templates[0].InstalledConfigJSON) != `{"region": "us-east-1"}` {
@@ -1085,23 +1085,23 @@ func TestCreateStackTemplateAllowsRepeatedSourceWithDistinctComponentKeys(t *tes
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	tenantID := traits.TenantID("tenant_123")
-	sourceTemplateID := traits.SourceTemplateID("source_template_vpc")
+	tenantID := domain.TenantID("tenant_123")
+	sourceTemplateID := domain.SourceTemplateID("source_template_vpc")
 
-	stack := traits.Stack{
-		ID:        traits.StackID("stack_123"),
+	stack := domain.Stack{
+		ID:        domain.StackID("stack_123"),
 		TenantID:  tenantID,
 		Name:      "Acme Prod",
 		Slug:      "acme-prod",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := store.CreateStack(ctx, stack); err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
 
-	template := traits.TemplateRevision{
-		ID:                traits.TemplateRevisionID("template_rev_1"),
+	template := domain.TemplateRevision{
+		ID:                domain.TemplateRevisionID("template_rev_1"),
 		TenantID:          tenantID,
 		SourceTemplateID:  sourceTemplateID,
 		RepoOwner:         "acme",
@@ -1110,15 +1110,15 @@ func TestCreateStackTemplateAllowsRepeatedSourceWithDistinctComponentKeys(t *tes
 		ResolvedCommitSHA: "sha-1",
 		RootPath:          "vpc",
 		Name:              "vpc",
-		Status:            traits.TemplateRevisionActive,
+		Status:            domain.TemplateRevisionActive,
 		CreatedAt:         time.Now().UTC(),
 	}
 	if _, err := store.UpsertTemplateRevisionWithVariables(ctx, template, nil); err != nil {
 		t.Fatalf("UpsertTemplateRevisionWithVariables returned error: %v", err)
 	}
 
-	first := traits.StackTemplate{
-		ID:                        traits.StackTemplateID("stack_template_primary"),
+	first := domain.StackTemplate{
+		ID:                        domain.StackTemplateID("stack_template_primary"),
 		TenantID:                  tenantID,
 		StackID:                   stack.ID,
 		SourceTemplateID:          sourceTemplateID,
@@ -1127,11 +1127,11 @@ func TestCreateStackTemplateAllowsRepeatedSourceWithDistinctComponentKeys(t *tes
 		WorkspaceName:             "meg_acme_primary",
 		InstalledConfigJSON:       json.RawMessage(`{"region":"us-east-1"}`),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-		CreatedBy:                 traits.UserID("user_123"),
-		Lifecycle:                 traits.StackTemplateActive,
+		CreatedBy:                 domain.UserID("user_123"),
+		Lifecycle:                 domain.StackTemplateActive,
 	}
 	second := first
-	second.ID = traits.StackTemplateID("stack_template_shared")
+	second.ID = domain.StackTemplateID("stack_template_shared")
 	second.ComponentKey = "shared-vpc"
 	second.WorkspaceName = "meg_acme_shared"
 
@@ -1160,23 +1160,23 @@ func TestCreateStackTemplateRejectsDuplicateActiveComponentKey(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	tenantID := traits.TenantID("tenant_123")
-	sourceTemplateID := traits.SourceTemplateID("source_template_vpc")
+	tenantID := domain.TenantID("tenant_123")
+	sourceTemplateID := domain.SourceTemplateID("source_template_vpc")
 
-	stack := traits.Stack{
-		ID:        traits.StackID("stack_123"),
+	stack := domain.Stack{
+		ID:        domain.StackID("stack_123"),
 		TenantID:  tenantID,
 		Name:      "Acme Prod",
 		Slug:      "acme-prod",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := store.CreateStack(ctx, stack); err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
 
-	template := traits.TemplateRevision{
-		ID:                traits.TemplateRevisionID("template_rev_1"),
+	template := domain.TemplateRevision{
+		ID:                domain.TemplateRevisionID("template_rev_1"),
 		TenantID:          tenantID,
 		SourceTemplateID:  sourceTemplateID,
 		RepoOwner:         "acme",
@@ -1185,15 +1185,15 @@ func TestCreateStackTemplateRejectsDuplicateActiveComponentKey(t *testing.T) {
 		ResolvedCommitSHA: "sha-1",
 		RootPath:          "vpc",
 		Name:              "vpc",
-		Status:            traits.TemplateRevisionActive,
+		Status:            domain.TemplateRevisionActive,
 		CreatedAt:         time.Now().UTC(),
 	}
 	if _, err := store.UpsertTemplateRevisionWithVariables(ctx, template, nil); err != nil {
 		t.Fatalf("UpsertTemplateRevisionWithVariables returned error: %v", err)
 	}
 
-	stackTemplate := traits.StackTemplate{
-		ID:                        traits.StackTemplateID("stack_template_primary"),
+	stackTemplate := domain.StackTemplate{
+		ID:                        domain.StackTemplateID("stack_template_primary"),
 		TenantID:                  tenantID,
 		StackID:                   stack.ID,
 		SourceTemplateID:          sourceTemplateID,
@@ -1202,14 +1202,14 @@ func TestCreateStackTemplateRejectsDuplicateActiveComponentKey(t *testing.T) {
 		WorkspaceName:             "meg_acme_primary",
 		InstalledConfigJSON:       json.RawMessage(`{}`),
 		DesiredConfigJSON:         json.RawMessage(`{}`),
-		CreatedBy:                 traits.UserID("user_123"),
-		Lifecycle:                 traits.StackTemplateActive,
+		CreatedBy:                 domain.UserID("user_123"),
+		Lifecycle:                 domain.StackTemplateActive,
 	}
 
 	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
 		t.Fatalf("CreateStackTemplate first returned error: %v", err)
 	}
-	stackTemplate.ID = traits.StackTemplateID("stack_template_duplicate")
+	stackTemplate.ID = domain.StackTemplateID("stack_template_duplicate")
 	err := store.CreateStackTemplate(ctx, stackTemplate)
 	if !errors.Is(err, app.ErrDuplicateStackTemplateComponentKey) {
 		t.Fatalf("error = %v, want ErrDuplicateStackTemplateComponentKey", err)
@@ -1222,30 +1222,30 @@ func TestUpdateStackTemplateConfigPersistsDesiredConfig(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	tenantID := traits.TenantID("tenant_123")
-	stack := traits.Stack{
-		ID:        traits.StackID("stack_123"),
+	tenantID := domain.TenantID("tenant_123")
+	stack := domain.Stack{
+		ID:        domain.StackID("stack_123"),
 		TenantID:  tenantID,
 		Name:      "Acme Prod",
 		Slug:      "acme-prod",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := store.CreateStack(ctx, stack); err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
-	stackTemplate := traits.StackTemplate{
-		ID:                        traits.StackTemplateID("stack_template_123"),
+	stackTemplate := domain.StackTemplate{
+		ID:                        domain.StackTemplateID("stack_template_123"),
 		TenantID:                  tenantID,
 		StackID:                   stack.ID,
-		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
-		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
+		SourceTemplateID:          domain.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateRevisionID: domain.TemplateRevisionID("template_rev_1"),
 		ComponentKey:              "primary-vpc",
 		WorkspaceName:             "meg_acme_primary",
 		InstalledConfigJSON:       json.RawMessage(`{"region":"us-east-1"}`),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-		CreatedBy:                 traits.UserID("user_123"),
-		Lifecycle:                 traits.StackTemplateActive,
+		CreatedBy:                 domain.UserID("user_123"),
+		Lifecycle:                 domain.StackTemplateActive,
 	}
 	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
 		t.Fatalf("CreateStackTemplate returned error: %v", err)
@@ -1269,40 +1269,40 @@ func TestUpdateStackTemplateDesiredRevisionPersistsRevisionAndConfig(t *testing.
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	tenantID := traits.TenantID("tenant_123")
-	stack := traits.Stack{
-		ID:        traits.StackID("stack_123"),
+	tenantID := domain.TenantID("tenant_123")
+	stack := domain.Stack{
+		ID:        domain.StackID("stack_123"),
 		TenantID:  tenantID,
 		Name:      "Acme Prod",
 		Slug:      "acme-prod",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := store.CreateStack(ctx, stack); err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
-	stackTemplate := traits.StackTemplate{
-		ID:                        traits.StackTemplateID("stack_template_123"),
+	stackTemplate := domain.StackTemplate{
+		ID:                        domain.StackTemplateID("stack_template_123"),
 		TenantID:                  tenantID,
 		StackID:                   stack.ID,
-		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
-		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_1"),
+		SourceTemplateID:          domain.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateRevisionID: domain.TemplateRevisionID("template_rev_1"),
 		ComponentKey:              "primary-vpc",
 		WorkspaceName:             "meg_acme_primary",
 		InstalledConfigJSON:       json.RawMessage(`{"region":"us-east-1"}`),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-		CreatedBy:                 traits.UserID("user_123"),
-		Lifecycle:                 traits.StackTemplateActive,
+		CreatedBy:                 domain.UserID("user_123"),
+		Lifecycle:                 domain.StackTemplateActive,
 	}
 	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
 		t.Fatalf("CreateStackTemplate returned error: %v", err)
 	}
 
-	updated, err := store.UpdateStackTemplateDesiredRevision(ctx, tenantID, stackTemplate.ID, traits.TemplateRevisionID("template_rev_2"), json.RawMessage(`{"region":"us-west-2"}`))
+	updated, err := store.UpdateStackTemplateDesiredRevision(ctx, tenantID, stackTemplate.ID, domain.TemplateRevisionID("template_rev_2"), json.RawMessage(`{"region":"us-west-2"}`))
 	if err != nil {
 		t.Fatalf("UpdateStackTemplateDesiredRevision returned error: %v", err)
 	}
-	if updated.DesiredTemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
+	if updated.DesiredTemplateRevisionID != domain.TemplateRevisionID("template_rev_2") {
 		t.Fatalf("updated desired template revision ID = %q, want template_rev_2", updated.DesiredTemplateRevisionID)
 	}
 	if !sameJSON(t, updated.DesiredConfigJSON, []byte(`{"region":"us-west-2"}`)) {
@@ -1354,18 +1354,18 @@ func TestGetStackTemplateReturnsTenantScopedRecord(t *testing.T) {
 		t.Fatalf("seed stack template: %v", err)
 	}
 
-	stackTemplate, err := store.GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"))
+	stackTemplate, err := store.GetStackTemplate(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"))
 	if err != nil {
 		t.Fatalf("GetStackTemplate returned error: %v", err)
 	}
 
-	if stackTemplate.ID != traits.StackTemplateID("stack_template_123") {
+	if stackTemplate.ID != domain.StackTemplateID("stack_template_123") {
 		t.Fatalf("ID = %q, want stack_template_123", stackTemplate.ID)
 	}
-	if stackTemplate.StackID != traits.StackID("stack_123") {
+	if stackTemplate.StackID != domain.StackID("stack_123") {
 		t.Fatalf("StackID = %q, want stack_123", stackTemplate.StackID)
 	}
-	if stackTemplate.DesiredTemplateRevisionID != traits.TemplateRevisionID("template_123") {
+	if stackTemplate.DesiredTemplateRevisionID != domain.TemplateRevisionID("template_123") {
 		t.Fatalf("DesiredTemplateRevisionID = %q, want template_123", stackTemplate.DesiredTemplateRevisionID)
 	}
 	if stackTemplate.WorkspaceName != "mtp_acme_prod_vpc_a13f9c" {
@@ -1374,13 +1374,13 @@ func TestGetStackTemplateReturnsTenantScopedRecord(t *testing.T) {
 	if string(stackTemplate.InstalledConfigJSON) != `{"region": "us-east-1"}` {
 		t.Fatalf("InstalledConfigJSON = %s, want region config", stackTemplate.InstalledConfigJSON)
 	}
-	if stackTemplate.LastAppliedRunID != traits.TemplateRunID("run_123") {
+	if stackTemplate.LastAppliedRunID != domain.TemplateRunID("run_123") {
 		t.Fatalf("LastAppliedRunID = %q, want run_123", stackTemplate.LastAppliedRunID)
 	}
 	if !stackTemplate.LastAppliedAt.Equal(lastAppliedAt) {
 		t.Fatalf("LastAppliedAt = %v, want %v", stackTemplate.LastAppliedAt, lastAppliedAt)
 	}
-	if stackTemplate.Lifecycle != traits.StackTemplateActive {
+	if stackTemplate.Lifecycle != domain.StackTemplateActive {
 		t.Fatalf("Lifecycle = %q, want active", stackTemplate.Lifecycle)
 	}
 }
@@ -1413,7 +1413,7 @@ func TestGetStackTemplateReturnsNotFoundForOtherTenant(t *testing.T) {
 		t.Fatalf("seed stack template: %v", err)
 	}
 
-	_, err = store.GetStackTemplate(ctx, traits.TenantID("tenant_456"), traits.StackTemplateID("stack_template_123"))
+	_, err = store.GetStackTemplate(ctx, domain.TenantID("tenant_456"), domain.StackTemplateID("stack_template_123"))
 	if !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("error = %v, want app.ErrNotFound", err)
 	}
@@ -1437,20 +1437,20 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 		t.Fatalf("seed template revision: %v", err)
 	}
 
-	run := traits.TemplateRun{
-		ID:                 traits.TemplateRunID("run_123"),
-		TenantID:           traits.TenantID("tenant_123"),
-		StackTemplateID:    traits.StackTemplateID("stack_template_123"),
-		TemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
-		SourceTemplateID:   traits.SourceTemplateID("source_template_vpc"),
-		Operation:          traits.OperationApply,
+	run := domain.TemplateRun{
+		ID:                 domain.TemplateRunID("run_123"),
+		TenantID:           domain.TenantID("tenant_123"),
+		StackTemplateID:    domain.StackTemplateID("stack_template_123"),
+		TemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
+		SourceTemplateID:   domain.SourceTemplateID("source_template_vpc"),
+		Operation:          domain.OperationApply,
 		SelectedRef:        "main",
 		ResolvedCommitSHA:  "abc123",
 		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
 		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 		BackendType:        "s3",
 		BackendConfigHash:  "backend_hash_123",
-		Status:             traits.TemplateRunQueued,
+		Status:             domain.TemplateRunQueued,
 		TriggerActor:       requesterSubject,
 		StartedAt:          startedAt,
 		CompletedAt:        completedAt,
@@ -1461,7 +1461,7 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 		t.Fatalf("CreateTemplateRun returned error: %v", err)
 	}
 
-	var got traits.TemplateRun
+	var got domain.TemplateRun
 	err = pool.QueryRow(ctx, `
 		select
 			id,
@@ -1549,21 +1549,21 @@ func TestUnitOfWorkTemplateWritesRollbackTogether(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed template revision: %v", err)
 	}
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{ID: "run_approval", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: traits.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: traits.TemplateRunWaitingApproval, TriggerActor: "user_123"})
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{ID: "run_cancel", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: traits.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: traits.TemplateRunQueued, TriggerActor: "user_123"})
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_approval", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunWaitingApproval, TriggerActor: "user_123"})
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_cancel", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunQueued, TriggerActor: "user_123"})
 	sentinel := errors.New("rollback")
 
 	err = store.InTx(ctx, func(repo app.TxRepo, _ queue.Enqueuer) error {
-		if err := repo.CreateTemplateRegistration(ctx, traits.TemplateRegistration{ID: "registration_123", TenantID: "tenant_123", RepoOwner: "acme", RepoName: "infra", SourceRef: "main", RootPath: "modules/vpc", Status: traits.TemplateRegistrationPending, RequestedBy: "user_123", RequestedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil {
+		if err := repo.CreateTemplateRegistration(ctx, domain.TemplateRegistration{ID: "registration_123", TenantID: "tenant_123", RepoOwner: "acme", RepoName: "infra", SourceRef: "main", RootPath: "modules/vpc", Status: domain.TemplateRegistrationPending, RequestedBy: "user_123", RequestedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil {
 			return err
 		}
-		if err := repo.CreateTemplateRun(ctx, traits.TemplateRun{ID: "run_created", TenantID: "tenant_123", StackTemplateID: "stack_template_123", TemplateRevisionID: "revision_123", Operation: traits.OperationPlan, SelectedRef: "main", WorkspaceName: "workspace", ConfigJSON: json.RawMessage(`{}`), Status: traits.TemplateRunQueued, TriggerActor: "user_123"}); err != nil {
+		if err := repo.CreateTemplateRun(ctx, domain.TemplateRun{ID: "run_created", TenantID: "tenant_123", StackTemplateID: "stack_template_123", TemplateRevisionID: "revision_123", Operation: domain.OperationPlan, SelectedRef: "main", WorkspaceName: "workspace", ConfigJSON: json.RawMessage(`{}`), Status: domain.TemplateRunQueued, TriggerActor: "user_123"}); err != nil {
 			return err
 		}
-		if err := repo.ApproveTemplateRun(ctx, traits.TemplateRunApproval{TenantID: "tenant_123", RunID: "run_approval", ApprovedBy: "user_123", ApprovedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil {
+		if err := repo.ApproveTemplateRun(ctx, domain.TemplateRunApproval{TenantID: "tenant_123", RunID: "run_approval", ApprovedBy: "user_123", ApprovedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil {
 			return err
 		}
-		if err := repo.RequestTemplateRunCancellation(ctx, traits.TemplateRunCancellation{TenantID: "tenant_123", RunID: "run_cancel", RequestedBy: "user_123", Reason: "superseded", RequestedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil {
+		if err := repo.RequestTemplateRunCancellation(ctx, domain.TemplateRunCancellation{TenantID: "tenant_123", RunID: "run_cancel", RequestedBy: "user_123", Reason: "superseded", RequestedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil {
 			return err
 		}
 		return sentinel
@@ -1573,11 +1573,11 @@ func TestUnitOfWorkTemplateWritesRollbackTogether(t *testing.T) {
 	}
 
 	var registrations, createdRuns, approvals int
-	var approvalStatus, cancellationStatus traits.TemplateRunStatus
+	var approvalStatus, cancellationStatus domain.TemplateRunStatus
 	if err := pool.QueryRow(ctx, `select (select count(*) from template_registrations where id = 'registration_123'), (select count(*) from template_runs where id = 'run_created'), (select count(*) from template_run_approvals where run_id = 'run_approval'), (select status from template_runs where id = 'run_approval'), (select status from template_runs where id = 'run_cancel')`).Scan(&registrations, &createdRuns, &approvals, &approvalStatus, &cancellationStatus); err != nil {
 		t.Fatalf("read transaction state: %v", err)
 	}
-	if registrations != 0 || createdRuns != 0 || approvals != 0 || approvalStatus != traits.TemplateRunWaitingApproval || cancellationStatus != traits.TemplateRunQueued {
+	if registrations != 0 || createdRuns != 0 || approvals != 0 || approvalStatus != domain.TemplateRunWaitingApproval || cancellationStatus != domain.TemplateRunQueued {
 		t.Fatalf("registrations=%d createdRuns=%d approvals=%d approvalStatus=%q cancellationStatus=%q", registrations, createdRuns, approvals, approvalStatus, cancellationStatus)
 	}
 }
@@ -1590,40 +1590,40 @@ func TestGetTemplateRunReturnsTenantScopedRecord(t *testing.T) {
 	store := NewStore(pool)
 	startedAt := time.Date(2026, 7, 5, 9, 30, 0, 123456000, time.UTC)
 	completedAt := time.Date(2026, 7, 5, 9, 45, 0, 123456000, time.UTC)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:                traits.TemplateRunID("run_123"),
-		TenantID:          traits.TenantID("tenant_123"),
-		StackTemplateID:   traits.StackTemplateID("stack_template_123"),
-		Operation:         traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:                domain.TemplateRunID("run_123"),
+		TenantID:          domain.TenantID("tenant_123"),
+		StackTemplateID:   domain.StackTemplateID("stack_template_123"),
+		Operation:         domain.OperationPlan,
 		SelectedRef:       "main",
 		ResolvedCommitSHA: "abc123",
 		WorkspaceName:     "mtp_acme_prod_vpc_a13f9c",
 		BackendType:       "s3",
 		BackendConfigHash: "backend_hash_123",
-		Status:            traits.TemplateRunCompleted,
-		TriggerActor:      traits.UserID("user_123"),
+		Status:            domain.TemplateRunCompleted,
+		TriggerActor:      domain.UserID("user_123"),
 		StartedAt:         startedAt,
 		CompletedAt:       completedAt,
 		ErrorSummary:      "previous error summary",
 	})
 
-	run, err := store.GetTemplateRun(ctx, traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"))
+	run, err := store.GetTemplateRun(ctx, domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"))
 	if err != nil {
 		t.Fatalf("GetTemplateRun returned error: %v", err)
 	}
 
-	want := traits.TemplateRun{
-		ID:                traits.TemplateRunID("run_123"),
-		TenantID:          traits.TenantID("tenant_123"),
-		StackTemplateID:   traits.StackTemplateID("stack_template_123"),
-		Operation:         traits.OperationPlan,
+	want := domain.TemplateRun{
+		ID:                domain.TemplateRunID("run_123"),
+		TenantID:          domain.TenantID("tenant_123"),
+		StackTemplateID:   domain.StackTemplateID("stack_template_123"),
+		Operation:         domain.OperationPlan,
 		SelectedRef:       "main",
 		ResolvedCommitSHA: "abc123",
 		WorkspaceName:     "mtp_acme_prod_vpc_a13f9c",
 		BackendType:       "s3",
 		BackendConfigHash: "backend_hash_123",
-		Status:            traits.TemplateRunCompleted,
-		TriggerActor:      traits.UserID("user_123"),
+		Status:            domain.TemplateRunCompleted,
+		TriggerActor:      domain.UserID("user_123"),
 		StartedAt:         startedAt,
 		CompletedAt:       completedAt,
 		ConfigJSON:        json.RawMessage(`{}`),
@@ -1642,18 +1642,18 @@ func TestGetTemplateRunReturnsNotFoundForOtherTenant(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunQueued,
-		TriggerActor:    traits.UserID("user_123"),
+		Status:          domain.TemplateRunQueued,
+		TriggerActor:    domain.UserID("user_123"),
 	})
 
-	_, err := store.GetTemplateRun(ctx, traits.TenantID("tenant_456"), traits.TemplateRunID("run_123"))
+	_, err := store.GetTemplateRun(ctx, domain.TenantID("tenant_456"), domain.TemplateRunID("run_123"))
 	if !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("error = %v, want app.ErrNotFound", err)
 	}
@@ -1666,20 +1666,20 @@ func TestRecordTemplateRunLogUpsertsTenantScopedMetadata(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 	uploadedAt := time.Date(2026, 7, 6, 10, 15, 0, 123456000, time.UTC)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunQueued,
-		TriggerActor:    traits.UserID("user_123"),
+		Status:          domain.TemplateRunQueued,
+		TriggerActor:    domain.UserID("user_123"),
 	})
 
-	log := traits.TemplateRunLog{
-		TenantID:    traits.TenantID("tenant_123"),
-		RunID:       traits.TemplateRunID("run_123"),
+	log := domain.TemplateRunLog{
+		TenantID:    domain.TenantID("tenant_123"),
+		RunID:       domain.TemplateRunID("run_123"),
 		Phase:       "plan",
 		ObjectKey:   "tenants/tenant_123/runs/run_123/logs/plan.log",
 		ContentType: "text/plain; charset=utf-8",
@@ -1696,7 +1696,7 @@ func TestRecordTemplateRunLogUpsertsTenantScopedMetadata(t *testing.T) {
 		t.Fatalf("RecordTemplateRunLog upsert returned error: %v", err)
 	}
 
-	got, err := store.GetTemplateRunLog(ctx, traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"), "plan")
+	got, err := store.GetTemplateRunLog(ctx, domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"), "plan")
 	if err != nil {
 		t.Fatalf("GetTemplateRunLog returned error: %v", err)
 	}
@@ -1714,30 +1714,30 @@ func TestListTemplateRunLogsReturnsTenantScopedMetadataOrderedByPhase(t *testing
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 	uploadedAt := time.Date(2026, 7, 6, 10, 15, 0, 123456000, time.UTC)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunQueued,
-		TriggerActor:    traits.UserID("user_123"),
+		Status:          domain.TemplateRunQueued,
+		TriggerActor:    domain.UserID("user_123"),
 	})
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_456"),
-		TenantID:        traits.TenantID("tenant_456"),
-		StackTemplateID: traits.StackTemplateID("stack_template_456"),
-		Operation:       traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_456"),
+		TenantID:        domain.TenantID("tenant_456"),
+		StackTemplateID: domain.StackTemplateID("stack_template_456"),
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_other_prod_vpc_f47ac",
-		Status:          traits.TemplateRunQueued,
-		TriggerActor:    traits.UserID("user_456"),
+		Status:          domain.TemplateRunQueued,
+		TriggerActor:    domain.UserID("user_456"),
 	})
-	for _, log := range []traits.TemplateRunLog{
+	for _, log := range []domain.TemplateRunLog{
 		{
-			TenantID:    traits.TenantID("tenant_123"),
-			RunID:       traits.TemplateRunID("run_123"),
+			TenantID:    domain.TenantID("tenant_123"),
+			RunID:       domain.TemplateRunID("run_123"),
 			Phase:       "plan",
 			ObjectKey:   "tenants/tenant_123/runs/run_123/logs/plan.log",
 			ContentType: "text/plain; charset=utf-8",
@@ -1745,8 +1745,8 @@ func TestListTemplateRunLogsReturnsTenantScopedMetadataOrderedByPhase(t *testing
 			UploadedAt:  uploadedAt,
 		},
 		{
-			TenantID:    traits.TenantID("tenant_123"),
-			RunID:       traits.TemplateRunID("run_123"),
+			TenantID:    domain.TenantID("tenant_123"),
+			RunID:       domain.TemplateRunID("run_123"),
 			Phase:       "init",
 			ObjectKey:   "tenants/tenant_123/runs/run_123/logs/init.log",
 			ContentType: "text/plain; charset=utf-8",
@@ -1754,8 +1754,8 @@ func TestListTemplateRunLogsReturnsTenantScopedMetadataOrderedByPhase(t *testing
 			UploadedAt:  uploadedAt.Add(-time.Minute),
 		},
 		{
-			TenantID:    traits.TenantID("tenant_456"),
-			RunID:       traits.TemplateRunID("run_456"),
+			TenantID:    domain.TenantID("tenant_456"),
+			RunID:       domain.TemplateRunID("run_456"),
 			Phase:       "plan",
 			ObjectKey:   "tenants/tenant_456/runs/run_456/logs/plan.log",
 			ContentType: "text/plain; charset=utf-8",
@@ -1768,7 +1768,7 @@ func TestListTemplateRunLogsReturnsTenantScopedMetadataOrderedByPhase(t *testing
 		}
 	}
 
-	logs, err := store.ListTemplateRunLogs(ctx, traits.TenantID("tenant_123"), traits.TemplateRunID("run_123"))
+	logs, err := store.ListTemplateRunLogs(ctx, domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"))
 	if err != nil {
 		t.Fatalf("ListTemplateRunLogs returned error: %v", err)
 	}
@@ -1787,20 +1787,20 @@ func TestRecordTemplateRunLogReturnsNotFoundForOtherTenant(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunQueued,
-		TriggerActor:    traits.UserID("user_123"),
+		Status:          domain.TemplateRunQueued,
+		TriggerActor:    domain.UserID("user_123"),
 	})
 
-	err := store.RecordTemplateRunLog(ctx, traits.TemplateRunLog{
-		TenantID:    traits.TenantID("tenant_456"),
-		RunID:       traits.TemplateRunID("run_123"),
+	err := store.RecordTemplateRunLog(ctx, domain.TemplateRunLog{
+		TenantID:    domain.TenantID("tenant_456"),
+		RunID:       domain.TemplateRunID("run_123"),
 		Phase:       "plan",
 		ObjectKey:   "tenants/tenant_456/runs/run_123/logs/plan.log",
 		ContentType: "text/plain; charset=utf-8",
@@ -1819,41 +1819,41 @@ func TestListTemplateRunsReturnsMostRecentFirstScopedToStackTemplate(t *testing.
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_older"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_older"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunCompleted,
-		TriggerActor:    traits.UserID("user_123"),
+		Status:          domain.TemplateRunCompleted,
+		TriggerActor:    domain.UserID("user_123"),
 		StartedAt:       time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC),
 	})
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_newer"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationApply,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_newer"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunWaitingApproval,
-		TriggerActor:    traits.UserID("user_456"),
+		Status:          domain.TemplateRunWaitingApproval,
+		TriggerActor:    domain.UserID("user_456"),
 		StartedAt:       time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC),
 	})
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_other_stack_template"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_456"),
-		Operation:       traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_other_stack_template"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_456"),
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_other",
-		Status:          traits.TemplateRunCompleted,
-		TriggerActor:    traits.UserID("user_123"),
+		Status:          domain.TemplateRunCompleted,
+		TriggerActor:    domain.UserID("user_123"),
 		StartedAt:       time.Date(2026, 7, 20, 11, 0, 0, 0, time.UTC),
 	})
 
-	runs, err := store.ListTemplateRuns(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"))
+	runs, err := store.ListTemplateRuns(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"))
 	if err != nil {
 		t.Fatalf("ListTemplateRuns returned error: %v", err)
 	}
@@ -1861,13 +1861,13 @@ func TestListTemplateRunsReturnsMostRecentFirstScopedToStackTemplate(t *testing.
 	if len(runs) != 2 {
 		t.Fatalf("len(runs) = %d, want 2", len(runs))
 	}
-	if runs[0].ID != traits.TemplateRunID("run_newer") || runs[1].ID != traits.TemplateRunID("run_older") {
+	if runs[0].ID != domain.TemplateRunID("run_newer") || runs[1].ID != domain.TemplateRunID("run_older") {
 		t.Fatalf("run order = %q, %q; want run_newer, run_older", runs[0].ID, runs[1].ID)
 	}
-	if runs[0].Status != traits.TemplateRunWaitingApproval {
+	if runs[0].Status != domain.TemplateRunWaitingApproval {
 		t.Fatalf("newest run status = %q, want waiting_approval", runs[0].Status)
 	}
-	if runs[0].TriggerActor != traits.UserID("user_456") {
+	if runs[0].TriggerActor != domain.UserID("user_456") {
 		t.Fatalf("newest run trigger actor = %q, want user_456", runs[0].TriggerActor)
 	}
 }
@@ -1879,7 +1879,7 @@ func TestListTemplateRunsReturnsEmptySliceWhenNoneExist(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 
-	runs, err := store.ListTemplateRuns(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_nonexistent"))
+	runs, err := store.ListTemplateRuns(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_nonexistent"))
 	if err != nil {
 		t.Fatalf("ListTemplateRuns returned error: %v", err)
 	}
@@ -1898,20 +1898,20 @@ func TestApproveTemplateRunApprovesWaitingRun(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 	approvedAt := time.Date(2026, 7, 2, 10, 15, 0, 123456000, time.UTC)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationApply,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunWaitingApproval,
+		Status:          domain.TemplateRunWaitingApproval,
 		TriggerActor:    requesterSubject,
 	})
 
-	err := store.ApproveTemplateRun(ctx, traits.TemplateRunApproval{
-		RunID:      traits.TemplateRunID("run_123"),
-		TenantID:   traits.TenantID("tenant_123"),
+	err := store.ApproveTemplateRun(ctx, domain.TemplateRunApproval{
+		RunID:      domain.TemplateRunID("run_123"),
+		TenantID:   domain.TenantID("tenant_123"),
 		ApprovedBy: approverSubject,
 		ApprovedAt: approvedAt,
 	})
@@ -1919,15 +1919,15 @@ func TestApproveTemplateRunApprovesWaitingRun(t *testing.T) {
 		t.Fatalf("ApproveTemplateRun returned error: %v", err)
 	}
 
-	var status traits.TemplateRunStatus
+	var status domain.TemplateRunStatus
 	if err := pool.QueryRow(ctx, "select status from template_runs where id = $1", "run_123").Scan(&status); err != nil {
 		t.Fatalf("read approved run status: %v", err)
 	}
-	if status != traits.TemplateRunApproved {
-		t.Fatalf("status = %q, want %q", status, traits.TemplateRunApproved)
+	if status != domain.TemplateRunApproved {
+		t.Fatalf("status = %q, want %q", status, domain.TemplateRunApproved)
 	}
 
-	var approvedBy traits.UserID
+	var approvedBy domain.UserID
 	var gotApprovedAt time.Time
 	if err := pool.QueryRow(ctx, `
 		select approved_by, approved_at
@@ -1950,21 +1950,21 @@ func TestApproveTemplateRunRejectsNonWaitingRun(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationApply,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunQueued,
-		TriggerActor:    traits.UserID("user_123"),
+		Status:          domain.TemplateRunQueued,
+		TriggerActor:    domain.UserID("user_123"),
 	})
 
-	err := store.ApproveTemplateRun(ctx, traits.TemplateRunApproval{
-		RunID:      traits.TemplateRunID("run_123"),
-		TenantID:   traits.TenantID("tenant_123"),
-		ApprovedBy: traits.UserID("user_456"),
+	err := store.ApproveTemplateRun(ctx, domain.TemplateRunApproval{
+		RunID:      domain.TemplateRunID("run_123"),
+		TenantID:   domain.TenantID("tenant_123"),
+		ApprovedBy: domain.UserID("user_456"),
 		ApprovedAt: time.Date(2026, 7, 2, 10, 15, 0, 0, time.UTC),
 	})
 	if !errors.Is(err, app.ErrRunNotApprovable) {
@@ -1979,20 +1979,20 @@ func TestRequestTemplateRunCancellationMarksCancelableRun(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 	requestedAt := time.Date(2026, 7, 2, 10, 45, 0, 123456000, time.UTC)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationApply,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunApplyStarted,
+		Status:          domain.TemplateRunApplyStarted,
 		TriggerActor:    requesterSubject,
 	})
 
-	err := store.RequestTemplateRunCancellation(ctx, traits.TemplateRunCancellation{
-		RunID:       traits.TemplateRunID("run_123"),
-		TenantID:    traits.TenantID("tenant_123"),
+	err := store.RequestTemplateRunCancellation(ctx, domain.TemplateRunCancellation{
+		RunID:       domain.TemplateRunID("run_123"),
+		TenantID:    domain.TenantID("tenant_123"),
 		RequestedBy: requesterSubject,
 		Reason:      "superseded by newer run",
 		RequestedAt: requestedAt,
@@ -2001,8 +2001,8 @@ func TestRequestTemplateRunCancellationMarksCancelableRun(t *testing.T) {
 		t.Fatalf("RequestTemplateRunCancellation returned error: %v", err)
 	}
 
-	var status traits.TemplateRunStatus
-	var requestedBy traits.UserID
+	var status domain.TemplateRunStatus
+	var requestedBy domain.UserID
 	var reason string
 	var gotRequestedAt time.Time
 	if err := pool.QueryRow(ctx, `
@@ -2016,8 +2016,8 @@ func TestRequestTemplateRunCancellationMarksCancelableRun(t *testing.T) {
 	`, "run_123").Scan(&status, &requestedBy, &reason, &gotRequestedAt); err != nil {
 		t.Fatalf("read cancellation metadata: %v", err)
 	}
-	if status != traits.TemplateRunCancelRequested {
-		t.Fatalf("status = %q, want %q", status, traits.TemplateRunCancelRequested)
+	if status != domain.TemplateRunCancelRequested {
+		t.Fatalf("status = %q, want %q", status, domain.TemplateRunCancelRequested)
 	}
 	if requestedBy != requesterSubject {
 		t.Fatalf("requested_by = %q, want %q", requestedBy, requesterSubject)
@@ -2036,21 +2036,21 @@ func TestRequestTemplateRunCancellationRejectsTerminalRun(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationApply,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunCompleted,
-		TriggerActor:    traits.UserID("user_123"),
+		Status:          domain.TemplateRunCompleted,
+		TriggerActor:    domain.UserID("user_123"),
 	})
 
-	err := store.RequestTemplateRunCancellation(ctx, traits.TemplateRunCancellation{
-		RunID:       traits.TemplateRunID("run_123"),
-		TenantID:    traits.TenantID("tenant_123"),
-		RequestedBy: traits.UserID("user_456"),
+	err := store.RequestTemplateRunCancellation(ctx, domain.TemplateRunCancellation{
+		RunID:       domain.TemplateRunID("run_123"),
+		TenantID:    domain.TenantID("tenant_123"),
+		RequestedBy: domain.UserID("user_456"),
 		Reason:      "too late",
 		RequestedAt: time.Date(2026, 7, 2, 10, 45, 0, 0, time.UTC),
 	})
@@ -2065,51 +2065,51 @@ func TestRecordTemplateRunStatusUpdatesTenantScopedRun(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunQueued,
-		TriggerActor:    traits.UserID("user_123"),
+		Status:          domain.TemplateRunQueued,
+		TriggerActor:    domain.UserID("user_123"),
 	})
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_456"),
-		TenantID:        traits.TenantID("tenant_456"),
-		StackTemplateID: traits.StackTemplateID("stack_template_456"),
-		Operation:       traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_456"),
+		TenantID:        domain.TenantID("tenant_456"),
+		StackTemplateID: domain.StackTemplateID("stack_template_456"),
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_other_prod_vpc_f47ac",
-		Status:          traits.TemplateRunQueued,
-		TriggerActor:    traits.UserID("user_456"),
+		Status:          domain.TemplateRunQueued,
+		TriggerActor:    domain.UserID("user_456"),
 	})
 
-	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
-		RunID:           traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
-		Status:          traits.TemplateRunPlanStarted,
+	err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
+		RunID:           domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
+		Status:          domain.TemplateRunPlanStarted,
 	})
 	if err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
 	}
 
-	var status traits.TemplateRunStatus
+	var status domain.TemplateRunStatus
 	if err := pool.QueryRow(ctx, "select status from template_runs where id = $1", "run_123").Scan(&status); err != nil {
 		t.Fatalf("read updated run status: %v", err)
 	}
-	if status != traits.TemplateRunPlanStarted {
-		t.Fatalf("status = %q, want %q", status, traits.TemplateRunPlanStarted)
+	if status != domain.TemplateRunPlanStarted {
+		t.Fatalf("status = %q, want %q", status, domain.TemplateRunPlanStarted)
 	}
 
 	if err := pool.QueryRow(ctx, "select status from template_runs where id = $1", "run_456").Scan(&status); err != nil {
 		t.Fatalf("read other tenant run status: %v", err)
 	}
-	if status != traits.TemplateRunQueued {
-		t.Fatalf("other tenant status = %q, want %q", status, traits.TemplateRunQueued)
+	if status != domain.TemplateRunQueued {
+		t.Fatalf("other tenant status = %q, want %q", status, domain.TemplateRunQueued)
 	}
 }
 
@@ -2122,30 +2122,30 @@ func TestRecordTemplateRunStatusSetsCompletedAtForTerminalStatus(t *testing.T) {
 	// A completed plan also denormalises its snapshot onto the stack template,
 	// so the template has to exist for the status write to land.
 	seedStackWithTemplate(t, ctx, store)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:                 traits.TemplateRunID("run_123"),
-		TenantID:           traits.TenantID("tenant_123"),
-		StackTemplateID:    traits.StackTemplateID("stack_template_123"),
-		TemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
-		Operation:          traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:                 domain.TemplateRunID("run_123"),
+		TenantID:           domain.TenantID("tenant_123"),
+		StackTemplateID:    domain.StackTemplateID("stack_template_123"),
+		TemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
+		Operation:          domain.OperationPlan,
 		SelectedRef:        "main",
 		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
-		Status:             traits.TemplateRunLockReleased,
-		TriggerActor:       traits.UserID("user_123"),
+		Status:             domain.TemplateRunLockReleased,
+		TriggerActor:       domain.UserID("user_123"),
 	})
 
-	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
-		RunID:           traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
-		Status:          traits.TemplateRunCompleted,
+	err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
+		RunID:           domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
+		Status:          domain.TemplateRunCompleted,
 	})
 	if err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
 	}
 
-	var status traits.TemplateRunStatus
+	var status domain.TemplateRunStatus
 	var completedAt time.Time
 	if err := pool.QueryRow(ctx, `
 		select status, completed_at
@@ -2154,8 +2154,8 @@ func TestRecordTemplateRunStatusSetsCompletedAtForTerminalStatus(t *testing.T) {
 	`, "run_123").Scan(&status, &completedAt); err != nil {
 		t.Fatalf("read terminal run status: %v", err)
 	}
-	if status != traits.TemplateRunCompleted {
-		t.Fatalf("status = %q, want %q", status, traits.TemplateRunCompleted)
+	if status != domain.TemplateRunCompleted {
+		t.Fatalf("status = %q, want %q", status, domain.TemplateRunCompleted)
 	}
 	if completedAt.IsZero() {
 		t.Fatal("completed_at was not set")
@@ -2168,30 +2168,30 @@ func TestRecordTemplateRunStatusPersistsFailureSummary(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_failure_summary"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_failure_summary"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "workspace",
-		Status:          traits.TemplateRunInitFinished,
+		Status:          domain.TemplateRunInitFinished,
 		TriggerActor:    requesterSubject,
 	})
 
-	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
-		RunID:           traits.TemplateRunID("run_failure_summary"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
-		Status:          traits.TemplateRunFailed,
+	err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
+		RunID:           domain.TemplateRunID("run_failure_summary"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
+		Status:          domain.TemplateRunFailed,
 		ErrorSummary:    "run terraform: activity failed",
 	})
 	if err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
 	}
 
-	var status traits.TemplateRunStatus
+	var status domain.TemplateRunStatus
 	var errorSummary string
 	var completedAt time.Time
 	if err := pool.QueryRow(ctx, `
@@ -2201,8 +2201,8 @@ func TestRecordTemplateRunStatusPersistsFailureSummary(t *testing.T) {
 	`, "run_failure_summary").Scan(&status, &errorSummary, &completedAt); err != nil {
 		t.Fatalf("read failed run: %v", err)
 	}
-	if status != traits.TemplateRunFailed {
-		t.Fatalf("status = %q, want %q", status, traits.TemplateRunFailed)
+	if status != domain.TemplateRunFailed {
+		t.Fatalf("status = %q, want %q", status, domain.TemplateRunFailed)
 	}
 	if errorSummary != "run terraform: activity failed" {
 		t.Fatalf("error_summary = %q", errorSummary)
@@ -2218,23 +2218,23 @@ func TestReconcileTemplateRunCancellationMarksRunFailed(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_reconcile"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationApply,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_reconcile"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
 		SelectedRef:     "main",
 		WorkspaceName:   "workspace",
-		Status:          traits.TemplateRunCancelRequested,
+		Status:          domain.TemplateRunCancelRequested,
 		TriggerActor:    requesterSubject,
 	})
 
-	err := store.ReconcileTemplateRunCancellation(ctx, traits.TenantID("tenant_123"), traits.TemplateRunID("run_reconcile"), "workflow closed before cancellation was processed")
+	err := store.ReconcileTemplateRunCancellation(ctx, domain.TenantID("tenant_123"), domain.TemplateRunID("run_reconcile"), "workflow closed before cancellation was processed")
 	if err != nil {
 		t.Fatalf("ReconcileTemplateRunCancellation returned error: %v", err)
 	}
 
-	var status traits.TemplateRunStatus
+	var status domain.TemplateRunStatus
 	var errorSummary string
 	var completedAt time.Time
 	if err := pool.QueryRow(ctx, `
@@ -2244,8 +2244,8 @@ func TestReconcileTemplateRunCancellationMarksRunFailed(t *testing.T) {
 	`, "run_reconcile").Scan(&status, &errorSummary, &completedAt); err != nil {
 		t.Fatalf("read reconciled run: %v", err)
 	}
-	if status != traits.TemplateRunFailed {
-		t.Fatalf("status = %q, want %q", status, traits.TemplateRunFailed)
+	if status != domain.TemplateRunFailed {
+		t.Fatalf("status = %q, want %q", status, domain.TemplateRunFailed)
 	}
 	if errorSummary != "workflow closed before cancellation was processed" {
 		t.Fatalf("error_summary = %q", errorSummary)
@@ -2261,18 +2261,18 @@ func TestReconcileTemplateRunCancellationRejectsTerminalRun(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_reconcile_terminal"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationApply,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_reconcile_terminal"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
 		SelectedRef:     "main",
 		WorkspaceName:   "workspace",
-		Status:          traits.TemplateRunCompleted,
+		Status:          domain.TemplateRunCompleted,
 		TriggerActor:    requesterSubject,
 	})
 
-	err := store.ReconcileTemplateRunCancellation(ctx, traits.TenantID("tenant_123"), traits.TemplateRunID("run_reconcile_terminal"), "should not overwrite terminal run")
+	err := store.ReconcileTemplateRunCancellation(ctx, domain.TenantID("tenant_123"), domain.TemplateRunID("run_reconcile_terminal"), "should not overwrite terminal run")
 	if !errors.Is(err, app.ErrRunNotCancelable) {
 		t.Fatalf("error = %v, want ErrRunNotCancelable", err)
 	}
@@ -2284,58 +2284,58 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	stack := traits.Stack{
-		ID:        traits.StackID("stack_123"),
-		TenantID:  traits.TenantID("tenant_123"),
+	stack := domain.Stack{
+		ID:        domain.StackID("stack_123"),
+		TenantID:  domain.TenantID("tenant_123"),
 		Name:      "Acme Prod",
 		Slug:      "acme-prod",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := store.CreateStack(ctx, stack); err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
-	stackTemplate := traits.StackTemplate{
-		ID:                        traits.StackTemplateID("stack_template_123"),
-		TenantID:                  traits.TenantID("tenant_123"),
-		StackID:                   traits.StackID("stack_123"),
-		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
-		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
+	stackTemplate := domain.StackTemplate{
+		ID:                        domain.StackTemplateID("stack_template_123"),
+		TenantID:                  domain.TenantID("tenant_123"),
+		StackID:                   domain.StackID("stack_123"),
+		SourceTemplateID:          domain.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
 		WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
 		InstalledConfigJSON:       json.RawMessage(`{"region":"us-east-1"}`),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-		CreatedBy:                 traits.UserID("installer_123"),
-		Lifecycle:                 traits.StackTemplateActive,
+		CreatedBy:                 domain.UserID("installer_123"),
+		Lifecycle:                 domain.StackTemplateActive,
 	}
 	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
 		t.Fatalf("CreateStackTemplate returned error: %v", err)
 	}
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:                 traits.TemplateRunID("run_123"),
-		TenantID:           traits.TenantID("tenant_123"),
-		StackTemplateID:    traits.StackTemplateID("stack_template_123"),
-		TemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
-		SourceTemplateID:   traits.SourceTemplateID("source_template_vpc"),
-		Operation:          traits.OperationApply,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:                 domain.TemplateRunID("run_123"),
+		TenantID:           domain.TenantID("tenant_123"),
+		StackTemplateID:    domain.StackTemplateID("stack_template_123"),
+		TemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
+		SourceTemplateID:   domain.SourceTemplateID("source_template_vpc"),
+		Operation:          domain.OperationApply,
 		SelectedRef:        "release-2026-07-08",
 		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
-		Status:             traits.TemplateRunApplyStarted,
-		TriggerActor:       traits.UserID("user_123"),
+		Status:             domain.TemplateRunApplyStarted,
+		TriggerActor:       domain.UserID("user_123"),
 	})
 
-	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
-		RunID:           traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationApply,
-		Status:          traits.TemplateRunApplyFinished,
+	err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
+		RunID:           domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
+		Status:          domain.TemplateRunApplyFinished,
 	})
 	if err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
 	}
 
-	var lastAppliedRunID traits.TemplateRunID
-	var lastAppliedTemplateRevisionID traits.TemplateRevisionID
+	var lastAppliedRunID domain.TemplateRunID
+	var lastAppliedTemplateRevisionID domain.TemplateRevisionID
 	var lastAppliedAt time.Time
 	if err := pool.QueryRow(ctx, `
 		select last_applied_run_id, last_applied_template_revision_id, last_applied_at
@@ -2349,12 +2349,12 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 	); err != nil {
 		t.Fatalf("read stack template last applied fields: %v", err)
 	}
-	if lastAppliedRunID != traits.TemplateRunID("run_123") {
+	if lastAppliedRunID != domain.TemplateRunID("run_123") {
 		t.Fatalf("LastAppliedRunID = %q, want run_123", lastAppliedRunID)
 	}
 	// The applied revision is the durable fact. The run's ref is kept on the run
 	// itself; copying it onto the component gave it a ref it does not own.
-	if lastAppliedTemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
+	if lastAppliedTemplateRevisionID != domain.TemplateRevisionID("template_rev_2") {
 		t.Fatalf("LastAppliedTemplateRevisionID = %q, want template_rev_2", lastAppliedTemplateRevisionID)
 	}
 	if lastAppliedAt.IsZero() {
@@ -2368,23 +2368,23 @@ func TestRecordTemplateRunStatusReturnsNotFoundForOtherTenant(t *testing.T) {
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          traits.TemplateRunQueued,
-		TriggerActor:    traits.UserID("user_123"),
+		Status:          domain.TemplateRunQueued,
+		TriggerActor:    domain.UserID("user_123"),
 	})
 
-	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
-		RunID:           traits.TemplateRunID("run_123"),
-		TenantID:        traits.TenantID("tenant_456"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
-		Status:          traits.TemplateRunPlanStarted,
+	err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
+		RunID:           domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_456"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
+		Status:          domain.TemplateRunPlanStarted,
 	})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("error = %v, want ErrNotFound", err)
@@ -2398,38 +2398,38 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastPlannedForCompletedPlan(
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 	seedStackWithTemplate(t, ctx, store)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:                 traits.TemplateRunID("run_plan_1"),
-		TenantID:           traits.TenantID("tenant_123"),
-		StackTemplateID:    traits.StackTemplateID("stack_template_123"),
-		TemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
-		SourceTemplateID:   traits.SourceTemplateID("source_template_vpc"),
-		Operation:          traits.OperationPlan,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:                 domain.TemplateRunID("run_plan_1"),
+		TenantID:           domain.TenantID("tenant_123"),
+		StackTemplateID:    domain.StackTemplateID("stack_template_123"),
+		TemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
+		SourceTemplateID:   domain.SourceTemplateID("source_template_vpc"),
+		Operation:          domain.OperationPlan,
 		SelectedRef:        "main",
 		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
 		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-		Status:             traits.TemplateRunPlanFinished,
-		TriggerActor:       traits.UserID("user_123"),
+		Status:             domain.TemplateRunPlanFinished,
+		TriggerActor:       domain.UserID("user_123"),
 	})
 
-	if err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
-		RunID:           traits.TemplateRunID("run_plan_1"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationPlan,
-		Status:          traits.TemplateRunCompleted,
+	if err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
+		RunID:           domain.TemplateRunID("run_plan_1"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
+		Status:          domain.TemplateRunCompleted,
 	}); err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
 	}
 
-	stackTemplate, err := store.GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"))
+	stackTemplate, err := store.GetStackTemplate(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"))
 	if err != nil {
 		t.Fatalf("GetStackTemplate returned error: %v", err)
 	}
-	if stackTemplate.LastPlannedRunID != traits.TemplateRunID("run_plan_1") {
+	if stackTemplate.LastPlannedRunID != domain.TemplateRunID("run_plan_1") {
 		t.Fatalf("LastPlannedRunID = %q, want run_plan_1", stackTemplate.LastPlannedRunID)
 	}
-	if stackTemplate.LastPlannedTemplateRevisionID != traits.TemplateRevisionID("template_rev_2") {
+	if stackTemplate.LastPlannedTemplateRevisionID != domain.TemplateRevisionID("template_rev_2") {
 		t.Fatalf("LastPlannedTemplateRevisionID = %q, want template_rev_2", stackTemplate.LastPlannedTemplateRevisionID)
 	}
 	if stackTemplate.LastPlannedAt.IsZero() {
@@ -2439,23 +2439,23 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastPlannedForCompletedPlan(
 	// would run exactly what this plan showed. Note the config comes back with
 	// jsonb's own key spacing, which is why the comparison parses rather than
 	// comparing bytes.
-	if stackTemplate.PlanState() != traits.PlanMatches {
+	if stackTemplate.PlanState() != domain.PlanMatches {
 		t.Fatalf("PlanState() = %q, want matches (planned config %s, desired %s)", stackTemplate.PlanState(), stackTemplate.LastPlannedConfigJSON, stackTemplate.DesiredConfig())
 	}
-	if stackTemplate.LiveState() != traits.LiveNever {
+	if stackTemplate.LiveState() != domain.LiveNever {
 		t.Fatalf("LiveState() = %q, want never", stackTemplate.LiveState())
 	}
 
 	// Saving config moves desired without touching runs; the recorded plan is
 	// what makes that visible instead of leaving apply enabled.
-	if _, err := store.UpdateStackTemplateConfig(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"), json.RawMessage(`{"region":"eu-west-1"}`)); err != nil {
+	if _, err := store.UpdateStackTemplateConfig(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"), json.RawMessage(`{"region":"eu-west-1"}`)); err != nil {
 		t.Fatalf("UpdateStackTemplateConfig returned error: %v", err)
 	}
-	edited, err := store.GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"))
+	edited, err := store.GetStackTemplate(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"))
 	if err != nil {
 		t.Fatalf("GetStackTemplate returned error: %v", err)
 	}
-	if edited.PlanState() != traits.PlanStale {
+	if edited.PlanState() != domain.PlanStale {
 		t.Fatalf("PlanState() after config edit = %q, want stale", edited.PlanState())
 	}
 }
@@ -2467,35 +2467,35 @@ func TestRecordTemplateRunStatusRecordsAppliedConfigAlongsideRevision(t *testing
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 	seedStackWithTemplate(t, ctx, store)
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:                 traits.TemplateRunID("run_apply_1"),
-		TenantID:           traits.TenantID("tenant_123"),
-		StackTemplateID:    traits.StackTemplateID("stack_template_123"),
-		TemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
-		SourceTemplateID:   traits.SourceTemplateID("source_template_vpc"),
-		Operation:          traits.OperationApply,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:                 domain.TemplateRunID("run_apply_1"),
+		TenantID:           domain.TenantID("tenant_123"),
+		StackTemplateID:    domain.StackTemplateID("stack_template_123"),
+		TemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
+		SourceTemplateID:   domain.SourceTemplateID("source_template_vpc"),
+		Operation:          domain.OperationApply,
 		SelectedRef:        "main",
 		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
 		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-		Status:             traits.TemplateRunApplyStarted,
-		TriggerActor:       traits.UserID("user_123"),
+		Status:             domain.TemplateRunApplyStarted,
+		TriggerActor:       domain.UserID("user_123"),
 	})
 
-	if err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
-		RunID:           traits.TemplateRunID("run_apply_1"),
-		TenantID:        traits.TenantID("tenant_123"),
-		StackTemplateID: traits.StackTemplateID("stack_template_123"),
-		Operation:       traits.OperationApply,
-		Status:          traits.TemplateRunApplyFinished,
+	if err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
+		RunID:           domain.TemplateRunID("run_apply_1"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
+		Status:          domain.TemplateRunApplyFinished,
 	}); err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
 	}
 
-	stackTemplate, err := store.GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"))
+	stackTemplate, err := store.GetStackTemplate(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"))
 	if err != nil {
 		t.Fatalf("GetStackTemplate returned error: %v", err)
 	}
-	if stackTemplate.LiveState() != traits.LiveMatches {
+	if stackTemplate.LiveState() != domain.LiveMatches {
 		t.Fatalf("LiveState() = %q, want matches (applied config %s)", stackTemplate.LiveState(), stackTemplate.LastAppliedConfigJSON)
 	}
 }
@@ -2524,11 +2524,11 @@ func TestStackTemplateSnapshotConfigsStartAbsentRatherThanEmpty(t *testing.T) {
 		t.Fatalf("snapshot configs = %v / %v, want both null", plannedConfig, appliedConfig)
 	}
 
-	stackTemplate, err := store.GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"))
+	stackTemplate, err := store.GetStackTemplate(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"))
 	if err != nil {
 		t.Fatalf("GetStackTemplate returned error: %v", err)
 	}
-	if stackTemplate.PlanState() != traits.PlanNone || stackTemplate.LiveState() != traits.LiveNever {
+	if stackTemplate.PlanState() != domain.PlanNone || stackTemplate.LiveState() != domain.LiveNever {
 		t.Fatalf("states = %q / %q, want none / never", stackTemplate.PlanState(), stackTemplate.LiveState())
 	}
 }
@@ -2587,11 +2587,11 @@ func TestPlannedStateMigrationBackfillsFromExistingRuns(t *testing.T) {
 	}
 
 	store := NewStore(pool)
-	stackTemplate, err := store.GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_123"))
+	stackTemplate, err := store.GetStackTemplate(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"))
 	if err != nil {
 		t.Fatalf("GetStackTemplate returned error: %v", err)
 	}
-	if stackTemplate.LastPlannedRunID != traits.TemplateRunID("run_plan_new") {
+	if stackTemplate.LastPlannedRunID != domain.TemplateRunID("run_plan_new") {
 		t.Fatalf("LastPlannedRunID = %q, want run_plan_new", stackTemplate.LastPlannedRunID)
 	}
 	if stackTemplate.LastPlannedAt.IsZero() {
@@ -2599,10 +2599,10 @@ func TestPlannedStateMigrationBackfillsFromExistingRuns(t *testing.T) {
 	}
 	// Both snapshots equal desired, so the template lands in steady state
 	// rather than being told to re-plan something it already applied.
-	if stackTemplate.PlanState() != traits.PlanMatches {
+	if stackTemplate.PlanState() != domain.PlanMatches {
 		t.Fatalf("PlanState() = %q, want matches", stackTemplate.PlanState())
 	}
-	if stackTemplate.LiveState() != traits.LiveMatches {
+	if stackTemplate.LiveState() != domain.LiveMatches {
 		t.Fatalf("LiveState() = %q, want matches", stackTemplate.LiveState())
 	}
 }
@@ -2637,7 +2637,7 @@ func TestPlannedStateMigrationLeavesUnplannedTemplatesAbsent(t *testing.T) {
 		t.Fatalf("migrate to head: %v", err)
 	}
 
-	stackTemplate, err := NewStore(pool).GetStackTemplate(ctx, traits.TenantID("tenant_123"), traits.StackTemplateID("stack_template_456"))
+	stackTemplate, err := NewStore(pool).GetStackTemplate(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_456"))
 	if err != nil {
 		t.Fatalf("GetStackTemplate returned error: %v", err)
 	}
@@ -2646,7 +2646,7 @@ func TestPlannedStateMigrationLeavesUnplannedTemplatesAbsent(t *testing.T) {
 	if stackTemplate.LastPlannedConfigJSON != nil || stackTemplate.LastAppliedConfigJSON != nil {
 		t.Fatalf("snapshot configs = %s / %s, want both absent", stackTemplate.LastPlannedConfigJSON, stackTemplate.LastAppliedConfigJSON)
 	}
-	if stackTemplate.PlanState() != traits.PlanNone || stackTemplate.LiveState() != traits.LiveNever {
+	if stackTemplate.PlanState() != domain.PlanNone || stackTemplate.LiveState() != domain.LiveNever {
 		t.Fatalf("states = %q / %q, want none / never", stackTemplate.PlanState(), stackTemplate.LiveState())
 	}
 }
@@ -2757,33 +2757,33 @@ func openMigratedTestPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 func seedStackWithTemplate(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
 
-	if err := store.CreateStack(ctx, traits.Stack{
-		ID:        traits.StackID("stack_123"),
-		TenantID:  traits.TenantID("tenant_123"),
+	if err := store.CreateStack(ctx, domain.Stack{
+		ID:        domain.StackID("stack_123"),
+		TenantID:  domain.TenantID("tenant_123"),
 		Name:      "Acme Prod",
 		Slug:      "acme-prod",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
-	if err := store.CreateStackTemplate(ctx, traits.StackTemplate{
-		ID:                        traits.StackTemplateID("stack_template_123"),
-		TenantID:                  traits.TenantID("tenant_123"),
-		StackID:                   traits.StackID("stack_123"),
-		SourceTemplateID:          traits.SourceTemplateID("source_template_vpc"),
-		DesiredTemplateRevisionID: traits.TemplateRevisionID("template_rev_2"),
+	if err := store.CreateStackTemplate(ctx, domain.StackTemplate{
+		ID:                        domain.StackTemplateID("stack_template_123"),
+		TenantID:                  domain.TenantID("tenant_123"),
+		StackID:                   domain.StackID("stack_123"),
+		SourceTemplateID:          domain.SourceTemplateID("source_template_vpc"),
+		DesiredTemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
 		WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
 		InstalledConfigJSON:       json.RawMessage(`{"region":"us-east-1"}`),
 		DesiredConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-		CreatedBy:                 traits.UserID("installer_123"),
-		Lifecycle:                 traits.StackTemplateActive,
+		CreatedBy:                 domain.UserID("installer_123"),
+		Lifecycle:                 domain.StackTemplateActive,
 	}); err != nil {
 		t.Fatalf("CreateStackTemplate returned error: %v", err)
 	}
 }
 
-func seedTemplateRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run traits.TemplateRun) {
+func seedTemplateRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run domain.TemplateRun) {
 	t.Helper()
 
 	_, err := pool.Exec(ctx, `
@@ -2895,15 +2895,15 @@ func TestAppendAuditEventSuccess(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 
-	event := traits.SecurityAuditEvent{
+	event := domain.SecurityAuditEvent{
 		ActorSubject:  "user:6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91",
-		Action:        traits.AuditActionGrant,
+		Action:        domain.AuditActionGrant,
 		TargetUser:    "user:target-subject",
-		TenantID:      traits.TenantID("tenant_123"),
-		StackID:       traits.StackID("stack_123"),
+		TenantID:      domain.TenantID("tenant_123"),
+		StackID:       domain.StackID("stack_123"),
 		OldRole:       "",
 		NewRole:       "owner",
-		Outcome:       traits.AuditOutcomeSuccess,
+		Outcome:       domain.AuditOutcomeSuccess,
 		CorrelationID: "req_abc123",
 	}
 
@@ -2982,57 +2982,57 @@ func TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroying(t *testin
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	stack := traits.Stack{
-		ID:        traits.StackID("stack_destroy_1"),
-		TenantID:  traits.TenantID("tenant_destroy_1"),
+	stack := domain.Stack{
+		ID:        domain.StackID("stack_destroy_1"),
+		TenantID:  domain.TenantID("tenant_destroy_1"),
 		Name:      "Destroy Test",
 		Slug:      "destroy-test",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := store.CreateStack(ctx, stack); err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
-	stackTemplate := traits.StackTemplate{
-		ID:        traits.StackTemplateID("st_destroy_1"),
-		TenantID:  traits.TenantID("tenant_destroy_1"),
-		StackID:   traits.StackID("stack_destroy_1"),
-		Lifecycle: traits.StackTemplateActive,
+	stackTemplate := domain.StackTemplate{
+		ID:        domain.StackTemplateID("st_destroy_1"),
+		TenantID:  domain.TenantID("tenant_destroy_1"),
+		StackID:   domain.StackID("stack_destroy_1"),
+		Lifecycle: domain.StackTemplateActive,
 	}
 	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
 		t.Fatalf("CreateStackTemplate returned error: %v", err)
 	}
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_destroy_1"),
-		TenantID:        traits.TenantID("tenant_destroy_1"),
-		StackTemplateID: traits.StackTemplateID("st_destroy_1"),
-		Operation:       traits.OperationDestroy,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_destroy_1"),
+		TenantID:        domain.TenantID("tenant_destroy_1"),
+		StackTemplateID: domain.StackTemplateID("st_destroy_1"),
+		Operation:       domain.OperationDestroy,
 		SelectedRef:     "main",
 		WorkspaceName:   "ws_destroy",
-		Status:          traits.TemplateRunLocked,
-		TriggerActor:    traits.UserID("user_123"),
+		Status:          domain.TemplateRunLocked,
+		TriggerActor:    domain.UserID("user_123"),
 	})
 
-	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
-		RunID:           traits.TemplateRunID("run_destroy_1"),
-		TenantID:        traits.TenantID("tenant_destroy_1"),
-		StackTemplateID: traits.StackTemplateID("st_destroy_1"),
-		Operation:       traits.OperationDestroy,
-		Status:          traits.TemplateRunDestroyStarted,
+	err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
+		RunID:           domain.TemplateRunID("run_destroy_1"),
+		TenantID:        domain.TenantID("tenant_destroy_1"),
+		StackTemplateID: domain.StackTemplateID("st_destroy_1"),
+		Operation:       domain.OperationDestroy,
+		Status:          domain.TemplateRunDestroyStarted,
 	})
 	if err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
 	}
 
-	var lifecycle traits.StackTemplateLifecycle
+	var lifecycle domain.StackTemplateLifecycle
 	if err := pool.QueryRow(ctx, `
 		select lifecycle from stack_templates
 		where tenant_id = $1 and id = $2
 	`, "tenant_destroy_1", "st_destroy_1").Scan(&lifecycle); err != nil {
 		t.Fatalf("read stack template lifecycle: %v", err)
 	}
-	if lifecycle != traits.StackTemplateDestroying {
-		t.Fatalf("lifecycle = %q, want %q", lifecycle, traits.StackTemplateDestroying)
+	if lifecycle != domain.StackTemplateDestroying {
+		t.Fatalf("lifecycle = %q, want %q", lifecycle, domain.StackTemplateDestroying)
 	}
 }
 
@@ -3046,57 +3046,57 @@ func TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroyed(t *testing
 	ctx := context.Background()
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
-	stack := traits.Stack{
-		ID:        traits.StackID("stack_destroy_2"),
-		TenantID:  traits.TenantID("tenant_destroy_2"),
+	stack := domain.Stack{
+		ID:        domain.StackID("stack_destroy_2"),
+		TenantID:  domain.TenantID("tenant_destroy_2"),
 		Name:      "Destroy Done",
 		Slug:      "destroy-done",
-		CreatedBy: traits.UserID("user_123"),
+		CreatedBy: domain.UserID("user_123"),
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := store.CreateStack(ctx, stack); err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
-	stackTemplate := traits.StackTemplate{
-		ID:        traits.StackTemplateID("st_destroy_2"),
-		TenantID:  traits.TenantID("tenant_destroy_2"),
-		StackID:   traits.StackID("stack_destroy_2"),
-		Lifecycle: traits.StackTemplateDestroying,
+	stackTemplate := domain.StackTemplate{
+		ID:        domain.StackTemplateID("st_destroy_2"),
+		TenantID:  domain.TenantID("tenant_destroy_2"),
+		StackID:   domain.StackID("stack_destroy_2"),
+		Lifecycle: domain.StackTemplateDestroying,
 	}
 	if err := store.CreateStackTemplate(ctx, stackTemplate); err != nil {
 		t.Fatalf("CreateStackTemplate returned error: %v", err)
 	}
-	seedTemplateRun(t, ctx, pool, traits.TemplateRun{
-		ID:              traits.TemplateRunID("run_destroy_2"),
-		TenantID:        traits.TenantID("tenant_destroy_2"),
-		StackTemplateID: traits.StackTemplateID("st_destroy_2"),
-		Operation:       traits.OperationDestroy,
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_destroy_2"),
+		TenantID:        domain.TenantID("tenant_destroy_2"),
+		StackTemplateID: domain.StackTemplateID("st_destroy_2"),
+		Operation:       domain.OperationDestroy,
 		SelectedRef:     "main",
 		WorkspaceName:   "ws_destroy_2",
-		Status:          traits.TemplateRunDestroyStarted,
-		TriggerActor:    traits.UserID("user_123"),
+		Status:          domain.TemplateRunDestroyStarted,
+		TriggerActor:    domain.UserID("user_123"),
 	})
 
-	err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
-		RunID:           traits.TemplateRunID("run_destroy_2"),
-		TenantID:        traits.TenantID("tenant_destroy_2"),
-		StackTemplateID: traits.StackTemplateID("st_destroy_2"),
-		Operation:       traits.OperationDestroy,
-		Status:          traits.TemplateRunDestroyFinished,
+	err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
+		RunID:           domain.TemplateRunID("run_destroy_2"),
+		TenantID:        domain.TenantID("tenant_destroy_2"),
+		StackTemplateID: domain.StackTemplateID("st_destroy_2"),
+		Operation:       domain.OperationDestroy,
+		Status:          domain.TemplateRunDestroyFinished,
 	})
 	if err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
 	}
 
-	var lifecycle traits.StackTemplateLifecycle
+	var lifecycle domain.StackTemplateLifecycle
 	if err := pool.QueryRow(ctx, `
 		select lifecycle from stack_templates
 		where tenant_id = $1 and id = $2
 	`, "tenant_destroy_2", "st_destroy_2").Scan(&lifecycle); err != nil {
 		t.Fatalf("read stack template lifecycle: %v", err)
 	}
-	if lifecycle != traits.StackTemplateDestroyed {
-		t.Fatalf("lifecycle = %q, want %q", lifecycle, traits.StackTemplateDestroyed)
+	if lifecycle != domain.StackTemplateDestroyed {
+		t.Fatalf("lifecycle = %q, want %q", lifecycle, domain.StackTemplateDestroyed)
 	}
 }
 
@@ -3105,32 +3105,32 @@ func TestRecordsStackTemplateDestroyInterrupted(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		operation traits.OperationType
-		status    traits.TemplateRunStatus
+		operation domain.OperationType
+		status    domain.TemplateRunStatus
 		want      bool
 	}{
 		{
 			name:      "failed destroy",
-			operation: traits.OperationDestroy,
-			status:    traits.TemplateRunFailed,
+			operation: domain.OperationDestroy,
+			status:    domain.TemplateRunFailed,
 			want:      true,
 		},
 		{
 			name:      "canceled destroy",
-			operation: traits.OperationDestroy,
-			status:    traits.TemplateRunCanceled,
+			operation: domain.OperationDestroy,
+			status:    domain.TemplateRunCanceled,
 			want:      true,
 		},
 		{
 			name:      "successful destroy",
-			operation: traits.OperationDestroy,
-			status:    traits.TemplateRunDestroyFinished,
+			operation: domain.OperationDestroy,
+			status:    domain.TemplateRunDestroyFinished,
 			want:      false,
 		},
 		{
 			name:      "failed apply",
-			operation: traits.OperationApply,
-			status:    traits.TemplateRunFailed,
+			operation: domain.OperationApply,
+			status:    domain.TemplateRunFailed,
 			want:      false,
 		},
 	}
@@ -3139,7 +3139,7 @@ func TestRecordsStackTemplateDestroyInterrupted(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			input := traits.TemplateRunStatusActivityInput{
+			input := domain.TemplateRunStatusActivityInput{
 				Operation: test.operation,
 				Status:    test.status,
 			}
@@ -3155,45 +3155,45 @@ func TestRecordTemplateRunStatusReconcilesInterruptedDestroyLifecycle(t *testing
 
 	tests := []struct {
 		name             string
-		initialLifecycle traits.StackTemplateLifecycle
-		initialStatus    traits.TemplateRunStatus
-		terminalStatus   traits.TemplateRunStatus
-		wantLifecycle    traits.StackTemplateLifecycle
+		initialLifecycle domain.StackTemplateLifecycle
+		initialStatus    domain.TemplateRunStatus
+		terminalStatus   domain.TemplateRunStatus
+		wantLifecycle    domain.StackTemplateLifecycle
 	}{
 		{
 			name:             "failed after destroy started",
-			initialLifecycle: traits.StackTemplateDestroying,
-			initialStatus:    traits.TemplateRunDestroyStarted,
-			terminalStatus:   traits.TemplateRunFailed,
-			wantLifecycle:    traits.StackTemplateFailed,
+			initialLifecycle: domain.StackTemplateDestroying,
+			initialStatus:    domain.TemplateRunDestroyStarted,
+			terminalStatus:   domain.TemplateRunFailed,
+			wantLifecycle:    domain.StackTemplateFailed,
 		},
 		{
 			name:             "canceled after destroy started",
-			initialLifecycle: traits.StackTemplateDestroying,
-			initialStatus:    traits.TemplateRunDestroyStarted,
-			terminalStatus:   traits.TemplateRunCanceled,
-			wantLifecycle:    traits.StackTemplateFailed,
+			initialLifecycle: domain.StackTemplateDestroying,
+			initialStatus:    domain.TemplateRunDestroyStarted,
+			terminalStatus:   domain.TemplateRunCanceled,
+			wantLifecycle:    domain.StackTemplateFailed,
 		},
 		{
 			name:             "failed before destroy started",
-			initialLifecycle: traits.StackTemplateActive,
-			initialStatus:    traits.TemplateRunWaitingApproval,
-			terminalStatus:   traits.TemplateRunFailed,
-			wantLifecycle:    traits.StackTemplateActive,
+			initialLifecycle: domain.StackTemplateActive,
+			initialStatus:    domain.TemplateRunWaitingApproval,
+			terminalStatus:   domain.TemplateRunFailed,
+			wantLifecycle:    domain.StackTemplateActive,
 		},
 		{
 			name:             "retries after lifecycle failure",
-			initialLifecycle: traits.StackTemplateFailed,
-			initialStatus:    traits.TemplateRunDestroyStarted,
-			terminalStatus:   traits.TemplateRunFailed,
-			wantLifecycle:    traits.StackTemplateFailed,
+			initialLifecycle: domain.StackTemplateFailed,
+			initialStatus:    domain.TemplateRunDestroyStarted,
+			terminalStatus:   domain.TemplateRunFailed,
+			wantLifecycle:    domain.StackTemplateFailed,
 		},
 		{
 			name:             "late failure after destroy completed",
-			initialLifecycle: traits.StackTemplateDestroyed,
-			initialStatus:    traits.TemplateRunDestroyFinished,
-			terminalStatus:   traits.TemplateRunFailed,
-			wantLifecycle:    traits.StackTemplateDestroyed,
+			initialLifecycle: domain.StackTemplateDestroyed,
+			initialStatus:    domain.TemplateRunDestroyFinished,
+			terminalStatus:   domain.TemplateRunFailed,
+			wantLifecycle:    domain.StackTemplateDestroyed,
 		},
 	}
 
@@ -3206,22 +3206,22 @@ func TestRecordTemplateRunStatusReconcilesInterruptedDestroyLifecycle(t *testing
 			pool := openMigratedTestPool(t, ctx)
 			store := NewStore(pool)
 			suffix := strings.ReplaceAll(test.name, " ", "_")
-			stackID := traits.StackID("stack_destroy_interrupted_" + suffix)
-			stackTemplateID := traits.StackTemplateID("st_destroy_interrupted_" + suffix)
-			tenantID := traits.TenantID("tenant_destroy_interrupted_" + suffix)
-			runID := traits.TemplateRunID("run_destroy_interrupted_" + suffix)
+			stackID := domain.StackID("stack_destroy_interrupted_" + suffix)
+			stackTemplateID := domain.StackTemplateID("st_destroy_interrupted_" + suffix)
+			tenantID := domain.TenantID("tenant_destroy_interrupted_" + suffix)
+			runID := domain.TemplateRunID("run_destroy_interrupted_" + suffix)
 
-			if err := store.CreateStack(ctx, traits.Stack{
+			if err := store.CreateStack(ctx, domain.Stack{
 				ID:        stackID,
 				TenantID:  tenantID,
 				Name:      "Interrupted Destroy Test",
 				Slug:      "interrupted-destroy-" + suffix,
-				CreatedBy: traits.UserID("user_123"),
+				CreatedBy: domain.UserID("user_123"),
 				CreatedAt: time.Now().UTC(),
 			}); err != nil {
 				t.Fatalf("CreateStack returned error: %v", err)
 			}
-			if err := store.CreateStackTemplate(ctx, traits.StackTemplate{
+			if err := store.CreateStackTemplate(ctx, domain.StackTemplate{
 				ID:        stackTemplateID,
 				TenantID:  tenantID,
 				StackID:   stackID,
@@ -3229,28 +3229,28 @@ func TestRecordTemplateRunStatusReconcilesInterruptedDestroyLifecycle(t *testing
 			}); err != nil {
 				t.Fatalf("CreateStackTemplate returned error: %v", err)
 			}
-			seedTemplateRun(t, ctx, pool, traits.TemplateRun{
+			seedTemplateRun(t, ctx, pool, domain.TemplateRun{
 				ID:              runID,
 				TenantID:        tenantID,
 				StackTemplateID: stackTemplateID,
-				Operation:       traits.OperationDestroy,
+				Operation:       domain.OperationDestroy,
 				SelectedRef:     "main",
 				WorkspaceName:   "ws_" + suffix,
 				Status:          test.initialStatus,
-				TriggerActor:    traits.UserID("user_123"),
+				TriggerActor:    domain.UserID("user_123"),
 			})
 
-			if err := store.RecordTemplateRunStatus(ctx, traits.TemplateRunStatusActivityInput{
+			if err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
 				RunID:           runID,
 				TenantID:        tenantID,
 				StackTemplateID: stackTemplateID,
-				Operation:       traits.OperationDestroy,
+				Operation:       domain.OperationDestroy,
 				Status:          test.terminalStatus,
 			}); err != nil {
 				t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
 			}
 
-			var lifecycle traits.StackTemplateLifecycle
+			var lifecycle domain.StackTemplateLifecycle
 			if err := pool.QueryRow(ctx, `
 				select lifecycle from stack_templates
 				where tenant_id = $1 and id = $2
@@ -3271,11 +3271,11 @@ func TestAppendAuditEventEmptyOptionalFields(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := NewStore(pool)
 
-	event := traits.SecurityAuditEvent{
+	event := domain.SecurityAuditEvent{
 		ActorSubject: "user:actor",
-		Action:       traits.AuditActionFailedAccessAttempt,
-		TenantID:     traits.TenantID("tenant_123"),
-		Outcome:      traits.AuditOutcomeFailure,
+		Action:       domain.AuditActionFailedAccessAttempt,
+		TenantID:     domain.TenantID("tenant_123"),
+		Outcome:      domain.AuditOutcomeFailure,
 	}
 
 	if err := store.AppendAuditEvent(ctx, event); err != nil {

@@ -14,10 +14,10 @@ import (
 	"github.com/vishu42/tflive/internal/artifacts"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/temporal"
-	"github.com/vishu42/tflive/internal/traits"
 	"github.com/vishu42/tflive/internal/workflows"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
@@ -82,20 +82,20 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if deps.worker.registeredWorkflow != reflect.ValueOf(workflows.TemplateRunWorkflow).Pointer() {
 		t.Fatal("TemplateRunWorkflow was not registered")
 	}
-	if deps.worker.registeredWorkflowOptions.Name != traits.TemplateRunWorkflowName {
-		t.Fatalf("workflow registration name = %q, want %q", deps.worker.registeredWorkflowOptions.Name, traits.TemplateRunWorkflowName)
+	if deps.worker.registeredWorkflowOptions.Name != domain.TemplateRunWorkflowName {
+		t.Fatalf("workflow registration name = %q, want %q", deps.worker.registeredWorkflowOptions.Name, domain.TemplateRunWorkflowName)
 	}
-	if deps.worker.registeredActivityOptions.Name != traits.RecordTemplateRunStatusActivityName {
-		t.Fatalf("activity registration name = %q, want %q", deps.worker.registeredActivityOptions.Name, traits.RecordTemplateRunStatusActivityName)
+	if deps.worker.registeredActivityOptions.Name != domain.RecordTemplateRunStatusActivityName {
+		t.Fatalf("activity registration name = %q, want %q", deps.worker.registeredActivityOptions.Name, domain.RecordTemplateRunStatusActivityName)
 	}
-	if !deps.worker.registeredActivities[traits.PrepareWorkspaceActivityName] {
-		t.Fatalf("activity %q was not registered", traits.PrepareWorkspaceActivityName)
+	if !deps.worker.registeredActivities[domain.PrepareWorkspaceActivityName] {
+		t.Fatalf("activity %q was not registered", domain.PrepareWorkspaceActivityName)
 	}
-	if !deps.worker.registeredActivities[traits.FetchSourceActivityName] {
-		t.Fatalf("activity %q was not registered", traits.FetchSourceActivityName)
+	if !deps.worker.registeredActivities[domain.FetchSourceActivityName] {
+		t.Fatalf("activity %q was not registered", domain.FetchSourceActivityName)
 	}
-	if !deps.worker.registeredActivities[traits.RunTerraformActivityName] {
-		t.Fatalf("activity %q was not registered", traits.RunTerraformActivityName)
+	if !deps.worker.registeredActivities[domain.RunTerraformActivityName] {
+		t.Fatalf("activity %q was not registered", domain.RunTerraformActivityName)
 	}
 	if !deps.activityStoreIsWired {
 		t.Fatal("activity was not wired with the Postgres store")
@@ -194,17 +194,17 @@ func TestDefaultWorkerDependenciesRegisterTerraformActivities(t *testing.T) {
 
 	deps.registerActivities(worker, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{})
 
-	if !worker.registeredActivities[traits.PrepareWorkspaceActivityName] {
-		t.Fatalf("activity %q was not registered", traits.PrepareWorkspaceActivityName)
+	if !worker.registeredActivities[domain.PrepareWorkspaceActivityName] {
+		t.Fatalf("activity %q was not registered", domain.PrepareWorkspaceActivityName)
 	}
-	if !worker.registeredActivities[traits.FetchSourceActivityName] {
-		t.Fatalf("activity %q was not registered", traits.FetchSourceActivityName)
+	if !worker.registeredActivities[domain.FetchSourceActivityName] {
+		t.Fatalf("activity %q was not registered", domain.FetchSourceActivityName)
 	}
-	if !worker.registeredActivities[traits.RunTerraformActivityName] {
-		t.Fatalf("activity %q was not registered", traits.RunTerraformActivityName)
+	if !worker.registeredActivities[domain.RunTerraformActivityName] {
+		t.Fatalf("activity %q was not registered", domain.RunTerraformActivityName)
 	}
-	if !worker.registeredActivities[traits.RecordTemplateRunStatusActivityName] {
-		t.Fatalf("activity %q was not registered", traits.RecordTemplateRunStatusActivityName)
+	if !worker.registeredActivities[domain.RecordTemplateRunStatusActivityName] {
+		t.Fatalf("activity %q was not registered", domain.RecordTemplateRunStatusActivityName)
 	}
 }
 
@@ -216,11 +216,11 @@ func TestDefaultWorkerDependenciesRegisterTemplateSyncWorkflow(t *testing.T) {
 
 	deps.registerWorkflow(worker)
 
-	if !worker.registeredWorkflows[traits.TemplateRunWorkflowName] {
-		t.Fatalf("workflow %q was not registered", traits.TemplateRunWorkflowName)
+	if !worker.registeredWorkflows[domain.TemplateRunWorkflowName] {
+		t.Fatalf("workflow %q was not registered", domain.TemplateRunWorkflowName)
 	}
-	if !worker.registeredWorkflows[traits.TemplateSyncWorkflowName] {
-		t.Fatalf("workflow %q was not registered", traits.TemplateSyncWorkflowName)
+	if !worker.registeredWorkflows[domain.TemplateSyncWorkflowName] {
+		t.Fatalf("workflow %q was not registered", domain.TemplateSyncWorkflowName)
 	}
 }
 
@@ -232,11 +232,11 @@ func TestDefaultWorkerDependenciesRegisterTemplateSyncActivities(t *testing.T) {
 
 	deps.registerActivities(worker, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{})
 
-	if !worker.registeredActivities[traits.RecordTemplateRegistrationStatusActivityName] {
-		t.Fatalf("activity %q was not registered", traits.RecordTemplateRegistrationStatusActivityName)
+	if !worker.registeredActivities[domain.RecordTemplateRegistrationStatusActivityName] {
+		t.Fatalf("activity %q was not registered", domain.RecordTemplateRegistrationStatusActivityName)
 	}
-	if !worker.registeredActivities[traits.SyncTemplateActivityName] {
-		t.Fatalf("activity %q was not registered", traits.SyncTemplateActivityName)
+	if !worker.registeredActivities[domain.SyncTemplateActivityName] {
+		t.Fatalf("activity %q was not registered", domain.SyncTemplateActivityName)
 	}
 }
 
@@ -389,7 +389,7 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 				t.Fatalf("registerWorkflow worker = %p, want %p", worker, deps.worker)
 			}
 			worker.RegisterWorkflowWithOptions(workflows.TemplateRunWorkflow, workflow.RegisterOptions{
-				Name: traits.TemplateRunWorkflowName,
+				Name: domain.TemplateRunWorkflowName,
 			})
 		},
 		registerActivities: func(worker temporalWorker, recorder workerStore, runRoot string, logStore activities.TemplateRunLogStore) {
@@ -403,35 +403,35 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			deps.activityRunRoot = runRoot
 			deps.activityLogStore = logStore
 			worker.RegisterActivityWithOptions(
-				func(context.Context, traits.PrepareWorkspaceActivityInput) (traits.PrepareWorkspaceActivityOutput, error) {
-					return traits.PrepareWorkspaceActivityOutput{}, nil
+				func(context.Context, domain.PrepareWorkspaceActivityInput) (domain.PrepareWorkspaceActivityOutput, error) {
+					return domain.PrepareWorkspaceActivityOutput{}, nil
 				},
 				activity.RegisterOptions{
-					Name: traits.PrepareWorkspaceActivityName,
+					Name: domain.PrepareWorkspaceActivityName,
 				},
 			)
 			worker.RegisterActivityWithOptions(
-				func(context.Context, traits.FetchSourceActivityInput) (traits.FetchSourceActivityOutput, error) {
-					return traits.FetchSourceActivityOutput{}, nil
+				func(context.Context, domain.FetchSourceActivityInput) (domain.FetchSourceActivityOutput, error) {
+					return domain.FetchSourceActivityOutput{}, nil
 				},
 				activity.RegisterOptions{
-					Name: traits.FetchSourceActivityName,
+					Name: domain.FetchSourceActivityName,
 				},
 			)
 			worker.RegisterActivityWithOptions(
-				func(context.Context, traits.RunTerraformActivityInput) error {
+				func(context.Context, domain.RunTerraformActivityInput) error {
 					return nil
 				},
 				activity.RegisterOptions{
-					Name: traits.RunTerraformActivityName,
+					Name: domain.RunTerraformActivityName,
 				},
 			)
 			worker.RegisterActivityWithOptions(
-				func(context.Context, traits.TemplateRunStatusActivityInput) error {
+				func(context.Context, domain.TemplateRunStatusActivityInput) error {
 					return nil
 				},
 				activity.RegisterOptions{
-					Name: traits.RecordTemplateRunStatusActivityName,
+					Name: domain.RecordTemplateRunStatusActivityName,
 				},
 			)
 		},
@@ -466,19 +466,19 @@ func (pool *recordingWorkerPostgresPool) Close() {
 
 type recordingWorkerStore struct{}
 
-func (store *recordingWorkerStore) RecordTemplateRunStatus(context.Context, traits.TemplateRunStatusActivityInput) error {
+func (store *recordingWorkerStore) RecordTemplateRunStatus(context.Context, domain.TemplateRunStatusActivityInput) error {
 	return nil
 }
 
-func (store *recordingWorkerStore) RecordTemplateRegistrationStatus(context.Context, traits.TemplateRegistrationStatusActivityInput) error {
+func (store *recordingWorkerStore) RecordTemplateRegistrationStatus(context.Context, domain.TemplateRegistrationStatusActivityInput) error {
 	return nil
 }
 
-func (store *recordingWorkerStore) UpsertTemplateRevisionWithVariables(context.Context, traits.TemplateRevision, []traits.TemplateVariable) (traits.TemplateRevision, error) {
-	return traits.TemplateRevision{}, nil
+func (store *recordingWorkerStore) UpsertTemplateRevisionWithVariables(context.Context, domain.TemplateRevision, []domain.TemplateVariable) (domain.TemplateRevision, error) {
+	return domain.TemplateRevision{}, nil
 }
 
-func (store *recordingWorkerStore) RecordTemplateRunLog(context.Context, traits.TemplateRunLog) error {
+func (store *recordingWorkerStore) RecordTemplateRunLog(context.Context, domain.TemplateRunLog) error {
 	return nil
 }
 
@@ -486,11 +486,11 @@ func (store *recordingWorkerStore) Enqueue(context.Context, ...queue.Request) er
 	return nil
 }
 
-func (store *recordingWorkerStore) ReconcileTemplateRunCancellation(context.Context, traits.TenantID, traits.TemplateRunID, string) error {
+func (store *recordingWorkerStore) ReconcileTemplateRunCancellation(context.Context, domain.TenantID, domain.TemplateRunID, string) error {
 	return nil
 }
 
-func (store *recordingWorkerStore) MarkStackReady(context.Context, traits.TenantID, traits.StackID) error {
+func (store *recordingWorkerStore) MarkStackReady(context.Context, domain.TenantID, domain.StackID) error {
 	return nil
 }
 
@@ -514,19 +514,19 @@ func (*recordingWorkerAuthorizer) DeleteRelationships(context.Context, authz.Mut
 
 type recordingWorkflowDispatcher struct{}
 
-func (recordingWorkflowDispatcher) StartTemplateRun(context.Context, traits.TemplateRunWorkflowInput) error {
+func (recordingWorkflowDispatcher) StartTemplateRun(context.Context, domain.TemplateRunWorkflowInput) error {
 	return nil
 }
 
-func (recordingWorkflowDispatcher) StartTemplateSync(context.Context, traits.TemplateSyncWorkflowInput) error {
+func (recordingWorkflowDispatcher) StartTemplateSync(context.Context, domain.TemplateSyncWorkflowInput) error {
 	return nil
 }
 
-func (recordingWorkflowDispatcher) ApproveTemplateRun(context.Context, traits.TenantID, traits.TemplateRunID, traits.ApprovalSignal) error {
+func (recordingWorkflowDispatcher) ApproveTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID, domain.ApprovalSignal) error {
 	return nil
 }
 
-func (recordingWorkflowDispatcher) CancelTemplateRun(context.Context, traits.TenantID, traits.TemplateRunID, traits.CancelSignal) error {
+func (recordingWorkflowDispatcher) CancelTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID, domain.CancelSignal) error {
 	return nil
 }
 
@@ -543,7 +543,7 @@ func (dispatcher *recordingQueueController) Run(ctx context.Context) {
 
 type recordingWorkerLogStore struct{}
 
-func (recordingWorkerLogStore) PutTemplateRunLog(context.Context, traits.TenantID, traits.TemplateRunID, string, io.Reader) error {
+func (recordingWorkerLogStore) PutTemplateRunLog(context.Context, domain.TenantID, domain.TemplateRunID, string, io.Reader) error {
 	return nil
 }
 

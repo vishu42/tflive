@@ -16,14 +16,14 @@ import (
 	"github.com/vishu42/tflive/internal/auth"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 type Server struct {
 	service  *app.Service
-	tenantID traits.TenantID
+	tenantID domain.TenantID
 	queue    queue.Reader
 	auth     AuthConfig
 	mux      *http.ServeMux
@@ -125,7 +125,7 @@ func requireCompleteAuthWiring(service *app.Service, auth AuthConfig) {
 	}
 }
 
-func NewServer(service *app.Service, tenantID traits.TenantID, options ...ServerOption) *Server {
+func NewServer(service *app.Service, tenantID domain.TenantID, options ...ServerOption) *Server {
 	server := &Server{
 		service:  service,
 		tenantID: tenantID,
@@ -235,7 +235,7 @@ func NewServer(service *app.Service, tenantID traits.TenantID, options ...Server
 }
 
 // NewAuthenticatedServer protects all /v1 routes and leaves health probes public.
-func NewAuthenticatedServer(service *app.Service, tenantID traits.TenantID, debug bool, options ...ServerOption) *Server {
+func NewAuthenticatedServer(service *app.Service, tenantID domain.TenantID, debug bool, options ...ServerOption) *Server {
 	server := NewServer(service, tenantID, options...)
 	server.debug = debug
 	// No verifier here. The middleware authenticates against the session store
@@ -280,7 +280,7 @@ func (server *Server) handleTenantRoute(pattern string, handler http.HandlerFunc
 
 func (server *Server) requireConfiguredTenant(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if traits.TenantID(request.PathValue("tenant_id")) != server.tenantID {
+		if domain.TenantID(request.PathValue("tenant_id")) != server.tenantID {
 			writeError(response, http.StatusNotFound, "not_found", "resource not found")
 			return
 		}
@@ -366,7 +366,7 @@ func (server *Server) handleSearchUsers(response http.ResponseWriter, request *h
 	}
 
 	users, err := server.service.SearchUsers(request.Context(), app.SearchUsersCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")),
 		Query:    q,
 		First:    first,
 		Max:      max,
@@ -397,7 +397,7 @@ func (server *Server) handleRegisterTemplate(response http.ResponseWriter, reque
 	}
 
 	registration, err := server.service.RegisterTemplate(request.Context(), app.RegisterTemplateCommand{
-		TenantID:  traits.TenantID(request.PathValue("tenant_id")),
+		TenantID:  domain.TenantID(request.PathValue("tenant_id")),
 		RepoOwner: body.RepoOwner,
 		RepoName:  body.RepoName,
 		SourceRef: body.SourceRef,
@@ -413,7 +413,7 @@ func (server *Server) handleRegisterTemplate(response http.ResponseWriter, reque
 
 func (server *Server) handleListTemplateRevisions(response http.ResponseWriter, request *http.Request) {
 	templateRevisions, err := server.service.ListTemplateRevisions(request.Context(), app.ListTemplateRevisionsCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -425,8 +425,8 @@ func (server *Server) handleListTemplateRevisions(response http.ResponseWriter, 
 
 func (server *Server) handleGetTemplateRegistration(response http.ResponseWriter, request *http.Request) {
 	registration, err := server.service.GetTemplateRegistration(request.Context(), app.GetTemplateRegistrationCommand{
-		TenantID:       traits.TenantID(request.PathValue("tenant_id")),
-		RegistrationID: traits.TemplateRegistrationID(request.PathValue("registration_id")),
+		TenantID:       domain.TenantID(request.PathValue("tenant_id")),
+		RegistrationID: domain.TemplateRegistrationID(request.PathValue("registration_id")),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -438,8 +438,8 @@ func (server *Server) handleGetTemplateRegistration(response http.ResponseWriter
 
 func (server *Server) handleGetTemplateRevisionVariables(response http.ResponseWriter, request *http.Request) {
 	variables, err := server.service.GetTemplateRevisionVariables(request.Context(), app.GetTemplateRevisionVariablesCommand{
-		TenantID:           traits.TenantID(request.PathValue("tenant_id")),
-		TemplateRevisionID: traits.TemplateRevisionID(request.PathValue("template_revision_id")),
+		TenantID:           domain.TenantID(request.PathValue("tenant_id")),
+		TemplateRevisionID: domain.TemplateRevisionID(request.PathValue("template_revision_id")),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -455,13 +455,13 @@ func (server *Server) handleCreateStack(response http.ResponseWriter, request *h
 		return
 	}
 
-	credentialIDs := make([]traits.CredentialSetID, 0, len(body.DefaultCredentialIDs))
+	credentialIDs := make([]domain.CredentialSetID, 0, len(body.DefaultCredentialIDs))
 	for _, id := range body.DefaultCredentialIDs {
-		credentialIDs = append(credentialIDs, traits.CredentialSetID(id))
+		credentialIDs = append(credentialIDs, domain.CredentialSetID(id))
 	}
 
 	stack, err := server.service.CreateStack(request.Context(), app.CreateStackCommand{
-		TenantID:             traits.TenantID(request.PathValue("tenant_id")),
+		TenantID:             domain.TenantID(request.PathValue("tenant_id")),
 		Name:                 body.Name,
 		Slug:                 body.Slug,
 		Tags:                 body.Tags,
@@ -472,7 +472,7 @@ func (server *Server) handleCreateStack(response http.ResponseWriter, request *h
 		return
 	}
 
-	caps, err := app.ResolveStackCapabilities(request.Context(), server.service.Authorizer, traits.StackID(stack.ID))
+	caps, err := app.ResolveStackCapabilities(request.Context(), server.service.Authorizer, domain.StackID(stack.ID))
 	if err != nil {
 		writeAppError(response, err)
 		return
@@ -483,7 +483,7 @@ func (server *Server) handleCreateStack(response http.ResponseWriter, request *h
 
 func (server *Server) handleListStacks(response http.ResponseWriter, request *http.Request) {
 	stacks, err := server.service.ListStacks(request.Context(), app.ListStacksCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -505,8 +505,8 @@ func (server *Server) handleListStacks(response http.ResponseWriter, request *ht
 
 func (server *Server) handleGetStack(response http.ResponseWriter, request *http.Request) {
 	view, err := server.service.GetStack(request.Context(), app.GetStackCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")),
-		StackID:  traits.StackID(request.PathValue("stack_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")),
+		StackID:  domain.StackID(request.PathValue("stack_id")),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -524,8 +524,8 @@ func (server *Server) handleCreateStackCredential(response http.ResponseWriter, 
 	}
 	server.debugf("credential create request scope=stack tenant_id=%s stack_id=%s name=%s value_present=%t", request.PathValue("tenant_id"), request.PathValue("stack_id"), body.Name, body.Value != "")
 	credential, err := server.service.CreateCredential(request.Context(), app.CreateCredentialCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")), Scope: traits.CredentialScopeStack,
-		StackID: traits.StackID(request.PathValue("stack_id")), Name: body.Name, Value: body.Value,
+		TenantID: domain.TenantID(request.PathValue("tenant_id")), Scope: domain.CredentialScopeStack,
+		StackID: domain.StackID(request.PathValue("stack_id")), Name: body.Name, Value: body.Value,
 	})
 	if err != nil {
 		server.debugf("credential create failed scope=stack tenant_id=%s stack_id=%s name=%s error=%v", request.PathValue("tenant_id"), request.PathValue("stack_id"), body.Name, err)
@@ -540,8 +540,8 @@ func (server *Server) handleCreateStackCredential(response http.ResponseWriter, 
 func (server *Server) handleListStackCredentials(response http.ResponseWriter, request *http.Request) {
 	server.debugf("credential list request scope=stack tenant_id=%s stack_id=%s", request.PathValue("tenant_id"), request.PathValue("stack_id"))
 	credentials, err := server.service.ListCredentials(request.Context(), app.ListCredentialsCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")), Scope: traits.CredentialScopeStack,
-		StackID: traits.StackID(request.PathValue("stack_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")), Scope: domain.CredentialScopeStack,
+		StackID: domain.StackID(request.PathValue("stack_id")),
 	})
 	if err != nil {
 		server.debugf("credential list failed scope=stack tenant_id=%s stack_id=%s error=%v", request.PathValue("tenant_id"), request.PathValue("stack_id"), err)
@@ -556,8 +556,8 @@ func (server *Server) handleListStackCredentials(response http.ResponseWriter, r
 func (server *Server) handleDeleteStackCredential(response http.ResponseWriter, request *http.Request) {
 	server.debugf("credential delete request scope=stack tenant_id=%s stack_id=%s credential_id=%s", request.PathValue("tenant_id"), request.PathValue("stack_id"), request.PathValue("credential_id"))
 	err := server.service.DeleteCredential(request.Context(), app.DeleteCredentialCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")), StackID: traits.StackID(request.PathValue("stack_id")),
-		CredentialID: traits.CredentialSetID(request.PathValue("credential_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")), StackID: domain.StackID(request.PathValue("stack_id")),
+		CredentialID: domain.CredentialSetID(request.PathValue("credential_id")),
 	})
 	if err != nil {
 		server.debugf("credential delete failed scope=stack tenant_id=%s stack_id=%s credential_id=%s error=%v", request.PathValue("tenant_id"), request.PathValue("stack_id"), request.PathValue("credential_id"), err)
@@ -576,8 +576,8 @@ func (server *Server) handleCreateStackTemplateCredential(response http.Response
 	}
 	server.debugf("credential create request scope=stack_template tenant_id=%s stack_template_id=%s name=%s value_present=%t", request.PathValue("tenant_id"), request.PathValue("stack_template_id"), body.Name, body.Value != "")
 	credential, err := server.service.CreateCredential(request.Context(), app.CreateCredentialCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")), Scope: traits.CredentialScopeStackTemplate,
-		StackTemplateID: traits.StackTemplateID(request.PathValue("stack_template_id")), Name: body.Name, Value: body.Value,
+		TenantID: domain.TenantID(request.PathValue("tenant_id")), Scope: domain.CredentialScopeStackTemplate,
+		StackTemplateID: domain.StackTemplateID(request.PathValue("stack_template_id")), Name: body.Name, Value: body.Value,
 	})
 	if err != nil {
 		server.debugf("credential create failed scope=stack_template tenant_id=%s stack_template_id=%s name=%s error=%v", request.PathValue("tenant_id"), request.PathValue("stack_template_id"), body.Name, err)
@@ -592,8 +592,8 @@ func (server *Server) handleCreateStackTemplateCredential(response http.Response
 func (server *Server) handleListStackTemplateCredentials(response http.ResponseWriter, request *http.Request) {
 	server.debugf("credential list request scope=stack_template tenant_id=%s stack_template_id=%s", request.PathValue("tenant_id"), request.PathValue("stack_template_id"))
 	credentials, err := server.service.ListCredentials(request.Context(), app.ListCredentialsCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")), Scope: traits.CredentialScopeStackTemplate,
-		StackTemplateID: traits.StackTemplateID(request.PathValue("stack_template_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")), Scope: domain.CredentialScopeStackTemplate,
+		StackTemplateID: domain.StackTemplateID(request.PathValue("stack_template_id")),
 	})
 	if err != nil {
 		server.debugf("credential list failed scope=stack_template tenant_id=%s stack_template_id=%s error=%v", request.PathValue("tenant_id"), request.PathValue("stack_template_id"), err)
@@ -608,8 +608,8 @@ func (server *Server) handleListStackTemplateCredentials(response http.ResponseW
 func (server *Server) handleDeleteStackTemplateCredential(response http.ResponseWriter, request *http.Request) {
 	server.debugf("credential delete request scope=stack_template tenant_id=%s stack_template_id=%s credential_id=%s", request.PathValue("tenant_id"), request.PathValue("stack_template_id"), request.PathValue("credential_id"))
 	err := server.service.DeleteCredential(request.Context(), app.DeleteCredentialCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")), StackTemplateID: traits.StackTemplateID(request.PathValue("stack_template_id")),
-		CredentialID: traits.CredentialSetID(request.PathValue("credential_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")), StackTemplateID: domain.StackTemplateID(request.PathValue("stack_template_id")),
+		CredentialID: domain.CredentialSetID(request.PathValue("credential_id")),
 	})
 	if err != nil {
 		server.debugf("credential delete failed scope=stack_template tenant_id=%s stack_template_id=%s credential_id=%s error=%v", request.PathValue("tenant_id"), request.PathValue("stack_template_id"), request.PathValue("credential_id"), err)
@@ -632,9 +632,9 @@ func (server *Server) handleAddTemplateToStack(response http.ResponseWriter, req
 	}
 
 	stackTemplate, err := server.service.AddTemplateToStack(request.Context(), app.AddTemplateToStackCommand{
-		TenantID:           traits.TenantID(request.PathValue("tenant_id")),
-		StackID:            traits.StackID(request.PathValue("stack_id")),
-		TemplateRevisionID: traits.TemplateRevisionID(body.TemplateRevisionID),
+		TenantID:           domain.TenantID(request.PathValue("tenant_id")),
+		StackID:            domain.StackID(request.PathValue("stack_id")),
+		TemplateRevisionID: domain.TemplateRevisionID(body.TemplateRevisionID),
 		ComponentKey:       body.ComponentKey,
 		ConfigJSON:         configJSON,
 	})
@@ -658,8 +658,8 @@ func (server *Server) handleUpdateStackTemplateConfig(response http.ResponseWrit
 	}
 
 	stackTemplate, err := server.service.UpdateStackTemplateConfig(request.Context(), app.UpdateStackTemplateConfigCommand{
-		TenantID:        traits.TenantID(request.PathValue("tenant_id")),
-		StackTemplateID: traits.StackTemplateID(request.PathValue("stack_template_id")),
+		TenantID:        domain.TenantID(request.PathValue("tenant_id")),
+		StackTemplateID: domain.StackTemplateID(request.PathValue("stack_template_id")),
 		ConfigJSON:      configJSON,
 	})
 	if err != nil {
@@ -686,9 +686,9 @@ func (server *Server) handleUpgradeStackTemplate(response http.ResponseWriter, r
 	}
 
 	stackTemplate, err := server.service.UpgradeStackTemplate(request.Context(), app.UpgradeStackTemplateCommand{
-		TenantID:                 traits.TenantID(request.PathValue("tenant_id")),
-		StackTemplateID:          traits.StackTemplateID(request.PathValue("stack_template_id")),
-		TargetTemplateRevisionID: traits.TemplateRevisionID(body.TargetTemplateRevisionID),
+		TenantID:                 domain.TenantID(request.PathValue("tenant_id")),
+		StackTemplateID:          domain.StackTemplateID(request.PathValue("stack_template_id")),
+		TargetTemplateRevisionID: domain.TemplateRevisionID(body.TargetTemplateRevisionID),
 		ConfigJSON:               configJSON,
 	})
 	if err != nil {
@@ -706,9 +706,9 @@ func (server *Server) handleStartTemplateRun(response http.ResponseWriter, reque
 	}
 
 	run, err := server.service.StartTemplateRun(request.Context(), app.StartTemplateRunCommand{
-		TenantID:        traits.TenantID(request.PathValue("tenant_id")),
-		StackTemplateID: traits.StackTemplateID(request.PathValue("stack_template_id")),
-		Operation:       traits.OperationType(body.Operation),
+		TenantID:        domain.TenantID(request.PathValue("tenant_id")),
+		StackTemplateID: domain.StackTemplateID(request.PathValue("stack_template_id")),
+		Operation:       domain.OperationType(body.Operation),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -720,8 +720,8 @@ func (server *Server) handleStartTemplateRun(response http.ResponseWriter, reque
 
 func (server *Server) handleGetTemplateRun(response http.ResponseWriter, request *http.Request) {
 	run, err := server.service.GetTemplateRun(request.Context(), app.GetTemplateRunCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")),
-		RunID:    traits.TemplateRunID(request.PathValue("run_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")),
+		RunID:    domain.TemplateRunID(request.PathValue("run_id")),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -733,8 +733,8 @@ func (server *Server) handleGetTemplateRun(response http.ResponseWriter, request
 
 func (server *Server) handleListTemplateRuns(response http.ResponseWriter, request *http.Request) {
 	runs, err := server.service.ListTemplateRuns(request.Context(), app.ListTemplateRunsCommand{
-		TenantID:        traits.TenantID(request.PathValue("tenant_id")),
-		StackTemplateID: traits.StackTemplateID(request.PathValue("stack_template_id")),
+		TenantID:        domain.TenantID(request.PathValue("tenant_id")),
+		StackTemplateID: domain.StackTemplateID(request.PathValue("stack_template_id")),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -746,8 +746,8 @@ func (server *Server) handleListTemplateRuns(response http.ResponseWriter, reque
 
 func (server *Server) handleGetTemplateRunLog(response http.ResponseWriter, request *http.Request) {
 	content, err := server.service.GetTemplateRunLog(request.Context(), app.GetTemplateRunLogCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")),
-		RunID:    traits.TemplateRunID(request.PathValue("run_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")),
+		RunID:    domain.TemplateRunID(request.PathValue("run_id")),
 		Phase:    request.PathValue("phase"),
 	})
 	if err != nil {
@@ -762,8 +762,8 @@ func (server *Server) handleGetTemplateRunLog(response http.ResponseWriter, requ
 
 func (server *Server) handleListTemplateRunLogs(response http.ResponseWriter, request *http.Request) {
 	logs, err := server.service.ListTemplateRunLogs(request.Context(), app.ListTemplateRunLogsCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")),
-		RunID:    traits.TemplateRunID(request.PathValue("run_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")),
+		RunID:    domain.TemplateRunID(request.PathValue("run_id")),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -780,8 +780,8 @@ func (server *Server) handleApproveRun(response http.ResponseWriter, request *ht
 	}
 
 	err := server.service.ApproveRun(request.Context(), app.ApproveRunCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")),
-		RunID:    traits.TemplateRunID(request.PathValue("run_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")),
+		RunID:    domain.TemplateRunID(request.PathValue("run_id")),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -798,8 +798,8 @@ func (server *Server) handleCancelRun(response http.ResponseWriter, request *htt
 	}
 
 	err := server.service.CancelRun(request.Context(), app.CancelRunCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")),
-		RunID:    traits.TemplateRunID(request.PathValue("run_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")),
+		RunID:    domain.TemplateRunID(request.PathValue("run_id")),
 		Reason:   body.Reason,
 	})
 	if err != nil {
@@ -934,7 +934,7 @@ func newStackViewResponse(view app.StackView) stackViewResponse {
 	}
 }
 
-func newStackResponse(stack traits.Stack, capabilities app.StackCapabilities) stackResponse {
+func newStackResponse(stack domain.Stack, capabilities app.StackCapabilities) stackResponse {
 	credentialIDs := make([]string, 0, len(stack.DefaultCredentialIDs))
 	for _, id := range stack.DefaultCredentialIDs {
 		credentialIDs = append(credentialIDs, string(id))
@@ -950,7 +950,7 @@ func newStackResponse(stack traits.Stack, capabilities app.StackCapabilities) st
 	// can leave a stack provisioning.
 	status := string(stack.Status)
 	if status == "" {
-		status = string(traits.StackStatusReady)
+		status = string(domain.StackStatusReady)
 	}
 
 	return stackResponse{
@@ -1015,8 +1015,8 @@ func newStackTemplateResponse(view app.StackTemplateView) stackTemplateResponse 
 
 func (server *Server) handleListStackGrants(response http.ResponseWriter, request *http.Request) {
 	result, err := server.service.ListStackGrants(request.Context(), app.ListStackGrantsCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")),
-		StackID:  traits.StackID(request.PathValue("stack_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")),
+		StackID:  domain.StackID(request.PathValue("stack_id")),
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -1039,8 +1039,8 @@ func (server *Server) handleAssignStackRole(response http.ResponseWriter, reques
 	}
 
 	grant, err := server.service.AssignStackRole(request.Context(), app.AssignStackRoleCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")),
-		StackID:  traits.StackID(request.PathValue("stack_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")),
+		StackID:  domain.StackID(request.PathValue("stack_id")),
 		UserSub:  body.UserSub,
 		Role:     body.Role,
 	})
@@ -1059,8 +1059,8 @@ type assignStackRoleRequest struct {
 
 func (server *Server) handleRevokeStackRole(response http.ResponseWriter, request *http.Request) {
 	err := server.service.RevokeStackRole(request.Context(), app.RevokeStackRoleCommand{
-		TenantID: traits.TenantID(request.PathValue("tenant_id")),
-		StackID:  traits.StackID(request.PathValue("stack_id")),
+		TenantID: domain.TenantID(request.PathValue("tenant_id")),
+		StackID:  domain.StackID(request.PathValue("stack_id")),
 		UserSub:  request.PathValue("user_sub"),
 	})
 	if err != nil {

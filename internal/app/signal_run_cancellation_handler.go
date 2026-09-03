@@ -8,8 +8,8 @@ import (
 
 	"go.temporal.io/api/serviceerror"
 
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 const KindSignalRunCancellation queue.Kind = "signal_run_cancellation"
@@ -17,15 +17,15 @@ const KindSignalRunCancellation queue.Kind = "signal_run_cancellation"
 // SignalRunCancellationPayload carries the complete cancellation event for one run.
 // It intentionally has no JSON tags: persisted JSON uses its Go field names.
 type SignalRunCancellationPayload struct {
-	TenantID traits.TenantID
-	RunID    traits.TemplateRunID
-	Signal   traits.CancelSignal
+	TenantID domain.TenantID
+	RunID    domain.TemplateRunID
+	Signal   domain.CancelSignal
 }
 
 // TemplateRunCancellationReconciler resolves a persisted cancellation request
 // after Temporal reports the run is already closed.
 type TemplateRunCancellationReconciler interface {
-	ReconcileTemplateRunCancellation(context.Context, traits.TenantID, traits.TemplateRunID, string) error
+	ReconcileTemplateRunCancellation(context.Context, domain.TenantID, domain.TemplateRunID, string) error
 }
 
 var SignalRunCancellationSpec = queue.Spec{Kind: KindSignalRunCancellation, Mode: queue.ModeJob, Key: signalRunCancellationKey}

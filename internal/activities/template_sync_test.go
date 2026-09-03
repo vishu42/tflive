@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 func TestRecordTemplateRegistrationStatusDelegatesToRecorder(t *testing.T) {
@@ -16,10 +16,10 @@ func TestRecordTemplateRegistrationStatusDelegatesToRecorder(t *testing.T) {
 
 	store := &recordingTemplateSyncStore{}
 	activities := NewTemplateSyncActivities(store)
-	input := traits.TemplateRegistrationStatusActivityInput{
-		RegistrationID: traits.TemplateRegistrationID("template_registration_123"),
-		TenantID:       traits.TenantID("tenant_123"),
-		Status:         traits.TemplateRegistrationRunning,
+	input := domain.TemplateRegistrationStatusActivityInput{
+		RegistrationID: domain.TemplateRegistrationID("template_registration_123"),
+		TenantID:       domain.TenantID("tenant_123"),
+		Status:         domain.TemplateRegistrationRunning,
 	}
 
 	if err := activities.RecordTemplateRegistrationStatus(context.Background(), input); err != nil {
@@ -66,9 +66,9 @@ variable "cidr" {
 		WithTemplateSyncTempRoot(t.TempDir()),
 	)
 
-	output, err := activities.SyncTemplate(context.Background(), traits.TemplateSyncActivityInput{
-		RegistrationID: traits.TemplateRegistrationID("template_registration_123"),
-		TenantID:       traits.TenantID("tenant_123"),
+	output, err := activities.SyncTemplate(context.Background(), domain.TemplateSyncActivityInput{
+		RegistrationID: domain.TemplateRegistrationID("template_registration_123"),
+		TenantID:       domain.TenantID("tenant_123"),
 		RepoOwner:      "acme",
 		RepoName:       "infra-templates",
 		SourceRef:      "v0.0.1",
@@ -78,7 +78,7 @@ variable "cidr" {
 		t.Fatalf("SyncTemplate returned error: %v", err)
 	}
 
-	if output.Status != traits.TemplateRegistrationCompleted {
+	if output.Status != domain.TemplateRegistrationCompleted {
 		t.Fatalf("status = %q, want completed", output.Status)
 	}
 	if output.ResolvedCommitSHA != "abc123" {
@@ -118,8 +118,8 @@ func TestSyncTemplateRejectsUnsafeRootPath(t *testing.T) {
 		WithTemplateSyncTempRoot(t.TempDir()),
 	)
 
-	output, err := activities.SyncTemplate(context.Background(), traits.TemplateSyncActivityInput{
-		TenantID:  traits.TenantID("tenant_123"),
+	output, err := activities.SyncTemplate(context.Background(), domain.TemplateSyncActivityInput{
+		TenantID:  domain.TenantID("tenant_123"),
 		RepoOwner: "acme",
 		RepoName:  "infra-templates",
 		SourceRef: "v0.0.1",
@@ -128,7 +128,7 @@ func TestSyncTemplateRejectsUnsafeRootPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncTemplate returned error: %v", err)
 	}
-	if output.Status != traits.TemplateRegistrationInvalid {
+	if output.Status != domain.TemplateRegistrationInvalid {
 		t.Fatalf("status = %q, want invalid", output.Status)
 	}
 	if !strings.Contains(output.ErrorSummary, "root path") {
@@ -156,8 +156,8 @@ func TestSyncTemplateSupportsRepositoryRootPath(t *testing.T) {
 		WithTemplateSyncTempRoot(t.TempDir()),
 	)
 
-	output, err := activities.SyncTemplate(context.Background(), traits.TemplateSyncActivityInput{
-		TenantID:  traits.TenantID("tenant_123"),
+	output, err := activities.SyncTemplate(context.Background(), domain.TemplateSyncActivityInput{
+		TenantID:  domain.TenantID("tenant_123"),
 		RepoOwner: "acme",
 		RepoName:  "infra-templates",
 		SourceRef: "v0.0.1",
@@ -166,7 +166,7 @@ func TestSyncTemplateSupportsRepositoryRootPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncTemplate returned error: %v", err)
 	}
-	if output.Status != traits.TemplateRegistrationCompleted {
+	if output.Status != domain.TemplateRegistrationCompleted {
 		t.Fatalf("status = %q, want completed", output.Status)
 	}
 	if store.template.RootPath != "." {
@@ -203,8 +203,8 @@ variable "password" {
 		WithTemplateSyncTempRoot(t.TempDir()),
 	)
 
-	output, err := activities.SyncTemplate(context.Background(), traits.TemplateSyncActivityInput{
-		TenantID:  traits.TenantID("tenant_123"),
+	output, err := activities.SyncTemplate(context.Background(), domain.TemplateSyncActivityInput{
+		TenantID:  domain.TenantID("tenant_123"),
 		RepoOwner: "acme",
 		RepoName:  "infra-templates",
 		SourceRef: "v0.0.1",
@@ -213,7 +213,7 @@ variable "password" {
 	if err != nil {
 		t.Fatalf("SyncTemplate returned error: %v", err)
 	}
-	if output.Status != traits.TemplateRegistrationInvalid {
+	if output.Status != domain.TemplateRegistrationInvalid {
 		t.Fatalf("status = %q, want invalid", output.Status)
 	}
 	if !strings.Contains(output.ErrorSummary, "sensitive variables") {
@@ -228,9 +228,9 @@ func TestSyncTemplateReturnsExistingImmutableTemplate(t *testing.T) {
 	t.Parallel()
 
 	store := &recordingTemplateSyncStore{
-		upsertTemplate: traits.TemplateRevision{
-			ID:                traits.TemplateRevisionID("template_existing"),
-			TenantID:          traits.TenantID("tenant_123"),
+		upsertTemplate: domain.TemplateRevision{
+			ID:                domain.TemplateRevisionID("template_existing"),
+			TenantID:          domain.TenantID("tenant_123"),
 			ResolvedCommitSHA: "abc123",
 		},
 	}
@@ -251,8 +251,8 @@ func TestSyncTemplateReturnsExistingImmutableTemplate(t *testing.T) {
 		WithTemplateSyncTempRoot(t.TempDir()),
 	)
 
-	output, err := activities.SyncTemplate(context.Background(), traits.TemplateSyncActivityInput{
-		TenantID:  traits.TenantID("tenant_123"),
+	output, err := activities.SyncTemplate(context.Background(), domain.TemplateSyncActivityInput{
+		TenantID:  domain.TenantID("tenant_123"),
 		RepoOwner: "acme",
 		RepoName:  "infra-templates",
 		SourceRef: "v0.0.1",
@@ -261,21 +261,21 @@ func TestSyncTemplateReturnsExistingImmutableTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncTemplate returned error: %v", err)
 	}
-	if output.TemplateRevisionID != traits.TemplateRevisionID("template_existing") {
+	if output.TemplateRevisionID != domain.TemplateRevisionID("template_existing") {
 		t.Fatalf("template revision ID = %q, want template_existing", output.TemplateRevisionID)
 	}
 }
 
 type recordingTemplateSyncStore struct {
-	statusInput    traits.TemplateRegistrationStatusActivityInput
+	statusInput    domain.TemplateRegistrationStatusActivityInput
 	statusErr      error
-	template       traits.TemplateRevision
-	variables      []traits.TemplateVariable
-	upsertTemplate traits.TemplateRevision
+	template       domain.TemplateRevision
+	variables      []domain.TemplateVariable
+	upsertTemplate domain.TemplateRevision
 	upsertErr      error
 }
 
-func (store *recordingTemplateSyncStore) RecordTemplateRegistrationStatus(_ context.Context, input traits.TemplateRegistrationStatusActivityInput) error {
+func (store *recordingTemplateSyncStore) RecordTemplateRegistrationStatus(_ context.Context, input domain.TemplateRegistrationStatusActivityInput) error {
 	if store.statusErr != nil {
 		return store.statusErr
 	}
@@ -283,11 +283,11 @@ func (store *recordingTemplateSyncStore) RecordTemplateRegistrationStatus(_ cont
 	return nil
 }
 
-func (store *recordingTemplateSyncStore) UpsertTemplateRevisionWithVariables(_ context.Context, template traits.TemplateRevision, variables []traits.TemplateVariable) (traits.TemplateRevision, error) {
+func (store *recordingTemplateSyncStore) UpsertTemplateRevisionWithVariables(_ context.Context, template domain.TemplateRevision, variables []domain.TemplateVariable) (domain.TemplateRevision, error) {
 	store.template = template
 	store.variables = variables
 	if store.upsertErr != nil {
-		return traits.TemplateRevision{}, store.upsertErr
+		return domain.TemplateRevision{}, store.upsertErr
 	}
 	if store.upsertTemplate.ID != "" {
 		return store.upsertTemplate, nil

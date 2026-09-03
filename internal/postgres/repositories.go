@@ -12,14 +12,14 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vishu42/tflive/internal/app"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
-func (store *Store) CreateTemplateRegistration(ctx context.Context, registration traits.TemplateRegistration) error {
+func (store *Store) CreateTemplateRegistration(ctx context.Context, registration domain.TemplateRegistration) error {
 	return createTemplateRegistration(ctx, store.pool, registration)
 }
 
-func createTemplateRegistration(ctx context.Context, exec pgxExecutor, registration traits.TemplateRegistration) error {
+func createTemplateRegistration(ctx context.Context, exec pgxExecutor, registration domain.TemplateRegistration) error {
 	_, err := exec.Exec(ctx, `
 		insert into template_registrations (
 			id,
@@ -61,7 +61,7 @@ func createTemplateRegistration(ctx context.Context, exec pgxExecutor, registrat
 }
 
 // CreateCredential stores one already-encrypted credential under exactly one scope owner.
-func (store *Store) CreateCredential(ctx context.Context, credential traits.CredentialSet) error {
+func (store *Store) CreateCredential(ctx context.Context, credential domain.CredentialSet) error {
 	_, err := store.pool.Exec(ctx, `
 		insert into scoped_credentials (id, tenant_id, stack_id, stack_template_id, name, ciphertext, created_at)
 		values ($1, $2, nullif($3, ''), nullif($4, ''), $5, $6, $7)
@@ -76,12 +76,12 @@ func (store *Store) CreateCredential(ctx context.Context, credential traits.Cred
 }
 
 // ListCredentials returns encrypted credential records owned directly by one scope owner.
-func (store *Store) ListCredentials(ctx context.Context, tenantID traits.TenantID, scope traits.CredentialScope, ownerID string) ([]traits.CredentialSet, error) {
+func (store *Store) ListCredentials(ctx context.Context, tenantID domain.TenantID, scope domain.CredentialScope, ownerID string) ([]domain.CredentialSet, error) {
 	column := "stack_id"
-	if scope == traits.CredentialScopeStackTemplate {
+	if scope == domain.CredentialScopeStackTemplate {
 		column = "stack_template_id"
 	}
-	if scope != traits.CredentialScopeStack && scope != traits.CredentialScopeStackTemplate {
+	if scope != domain.CredentialScopeStack && scope != domain.CredentialScopeStackTemplate {
 		return nil, app.ErrInvalidCommand
 	}
 	rows, err := store.pool.Query(ctx, fmt.Sprintf(`
@@ -98,7 +98,7 @@ func (store *Store) ListCredentials(ctx context.Context, tenantID traits.TenantI
 }
 
 // DeleteCredential removes one tenant-owned credential record by ID.
-func (store *Store) DeleteCredential(ctx context.Context, tenantID traits.TenantID, id traits.CredentialSetID) error {
+func (store *Store) DeleteCredential(ctx context.Context, tenantID domain.TenantID, id domain.CredentialSetID) error {
 	result, err := store.pool.Exec(ctx, `delete from scoped_credentials where tenant_id = $1 and id = $2`, tenantID, id)
 	if err != nil {
 		return fmt.Errorf("delete credential: %w", err)
@@ -110,7 +110,7 @@ func (store *Store) DeleteCredential(ctx context.Context, tenantID traits.Tenant
 }
 
 // ListCredentialsForStackTemplate returns stack credentials plus template credentials for runtime inheritance.
-func (store *Store) ListCredentialsForStackTemplate(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID) ([]traits.CredentialSet, error) {
+func (store *Store) ListCredentialsForStackTemplate(ctx context.Context, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID) ([]domain.CredentialSet, error) {
 	rows, err := store.pool.Query(ctx, `
 		select c.id, c.tenant_id, c.stack_id, c.stack_template_id, c.name, c.ciphertext, c.created_at
 		from scoped_credentials c
@@ -132,20 +132,20 @@ type credentialRows interface {
 }
 
 // scanCredentials converts nullable scope-owner columns into credential domain records.
-func scanCredentials(rows credentialRows) ([]traits.CredentialSet, error) {
-	credentials := make([]traits.CredentialSet, 0)
+func scanCredentials(rows credentialRows) ([]domain.CredentialSet, error) {
+	credentials := make([]domain.CredentialSet, 0)
 	for rows.Next() {
-		var credential traits.CredentialSet
+		var credential domain.CredentialSet
 		var stackID sql.NullString
 		var stackTemplateID sql.NullString
 		if err := rows.Scan(&credential.ID, &credential.TenantID, &stackID, &stackTemplateID, &credential.Name, &credential.Ciphertext, &credential.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan credential: %w", err)
 		}
 		if stackID.Valid {
-			credential.StackID = traits.StackID(stackID.String)
+			credential.StackID = domain.StackID(stackID.String)
 		}
 		if stackTemplateID.Valid {
-			credential.StackTemplateID = traits.StackTemplateID(stackTemplateID.String)
+			credential.StackTemplateID = domain.StackTemplateID(stackTemplateID.String)
 		}
 		credentials = append(credentials, credential)
 	}
@@ -155,8 +155,8 @@ func scanCredentials(rows credentialRows) ([]traits.CredentialSet, error) {
 	return credentials, nil
 }
 
-func (store *Store) GetTemplateRegistration(ctx context.Context, tenantID traits.TenantID, id traits.TemplateRegistrationID) (traits.TemplateRegistration, error) {
-	var registration traits.TemplateRegistration
+func (store *Store) GetTemplateRegistration(ctx context.Context, tenantID domain.TenantID, id domain.TemplateRegistrationID) (domain.TemplateRegistration, error) {
+	var registration domain.TemplateRegistration
 	var completedAt sql.NullTime
 	err := store.pool.QueryRow(ctx, `
 		select
@@ -192,10 +192,10 @@ func (store *Store) GetTemplateRegistration(ctx context.Context, tenantID traits
 		&registration.ErrorSummary,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return traits.TemplateRegistration{}, app.ErrNotFound
+		return domain.TemplateRegistration{}, app.ErrNotFound
 	}
 	if err != nil {
-		return traits.TemplateRegistration{}, fmt.Errorf("get template registration: %w", err)
+		return domain.TemplateRegistration{}, fmt.Errorf("get template registration: %w", err)
 	}
 	if completedAt.Valid {
 		registration.CompletedAt = completedAt.Time
@@ -203,7 +203,7 @@ func (store *Store) GetTemplateRegistration(ctx context.Context, tenantID traits
 	return registration, nil
 }
 
-func (store *Store) RecordTemplateRegistrationStatus(ctx context.Context, input traits.TemplateRegistrationStatusActivityInput) error {
+func (store *Store) RecordTemplateRegistrationStatus(ctx context.Context, input domain.TemplateRegistrationStatusActivityInput) error {
 	var err error
 	if terminalTemplateRegistrationStatus(input.Status) {
 		_, err = store.pool.Exec(ctx, `
@@ -261,16 +261,16 @@ func (store *Store) RecordTemplateRegistrationStatus(ctx context.Context, input 
 // an existing revision with the same identity. The source template is resolved or created
 // first so the revision can reference it; variables are only written when this call actually
 // inserts a new revision, since a reused revision already has its variables recorded.
-func (store *Store) UpsertTemplateRevisionWithVariables(ctx context.Context, templateRevision traits.TemplateRevision, variables []traits.TemplateVariable) (traits.TemplateRevision, error) {
+func (store *Store) UpsertTemplateRevisionWithVariables(ctx context.Context, templateRevision domain.TemplateRevision, variables []domain.TemplateVariable) (domain.TemplateRevision, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return traits.TemplateRevision{}, fmt.Errorf("begin upsert template revision: %w", err)
+		return domain.TemplateRevision{}, fmt.Errorf("begin upsert template revision: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
 	tagsJSON, err := json.Marshal(templateRevision.Tags)
 	if err != nil {
-		return traits.TemplateRevision{}, fmt.Errorf("marshal template revision tags: %w", err)
+		return domain.TemplateRevision{}, fmt.Errorf("marshal template revision tags: %w", err)
 	}
 	if tagsJSON == nil {
 		// Store an empty JSON array rather than a null tags column.
@@ -279,22 +279,22 @@ func (store *Store) UpsertTemplateRevisionWithVariables(ctx context.Context, tem
 
 	sourceTemplateID, err := upsertSourceTemplate(ctx, tx, templateRevision)
 	if err != nil {
-		return traits.TemplateRevision{}, err
+		return domain.TemplateRevision{}, err
 	}
 	templateRevision.SourceTemplateID = sourceTemplateID
 
 	inserted, insertedNew, err := insertTemplateRevision(ctx, tx, templateRevision, tagsJSON)
 	if err != nil {
-		return traits.TemplateRevision{}, err
+		return domain.TemplateRevision{}, err
 	}
 	if err := recordLatestTemplateRevision(ctx, tx, inserted); err != nil {
-		return traits.TemplateRevision{}, err
+		return domain.TemplateRevision{}, err
 	}
 	if !insertedNew {
 		// Revision already existed under this identity, so its variables were already
 		// recorded on the original insert — skip re-inserting them.
 		if err := tx.Commit(ctx); err != nil {
-			return traits.TemplateRevision{}, fmt.Errorf("commit reused template revision: %w", err)
+			return domain.TemplateRevision{}, fmt.Errorf("commit reused template revision: %w", err)
 		}
 		return inserted, nil
 	}
@@ -321,17 +321,17 @@ func (store *Store) UpsertTemplateRevisionWithVariables(ctx context.Context, tem
 			variable.Sensitive,
 			variable.HasValidation,
 		); err != nil {
-			return traits.TemplateRevision{}, fmt.Errorf("insert template revision variable %q: %w", variable.Name, err)
+			return domain.TemplateRevision{}, fmt.Errorf("insert template revision variable %q: %w", variable.Name, err)
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return traits.TemplateRevision{}, fmt.Errorf("commit upsert template revision: %w", err)
+		return domain.TemplateRevision{}, fmt.Errorf("commit upsert template revision: %w", err)
 	}
 	return inserted, nil
 }
 
-func (store *Store) GetTemplateRevisionVariables(ctx context.Context, tenantID traits.TenantID, templateRevisionID traits.TemplateRevisionID) ([]traits.TemplateVariable, error) {
+func (store *Store) GetTemplateRevisionVariables(ctx context.Context, tenantID domain.TenantID, templateRevisionID domain.TemplateRevisionID) ([]domain.TemplateVariable, error) {
 	var exists bool
 	if err := store.pool.QueryRow(ctx, `
 		select exists (
@@ -366,9 +366,9 @@ func (store *Store) GetTemplateRevisionVariables(ctx context.Context, tenantID t
 	}
 	defer rows.Close()
 
-	var variables []traits.TemplateVariable
+	var variables []domain.TemplateVariable
 	for rows.Next() {
-		var variable traits.TemplateVariable
+		var variable domain.TemplateVariable
 		if err := rows.Scan(
 			&variable.TemplateRevisionID,
 			&variable.Name,
@@ -389,7 +389,7 @@ func (store *Store) GetTemplateRevisionVariables(ctx context.Context, tenantID t
 	return variables, nil
 }
 
-func (store *Store) ListTemplateRevisions(ctx context.Context, tenantID traits.TenantID) ([]traits.TemplateRevision, error) {
+func (store *Store) ListTemplateRevisions(ctx context.Context, tenantID domain.TenantID) ([]domain.TemplateRevision, error) {
 	rows, err := store.pool.Query(ctx, `
 		select
 			id,
@@ -414,7 +414,7 @@ func (store *Store) ListTemplateRevisions(ctx context.Context, tenantID traits.T
 	}
 	defer rows.Close()
 
-	var templateRevisions []traits.TemplateRevision
+	var templateRevisions []domain.TemplateRevision
 	for rows.Next() {
 		templateRevision, err := scanTemplateRevision(rows)
 		if err != nil {
@@ -428,7 +428,7 @@ func (store *Store) ListTemplateRevisions(ctx context.Context, tenantID traits.T
 	return templateRevisions, nil
 }
 
-func (store *Store) CreateStack(ctx context.Context, stack traits.Stack) error {
+func (store *Store) CreateStack(ctx context.Context, stack domain.Stack) error {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin create stack: %w", err)
@@ -443,7 +443,7 @@ func (store *Store) CreateStack(ctx context.Context, stack traits.Stack) error {
 	return nil
 }
 
-func insertStack(ctx context.Context, tx pgx.Tx, stack traits.Stack) error {
+func insertStack(ctx context.Context, tx pgx.Tx, stack domain.Stack) error {
 	tagsJSON, err := json.Marshal(stack.Tags)
 	if err != nil {
 		return fmt.Errorf("marshal stack tags: %w", err)
@@ -464,7 +464,7 @@ func insertStack(ctx context.Context, tx pgx.Tx, stack traits.Stack) error {
 	// so only the queue-driven creation path can leave a stack pending.
 	status := stack.Status
 	if status == "" {
-		status = traits.StackStatusReady
+		status = domain.StackStatusReady
 	}
 
 	_, err = tx.Exec(ctx, `
@@ -503,13 +503,13 @@ func insertStack(ctx context.Context, tx pgx.Tx, stack traits.Stack) error {
 // idempotent by construction: running it against an already ready stack is a
 // no-op update, which is what makes at-least-once delivery of the
 // mark_stack_ready kind safe.
-func (store *Store) MarkStackReady(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) error {
+func (store *Store) MarkStackReady(ctx context.Context, tenantID domain.TenantID, stackID domain.StackID) error {
 	result, err := store.pool.Exec(ctx, `
 		update stacks
 		   set status = $3
 		 where tenant_id = $1
 		   and id = $2
-	`, tenantID, stackID, string(traits.StackStatusReady))
+	`, tenantID, stackID, string(domain.StackStatusReady))
 	if err != nil {
 		return fmt.Errorf("mark stack ready: %w", err)
 	}
@@ -519,15 +519,15 @@ func (store *Store) MarkStackReady(ctx context.Context, tenantID traits.TenantID
 	return nil
 }
 
-func (store *Store) GetStack(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error) {
+func (store *Store) GetStack(ctx context.Context, tenantID domain.TenantID, stackID domain.StackID) (domain.Stack, error) {
 	stack, err := store.getStack(ctx, tenantID, stackID)
 	if err != nil {
-		return traits.Stack{}, err
+		return domain.Stack{}, err
 	}
 	return stack, nil
 }
 
-func (store *Store) ListStacks(ctx context.Context, tenantID traits.TenantID) ([]traits.Stack, error) {
+func (store *Store) ListStacks(ctx context.Context, tenantID domain.TenantID) ([]domain.Stack, error) {
 	rows, err := store.pool.Query(ctx, `
 		select
 			id,
@@ -548,7 +548,7 @@ func (store *Store) ListStacks(ctx context.Context, tenantID traits.TenantID) ([
 	}
 	defer rows.Close()
 
-	var stacks []traits.Stack
+	var stacks []domain.Stack
 	for rows.Next() {
 		stack, err := scanStack(rows)
 		if err != nil {
@@ -562,12 +562,12 @@ func (store *Store) ListStacks(ctx context.Context, tenantID traits.TenantID) ([
 	return stacks, nil
 }
 
-func (store *Store) ListStacksPage(ctx context.Context, tenantID traits.TenantID, after *app.StackPageCursor, limit int) ([]traits.Stack, error) {
+func (store *Store) ListStacksPage(ctx context.Context, tenantID domain.TenantID, after *app.StackPageCursor, limit int) ([]domain.Stack, error) {
 	if limit <= 0 {
 		return nil, fmt.Errorf("stack page limit must be positive")
 	}
 	var afterCreatedAt any
-	var afterID traits.StackID
+	var afterID domain.StackID
 	if after != nil {
 		afterCreatedAt = after.CreatedAt
 		afterID = after.ID
@@ -594,7 +594,7 @@ func (store *Store) ListStacksPage(ctx context.Context, tenantID traits.TenantID
 	}
 	defer rows.Close()
 
-	stacks := make([]traits.Stack, 0, limit)
+	stacks := make([]domain.Stack, 0, limit)
 	for rows.Next() {
 		stack, err := scanStack(rows)
 		if err != nil {
@@ -608,7 +608,7 @@ func (store *Store) ListStacksPage(ctx context.Context, tenantID traits.TenantID
 	return stacks, nil
 }
 
-func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (app.StackView, error) {
+func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID domain.TenantID, stackID domain.StackID) (app.StackView, error) {
 	stack, err := store.getStack(ctx, tenantID, stackID)
 	if err != nil {
 		return app.StackView{}, err
@@ -640,7 +640,7 @@ func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.T
 			and stack_id = $2
 			and lifecycle != $3
 		order by id
-	`, tenantID, stackID, traits.StackTemplateDestroyed)
+	`, tenantID, stackID, domain.StackTemplateDestroyed)
 	if err != nil {
 		return app.StackView{}, fmt.Errorf("get stack templates: %w", err)
 	}
@@ -663,7 +663,7 @@ func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID traits.T
 	return app.StackView{Stack: stack, Templates: templates}, nil
 }
 
-func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate traits.StackTemplate) error {
+func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate domain.StackTemplate) error {
 	configJSON := stackTemplate.InstalledConfigJSON
 	if len(configJSON) == 0 {
 		configJSON = json.RawMessage(`{}`)
@@ -740,7 +740,7 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate trait
 	return nil
 }
 
-func (store *Store) GetTemplateRevision(ctx context.Context, tenantID traits.TenantID, templateRevisionID traits.TemplateRevisionID) (traits.TemplateRevision, error) {
+func (store *Store) GetTemplateRevision(ctx context.Context, tenantID domain.TenantID, templateRevisionID domain.TemplateRevisionID) (domain.TemplateRevision, error) {
 	row := store.pool.QueryRow(ctx, `
 		select
 			id,
@@ -762,15 +762,15 @@ func (store *Store) GetTemplateRevision(ctx context.Context, tenantID traits.Ten
 	`, tenantID, templateRevisionID)
 	templateRevision, err := scanTemplateRevision(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return traits.TemplateRevision{}, app.ErrNotFound
+		return domain.TemplateRevision{}, app.ErrNotFound
 	}
 	if err != nil {
-		return traits.TemplateRevision{}, fmt.Errorf("get template revision: %w", err)
+		return domain.TemplateRevision{}, fmt.Errorf("get template revision: %w", err)
 	}
 	return templateRevision, nil
 }
 
-func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID) (traits.StackTemplate, error) {
+func (store *Store) GetStackTemplate(ctx context.Context, tenantID domain.TenantID, id domain.StackTemplateID) (domain.StackTemplate, error) {
 	row := store.pool.QueryRow(ctx, `
 		select
 			id,
@@ -798,15 +798,15 @@ func (store *Store) GetStackTemplate(ctx context.Context, tenantID traits.Tenant
 	`, tenantID, id)
 	stackTemplate, scanErr := scanStackTemplate(row)
 	if errors.Is(scanErr, pgx.ErrNoRows) {
-		return traits.StackTemplate{}, app.ErrNotFound
+		return domain.StackTemplate{}, app.ErrNotFound
 	}
 	if scanErr != nil {
-		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", scanErr)
+		return domain.StackTemplate{}, fmt.Errorf("get stack template: %w", scanErr)
 	}
 	return stackTemplate, nil
 }
 
-func (store *Store) UpdateStackTemplateConfig(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID, configJSON json.RawMessage) (traits.StackTemplate, error) {
+func (store *Store) UpdateStackTemplateConfig(ctx context.Context, tenantID domain.TenantID, id domain.StackTemplateID, configJSON json.RawMessage) (domain.StackTemplate, error) {
 	row := store.pool.QueryRow(ctx, `
 		update stack_templates
 		set desired_config_json = $1::jsonb
@@ -835,15 +835,15 @@ func (store *Store) UpdateStackTemplateConfig(ctx context.Context, tenantID trai
 	`, defaultJSON(configJSON), tenantID, id)
 	stackTemplate, err := scanStackTemplate(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return traits.StackTemplate{}, app.ErrNotFound
+		return domain.StackTemplate{}, app.ErrNotFound
 	}
 	if err != nil {
-		return traits.StackTemplate{}, fmt.Errorf("update stack template config: %w", err)
+		return domain.StackTemplate{}, fmt.Errorf("update stack template config: %w", err)
 	}
 	return stackTemplate, nil
 }
 
-func (store *Store) UpdateStackTemplateDesiredRevision(ctx context.Context, tenantID traits.TenantID, id traits.StackTemplateID, templateRevisionID traits.TemplateRevisionID, configJSON json.RawMessage) (traits.StackTemplate, error) {
+func (store *Store) UpdateStackTemplateDesiredRevision(ctx context.Context, tenantID domain.TenantID, id domain.StackTemplateID, templateRevisionID domain.TemplateRevisionID, configJSON json.RawMessage) (domain.StackTemplate, error) {
 	row := store.pool.QueryRow(ctx, `
 		update stack_templates
 		set
@@ -874,15 +874,15 @@ func (store *Store) UpdateStackTemplateDesiredRevision(ctx context.Context, tena
 	`, templateRevisionID, defaultJSON(configJSON), tenantID, id)
 	stackTemplate, err := scanStackTemplate(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return traits.StackTemplate{}, app.ErrNotFound
+		return domain.StackTemplate{}, app.ErrNotFound
 	}
 	if err != nil {
-		return traits.StackTemplate{}, fmt.Errorf("update stack template desired revision: %w", err)
+		return domain.StackTemplate{}, fmt.Errorf("update stack template desired revision: %w", err)
 	}
 	return stackTemplate, nil
 }
 
-func (store *Store) CreateTemplateRun(ctx context.Context, run traits.TemplateRun) error {
+func (store *Store) CreateTemplateRun(ctx context.Context, run domain.TemplateRun) error {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin create template run: %w", err)
@@ -900,7 +900,7 @@ func (store *Store) CreateTemplateRun(ctx context.Context, run traits.TemplateRu
 	return nil
 }
 
-func createTemplateRun(ctx context.Context, exec pgxExecutor, run traits.TemplateRun) error {
+func createTemplateRun(ctx context.Context, exec pgxExecutor, run domain.TemplateRun) error {
 	_, err := exec.Exec(ctx, `
 		insert into template_runs (
 			id,
@@ -950,8 +950,8 @@ func createTemplateRun(ctx context.Context, exec pgxExecutor, run traits.Templat
 	return nil
 }
 
-func (store *Store) GetTemplateRun(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID) (traits.TemplateRun, error) {
-	var run traits.TemplateRun
+func (store *Store) GetTemplateRun(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID) (domain.TemplateRun, error) {
+	var run domain.TemplateRun
 	var startedAt sql.NullTime
 	var completedAt sql.NullTime
 
@@ -997,10 +997,10 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID traits.TenantID
 		&run.ErrorSummary,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return traits.TemplateRun{}, app.ErrNotFound
+		return domain.TemplateRun{}, app.ErrNotFound
 	}
 	if err != nil {
-		return traits.TemplateRun{}, fmt.Errorf("get template run: %w", err)
+		return domain.TemplateRun{}, fmt.Errorf("get template run: %w", err)
 	}
 
 	if startedAt.Valid {
@@ -1013,7 +1013,7 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID traits.TenantID
 	return run, nil
 }
 
-func (store *Store) ListTemplateRuns(ctx context.Context, tenantID traits.TenantID, stackTemplateID traits.StackTemplateID) ([]traits.TemplateRun, error) {
+func (store *Store) ListTemplateRuns(ctx context.Context, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID) ([]domain.TemplateRun, error) {
 	rows, err := store.pool.Query(ctx, `
 		select
 			id,
@@ -1043,9 +1043,9 @@ func (store *Store) ListTemplateRuns(ctx context.Context, tenantID traits.Tenant
 	}
 	defer rows.Close()
 
-	runs := []traits.TemplateRun{}
+	runs := []domain.TemplateRun{}
 	for rows.Next() {
-		var run traits.TemplateRun
+		var run domain.TemplateRun
 		var startedAt sql.NullTime
 		var completedAt sql.NullTime
 		if err := rows.Scan(
@@ -1084,7 +1084,7 @@ func (store *Store) ListTemplateRuns(ctx context.Context, tenantID traits.Tenant
 	return runs, nil
 }
 
-func (store *Store) RecordTemplateRunLog(ctx context.Context, log traits.TemplateRunLog) error {
+func (store *Store) RecordTemplateRunLog(ctx context.Context, log domain.TemplateRunLog) error {
 	result, err := store.pool.Exec(ctx, `
 		insert into template_run_logs (
 			tenant_id,
@@ -1125,8 +1125,8 @@ func (store *Store) RecordTemplateRunLog(ctx context.Context, log traits.Templat
 	return nil
 }
 
-func (store *Store) GetTemplateRunLog(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, phase string) (traits.TemplateRunLog, error) {
-	var log traits.TemplateRunLog
+func (store *Store) GetTemplateRunLog(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string) (domain.TemplateRunLog, error) {
+	var log domain.TemplateRunLog
 	err := store.pool.QueryRow(ctx, `
 		select
 			tenant_id,
@@ -1150,15 +1150,15 @@ func (store *Store) GetTemplateRunLog(ctx context.Context, tenantID traits.Tenan
 		&log.UploadedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return traits.TemplateRunLog{}, app.ErrNotFound
+		return domain.TemplateRunLog{}, app.ErrNotFound
 	}
 	if err != nil {
-		return traits.TemplateRunLog{}, fmt.Errorf("get template run log: %w", err)
+		return domain.TemplateRunLog{}, fmt.Errorf("get template run log: %w", err)
 	}
 	return log, nil
 }
 
-func (store *Store) ListTemplateRunLogs(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID) ([]traits.TemplateRunLog, error) {
+func (store *Store) ListTemplateRunLogs(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID) ([]domain.TemplateRunLog, error) {
 	rows, err := store.pool.Query(ctx, `
 		select
 			tenant_id,
@@ -1178,9 +1178,9 @@ func (store *Store) ListTemplateRunLogs(ctx context.Context, tenantID traits.Ten
 	}
 	defer rows.Close()
 
-	var logs []traits.TemplateRunLog
+	var logs []domain.TemplateRunLog
 	for rows.Next() {
-		var log traits.TemplateRunLog
+		var log domain.TemplateRunLog
 		if err := rows.Scan(
 			&log.TenantID,
 			&log.RunID,
@@ -1201,7 +1201,7 @@ func (store *Store) ListTemplateRunLogs(ctx context.Context, tenantID traits.Ten
 	return logs, nil
 }
 
-func (store *Store) ApproveTemplateRun(ctx context.Context, approval traits.TemplateRunApproval) error {
+func (store *Store) ApproveTemplateRun(ctx context.Context, approval domain.TemplateRunApproval) error {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin approve template run: %w", err)
@@ -1219,7 +1219,7 @@ func (store *Store) ApproveTemplateRun(ctx context.Context, approval traits.Temp
 	return nil
 }
 
-func approveTemplateRun(ctx context.Context, exec pgxExecutor, approval traits.TemplateRunApproval) error {
+func approveTemplateRun(ctx context.Context, exec pgxExecutor, approval domain.TemplateRunApproval) error {
 	commandTag, err := exec.Exec(ctx, `
 		update template_runs
 		set status = $1
@@ -1227,10 +1227,10 @@ func approveTemplateRun(ctx context.Context, exec pgxExecutor, approval traits.T
 			and id = $3
 			and status = $4
 	`,
-		traits.TemplateRunApproved,
+		domain.TemplateRunApproved,
 		approval.TenantID,
 		approval.RunID,
-		traits.TemplateRunWaitingApproval,
+		domain.TemplateRunWaitingApproval,
 	)
 	if err != nil {
 		return fmt.Errorf("approve template run status: %w", err)
@@ -1258,11 +1258,11 @@ func approveTemplateRun(ctx context.Context, exec pgxExecutor, approval traits.T
 	return nil
 }
 
-func (store *Store) RequestTemplateRunCancellation(ctx context.Context, cancellation traits.TemplateRunCancellation) error {
+func (store *Store) RequestTemplateRunCancellation(ctx context.Context, cancellation domain.TemplateRunCancellation) error {
 	return requestTemplateRunCancellation(ctx, store.pool, cancellation)
 }
 
-func requestTemplateRunCancellation(ctx context.Context, exec pgxExecutor, cancellation traits.TemplateRunCancellation) error {
+func requestTemplateRunCancellation(ctx context.Context, exec pgxExecutor, cancellation domain.TemplateRunCancellation) error {
 	// TODO: Revisit cancellation eligibility. This currently allows every
 	// non-terminal status, including post-action cleanup states such as applied,
 	// destroyed, and lock_released, to move back to cancel_requested.
@@ -1277,15 +1277,15 @@ func requestTemplateRunCancellation(ctx context.Context, exec pgxExecutor, cance
 			and id = $6
 			and status not in ($7, $8, $9)
 	`,
-		traits.TemplateRunCancelRequested,
+		domain.TemplateRunCancelRequested,
 		cancellation.RequestedBy,
 		cancellation.Reason,
 		cancellation.RequestedAt,
 		cancellation.TenantID,
 		cancellation.RunID,
-		traits.TemplateRunCompleted,
-		traits.TemplateRunFailed,
-		traits.TemplateRunCanceled,
+		domain.TemplateRunCompleted,
+		domain.TemplateRunFailed,
+		domain.TemplateRunCanceled,
 	)
 	if err != nil {
 		return fmt.Errorf("request template run cancellation: %w", err)
@@ -1297,7 +1297,7 @@ func requestTemplateRunCancellation(ctx context.Context, exec pgxExecutor, cance
 	return nil
 }
 
-func (store *Store) ReconcileTemplateRunCancellation(ctx context.Context, tenantID traits.TenantID, runID traits.TemplateRunID, errorSummary string) error {
+func (store *Store) ReconcileTemplateRunCancellation(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, errorSummary string) error {
 	commandTag, err := store.pool.Exec(ctx, `
 		update template_runs
 		set
@@ -1308,11 +1308,11 @@ func (store *Store) ReconcileTemplateRunCancellation(ctx context.Context, tenant
 			and id = $4
 			and status = $5
 	`,
-		traits.TemplateRunFailed,
+		domain.TemplateRunFailed,
 		errorSummary,
 		tenantID,
 		runID,
-		traits.TemplateRunCancelRequested,
+		domain.TemplateRunCancelRequested,
 	)
 	if err != nil {
 		return fmt.Errorf("reconcile template run cancellation: %w", err)
@@ -1324,13 +1324,13 @@ func (store *Store) ReconcileTemplateRunCancellation(ctx context.Context, tenant
 	return nil
 }
 
-func (store *Store) AppendAuditEvent(ctx context.Context, event traits.SecurityAuditEvent) error {
+func (store *Store) AppendAuditEvent(ctx context.Context, event domain.SecurityAuditEvent) error {
 	return appendAuditEvent(ctx, store.pool, event)
 }
 
 // appendAuditEvent holds the insert so both the standalone method and the
 // transaction-scoped repository share one copy of the SQL.
-func appendAuditEvent(ctx context.Context, exec pgxExecutor, event traits.SecurityAuditEvent) error {
+func appendAuditEvent(ctx context.Context, exec pgxExecutor, event domain.SecurityAuditEvent) error {
 	_, err := exec.Exec(ctx,
 		`INSERT INTO security_audit_log
 			(actor_subject, action, target_user, tenant_id, stack_id, old_role, new_role, outcome, correlation_id)
@@ -1342,7 +1342,7 @@ func appendAuditEvent(ctx context.Context, exec pgxExecutor, event traits.Securi
 	return err
 }
 
-func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.TemplateRunStatusActivityInput) error {
+func (store *Store) RecordTemplateRunStatus(ctx context.Context, input domain.TemplateRunStatusActivityInput) error {
 	if recordsStackTemplateLastApplied(input) || recordsStackTemplateLastPlanned(input) || recordsStackTemplateDestroying(input) || recordsStackTemplateDestroyed(input) || recordsStackTemplateDestroyInterrupted(input) {
 		tx, err := store.pool.Begin(ctx)
 		if err != nil {
@@ -1366,11 +1366,11 @@ func (store *Store) RecordTemplateRunStatus(ctx context.Context, input traits.Te
 				return err
 			}
 		case recordsStackTemplateDestroying(input):
-			if err := recordStackTemplateLifecycle(ctx, tx, input, traits.StackTemplateDestroying); err != nil {
+			if err := recordStackTemplateLifecycle(ctx, tx, input, domain.StackTemplateDestroying); err != nil {
 				return err
 			}
 		case recordsStackTemplateDestroyed(input):
-			if err := recordStackTemplateLifecycle(ctx, tx, input, traits.StackTemplateDestroyed); err != nil {
+			if err := recordStackTemplateLifecycle(ctx, tx, input, domain.StackTemplateDestroyed); err != nil {
 				return err
 			}
 		case recordsStackTemplateDestroyInterrupted(input):
@@ -1392,8 +1392,8 @@ type templateRunStatusWriter interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-func recordTemplateRunStatus(ctx context.Context, writer templateRunStatusWriter, input traits.TemplateRunStatusActivityInput) error {
-	var updatedRunID traits.TemplateRunID
+func recordTemplateRunStatus(ctx context.Context, writer templateRunStatusWriter, input domain.TemplateRunStatusActivityInput) error {
+	var updatedRunID domain.TemplateRunID
 	var err error
 
 	if input.Status.Terminal() {
@@ -1452,8 +1452,8 @@ type stackTemplateLifecycleWriter interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-func recordsStackTemplateLastApplied(input traits.TemplateRunStatusActivityInput) bool {
-	return input.Operation == traits.OperationApply && input.Status == traits.TemplateRunApplyFinished
+func recordsStackTemplateLastApplied(input domain.TemplateRunStatusActivityInput) bool {
+	return input.Operation == domain.OperationApply && input.Status == domain.TemplateRunApplyFinished
 }
 
 // recordsStackTemplateLastPlanned mirrors recordsStackTemplateLastApplied for
@@ -1462,24 +1462,24 @@ func recordsStackTemplateLastApplied(input traits.TemplateRunStatusActivityInput
 // terraform command, and the run goes on to lock_released and completed — so
 // completed is what "there is a reviewable plan" means, and it is the same
 // signal the web client already keys apply off.
-func recordsStackTemplateLastPlanned(input traits.TemplateRunStatusActivityInput) bool {
-	return input.Operation == traits.OperationPlan && input.Status == traits.TemplateRunCompleted
+func recordsStackTemplateLastPlanned(input domain.TemplateRunStatusActivityInput) bool {
+	return input.Operation == domain.OperationPlan && input.Status == domain.TemplateRunCompleted
 }
 
-func recordsStackTemplateDestroying(input traits.TemplateRunStatusActivityInput) bool {
-	return input.Operation == traits.OperationDestroy && input.Status == traits.TemplateRunDestroyStarted
+func recordsStackTemplateDestroying(input domain.TemplateRunStatusActivityInput) bool {
+	return input.Operation == domain.OperationDestroy && input.Status == domain.TemplateRunDestroyStarted
 }
 
-func recordsStackTemplateDestroyed(input traits.TemplateRunStatusActivityInput) bool {
-	return input.Operation == traits.OperationDestroy && input.Status == traits.TemplateRunDestroyFinished
+func recordsStackTemplateDestroyed(input domain.TemplateRunStatusActivityInput) bool {
+	return input.Operation == domain.OperationDestroy && input.Status == domain.TemplateRunDestroyFinished
 }
 
-func recordsStackTemplateDestroyInterrupted(input traits.TemplateRunStatusActivityInput) bool {
-	return input.Operation == traits.OperationDestroy &&
-		(input.Status == traits.TemplateRunFailed || input.Status == traits.TemplateRunCanceled)
+func recordsStackTemplateDestroyInterrupted(input domain.TemplateRunStatusActivityInput) bool {
+	return input.Operation == domain.OperationDestroy &&
+		(input.Status == domain.TemplateRunFailed || input.Status == domain.TemplateRunCanceled)
 }
 
-func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLastAppliedWriter, input traits.TemplateRunStatusActivityInput) error {
+func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLastAppliedWriter, input domain.TemplateRunStatusActivityInput) error {
 	commandTag, err := writer.Exec(ctx, `
 		update stack_templates
 		set
@@ -1516,7 +1516,7 @@ func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLas
 // onto the template, the same way recordStackTemplateLastApplied does for
 // applies. Without it, answering "does the reviewed plan still describe desired
 // state?" means scanning every run the template ever had.
-func recordStackTemplateLastPlanned(ctx context.Context, writer stackTemplateLastAppliedWriter, input traits.TemplateRunStatusActivityInput) error {
+func recordStackTemplateLastPlanned(ctx context.Context, writer stackTemplateLastAppliedWriter, input domain.TemplateRunStatusActivityInput) error {
 	commandTag, err := writer.Exec(ctx, `
 		update stack_templates
 		set
@@ -1549,7 +1549,7 @@ func recordStackTemplateLastPlanned(ctx context.Context, writer stackTemplateLas
 	return nil
 }
 
-func recordStackTemplateLifecycle(ctx context.Context, writer stackTemplateLastAppliedWriter, input traits.TemplateRunStatusActivityInput, lifecycle traits.StackTemplateLifecycle) error {
+func recordStackTemplateLifecycle(ctx context.Context, writer stackTemplateLastAppliedWriter, input domain.TemplateRunStatusActivityInput, lifecycle domain.StackTemplateLifecycle) error {
 	commandTag, err := writer.Exec(ctx, `
 		update stack_templates
 		set lifecycle = $1
@@ -1565,8 +1565,8 @@ func recordStackTemplateLifecycle(ctx context.Context, writer stackTemplateLastA
 	return nil
 }
 
-func recordInterruptedDestroyLifecycle(ctx context.Context, writer stackTemplateLifecycleWriter, input traits.TemplateRunStatusActivityInput) error {
-	var lifecycle traits.StackTemplateLifecycle
+func recordInterruptedDestroyLifecycle(ctx context.Context, writer stackTemplateLifecycleWriter, input domain.TemplateRunStatusActivityInput) error {
+	var lifecycle domain.StackTemplateLifecycle
 	err := writer.QueryRow(ctx, `
 		select lifecycle
 		from stack_templates
@@ -1579,11 +1579,11 @@ func recordInterruptedDestroyLifecycle(ctx context.Context, writer stackTemplate
 	if err != nil {
 		return fmt.Errorf("read interrupted destroy stack template lifecycle: %w", err)
 	}
-	if lifecycle != traits.StackTemplateDestroying {
+	if lifecycle != domain.StackTemplateDestroying {
 		return nil
 	}
 
-	return recordStackTemplateLifecycle(ctx, writer, input, traits.StackTemplateFailed)
+	return recordStackTemplateLifecycle(ctx, writer, input, domain.StackTemplateFailed)
 }
 
 type stackTemplateScanner interface {
@@ -1598,8 +1598,8 @@ type templateScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, error) {
-	var stackTemplate traits.StackTemplate
+func scanStackTemplate(scanner stackTemplateScanner) (domain.StackTemplate, error) {
+	var stackTemplate domain.StackTemplate
 	var configJSON []byte
 	var desiredConfigJSON []byte
 	var lastAppliedConfigJSON []byte
@@ -1628,7 +1628,7 @@ func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, erro
 		&stackTemplate.CreatedBy,
 		&stackTemplate.Lifecycle,
 	); err != nil {
-		return traits.StackTemplate{}, fmt.Errorf("scan stack template: %w", err)
+		return domain.StackTemplate{}, fmt.Errorf("scan stack template: %w", err)
 	}
 	stackTemplate.InstalledConfigJSON = configJSON
 	stackTemplate.DesiredConfigJSON = desiredConfigJSON
@@ -1649,8 +1649,8 @@ func scanStackTemplate(scanner stackTemplateScanner) (traits.StackTemplate, erro
 	return stackTemplate, nil
 }
 
-func scanTemplateRevision(scanner templateScanner) (traits.TemplateRevision, error) {
-	var templateRevision traits.TemplateRevision
+func scanTemplateRevision(scanner templateScanner) (domain.TemplateRevision, error) {
+	var templateRevision domain.TemplateRevision
 	var tagsJSON []byte
 
 	if err := scanner.Scan(
@@ -1668,16 +1668,16 @@ func scanTemplateRevision(scanner templateScanner) (traits.TemplateRevision, err
 		&templateRevision.Status,
 		&templateRevision.CreatedAt,
 	); err != nil {
-		return traits.TemplateRevision{}, err
+		return domain.TemplateRevision{}, err
 	}
 	if err := json.Unmarshal(tagsJSON, &templateRevision.Tags); err != nil {
-		return traits.TemplateRevision{}, fmt.Errorf("unmarshal template revision tags: %w", err)
+		return domain.TemplateRevision{}, fmt.Errorf("unmarshal template revision tags: %w", err)
 	}
 	return templateRevision, nil
 }
 
-func scanStack(scanner stackScanner) (traits.Stack, error) {
-	var stack traits.Stack
+func scanStack(scanner stackScanner) (domain.Stack, error) {
+	var stack domain.Stack
 	var tagsJSON []byte
 	var credentialIDsJSON []byte
 
@@ -1694,19 +1694,19 @@ func scanStack(scanner stackScanner) (traits.Stack, error) {
 		&stack.CreatedBy,
 		&stack.CreatedAt,
 	); err != nil {
-		return traits.Stack{}, err
+		return domain.Stack{}, err
 	}
-	stack.Status = traits.StackStatus(status)
+	stack.Status = domain.StackStatus(status)
 	if err := json.Unmarshal(tagsJSON, &stack.Tags); err != nil {
-		return traits.Stack{}, fmt.Errorf("unmarshal stack tags: %w", err)
+		return domain.Stack{}, fmt.Errorf("unmarshal stack tags: %w", err)
 	}
 	if err := json.Unmarshal(credentialIDsJSON, &stack.DefaultCredentialIDs); err != nil {
-		return traits.Stack{}, fmt.Errorf("unmarshal stack credential IDs: %w", err)
+		return domain.Stack{}, fmt.Errorf("unmarshal stack credential IDs: %w", err)
 	}
 	return stack, nil
 }
 
-func (store *Store) getStack(ctx context.Context, tenantID traits.TenantID, stackID traits.StackID) (traits.Stack, error) {
+func (store *Store) getStack(ctx context.Context, tenantID domain.TenantID, stackID domain.StackID) (domain.Stack, error) {
 	row := store.pool.QueryRow(ctx, `
 		select
 			id,
@@ -1724,10 +1724,10 @@ func (store *Store) getStack(ctx context.Context, tenantID traits.TenantID, stac
 	`, tenantID, stackID)
 	stack, err := scanStack(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return traits.Stack{}, app.ErrNotFound
+		return domain.Stack{}, app.ErrNotFound
 	}
 	if err != nil {
-		return traits.Stack{}, fmt.Errorf("get stack: %w", err)
+		return domain.Stack{}, fmt.Errorf("get stack: %w", err)
 	}
 	return stack, nil
 }
@@ -1737,7 +1737,7 @@ func duplicateConstraint(err error, constraint string) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
 }
 
-func upsertSourceTemplate(ctx context.Context, tx pgx.Tx, templateRevision traits.TemplateRevision) (traits.SourceTemplateID, error) {
+func upsertSourceTemplate(ctx context.Context, tx pgx.Tx, templateRevision domain.TemplateRevision) (domain.SourceTemplateID, error) {
 	// Identity is minted by the caller (see the deterministic hash in the template sync
 	// activity); the store persists it rather than inventing one, so a missing ID is a
 	// programming error instead of a silently empty primary key.
@@ -1746,7 +1746,7 @@ func upsertSourceTemplate(ctx context.Context, tx pgx.Tx, templateRevision trait
 		return "", errors.New("upsert source template: source template ID is required")
 	}
 
-	var persistedID traits.SourceTemplateID
+	var persistedID domain.SourceTemplateID
 	err := tx.QueryRow(ctx, `
 		insert into source_templates (
 			id,
@@ -1774,7 +1774,7 @@ func upsertSourceTemplate(ctx context.Context, tx pgx.Tx, templateRevision trait
 	return persistedID, nil
 }
 
-func recordLatestTemplateRevision(ctx context.Context, tx pgx.Tx, templateRevision traits.TemplateRevision) error {
+func recordLatestTemplateRevision(ctx context.Context, tx pgx.Tx, templateRevision domain.TemplateRevision) error {
 	commandTag, err := tx.Exec(ctx, `
 		update source_templates
 		set
@@ -1815,8 +1815,8 @@ func nullJSON(input json.RawMessage) any {
 	return input
 }
 
-func insertTemplateRevision(ctx context.Context, tx pgx.Tx, templateRevision traits.TemplateRevision, tagsJSON []byte) (traits.TemplateRevision, bool, error) {
-	var inserted traits.TemplateRevision
+func insertTemplateRevision(ctx context.Context, tx pgx.Tx, templateRevision domain.TemplateRevision, tagsJSON []byte) (domain.TemplateRevision, bool, error) {
+	var inserted domain.TemplateRevision
 	var insertedTagsJSON []byte
 	err := tx.QueryRow(ctx, `
 		insert into template_revisions (
@@ -1883,23 +1883,23 @@ func insertTemplateRevision(ctx context.Context, tx pgx.Tx, templateRevision tra
 	)
 	if err == nil {
 		if err := json.Unmarshal(insertedTagsJSON, &inserted.Tags); err != nil {
-			return traits.TemplateRevision{}, false, fmt.Errorf("unmarshal inserted template revision tags: %w", err)
+			return domain.TemplateRevision{}, false, fmt.Errorf("unmarshal inserted template revision tags: %w", err)
 		}
 		return inserted, true, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return traits.TemplateRevision{}, false, fmt.Errorf("insert template revision: %w", err)
+		return domain.TemplateRevision{}, false, fmt.Errorf("insert template revision: %w", err)
 	}
 
 	selected, err := selectTemplateRevisionByIdentity(ctx, tx, templateRevision)
 	if err != nil {
-		return traits.TemplateRevision{}, false, err
+		return domain.TemplateRevision{}, false, err
 	}
 	return selected, false, nil
 }
 
-func selectTemplateRevisionByIdentity(ctx context.Context, tx pgx.Tx, templateRevision traits.TemplateRevision) (traits.TemplateRevision, error) {
-	var selected traits.TemplateRevision
+func selectTemplateRevisionByIdentity(ctx context.Context, tx pgx.Tx, templateRevision domain.TemplateRevision) (domain.TemplateRevision, error) {
+	var selected domain.TemplateRevision
 	var tagsJSON []byte
 	err := tx.QueryRow(ctx, `
 		select
@@ -1940,20 +1940,20 @@ func selectTemplateRevisionByIdentity(ctx context.Context, tx pgx.Tx, templateRe
 		&selected.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return traits.TemplateRevision{}, app.ErrNotFound
+		return domain.TemplateRevision{}, app.ErrNotFound
 	}
 	if err != nil {
-		return traits.TemplateRevision{}, fmt.Errorf("select template revision by identity: %w", err)
+		return domain.TemplateRevision{}, fmt.Errorf("select template revision by identity: %w", err)
 	}
 	if err := json.Unmarshal(tagsJSON, &selected.Tags); err != nil {
-		return traits.TemplateRevision{}, fmt.Errorf("unmarshal selected template revision tags: %w", err)
+		return domain.TemplateRevision{}, fmt.Errorf("unmarshal selected template revision tags: %w", err)
 	}
 	return selected, nil
 }
 
-func terminalTemplateRegistrationStatus(status traits.TemplateRegistrationStatus) bool {
+func terminalTemplateRegistrationStatus(status domain.TemplateRegistrationStatus) bool {
 	switch status {
-	case traits.TemplateRegistrationCompleted, traits.TemplateRegistrationInvalid, traits.TemplateRegistrationFailed:
+	case domain.TemplateRegistrationCompleted, domain.TemplateRegistrationInvalid, domain.TemplateRegistrationFailed:
 		return true
 	default:
 		return false

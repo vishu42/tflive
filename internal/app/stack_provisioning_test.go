@@ -9,19 +9,19 @@ import (
 
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
-	"github.com/vishu42/tflive/internal/traits"
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 const provisioningSubject = "6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91"
 
 type recordingStackStatuses struct {
 	calls  int
-	tenant traits.TenantID
-	stack  traits.StackID
+	tenant domain.TenantID
+	stack  domain.StackID
 	err    error
 }
 
-func (statuses *recordingStackStatuses) MarkStackReady(_ context.Context, tenantID traits.TenantID, stackID traits.StackID) error {
+func (statuses *recordingStackStatuses) MarkStackReady(_ context.Context, tenantID domain.TenantID, stackID domain.StackID) error {
 	statuses.calls++
 	statuses.tenant = tenantID
 	statuses.stack = stackID
@@ -65,10 +65,10 @@ func getStackService(stacks *authorizationStackRepository) *Service {
 func TestGetStackLetsCreatorSeeTheirProvisioningStack(t *testing.T) {
 	t.Parallel()
 
-	stacks := &authorizationStackRepository{stack: traits.Stack{
+	stacks := &authorizationStackRepository{stack: domain.Stack{
 		ID:        "stack_abc",
 		TenantID:  "tenant_1",
-		Status:    traits.StackStatusProvisioning,
+		Status:    domain.StackStatusProvisioning,
 		CreatedBy: provisioningSubject,
 	}}
 	service := getStackService(stacks)
@@ -82,10 +82,10 @@ func TestGetStackLetsCreatorSeeTheirProvisioningStack(t *testing.T) {
 func TestGetStackHidesProvisioningStackFromOthers(t *testing.T) {
 	t.Parallel()
 
-	stacks := &authorizationStackRepository{stack: traits.Stack{
+	stacks := &authorizationStackRepository{stack: domain.Stack{
 		ID:        "stack_abc",
 		TenantID:  "tenant_1",
-		Status:    traits.StackStatusProvisioning,
+		Status:    domain.StackStatusProvisioning,
 		CreatedBy: "someone-else",
 	}}
 	service := getStackService(stacks)
@@ -100,10 +100,10 @@ func TestGetStackHidesProvisioningStackFromOthers(t *testing.T) {
 func TestGetStackStopsExceptingOnceTheStackIsReady(t *testing.T) {
 	t.Parallel()
 
-	stacks := &authorizationStackRepository{stack: traits.Stack{
+	stacks := &authorizationStackRepository{stack: domain.Stack{
 		ID:        "stack_abc",
 		TenantID:  "tenant_1",
-		Status:    traits.StackStatusReady,
+		Status:    domain.StackStatusReady,
 		CreatedBy: provisioningSubject,
 	}}
 	service := getStackService(stacks)

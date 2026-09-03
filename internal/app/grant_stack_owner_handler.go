@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/traits"
 )
 
 // KindGrantStackOwner grants the founding owner their role on a new stack. It
@@ -79,8 +79,8 @@ func (handler *GrantStackOwnerHandler) Deliver(ctx context.Context, item queue.I
 	}
 
 	if err := handler.provisioner.GrantStackOwner(ctx, GrantStackOwnerCommand{
-		TenantID: traits.TenantID(parsed.TenantID),
-		StackID:  traits.StackID(parsed.StackID),
+		TenantID: domain.TenantID(parsed.TenantID),
+		StackID:  domain.StackID(parsed.StackID),
 		Subject:  parsed.Subject,
 	}); err != nil {
 		return nil, err

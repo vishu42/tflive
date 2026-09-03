@@ -14,15 +14,15 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/runner"
-	"github.com/vishu42/tflive/internal/traits"
 	"github.com/zclconf/go-cty/cty"
 	"gopkg.in/yaml.v3"
 )
 
 type TemplateSyncStore interface {
-	RecordTemplateRegistrationStatus(context.Context, traits.TemplateRegistrationStatusActivityInput) error
-	UpsertTemplateRevisionWithVariables(context.Context, traits.TemplateRevision, []traits.TemplateVariable) (traits.TemplateRevision, error)
+	RecordTemplateRegistrationStatus(context.Context, domain.TemplateRegistrationStatusActivityInput) error
+	UpsertTemplateRevisionWithVariables(context.Context, domain.TemplateRevision, []domain.TemplateVariable) (domain.TemplateRevision, error)
 }
 
 type TemplateSyncActivities struct {
@@ -58,14 +58,14 @@ func NewTemplateSyncActivities(store TemplateSyncStore, options ...TemplateSyncO
 	return activities
 }
 
-func (activities *TemplateSyncActivities) RecordTemplateRegistrationStatus(ctx context.Context, input traits.TemplateRegistrationStatusActivityInput) error {
+func (activities *TemplateSyncActivities) RecordTemplateRegistrationStatus(ctx context.Context, input domain.TemplateRegistrationStatusActivityInput) error {
 	if err := activities.store.RecordTemplateRegistrationStatus(ctx, input); err != nil {
 		return fmt.Errorf("record template registration status: %w", err)
 	}
 	return nil
 }
 
-func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, input traits.TemplateSyncActivityInput) (traits.TemplateSyncActivityOutput, error) {
+func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, input domain.TemplateSyncActivityInput) (domain.TemplateSyncActivityOutput, error) {
 	rootPath, err := safeTemplateRootPath(input.RootPath)
 	if err != nil {
 		return invalidTemplateSyncOutput("%v", err), nil
@@ -73,7 +73,7 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 
 	workspace, err := os.MkdirTemp(activities.tempRoot, "tflive-template-sync-*")
 	if err != nil {
-		return traits.TemplateSyncActivityOutput{}, fmt.Errorf("create template sync workspace: %w", err)
+		return domain.TemplateSyncActivityOutput{}, fmt.Errorf("create template sync workspace: %w", err)
 	}
 	defer os.RemoveAll(workspace)
 
@@ -113,7 +113,7 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 		return invalidTemplateSyncOutput("sensitive variables are not supported: %s", strings.Join(sensitive, ", ")), nil
 	}
 
-	templateRevision := traits.TemplateRevision{
+	templateRevision := domain.TemplateRevision{
 		ID:                templateRevisionID,
 		TenantID:          input.TenantID,
 		SourceTemplateID:  sourceTemplateID,
@@ -125,16 +125,16 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 		Name:              metadata.Name,
 		Description:       metadata.Description,
 		Tags:              metadata.Tags,
-		Status:            traits.TemplateRevisionActive,
+		Status:            domain.TemplateRevisionActive,
 		CreatedAt:         time.Now().UTC(),
 	}
 	persisted, err := activities.store.UpsertTemplateRevisionWithVariables(ctx, templateRevision, variables)
 	if err != nil {
-		return traits.TemplateSyncActivityOutput{}, fmt.Errorf("persist synced template revision: %w", err)
+		return domain.TemplateSyncActivityOutput{}, fmt.Errorf("persist synced template revision: %w", err)
 	}
 
-	return traits.TemplateSyncActivityOutput{
-		Status:             traits.TemplateRegistrationCompleted,
+	return domain.TemplateSyncActivityOutput{
+		Status:             domain.TemplateRegistrationCompleted,
 		TemplateRevisionID: persisted.ID,
 		ResolvedCommitSHA:  persisted.ResolvedCommitSHA,
 	}, nil
@@ -144,9 +144,9 @@ func publicGitHubRepoURL(owner string, repo string) string {
 	return fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
 }
 
-func invalidTemplateSyncOutput(format string, args ...any) traits.TemplateSyncActivityOutput {
-	return traits.TemplateSyncActivityOutput{
-		Status:       traits.TemplateRegistrationInvalid,
+func invalidTemplateSyncOutput(format string, args ...any) domain.TemplateSyncActivityOutput {
+	return domain.TemplateSyncActivityOutput{
+		Status:       domain.TemplateRegistrationInvalid,
 		ErrorSummary: fmt.Sprintf(format, args...),
 	}
 }
@@ -235,14 +235,14 @@ func cleanTags(tags []string) []string {
 	return cleaned
 }
 
-func inferTemplateVariables(root string, templateRevisionID traits.TemplateRevisionID) ([]traits.TemplateVariable, error) {
+func inferTemplateVariables(root string, templateRevisionID domain.TemplateRevisionID) ([]domain.TemplateVariable, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
 	}
 
 	parser := hclparse.NewParser()
-	variablesByName := map[string]traits.TemplateVariable{}
+	variablesByName := map[string]domain.TemplateVariable{}
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".tf" {
 			continue
@@ -273,7 +273,7 @@ func inferTemplateVariables(root string, templateRevisionID traits.TemplateRevis
 		}
 	}
 
-	variables := make([]traits.TemplateVariable, 0, len(variablesByName))
+	variables := make([]domain.TemplateVariable, 0, len(variablesByName))
 	for _, variable := range variablesByName {
 		variables = append(variables, variable)
 	}
@@ -305,14 +305,14 @@ func variableBlockSchema() *hcl.BodySchema {
 	}
 }
 
-func parseVariableBlock(block *hcl.Block, source []byte, templateRevisionID traits.TemplateRevisionID) (traits.TemplateVariable, error) {
+func parseVariableBlock(block *hcl.Block, source []byte, templateRevisionID domain.TemplateRevisionID) (domain.TemplateVariable, error) {
 	name := block.Labels[0]
 	content, _, diags := block.Body.PartialContent(variableBlockSchema())
 	if diags.HasErrors() {
-		return traits.TemplateVariable{}, errors.New(diags.Error())
+		return domain.TemplateVariable{}, errors.New(diags.Error())
 	}
 
-	variable := traits.TemplateVariable{
+	variable := domain.TemplateVariable{
 		TemplateRevisionID: templateRevisionID,
 		Name:               name,
 		Required:           true,
@@ -323,7 +323,7 @@ func parseVariableBlock(block *hcl.Block, source []byte, templateRevisionID trai
 	if attr, ok := content.Attributes["description"]; ok {
 		description, err := hclStringValue(attr)
 		if err != nil {
-			return traits.TemplateVariable{}, fmt.Errorf("description: %w", err)
+			return domain.TemplateVariable{}, fmt.Errorf("description: %w", err)
 		}
 		variable.Description = description
 	}
@@ -334,7 +334,7 @@ func parseVariableBlock(block *hcl.Block, source []byte, templateRevisionID trai
 	if attr, ok := content.Attributes["sensitive"]; ok {
 		sensitive, err := hclBoolValue(attr)
 		if err != nil {
-			return traits.TemplateVariable{}, fmt.Errorf("sensitive: %w", err)
+			return domain.TemplateVariable{}, fmt.Errorf("sensitive: %w", err)
 		}
 		variable.Sensitive = sensitive
 	}
@@ -369,7 +369,7 @@ func hclBoolValue(attr *hcl.Attribute) (bool, error) {
 	return value.True(), nil
 }
 
-func sensitiveVariableNames(variables []traits.TemplateVariable) []string {
+func sensitiveVariableNames(variables []domain.TemplateVariable) []string {
 	var names []string
 	for _, variable := range variables {
 		if variable.Sensitive {
@@ -381,7 +381,7 @@ func sensitiveVariableNames(variables []traits.TemplateVariable) []string {
 }
 
 // template_4b93175b6dcb1641073fcd42475912a3
-func deterministicTemplateRevisionID(input traits.TemplateSyncActivityInput, rootPath string, resolvedSHA string) traits.TemplateRevisionID {
+func deterministicTemplateRevisionID(input domain.TemplateSyncActivityInput, rootPath string, resolvedSHA string) domain.TemplateRevisionID {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
 		string(input.TenantID),
 		input.RepoOwner,
@@ -389,7 +389,7 @@ func deterministicTemplateRevisionID(input traits.TemplateSyncActivityInput, roo
 		rootPath,
 		resolvedSHA,
 	}, "\x00")))
-	return traits.TemplateRevisionID("template_" + hex.EncodeToString(sum[:16]))
+	return domain.TemplateRevisionID("template_" + hex.EncodeToString(sum[:16]))
 }
 
 // deterministicSourceTemplateID derives a stable SourceTemplateID from the tenant, repo,
@@ -397,7 +397,7 @@ func deterministicTemplateRevisionID(input traits.TemplateSyncActivityInput, roo
 // instead of minting a duplicate row.
 // e.g. tenant_123/acme/templates/templates/web/main -> source_template_106bb033369f88d7820a14c2ec059296
 // source_template_327520eeba5223257d8fb1d2d2a39f6d
-func deterministicSourceTemplateID(input traits.TemplateSyncActivityInput, rootPath string) traits.SourceTemplateID {
+func deterministicSourceTemplateID(input domain.TemplateSyncActivityInput, rootPath string) domain.SourceTemplateID {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
 		string(input.TenantID),
 		input.RepoOwner,
@@ -405,5 +405,5 @@ func deterministicSourceTemplateID(input traits.TemplateSyncActivityInput, rootP
 		rootPath,
 		input.SourceRef,
 	}, "\x00")))
-	return traits.SourceTemplateID("source_template_" + hex.EncodeToString(sum[:16]))
+	return domain.SourceTemplateID("source_template_" + hex.EncodeToString(sum[:16]))
 }
