@@ -113,7 +113,6 @@ func (status TemplateRunStatus) Terminal() bool {
 }
 
 // TemplateRun is one Terraform operation against a StackTemplate.
-// TemplateRun is one terraform operation against a StackTemplate
 type TemplateRun struct {
 	ID                 TemplateRunID      `json:"id"`
 	TenantID           TenantID           `json:"tenant_id"`

@@ -32,7 +32,6 @@ type Stack struct {
 }
 
 // StackRun represents a coordinated multi-template operation.
-// StackRun represents a coordinated multi-template operation.
 type StackRun struct {
 	ID        StackRunID
 	TenantID  TenantID
