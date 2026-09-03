@@ -521,7 +521,7 @@
 .credentials-list {
   display: grid;
   gap: var(--space-2);
-  margin: var(--space-4) 0;
+  margin: 0;
 }
 
 .credential-row {
@@ -976,10 +976,10 @@
   gap: var(--space-2);
 }
 
-/* .button-row's trailing margin separates it from panel content below it;
-   here it is the last thing in the panel. */
-.template-run-controls .button-row,
-.danger-zone .button-row {
+/* .button-row's trailing margin separates it from content below it outside a
+   panel. Inside one, .panel > * + * already spaces whatever follows, and the
+   two together left a doubled gap. */
+.panel .button-row {
   margin-bottom: 0;
 }
 
@@ -1130,10 +1130,9 @@
   background: var(--color-border);
 }
 
-/* .panel > .secondary-button carries a top margin, for the panels that end in
-   a single action below their content. Here the divider above already sets the
-   separation, and the two margins together open a gap wide enough to read as
-   the SSO button belonging to something else. */
+/* .panel > * + * spaces a trailing action from the content above it. Here the
+   divider already sets that separation, and the two together open a gap wide
+   enough to read as the SSO button belonging to something else. */
 .signin-card > .signin-divider + .secondary-button {
   margin-top: 0;
 }

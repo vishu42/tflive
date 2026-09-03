@@ -126,8 +126,11 @@ describe("TemplateDestroyPanel", () => {
     const destroyButton = screen.getByRole("button", { name: /Destroy/ }) as HTMLButtonElement;
     expect(destroyButton.disabled).toBe(false);
     fireEvent.click(destroyButton);
-    expect(screen.getByText(/This will permanently destroy all infrastructure/)).toBeTruthy();
+    // The panel's standing warning already says destroy cannot be undone, so
+    // confirmation is proved by the controls swapping, not by repeating it.
     expect(screen.getByRole("button", { name: /Confirm destroy/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Cancel/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Destroy$/ })).toBeNull();
   });
 
   it("keeps destroy disabled until run history has loaded", () => {
