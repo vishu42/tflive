@@ -11,14 +11,7 @@ func NewObjectStore(cfg config.ArtifactStoreConfig) (ObjectStore, error) {
 	case config.ArtifactStoreFilesystem:
 		return NewFilesystemStore(cfg.FilesystemRoot), nil
 	case config.ArtifactStoreS3:
-		return NewS3Store(S3Config{
-			Bucket:          cfg.S3.Bucket,
-			Region:          cfg.S3.Region,
-			Endpoint:        cfg.S3.Endpoint,
-			AccessKeyID:     cfg.S3.AccessKeyID,
-			SecretAccessKey: cfg.S3.SecretAccessKey,
-			ForcePathStyle:  cfg.S3.ForcePathStyle,
-		})
+		return NewS3Store(cfg.S3)
 	default:
 		return nil, fmt.Errorf("unsupported artifact store kind %q", cfg.Kind)
 	}
