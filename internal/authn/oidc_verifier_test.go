@@ -33,6 +33,7 @@ type oidcTestServer struct {
 	keys                  map[string]*rsa.PrivateKey
 	published             []string
 	discoveryIssuer       string
+	jwksPath              string
 	unavailableBody       string
 	discoveryBody         string
 	jwksBody              string
@@ -51,6 +52,7 @@ func newOIDCTestServer(t *testing.T) *oidcTestServer {
 	s := &oidcTestServer{
 		t:               t,
 		issuerPathToken: "issuer-private-path",
+		jwksPath:        "/jwks",
 		keys:            make(map[string]*rsa.PrivateKey),
 	}
 	s.server = httptest.NewServer(http.HandlerFunc(s.serveHTTP))
@@ -142,11 +144,25 @@ func (s *oidcTestServer) serveHTTP(writer http.ResponseWriter, request *http.Req
 	switch request.URL.Path {
 	case "/" + s.issuerPathToken + "/.well-known/openid-configuration":
 		s.serveDiscovery(writer)
-	case "/jwks":
+	case s.currentJWKSPath():
 		s.serveJWKS(writer)
 	default:
 		http.NotFound(writer, request)
 	}
+}
+
+func (s *oidcTestServer) currentJWKSPath() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.jwksPath
+}
+
+// setJWKSPath moves the provider's JWKS endpoint, which is how discovery comes
+// to advertise a jwks_uri the verifier is not already registered against.
+func (s *oidcTestServer) setJWKSPath(path string) {
+	s.mu.Lock()
+	s.jwksPath = path
+	s.mu.Unlock()
 }
 
 func (s *oidcTestServer) serveDiscovery(writer http.ResponseWriter) {
@@ -159,6 +175,7 @@ func (s *oidcTestServer) serveDiscovery(writer http.ResponseWriter) {
 	tokenEndpoint := s.tokenEndpoint
 	endSessionEndpoint := s.endSessionEndpoint
 	omitEndpoints := s.omitEndpoints
+	jwksPath := s.jwksPath
 	s.mu.Unlock()
 
 	if unavailableBody != "" {
@@ -178,7 +195,7 @@ func (s *oidcTestServer) serveDiscovery(writer http.ResponseWriter) {
 		TokenEndpoint         string `json:"token_endpoint,omitempty"`
 		EndSessionEndpoint    string `json:"end_session_endpoint,omitempty"`
 	}
-	doc := document{Issuer: issuer, JWKSURI: s.server.URL + "/jwks"}
+	doc := document{Issuer: issuer, JWKSURI: s.server.URL + jwksPath}
 	if !omitEndpoints {
 		doc.AuthorizationEndpoint = authorizationEndpoint
 		doc.TokenEndpoint = tokenEndpoint
@@ -1255,4 +1272,77 @@ func TestOIDCVerifierAcceptsProviderTokenShapes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// replaceKeyCache had no test at all, which is how forty lines of duplicated
+// cache construction sat next to NewOIDCVerifier's copy without anything
+// noticing they had to stay in step. It runs only when discovery is re-read
+// after its TTL and the provider has moved jwks_uri, so that is what this
+// arranges: rotate the key, move the endpoint, advance past the TTL, and
+// require the verifier to follow.
+func TestOIDCVerifierReplacesKeyCacheWhenDiscoveryMovesTheJWKSURI(t *testing.T) {
+	s := newOIDCTestServer(t)
+	s.addRSAKey(t, "key-a")
+	s.publish("key-a")
+
+	start := time.Now()
+	clock := start
+	cfg := s.config(start)
+	cfg.DiscoveryTTL = 15 * time.Minute
+	cfg.Clock = func() time.Time { return clock }
+
+	v, err := NewOIDCVerifier(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewOIDCVerifier() error = %v", err)
+	}
+	defer v.Close(context.Background())
+
+	if _, err := v.Verify(context.Background(), s.sign(t, "key-a", nil)); err != nil {
+		t.Fatalf("Verify() with the original key error = %v", err)
+	}
+	originalURL := v.jwksURL()
+
+	// The provider rotates its signing key and serves the new set from a
+	// different endpoint.
+	s.addRSAKey(t, "key-b")
+	s.setJWKSPath("/jwks-rotated")
+	s.publish("key-b")
+
+	// Before the TTL elapses discovery is not re-read, so the move is not yet
+	// visible and the unknown key ID is simply refused.
+	if _, err := v.Verify(context.Background(), s.sign(t, "key-b", nil)); err == nil {
+		t.Fatal("Verify() with the rotated key succeeded before the discovery TTL elapsed, want an error")
+	}
+	if got := v.jwksURL(); got != originalURL {
+		t.Fatalf("jwks url = %q, want it unchanged at %q before the TTL elapsed", got, originalURL)
+	}
+
+	clock = start.Add(cfg.DiscoveryTTL + time.Minute)
+
+	if _, err := v.Verify(context.Background(), s.sign(t, "key-b", nil)); err != nil {
+		t.Fatalf("Verify() with the rotated key error = %v", err)
+	}
+	rotatedURL := v.jwksURL()
+	if rotatedURL == originalURL {
+		t.Fatalf("jwks url = %q, want the moved endpoint", rotatedURL)
+	}
+	if !strings.HasSuffix(rotatedURL, "/jwks-rotated") {
+		t.Fatalf("jwks url = %q, want it to end in /jwks-rotated", rotatedURL)
+	}
+
+	// The replaced cache holds the new set only: the retired key is gone
+	// rather than lingering alongside its replacement.
+	if _, err := v.Verify(context.Background(), s.sign(t, "key-a", nil)); err == nil {
+		t.Fatal("Verify() with the retired key succeeded, want an error")
+	}
+}
+
+// jwksURL reads the URL the verifier's current key cache is registered against.
+func (v *OIDCVerifier) jwksURL() string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	if v.keys == nil {
+		return ""
+	}
+	return v.keys.url
 }
