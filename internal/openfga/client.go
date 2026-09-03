@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/vishu42/tflive/internal/strval"
 )
 
 const maxResponseBody = 64 << 10
@@ -361,7 +363,7 @@ func (client *Client) doJSON(ctx context.Context, method string, endpoint *url.U
 		return fmt.Errorf("%w: read response: %w", ErrHTTPBodyRead, err)
 	}
 	if !containsStatus(accepted, response.StatusCode) {
-		safe := redact(string(data), client.token)
+		safe := strval.Redact(string(data), client.token)
 		if len(safe) > maxResponseBody {
 			safe = safe[:maxResponseBody]
 			truncated = true
@@ -425,18 +427,4 @@ func containsStatus(statuses []int, status int) bool {
 		}
 	}
 	return false
-}
-
-// redact removes every occurrence of secret from value. It is applied to
-// response bodies before they reach an error, because OpenFGA echoes request
-// context on some failures and that must not carry the token into a log.
-//
-//	("token abc leaked", "abc") → "token [REDACTED] leaked"
-//	("nothing here", "abc")     → "nothing here"
-//	("anything", "")            → unchanged (no secret configured)
-func redact(value, secret string) string {
-	if secret == "" {
-		return value
-	}
-	return strings.ReplaceAll(value, secret, "[REDACTED]")
 }

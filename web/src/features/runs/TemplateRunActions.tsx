@@ -10,6 +10,7 @@ import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
 import StatusRow from "../../shared/StatusRow";
 import { hasFreshPlan, planStaleReason } from "../stacks/stackWorkflow";
+import RunActionButton, { type RunActionButtonProps } from "./RunActionButton";
 
 interface TemplateRunActionsProps {
   stackId: string;
@@ -156,11 +157,9 @@ export default function TemplateRunActions({ stackId, stackTemplate }: TemplateR
         <RequireCapability
           capability="canApprove"
           stackId={stackId}
-          fallback={
-            <ApproveButton canApprove={false} onApprove={handleApprove} busy={approveRunMutation.isPending} disabledReason="Approving requires approver access" />
-          }
+          fallback={<ApproveButton enabled={false} onClick={handleApprove} busy={approveRunMutation.isPending} disabledReason="Approving requires approver access" />}
         >
-          <ApproveButton canApprove={canApprove} onApprove={handleApprove} busy={approveRunMutation.isPending} />
+          <ApproveButton enabled={canApprove} onClick={handleApprove} busy={approveRunMutation.isPending} />
         </RequireCapability>
       </div>
     </section>
@@ -205,29 +204,7 @@ function RunControls({ canPlan, onPlan, planBusy, canApply, onApply, applyBusy, 
   );
 }
 
-function ApproveButton({
-  canApprove,
-  onApprove,
-  busy,
-  disabledReason
-}: {
-  canApprove: boolean;
-  onApprove: () => void;
-  busy: boolean;
-  disabledReason?: string;
-}) {
-  const locked = Boolean(disabledReason);
-  return (
-    <div>
-      <button className="secondary-button" disabled={locked || !canApprove || busy} onClick={onApprove} type="button">
-        {busy ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
-        Approve
-      </button>
-      {disabledReason && (
-        <p className="muted" data-testid="template-run-approve-disabled-reason">
-          {disabledReason}
-        </p>
-      )}
-    </div>
-  );
+// This screen's approve action, bound to its own reason test id.
+function ApproveButton(props: Omit<RunActionButtonProps, "label" | "icon" | "reasonTestID">) {
+  return <RunActionButton {...props} label="Approve" icon={<ShieldCheck size={16} />} reasonTestID="template-run-approve-disabled-reason" />;
 }

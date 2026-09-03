@@ -2,9 +2,7 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
@@ -24,8 +22,8 @@ const authFailureBody = `<!doctype html><meta charset="utf-8"><title>Sign-in fai
 func (server *Server) handleAuthLogin(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 
-	state, stateErr := randomToken()
-	nonce, nonceErr := randomToken()
+	state, stateErr := authn.NewOpaqueToken()
+	nonce, nonceErr := authn.NewOpaqueToken()
 	if stateErr != nil || nonceErr != nil {
 		log.Printf("auth login: failed to generate state/nonce token: state error = %v, nonce error = %v", stateErr, nonceErr)
 		server.writeAuthFailure(response)
@@ -237,12 +235,4 @@ func (server *Server) writeAuthFailure(response http.ResponseWriter) {
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	response.WriteHeader(http.StatusUnauthorized)
 	_, _ = response.Write([]byte(authFailureBody))
-}
-
-func randomToken() (string, error) {
-	buffer := make([]byte, 32)
-	if _, err := rand.Read(buffer); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(buffer), nil
 }

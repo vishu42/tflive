@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vishu42/tflive/internal/secrets"
+	"github.com/vishu42/tflive/internal/encryption"
 )
 
-func testCipher(t *testing.T) *secrets.Cipher {
+func testCipher(t *testing.T) *encryption.Cipher {
 	t.Helper()
-	cipher, err := secrets.NewCipher("01234567890123456789012345678901")
+	cipher, err := encryption.NewCipher("01234567890123456789012345678901")
 	if err != nil {
 		t.Fatalf("NewCipher returned error: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestOpenTransactionRejectsExpiredTransaction(t *testing.T) {
 // sealTransactionAt seals a transaction with the IssuedAt already set on it,
 // bypassing SealTransaction's own timestamping. Production code has no such
 // path; this exists so the test can forge an old transaction.
-func sealTransactionAt(t *testing.T, cipher *secrets.Cipher, transaction Transaction) string {
+func sealTransactionAt(t *testing.T, cipher *encryption.Cipher, transaction Transaction) string {
 	t.Helper()
 	encoded, err := json.Marshal(transaction)
 	if err != nil {
@@ -124,7 +124,7 @@ func TestOpenTransactionRejectsAnotherKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SealTransaction returned error: %v", err)
 	}
-	other, err := secrets.NewCipher("abcdefghijklmnopqrstuvwxyz123456")
+	other, err := encryption.NewCipher("abcdefghijklmnopqrstuvwxyz123456")
 	if err != nil {
 		t.Fatalf("NewCipher returned error: %v", err)
 	}

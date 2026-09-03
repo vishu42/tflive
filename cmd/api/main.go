@@ -21,10 +21,10 @@ import (
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/bootstrap"
 	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/secrets"
 )
 
 type postgresPool interface {
@@ -57,7 +57,7 @@ type tokenVerifier interface {
 type apiDependencies struct {
 	newPostgresPool func(context.Context, string) (postgresPool, error)
 	migratePostgres func(context.Context, postgresPool) error
-	newStore        func(postgresPool, *queue.SpecRegistry, *secrets.Cipher, *secrets.Cipher) (appRepositories, error)
+	newStore        func(postgresPool, *queue.SpecRegistry, *encryption.Cipher, *encryption.Cipher) (appRepositories, error)
 	newLogReader    func(config.ArtifactStoreConfig) (app.TemplateRunLogReader, error)
 	newService      func(app.Service) (*app.Service, error)
 	newVerifier     func(context.Context, authn.OIDCVerifierConfig) (tokenVerifier, error)
@@ -131,7 +131,7 @@ func defaultAPIDependencies() apiDependencies {
 			}
 			return postgres.Migrate(ctx, pgxPool)
 		},
-		newStore: func(pool postgresPool, specs *queue.SpecRegistry, credentialCipher *secrets.Cipher, sessionCipher *secrets.Cipher) (appRepositories, error) {
+		newStore: func(pool postgresPool, specs *queue.SpecRegistry, credentialCipher *encryption.Cipher, sessionCipher *encryption.Cipher) (appRepositories, error) {
 			pgxPool, ok := pool.(*pgxpool.Pool)
 			if !ok {
 				return nil, fmt.Errorf("unexpected postgres pool type %T", pool)
@@ -170,7 +170,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("load api config: %w", err)
 	}
 
-	sessionSealer, err := secrets.NewCipher(cfg.Security.SessionEncryptionKey.Value())
+	sessionSealer, err := encryption.NewCipher(cfg.Security.SessionEncryptionKey.Value())
 	if err != nil {
 		return fmt.Errorf("create session sealer: %w", err)
 	}
@@ -236,9 +236,9 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("build queue specs: %w", err)
 	}
 
-	var credentialCipher *secrets.Cipher
+	var credentialCipher *encryption.Cipher
 	if !cfg.CredentialEncryptionKey.Empty() {
-		credentialCipher, err = secrets.NewCipher(cfg.CredentialEncryptionKey.Value())
+		credentialCipher, err = encryption.NewCipher(cfg.CredentialEncryptionKey.Value())
 		if err != nil {
 			return fmt.Errorf("create credential cipher: %w", err)
 		}

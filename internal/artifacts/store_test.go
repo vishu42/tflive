@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -139,7 +140,7 @@ func TestS3StorePutsAndGetsObject(t *testing.T) {
 	t.Parallel()
 
 	transport := &recordingRoundTripper{}
-	store, err := NewS3Store(S3Config{
+	store, err := NewS3Store(config.S3Config{
 		Bucket:          "tflive-artifacts",
 		Region:          "us-east-1",
 		Endpoint:        "https://s3.test.local",

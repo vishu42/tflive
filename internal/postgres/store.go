@@ -6,16 +6,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
+	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/secrets"
 )
 
 var ErrNotFound = errors.New("postgres: not found")
 
 type Store struct {
 	pool             *pgxpool.Pool
-	credentialCipher *secrets.Cipher
-	sessionCipher    *secrets.Cipher
+	credentialCipher *encryption.Cipher
+	sessionCipher    *encryption.Cipher
 	queueSpecs       *queue.SpecRegistry
 }
 
@@ -42,14 +42,14 @@ func NewStore(pool *pgxpool.Pool, options ...Option) *Store {
 
 // WithCredentialCipher supplies the process-wide credential encryption cipher.
 // Without it, Encrypt and Decrypt return app.ErrCredentialEncryptionUnavailable.
-func WithCredentialCipher(cipher *secrets.Cipher) Option {
+func WithCredentialCipher(cipher *encryption.Cipher) Option {
 	return func(store *Store) { store.credentialCipher = cipher }
 }
 
 // WithSessionCipher supplies the process-wide session encryption cipher, used
 // only for session rows. Without it, encryptSession and decryptSession return
 // authn.ErrSessionEncryptionUnavailable.
-func WithSessionCipher(cipher *secrets.Cipher) Option {
+func WithSessionCipher(cipher *encryption.Cipher) Option {
 	return func(store *Store) { store.sessionCipher = cipher }
 }
 

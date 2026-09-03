@@ -229,6 +229,26 @@ func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID tr
 	return stackTemplate, nil
 }
 
+// operableStackTemplate is authorizedStackTemplate for the mutating commands:
+// the same lookup, with the refusal recorded and wrapped the one way all of
+// them want it. The read-only callers deliberately do not use it -- they refuse
+// with ErrNotFound and write no audit event.
+func (service *Service) operableStackTemplate(
+	ctx context.Context,
+	actor traits.UserID,
+	tenantID traits.TenantID,
+	stackTemplateID traits.StackTemplateID,
+) (traits.StackTemplate, error) {
+	stackTemplate, err := service.authorizedStackTemplate(ctx, tenantID, stackTemplateID, authz.RelationCanOperate, ErrForbidden)
+	if err != nil {
+		// No StackID: the refusal can precede resolving which stack owns the
+		// template, so naming one here would sometimes be a guess.
+		service.auditFailedAccess(ctx, actor, tenantID, "")
+		return traits.StackTemplate{}, fmt.Errorf("get stack template: %w", err)
+	}
+	return stackTemplate, nil
+}
+
 // PlatformCapabilities is the global half of what GET /v1/me projects. The
 // field names keep the wire contract the web client already reads; what
 // changed is where the answers come from.
@@ -237,35 +257,32 @@ type PlatformCapabilities struct {
 	CanCreateStack  bool
 }
 
+// platformCapabilityRelations is the order a platform BatchCheck is built in,
+// and platformCapabilitiesFrom is the decoding of its results. The two are
+// positional and must agree, so they are kept adjacent rather than written out
+// separately at the point of use.
+var platformCapabilityRelations = []authz.Relation{
+	authz.RelationCanAdminister,
+	authz.RelationCanCreateStack,
+}
+
+func platformCapabilitiesFrom(results []authz.CheckResult) PlatformCapabilities {
+	return PlatformCapabilities{
+		IsPlatformAdmin: results[0].Allowed,
+		CanCreateStack:  results[1].Allowed,
+	}
+}
+
 // ResolvePlatformCapabilities answers both global questions in one BatchCheck.
 // An unauthenticated or unconfigured caller is not an error here: /v1/me is
 // reachable before any tuple exists, and a principal that holds nothing is a
 // legitimate answer rather than a failure.
 func ResolvePlatformCapabilities(ctx context.Context, authorizer authz.Authorizer) (PlatformCapabilities, error) {
-	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
+	results, err := batchCheckObject(ctx, authorizer, authz.Platform, platformCapabilityRelations)
 	if err != nil {
 		return PlatformCapabilities{}, err
 	}
-	subject, err := authz.SubjectFromOIDCSub(principal.Subject)
-	if err != nil {
-		return PlatformCapabilities{}, err
-	}
-	relations := []authz.Relation{authz.RelationCanAdminister, authz.RelationCanCreateStack}
-	checks := make([]authz.CheckRequest, len(relations))
-	for i, relation := range relations {
-		checks[i] = authz.CheckRequest{Subject: subject, Relation: relation, Object: authz.Platform}
-	}
-	result, err := authorizer.BatchCheck(ctx, authz.BatchCheckRequest{Checks: checks})
-	if err != nil {
-		return PlatformCapabilities{}, err
-	}
-	if len(result.Results) != len(relations) {
-		return PlatformCapabilities{}, fmt.Errorf("%w: batch result count does not match platform capabilities", authz.ErrMalformedResponse)
-	}
-	return PlatformCapabilities{
-		IsPlatformAdmin: result.Results[0].Allowed,
-		CanCreateStack:  result.Results[1].Allowed,
-	}, nil
+	return platformCapabilitiesFrom(results), nil
 }
 
 type StackCapabilities struct {
@@ -275,22 +292,45 @@ type StackCapabilities struct {
 	CanManageAccess bool
 }
 
-func ResolveStackCapabilities(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID) (StackCapabilities, error) {
+// stackCapabilityRelations and stackCapabilitiesFrom are the request order and
+// the result decoding for a stack BatchCheck. Both resolvers below share them,
+// so a reordering cannot reach one caller and miss the other -- which, while
+// each resolver spelled the order out for itself, would have silently returned
+// the wrong permissions rather than failing.
+var stackCapabilityRelations = []authz.Relation{
+	authz.RelationCanView,
+	authz.RelationCanOperate,
+	authz.RelationCanApprove,
+	authz.RelationCanManageAccess,
+}
+
+func stackCapabilitiesFrom(results []authz.CheckResult) StackCapabilities {
+	return StackCapabilities{
+		CanView:         results[0].Allowed,
+		CanOperate:      results[1].Allowed,
+		CanApprove:      results[2].Allowed,
+		CanManageAccess: results[3].Allowed,
+	}
+}
+
+// batchCheckObject asks every relation about one object in a single BatchCheck
+// and returns the results in request order. A response of the wrong length is
+// ErrMalformedResponse: the callers decode it positionally, so a short or long
+// result would otherwise be read as the wrong permission rather than as a
+// failure.
+func batchCheckObject(
+	ctx context.Context,
+	authorizer authz.Authorizer,
+	object authz.Object,
+	relations []authz.Relation,
+) ([]authz.CheckResult, error) {
 	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
 	if err != nil {
-		return StackCapabilities{}, err
+		return nil, err
 	}
 	subject, err := authz.SubjectFromOIDCSub(principal.Subject)
 	if err != nil {
-		return StackCapabilities{}, err
-	}
-	object, err := authz.ObjectFromID(authz.TypeStack, string(stackID))
-	if err != nil {
-		return StackCapabilities{}, err
-	}
-
-	relations := []authz.Relation{
-		authz.RelationCanView, authz.RelationCanOperate, authz.RelationCanApprove, authz.RelationCanManageAccess,
+		return nil, err
 	}
 	checks := make([]authz.CheckRequest, len(relations))
 	for i, relation := range relations {
@@ -298,17 +338,30 @@ func ResolveStackCapabilities(ctx context.Context, authorizer authz.Authorizer, 
 	}
 	result, err := authorizer.BatchCheck(ctx, authz.BatchCheckRequest{Checks: checks})
 	if err != nil {
+		return nil, err
+	}
+	if len(result.Results) != len(checks) {
+		return nil, fmt.Errorf("%w: batch result count does not match checks", authz.ErrMalformedResponse)
+	}
+	return result.Results, nil
+}
+
+func ResolveStackCapabilities(ctx context.Context, authorizer authz.Authorizer, stackID traits.StackID) (StackCapabilities, error) {
+	// Checked before the stack ID is parsed, so an anonymous caller still gets
+	// ErrUnauthenticated rather than a complaint about the ID. batchCheckObject
+	// repeats this; it is a pure read of the context.
+	if _, err := requirePrincipalAndAuthorizer(ctx, authorizer); err != nil {
 		return StackCapabilities{}, err
 	}
-	if len(result.Results) != len(relations) {
-		return StackCapabilities{}, fmt.Errorf("%w: batch result count does not match permissions", authz.ErrMalformedResponse)
+	object, err := authz.ObjectFromID(authz.TypeStack, string(stackID))
+	if err != nil {
+		return StackCapabilities{}, err
 	}
-	return StackCapabilities{
-		CanView:         result.Results[0].Allowed,
-		CanOperate:      result.Results[1].Allowed,
-		CanApprove:      result.Results[2].Allowed,
-		CanManageAccess: result.Results[3].Allowed,
-	}, nil
+	results, err := batchCheckObject(ctx, authorizer, object, stackCapabilityRelations)
+	if err != nil {
+		return StackCapabilities{}, err
+	}
+	return stackCapabilitiesFrom(results), nil
 }
 
 func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer, stacks []traits.Stack) (map[traits.StackID]StackCapabilities, error) {
@@ -338,16 +391,13 @@ func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer,
 	if err != nil {
 		return nil, err
 	}
-	relations := []authz.Relation{
-		authz.RelationCanView, authz.RelationCanOperate, authz.RelationCanApprove, authz.RelationCanManageAccess,
-	}
-	checks := make([]authz.CheckRequest, 0, len(stacks)*len(relations))
+	checks := make([]authz.CheckRequest, 0, len(stacks)*len(stackCapabilityRelations))
 	for _, s := range stacks {
 		object, err := authz.ObjectFromID(authz.TypeStack, string(s.ID))
 		if err != nil {
 			return nil, err
 		}
-		for _, relation := range relations {
+		for _, relation := range stackCapabilityRelations {
 			checks = append(checks, authz.CheckRequest{Subject: subject, Relation: relation, Object: object})
 		}
 	}
@@ -358,15 +408,13 @@ func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer,
 	if len(result.Results) != len(checks) {
 		return nil, fmt.Errorf("%w: batch result count does not match checks", authz.ErrMalformedResponse)
 	}
+	// One stack's relations occupy one contiguous run, in the order they were
+	// appended above, so each run decodes with the same function the
+	// single-stack resolver uses.
 	caps := make(map[traits.StackID]StackCapabilities, len(stacks))
 	for i, s := range stacks {
-		base := i * len(relations)
-		caps[s.ID] = StackCapabilities{
-			CanView:         result.Results[base+0].Allowed,
-			CanOperate:      result.Results[base+1].Allowed,
-			CanApprove:      result.Results[base+2].Allowed,
-			CanManageAccess: result.Results[base+3].Allowed,
-		}
+		base := i * len(stackCapabilityRelations)
+		caps[s.ID] = stackCapabilitiesFrom(result.Results[base : base+len(stackCapabilityRelations)])
 	}
 	return caps, nil
 }

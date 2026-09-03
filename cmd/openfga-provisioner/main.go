@@ -8,10 +8,10 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	openfga "github.com/vishu42/tflive/internal/openfga"
+	"github.com/vishu42/tflive/internal/strval"
 	openfgamodel "github.com/vishu42/tflive/openfga"
 )
 
@@ -64,7 +64,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, modelJS
 	result, err := execute(ctx, operation, cfg, model)
 	if err != nil {
 		return sanitizedExecutionError{
-			message: fmt.Sprintf("%s OpenFGA: %s", operation, redact(err.Error(), cfg.APIToken)),
+			message: fmt.Sprintf("%s OpenFGA: %s", operation, strval.Redact(err.Error(), cfg.APIToken)),
 			cause:   err,
 		}
 	}
@@ -83,11 +83,4 @@ func execute(ctx context.Context, operation string, cfg openfga.Config, model op
 		return openfga.Bootstrap(ctx, cfg, model, client)
 	}
 	return openfga.Verify(ctx, cfg, model, client)
-}
-
-func redact(value, secret string) string {
-	if secret == "" {
-		return value
-	}
-	return strings.ReplaceAll(value, secret, "[REDACTED]")
 }

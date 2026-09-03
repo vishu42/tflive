@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/vishu42/tflive/internal/secrets"
+	"github.com/vishu42/tflive/internal/encryption"
 )
 
 const (
@@ -161,7 +161,7 @@ func loadCredentialEncryptionKey(getenv func(string) string) (Secret, error) {
 	if key.Empty() {
 		return key, nil
 	}
-	if _, err := secrets.NewCipher(key.Value()); err != nil {
+	if _, err := encryption.NewCipher(key.Value()); err != nil {
 		return Secret{}, fmt.Errorf("%w: CREDENTIAL_ENCRYPTION_KEY must be a 32-byte raw, base64, or hex key", ErrInvalidConfig)
 	}
 	return key, nil

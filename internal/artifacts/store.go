@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -147,23 +148,14 @@ func (store FilesystemStore) objectPath(key string) (string, error) {
 	return filepath.Join(append([]string{store.root}, strings.Split(key, "/")...)...), nil
 }
 
-type S3Config struct {
-	Bucket          string
-	Region          string
-	Endpoint        string
-	AccessKeyID     string
-	SecretAccessKey string
-	ForcePathStyle  bool
-}
-
 type S3Store struct {
-	cfg        S3Config
+	cfg        config.S3Config
 	endpoint   *url.URL
 	httpClient *http.Client
 	now        func() time.Time
 }
 
-func NewS3Store(cfg S3Config) (*S3Store, error) {
+func NewS3Store(cfg config.S3Config) (*S3Store, error) {
 	if strings.TrimSpace(cfg.Bucket) == "" {
 		return nil, fmt.Errorf("s3 bucket is required")
 	}

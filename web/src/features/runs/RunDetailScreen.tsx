@@ -7,6 +7,7 @@ import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
 import StatusRow from "../../shared/StatusRow";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
+import RunActionButton, { type RunActionButtonProps } from "./RunActionButton";
 import RunLogsPanel from "./RunLogsPanel";
 
 // /stacks/:stackId/runs/:runId — plan/apply detail with per-phase logs,
@@ -89,18 +90,16 @@ export default function RunDetailScreen() {
           <RequireCapability
             capability="canApprove"
             stackId={stackId}
-            fallback={
-              <ApproveButton canApprove={false} onApprove={handleApprove} busy={approveRunMutation.isPending} disabledReason="Approving requires approver access" />
-            }
+            fallback={<ApproveButton enabled={false} onClick={handleApprove} busy={approveRunMutation.isPending} disabledReason="Approving requires approver access" />}
           >
-            <ApproveButton canApprove={canApprove} onApprove={handleApprove} busy={approveRunMutation.isPending} />
+            <ApproveButton enabled={canApprove} onClick={handleApprove} busy={approveRunMutation.isPending} />
           </RequireCapability>
           <RequireCapability
             capability="canOperate"
             stackId={stackId}
-            fallback={<CancelButton canCancel={false} onCancel={handleCancel} busy={cancelRunMutation.isPending} disabledReason="Canceling requires operator access" />}
+            fallback={<CancelButton enabled={false} onClick={handleCancel} busy={cancelRunMutation.isPending} disabledReason="Canceling requires operator access" />}
           >
-            <CancelButton canCancel={canCancel} onCancel={handleCancel} busy={cancelRunMutation.isPending} />
+            <CancelButton enabled={canCancel} onClick={handleCancel} busy={cancelRunMutation.isPending} />
           </RequireCapability>
         </div>
         <StatusRow label="Operation" value={run?.operation ?? ""} />
@@ -114,56 +113,14 @@ export default function RunDetailScreen() {
   );
 }
 
-function ApproveButton({
-  canApprove,
-  onApprove,
-  busy,
-  disabledReason
-}: {
-  canApprove: boolean;
-  onApprove: () => void;
-  busy: boolean;
-  disabledReason?: string;
-}) {
-  const locked = Boolean(disabledReason);
-  return (
-    <div>
-      <button className="secondary-button" disabled={locked || !canApprove || busy} onClick={onApprove} type="button">
-        {busy ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
-        Approve
-      </button>
-      {disabledReason && (
-        <p className="muted" data-testid="run-detail-approve-disabled-reason">
-          {disabledReason}
-        </p>
-      )}
-    </div>
-  );
+// This screen's two actions, bound to its own reason test ids. Everything else
+// about them is RunActionButton's.
+type ScreenAction = Omit<RunActionButtonProps, "label" | "icon" | "reasonTestID">;
+
+function ApproveButton(props: ScreenAction) {
+  return <RunActionButton {...props} label="Approve" icon={<ShieldCheck size={16} />} reasonTestID="run-detail-approve-disabled-reason" />;
 }
 
-function CancelButton({
-  canCancel,
-  onCancel,
-  busy,
-  disabledReason
-}: {
-  canCancel: boolean;
-  onCancel: () => void;
-  busy: boolean;
-  disabledReason?: string;
-}) {
-  const locked = Boolean(disabledReason);
-  return (
-    <div>
-      <button className="secondary-button" disabled={locked || !canCancel || busy} onClick={onCancel} type="button">
-        {busy ? <Loader2 size={16} className="spin" /> : <CircleStop size={16} />}
-        Cancel
-      </button>
-      {disabledReason && (
-        <p className="muted" data-testid="run-detail-cancel-disabled-reason">
-          {disabledReason}
-        </p>
-      )}
-    </div>
-  );
+function CancelButton(props: ScreenAction) {
+  return <RunActionButton {...props} label="Cancel" icon={<CircleStop size={16} />} reasonTestID="run-detail-cancel-disabled-reason" />;
 }

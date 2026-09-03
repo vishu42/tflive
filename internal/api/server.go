@@ -16,8 +16,8 @@ import (
 	"github.com/vishu42/tflive/internal/auth"
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/secrets"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -67,7 +67,7 @@ type AuthConfig struct {
 	// accounts are off, and the route is not registered at all: there is then
 	// no local credential path to reach, rather than one that always denies.
 	LocalAuthenticator LocalAuthenticator
-	Sealer             *secrets.Cipher
+	Sealer             *encryption.Cipher
 	// PublicURL is the origin the browser reaches, with no trailing slash. It
 	// is configured rather than derived from Host or X-Forwarded-Proto, which
 	// a caller can spoof.

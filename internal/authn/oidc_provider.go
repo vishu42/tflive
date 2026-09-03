@@ -94,15 +94,54 @@ func NewOIDCVerifier(ctx context.Context, cfg OIDCVerifierConfig) (*OIDCVerifier
 		return nil, ErrVerifierUnavailable
 	}
 
+	// providerClient, not cfg.HTTPClient: the raw configured client is hardened
+	// once inside newKeyCache. cfg.HTTPClient is already the hardened one by
+	// this point, and a refresh later re-hardens that -- see replaceKeyCache.
+	keys, err := newKeyCache(ctx, cfg, jwksURL, providerClient)
+	if err != nil {
+		return nil, ErrVerifierUnavailable
+	}
+
+	return &OIDCVerifier{
+		cfg:        cfg,
+		discovery:  discovery,
+		discovered: cfg.Clock(),
+		keys:       keys,
+	}, nil
+}
+
+// errDuplicateJWKSKeyIDs reports a JWKS that maps one key ID to more than one
+// key. Which key a token means is then ambiguous, so the set is refused rather
+// than resolved arbitrarily.
+var errDuplicateJWKSKeyIDs = errors.New("OIDC JWKS contains duplicate key IDs")
+
+// newKeyCache builds one registered, freshness-bounded JWKS cache for jwksURI.
+// It is the whole of what construction and a key rotation both need, and was
+// written out twice before this -- forty lines of security-relevant setup that
+// a hardening change could reach one copy of and miss the other.
+//
+// client is a parameter rather than read from cfg because the two callers pass
+// different things, and always have: construction passes the raw configured
+// client, while replaceKeyCache passes the already-hardened one off the
+// verifier.
+//
+// Every failure shuts down the cache it created, so a caller never has to clean
+// up something it was never handed. On success the caller owns the cache and
+// must Shutdown it eventually.
+func newKeyCache(ctx context.Context, cfg OIDCVerifierConfig, jwksURI string, client *http.Client) (*keyCache, error) {
 	registrationCtx, cancelRegistration := context.WithCancel(ctx)
 	defer cancelRegistration()
+
+	// A transport failure reported while registering cancels registrationCtx,
+	// so Register gives up rather than going on against a provider that is
+	// unreachable or answering with something oversized.
 	cache, err := jwk.NewCache(ctx, httprc.NewClient(
 		httprc.WithErrorSink(errsink.NewFunc(func(context.Context, error) {
 			cancelRegistration()
 		})),
 	))
 	if err != nil {
-		return nil, ErrVerifierUnavailable
+		return nil, err
 	}
 	keepCache := false
 	defer func() {
@@ -111,43 +150,35 @@ func NewOIDCVerifier(ctx context.Context, cfg OIDCVerifierConfig) (*OIDCVerifier
 		}
 	}()
 
-	cacheClient := hardenedProviderClient(providerClient, cancelRegistration)
 	if err := cache.Register(
 		registrationCtx,
-		jwksURL,
-		jwk.WithHTTPClient(cacheClient),
+		jwksURI,
+		jwk.WithHTTPClient(hardenedProviderClient(client, cancelRegistration)),
 		jwk.WithMinInterval(cfg.JWKSMinRefreshInterval),
 		jwk.WithMaxInterval(cfg.JWKSMaxRefreshInterval),
 	); err != nil {
-		return nil, ErrVerifierUnavailable
+		return nil, err
 	}
 
-	set, err := cache.CachedSet(jwksURL)
-	if err != nil || hasDuplicateKeyIDs(set) {
-		return nil, ErrVerifierUnavailable
+	set, err := cache.CachedSet(jwksURI)
+	if err != nil {
+		return nil, err
+	}
+	if hasDuplicateKeyIDs(set) {
+		return nil, errDuplicateJWKSKeyIDs
 	}
 	freshUntil, err := jwksFreshUntil(
-		cfg.Clock(), cache, jwksURL, cfg.JWKSMinRefreshInterval, cfg.JWKSMaxRefreshInterval,
+		cfg.Clock(), cache, jwksURI, cfg.JWKSMinRefreshInterval, cfg.JWKSMaxRefreshInterval,
 	)
 	if err != nil {
-		return nil, ErrVerifierUnavailable
+		return nil, err
 	}
-	if err := deferAutomaticJWKSRefresh(cache, jwksURL); err != nil {
-		return nil, ErrVerifierUnavailable
+	if err := deferAutomaticJWKSRefresh(cache, jwksURI); err != nil {
+		return nil, err
 	}
 
 	keepCache = true
-	return &OIDCVerifier{
-		cfg:        cfg,
-		discovery:  discovery,
-		discovered: cfg.Clock(),
-		keys: &keyCache{
-			url:        jwksURL,
-			cache:      cache,
-			set:        set,
-			freshUntil: freshUntil,
-		},
-	}, nil
+	return &keyCache{url: jwksURI, cache: cache, set: set, freshUntil: freshUntil}, nil
 }
 
 func (v *OIDCVerifier) Close(ctx context.Context) error {
@@ -339,57 +370,15 @@ func (v *OIDCVerifier) refreshDiscoveryIfDue(ctx context.Context) error {
 }
 
 func (v *OIDCVerifier) replaceKeyCache(ctx context.Context, jwksURI string) error {
-	registrationCtx, cancelRegistration := context.WithCancel(ctx)
-	defer cancelRegistration()
-
-	cache, err := jwk.NewCache(ctx, httprc.NewClient(
-		httprc.WithErrorSink(errsink.NewFunc(func(context.Context, error) {
-			cancelRegistration()
-		})),
-	))
+	newKeys, err := newKeyCache(ctx, v.cfg, jwksURI, v.cfg.HTTPClient)
 	if err != nil {
 		return err
 	}
-	keepCache := false
-	defer func() {
-		if !keepCache {
-			_ = cache.Shutdown(context.Background())
-		}
-	}()
 
-	cacheClient := hardenedProviderClient(v.cfg.HTTPClient, cancelRegistration)
-	if err := cache.Register(
-		registrationCtx,
-		jwksURI,
-		jwk.WithHTTPClient(cacheClient),
-		jwk.WithMinInterval(v.cfg.JWKSMinRefreshInterval),
-		jwk.WithMaxInterval(v.cfg.JWKSMaxRefreshInterval),
-	); err != nil {
-		return err
-	}
-	set, err := cache.CachedSet(jwksURI)
-	if err != nil {
-		return err
-	}
-	if hasDuplicateKeyIDs(set) {
-		return errors.New("OIDC JWKS contains duplicate key IDs")
-	}
-	freshUntil, err := jwksFreshUntil(
-		v.cfg.Clock(), cache, jwksURI, v.cfg.JWKSMinRefreshInterval, v.cfg.JWKSMaxRefreshInterval,
-	)
-	if err != nil {
-		return err
-	}
-	if err := deferAutomaticJWKSRefresh(cache, jwksURI); err != nil {
-		return err
-	}
-
-	newKeys := &keyCache{url: jwksURI, cache: cache, set: set, freshUntil: freshUntil}
 	v.mu.Lock()
 	oldKeys := v.keys
 	v.keys = newKeys
 	v.mu.Unlock()
-	keepCache = true
 
 	if oldKeys != nil && oldKeys.cache != nil {
 		return oldKeys.cache.Shutdown(context.Background())

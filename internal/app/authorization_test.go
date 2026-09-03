@@ -363,6 +363,57 @@ func TestResolveStacksCapabilitiesMapsEachStackAndRelationPositionally(t *testin
 	}
 }
 
+// platformCapabilityRelationsInOrder mirrors stackCapabilityRelationsInOrder
+// for the platform pair, and for the same reason: it is written out
+// independently of the production slice so a permutation of that slice fails
+// here instead of being copied into the assertion.
+var platformCapabilityRelationsInOrder = []authz.Relation{
+	authz.RelationCanAdminister, authz.RelationCanCreateStack,
+}
+
+var platformCapabilityRelationNames = []string{"can_administer", "can_create_stack"}
+
+// Pins ResolvePlatformCapabilities the way the two stack tests pin their
+// resolvers. The platform pair had no such test, which is what made a
+// reordering of its relations silently return IsPlatformAdmin for
+// can_create_stack.
+func TestResolvePlatformCapabilitiesMapsEachRelationPositionally(t *testing.T) {
+	t.Parallel()
+
+	for relationIndex, name := range platformCapabilityRelationNames {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			authorizer := &permissionAuthorizer{batchDecision: func(i int) bool { return i == relationIndex }}
+			ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
+
+			got, err := ResolvePlatformCapabilities(ctx, authorizer)
+			if err != nil {
+				t.Fatalf("ResolvePlatformCapabilities() error = %v", err)
+			}
+			want := PlatformCapabilities{IsPlatformAdmin: relationIndex == 0, CanCreateStack: relationIndex == 1}
+			if got != want {
+				t.Fatalf("ResolvePlatformCapabilities() = %+v, want %+v", got, want)
+			}
+
+			// The boolean assertion above cannot see a permuted relations
+			// slice on its own, so the recorded Relation at each position is
+			// checked too.
+			if len(authorizer.batchChecks) != len(platformCapabilityRelationsInOrder) {
+				t.Fatalf("batch checks sent = %d, want %d", len(authorizer.batchChecks), len(platformCapabilityRelationsInOrder))
+			}
+			for i, check := range authorizer.batchChecks {
+				if check.Relation != platformCapabilityRelationsInOrder[i] {
+					t.Fatalf("batchChecks[%d].Relation = %q, want %q (relations slice order changed)", i, check.Relation, platformCapabilityRelationsInOrder[i])
+				}
+				if check.Object != authz.Platform {
+					t.Fatalf("batchChecks[%d].Object = %q, want the platform singleton", i, check.Object)
+				}
+			}
+		})
+	}
+}
+
 func TestMissingAuthorizerIsUnavailable(t *testing.T) {
 	t.Parallel()
 

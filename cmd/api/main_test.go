@@ -18,9 +18,9 @@ import (
 	"github.com/vishu42/tflive/internal/authn"
 	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/queue"
-	"github.com/vishu42/tflive/internal/secrets"
 	"github.com/vishu42/tflive/internal/traits"
 )
 
@@ -469,8 +469,8 @@ type recordingAPIDependencies struct {
 	pool                *recordingPostgresPool
 	store               *recordingStore
 	queueSpecs          *queue.SpecRegistry
-	credentialCipher    *secrets.Cipher
-	sessionCipher       *secrets.Cipher
+	credentialCipher    *encryption.Cipher
+	sessionCipher       *encryption.Cipher
 	artifactStoreConfig config.ArtifactStoreConfig
 	logReader           recordingTemplateRunLogReader
 	service             app.Service
@@ -502,7 +502,7 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 			deps.migrated = true
 			return nil
 		},
-		newStore: func(pool postgresPool, specs *queue.SpecRegistry, credentialCipher *secrets.Cipher, sessionCipher *secrets.Cipher) (appRepositories, error) {
+		newStore: func(pool postgresPool, specs *queue.SpecRegistry, credentialCipher *encryption.Cipher, sessionCipher *encryption.Cipher) (appRepositories, error) {
 			if pool != deps.pool {
 				t.Fatalf("newStore pool = %p, want %p", pool, deps.pool)
 			}
