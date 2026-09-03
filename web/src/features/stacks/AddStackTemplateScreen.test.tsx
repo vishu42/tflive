@@ -119,7 +119,7 @@ describe("AddStackTemplateScreen", () => {
     expect(row.textContent).toContain("main");
     expect(row.textContent).toContain("44b2e01");
     // Two revisions of one template are one row.
-    expect(document.querySelectorAll(".templates-list li")).toHaveLength(1);
+    expect(document.querySelectorAll(".template-choices li")).toHaveLength(1);
   });
 
   it("says nothing about a template whose latest revision is active", () => {
@@ -131,6 +131,27 @@ describe("AddStackTemplateScreen", () => {
     const row = screen.getByTestId("add-template-choice-tmpl_src_1");
     expect(row.textContent).not.toContain("active");
     expect(row.querySelector(".status-tone")).toBeNull();
+  });
+
+  it("names the chosen template in the panel that configures it", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      templateRevision(),
+      templateRevision({ id: "rev_2", source_template_id: "tmpl_src_2", name: "rds", repo_owner: "my-org", repo_name: "rds" })
+    ]);
+    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_1"), [variable()]);
+
+    renderScreen(queryClient);
+
+    // Before choosing, the pane invites a choice rather than sitting empty.
+    expect(screen.getByTestId("add-stack-template-unchosen")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("add-template-choice-tmpl_src_1"));
+
+    // Named, because position alone said nothing: stacked under the list, this
+    // panel read as belonging to whichever template rendered last.
+    expect(screen.getByTestId("add-stack-template-variables").textContent).toContain("vpc");
+    expect(screen.queryByTestId("add-stack-template-unchosen")).toBeNull();
   });
 
   it("hides the variables form until a revision is chosen", () => {

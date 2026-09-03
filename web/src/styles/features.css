@@ -366,7 +366,8 @@
   overflow-wrap: anywhere;
 }
 
-.templates-list li small {
+.templates-list li small,
+.template-choices small {
   color: var(--color-muted-fg);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -1087,23 +1088,44 @@
   color: var(--color-danger);
 }
 
-/* The install picker's row. Its body is the same two-line block the registry
-   list uses (.templates-list__main plus a .templates-list__meta cluster), so it
-   aligns to the top rather than centring a name against a taller neighbour, and
-   its text reads left like a row instead of centring like a button label. */
+/* The install picker's rows. Deliberately NOT .templates-list: that class
+   exists to paint a card on the li, and a bordered button inside it read as a
+   box inside a box. Here the button is the card, so the list contributes
+   nothing but layout. Its rows still borrow .templates-list__main and the meta
+   cluster, which are only ever about the row's contents. */
+.template-choices {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The button's body is the same two-line block the registry list uses
+   (.templates-list__main plus a .templates-list__meta cluster), so it aligns to
+   the top rather than centring a name against a taller neighbour, and its text
+   reads left like a row instead of centring like a button label. */
 .template-choice {
   align-items: flex-start;
   text-align: left;
-  background: transparent;
+  background: var(--color-card);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
   color: var(--color-fg);
   cursor: pointer;
   display: flex;
-  gap: var(--space-3);
+  gap: var(--space-4);
   justify-content: space-between;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  transition: all var(--duration-lift) var(--ease-out);
   width: 100%;
+}
+
+.template-choice:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-color: var(--color-accent-border);
+  box-shadow: var(--shadow-lg);
 }
 
 .template-choice:disabled {
@@ -1114,6 +1136,26 @@
 .template-choice[data-selected="true"] {
   border-color: var(--color-accent-border);
   box-shadow: var(--shadow-ring);
+}
+
+/* ---- Install: browse on the left, configure on the right ---- */
+/* Sticky so the panel stays beside the row that opened it however far the
+   template list runs on. .workflow-grid collapses to one column at its own
+   breakpoint, where a sticky panel would pin the form over the list instead. */
+.template-configure {
+  position: sticky;
+  top: var(--space-6);
+  align-self: start;
+}
+
+.template-configure__name {
+  margin: 0;
+}
+
+@media (max-width: 900px) {
+  .template-configure {
+    position: static;
+  }
 }
 
 .upgrade-variable-notes {
