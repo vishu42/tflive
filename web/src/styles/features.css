@@ -1087,8 +1087,13 @@
   color: var(--color-danger);
 }
 
+/* The install picker's row. Its body is the same two-line block the registry
+   list uses (.templates-list__main plus a .templates-list__meta cluster), so it
+   aligns to the top rather than centring a name against a taller neighbour, and
+   its text reads left like a row instead of centring like a button label. */
 .template-choice {
-  align-items: center;
+  align-items: flex-start;
+  text-align: left;
   background: transparent;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);

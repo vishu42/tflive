@@ -106,43 +106,30 @@ export function groupTemplatesByRepository(templateRevisions: TemplateRevision[]
   return Array.from(repositories.values());
 }
 
-export interface TemplateRevisionRepositoryGroup {
-  key: string;
-  repoOwner: string;
-  repoName: string;
-  templateRevisions: TemplateRevision[];
+/**
+ * The revisions of a template that can actually be installed.
+ *
+ * Order is the order received, which is the API's `created_at desc, id desc` —
+ * most recently registered first. Callers rely on that (the install picker
+ * offers them in this order and defaults to the first), so this filters and
+ * never sorts: sorting on `created_at` alone would drop the id tiebreaker and
+ * let revisions registered in the same tick shuffle between renders.
+ */
+export function activeRevisions(templateRevisions: TemplateRevision[]): TemplateRevision[] {
+  return templateRevisions.filter((templateRevision) => templateRevision.status === "active");
 }
 
 /**
- * Buckets revisions by repository, one row per revision.
+ * The revision an install should default to: the most recently registered
+ * *active* one, or null when the template has none.
  *
- * This is the shape the stack template pickers need: installing or upgrading
- * picks a *revision*, so collapsing revisions into templates the way the
- * registry screen does would hide the very thing being chosen. Grouping is by
- * owner/name only, so every ref and root path of one repository lands in the
- * same group and the rows carry that detail.
- *
- * Insertion order is preserved both across and within groups.
+ * Deliberately not simply the latest revision. A template whose newest revision
+ * failed validation must stay installable at the last one that passed — which
+ * is what the old per-revision picker achieved by accident, by disabling the
+ * inactive rows and leaving the older active ones selectable.
  */
-export function groupTemplateRevisionsByRepository(
-  templateRevisions: TemplateRevision[]
-): TemplateRevisionRepositoryGroup[] {
-  const groups = new Map<string, TemplateRevisionRepositoryGroup>();
-  for (const templateRevision of templateRevisions) {
-    const key = `${templateRevision.repo_owner}/${templateRevision.repo_name}`;
-    const group = groups.get(key);
-    if (group) {
-      group.templateRevisions.push(templateRevision);
-      continue;
-    }
-    groups.set(key, {
-      key,
-      repoOwner: templateRevision.repo_owner,
-      repoName: templateRevision.repo_name,
-      templateRevisions: [templateRevision]
-    });
-  }
-  return Array.from(groups.values());
+export function latestActiveRevision(templateRevisions: TemplateRevision[]): TemplateRevision | null {
+  return activeRevisions(templateRevisions)[0] ?? null;
 }
 
 /**
@@ -197,16 +184,6 @@ export function templateRevisionLabel(templateRevision: TemplateRevision): strin
   const name = templateRevision.name.trim() || `${templateRevision.repo_owner}/${templateRevision.repo_name}`;
   const shortSHA = shortCommitSHA(templateRevision.resolved_commit_sha);
   return shortSHA ? `${name} @ ${templateRevision.source_ref} · ${shortSHA}` : `${name} @ ${templateRevision.source_ref}`;
-}
-
-/**
- * Labels a revision where the repository is already on screen and only the ref
- * and commit distinguish one row from the next. Still used by the stack
- * template pickers, which choose a revision rather than a template.
- */
-export function templateRevisionRefLabel(templateRevision: TemplateRevision): string {
-  const shortSHA = shortCommitSHA(templateRevision.resolved_commit_sha);
-  return shortSHA ? `${templateRevision.source_ref} · ${shortSHA}` : templateRevision.source_ref;
 }
 
 export function shortCommitSHA(commitSHA: string): string {

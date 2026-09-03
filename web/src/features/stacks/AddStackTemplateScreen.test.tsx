@@ -90,17 +90,47 @@ describe("AddStackTemplateScreen", () => {
     vi.unstubAllGlobals();
   });
 
-  it("groups selectable revisions by repository", () => {
+  it("groups selectable templates by repository", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
       templateRevision(),
-      templateRevision({ id: "rev_2", repo_owner: "my-org", repo_name: "rds" })
+      templateRevision({ id: "rev_2", source_template_id: "tmpl_src_2", repo_owner: "my-org", repo_name: "rds" })
     ]);
 
     renderScreen(queryClient);
 
     expect(screen.getByTestId("template-group-hashicorp/vpc")).toBeTruthy();
     expect(screen.getByTestId("template-group-my-org/rds")).toBeTruthy();
+    expect(screen.getByTestId("template-group-count-hashicorp/vpc").textContent).toBe("1");
+  });
+
+  it("shows one row per template, named after the template", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      templateRevision({ id: "rev_2", resolved_commit_sha: "44b2e0199999" }),
+      templateRevision({ id: "rev_1" })
+    ]);
+
+    renderScreen(queryClient);
+
+    const row = screen.getByTestId("add-template-choice-tmpl_src_1");
+    // The name leads; the ref and commit are demoted to the trailing meta.
+    expect(row.querySelector(".templates-list__name")?.textContent).toBe("vpc");
+    expect(row.textContent).toContain("main");
+    expect(row.textContent).toContain("44b2e01");
+    // Two revisions of one template are one row.
+    expect(document.querySelectorAll(".templates-list li")).toHaveLength(1);
+  });
+
+  it("says nothing about a template whose latest revision is active", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [templateRevision()]);
+
+    renderScreen(queryClient);
+
+    const row = screen.getByTestId("add-template-choice-tmpl_src_1");
+    expect(row.textContent).not.toContain("active");
+    expect(row.querySelector(".status-tone")).toBeNull();
   });
 
   it("hides the variables form until a revision is chosen", () => {
@@ -112,7 +142,7 @@ describe("AddStackTemplateScreen", () => {
 
     expect(screen.queryByTestId("add-stack-template-variables")).toBeNull();
 
-    fireEvent.click(screen.getByTestId("add-template-choice-rev_1"));
+    fireEvent.click(screen.getByTestId("add-template-choice-tmpl_src_1"));
 
     expect(screen.getByTestId("add-stack-template-variables")).toBeTruthy();
     expect((screen.getByLabelText(/region/) as HTMLInputElement).value).toBe("");
@@ -124,14 +154,14 @@ describe("AddStackTemplateScreen", () => {
     queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_1"), [variable()]);
 
     renderScreen(queryClient);
-    fireEvent.click(screen.getByTestId("add-template-choice-rev_1"));
+    fireEvent.click(screen.getByTestId("add-template-choice-tmpl_src_1"));
 
     expect(document.querySelector("[data-unsaved='true']")).toBeNull();
     fireEvent.change(screen.getByLabelText(/region/), { target: { value: "eu-west-1" } });
     expect(document.querySelector("[data-unsaved='true']")).not.toBeNull();
   });
 
-  it("does not allow choosing a revision that is not active", () => {
+  it("does not allow choosing a template with no active revision, and says why", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
       templateRevision({ id: "rev_pending", status: "pending_validation" })
@@ -139,7 +169,36 @@ describe("AddStackTemplateScreen", () => {
 
     renderScreen(queryClient);
 
-    expect((screen.getByTestId("add-template-choice-rev_pending") as HTMLButtonElement).disabled).toBe(true);
+    const row = screen.getByTestId("add-template-choice-tmpl_src_1");
+    expect((row as HTMLButtonElement).disabled).toBe(true);
+    // A dead button with no reason on it is what the status pill is for.
+    expect(row.textContent).toContain("pending_validation");
+  });
+
+  it("installs the newest active revision when a newer one failed validation", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      templateRevision({ id: "rev_bad", status: "invalid", resolved_commit_sha: "44b2e0199999" }),
+      templateRevision({ id: "rev_good", status: "active" })
+    ]);
+    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_good"), [variable()]);
+
+    renderScreen(queryClient);
+
+    const row = screen.getByTestId("add-template-choice-tmpl_src_1");
+    // Selectable, because a validated revision is still available to install —
+    // and the commit shown is that one, not the newer broken one.
+    expect((row as HTMLButtonElement).disabled).toBe(false);
+    expect(row.textContent).toContain("abcdef1");
+    expect(row.textContent).not.toContain("44b2e01");
+    // The pill still reports the latest revision's state, so a failed
+    // validation is not hidden behind an older success.
+    expect(row.textContent).toContain("invalid");
+
+    fireEvent.click(row);
+
+    expect(screen.getByTestId("add-stack-template-variables")).toBeTruthy();
+    expect(screen.getByLabelText(/region/)).toBeTruthy();
   });
 
   it("installs the chosen revision and returns to the template screen with it selected", async () => {
@@ -155,7 +214,7 @@ describe("AddStackTemplateScreen", () => {
 
     renderScreen(queryClient);
 
-    fireEvent.click(screen.getByTestId("add-template-choice-rev_1"));
+    fireEvent.click(screen.getByTestId("add-template-choice-tmpl_src_1"));
     fireEvent.change(screen.getByLabelText(/region/), { target: { value: "eu-west-1" } });
     fireEvent.click(screen.getByRole("button", { name: /Install/ }));
 
@@ -186,7 +245,7 @@ describe("AddStackTemplateScreen", () => {
 
     renderScreen(queryClient);
 
-    fireEvent.click(screen.getByTestId("add-template-choice-rev_1"));
+    fireEvent.click(screen.getByTestId("add-template-choice-tmpl_src_1"));
     fireEvent.click(screen.getByRole("button", { name: /Install/ }));
 
     await waitFor(() => expect(screen.getByTestId("add-stack-template-error")).toBeTruthy());
@@ -201,7 +260,7 @@ describe("AddStackTemplateScreen", () => {
 
     renderScreen(queryClient);
 
-    fireEvent.click(screen.getByTestId("add-template-choice-rev_1"));
+    fireEvent.click(screen.getByTestId("add-template-choice-tmpl_src_1"));
 
     expect(screen.getByTestId("add-stack-template-variables-loading")).toBeTruthy();
     expect(screen.queryByText("This template declares no variables")).toBeNull();
@@ -212,7 +271,7 @@ describe("AddStackTemplateScreen", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
       templateRevision(),
-      templateRevision({ id: "rev_2", repo_owner: "my-org", repo_name: "rds" })
+      templateRevision({ id: "rev_2", source_template_id: "tmpl_src_2", repo_owner: "my-org", repo_name: "rds" })
     ]);
     queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_1"), [variable()]);
     // rev_2's variables are deliberately left unseeded, and fetch never
@@ -222,10 +281,10 @@ describe("AddStackTemplateScreen", () => {
 
     renderScreen(queryClient);
 
-    fireEvent.click(screen.getByTestId("add-template-choice-rev_1"));
+    fireEvent.click(screen.getByTestId("add-template-choice-tmpl_src_1"));
     expect(screen.getByLabelText(/region/)).toBeTruthy();
 
-    fireEvent.click(screen.getByTestId("add-template-choice-rev_2"));
+    fireEvent.click(screen.getByTestId("add-template-choice-tmpl_src_2"));
 
     expect(screen.queryByLabelText(/region/)).toBeNull();
     expect(screen.getByTestId("add-stack-template-variables-loading")).toBeTruthy();
@@ -252,11 +311,84 @@ describe("AddStackTemplateScreen", () => {
 
     renderScreen(queryClient);
 
-    fireEvent.click(screen.getByTestId("add-template-choice-rev_1"));
+    fireEvent.click(screen.getByTestId("add-template-choice-tmpl_src_1"));
 
     await waitFor(() => expect(screen.getByTestId("add-stack-template-variables-error")).toBeTruthy());
     expect(screen.queryByText("This template declares no variables")).toBeNull();
     expect((screen.getByRole("button", { name: /Install/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("offers no revision picker when the template has only one active revision", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      templateRevision(),
+      // Not active, so not an alternative to choose between.
+      templateRevision({ id: "rev_old", status: "invalid", resolved_commit_sha: "44b2e0199999" })
+    ]);
+    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_1"), [variable()]);
+
+    renderScreen(queryClient);
+    fireEvent.click(screen.getByTestId("add-template-choice-tmpl_src_1"));
+
+    expect(screen.queryByTestId("add-template-revision-select")).toBeNull();
+  });
+
+  it("lists a template's active revisions newest-registered first, defaulting to the latest", () => {
+    const queryClient = testQueryClient();
+    // The API returns created_at desc, id desc; the screen renders that order
+    // as received and must not re-sort it.
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      templateRevision({ id: "rev_new", resolved_commit_sha: "f17f9834444", created_at: "2026-08-19T10:00:00Z" }),
+      templateRevision({ id: "rev_mid", resolved_commit_sha: "a91c2045555", created_at: "2026-08-02T09:30:00Z" }),
+      templateRevision({ id: "rev_old", resolved_commit_sha: "3c0e1126666", created_at: "2026-06-28T14:15:00Z" })
+    ]);
+    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_new"), [variable()]);
+
+    renderScreen(queryClient);
+    fireEvent.click(screen.getByTestId("add-template-choice-tmpl_src_1"));
+
+    const select = screen.getByTestId("add-template-revision-select") as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(["rev_new", "rev_mid", "rev_old"]);
+    expect(select.value).toBe("rev_new");
+    expect(select.options[0].textContent).toContain("f17f983");
+    expect(select.options[0].textContent).toContain("19 Aug 2026");
+    expect(select.options[0].textContent).toContain("latest");
+    expect(select.options[1].textContent).not.toContain("latest");
+  });
+
+  it("installs the revision chosen in the picker rather than the default", async () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      templateRevision({ id: "rev_new", resolved_commit_sha: "f17f9834444" }),
+      templateRevision({ id: "rev_old", resolved_commit_sha: "3c0e1126666" })
+    ]);
+    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_new"), [variable()]);
+    queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_old"), [variable()]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "st_new" }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+    );
+
+    renderScreen(queryClient);
+    fireEvent.click(screen.getByTestId("add-template-choice-tmpl_src_1"));
+    fireEvent.change(screen.getByLabelText(/region/), { target: { value: "eu-west-1" } });
+    fireEvent.change(screen.getByTestId("add-template-revision-select"), { target: { value: "rev_old" } });
+
+    // Switching revision clears typed values, the same as choosing a template:
+    // the new revision's variables are what the config must be built from.
+    expect((screen.getByLabelText(/region/) as HTMLInputElement).value).toBe("");
+
+    fireEvent.change(screen.getByLabelText(/region/), { target: { value: "us-east-1" } });
+    fireEvent.click(screen.getByRole("button", { name: /Install/ }));
+
+    await waitFor(() => expect(screen.getByTestId("location")).toBeTruthy());
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      template_revision_id: "rev_old",
+      config: { region: "us-east-1" }
+    });
   });
 
   it("points at template registration when the tenant has none", () => {
