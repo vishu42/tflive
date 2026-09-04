@@ -4,6 +4,7 @@ package domain
 
 import (
 	"encoding/json"
+	"slices"
 	"time"
 )
 
@@ -72,34 +73,40 @@ const (
 	TemplateRunDestroyFinished TemplateRunStatus = "destroy_finished"
 )
 
+// AllTemplateRunStatuses is every status a run may hold, in lifecycle order.
+//
+// It exists because two things outside this package have to reason about the
+// whole vocabulary rather than one status at a time: Valid below, and the
+// template_runs_in_flight_idx test, which asserts the index's terminal-status
+// predicate agrees with Terminal for every status there is. A status added to
+// the constants above but not to this slice fails both.
+var AllTemplateRunStatuses = []TemplateRunStatus{
+	TemplateRunQueued,
+	TemplateRunLocked,
+	TemplateRunWorkspacePrepared,
+	TemplateRunSourceFetched,
+	TemplateRunWorkspaceSelected,
+	TemplateRunWaitingApproval,
+	TemplateRunApproved,
+	TemplateRunCancelRequested,
+	TemplateRunCanceling,
+	TemplateRunCanceled,
+	TemplateRunLockReleased,
+	TemplateRunCompleted,
+	TemplateRunFailed,
+	TemplateRunInitStarted,
+	TemplateRunInitFinished,
+	TemplateRunPlanStarted,
+	TemplateRunPlanFinished,
+	TemplateRunApplyStarted,
+	TemplateRunApplyFinished,
+	TemplateRunDestroyStarted,
+	TemplateRunDestroyFinished,
+}
+
 // Valid reports whether the status is one of the supported run states.
 func (status TemplateRunStatus) Valid() bool {
-	switch status {
-	case TemplateRunQueued,
-		TemplateRunLocked,
-		TemplateRunWorkspacePrepared,
-		TemplateRunSourceFetched,
-		TemplateRunWorkspaceSelected,
-		TemplateRunWaitingApproval,
-		TemplateRunApproved,
-		TemplateRunCancelRequested,
-		TemplateRunCanceling,
-		TemplateRunCanceled,
-		TemplateRunLockReleased,
-		TemplateRunCompleted,
-		TemplateRunFailed,
-		TemplateRunInitStarted,
-		TemplateRunInitFinished,
-		TemplateRunPlanStarted,
-		TemplateRunPlanFinished,
-		TemplateRunApplyStarted,
-		TemplateRunApplyFinished,
-		TemplateRunDestroyStarted,
-		TemplateRunDestroyFinished:
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(AllTemplateRunStatuses, status)
 }
 
 // Terminal reports whether a run status represents no further workflow work.

@@ -381,6 +381,44 @@ func TestStartTemplateRunMapsStalePlanToConflictWithItsOwnCode(t *testing.T) {
 	}
 }
 
+func TestStartTemplateRunMapsAnInFlightRunToConflictWithItsOwnCode(t *testing.T) {
+	t.Parallel()
+
+	deps := newAPITestDependencies()
+	deps.stackTemplates.stackTemplate = domain.StackTemplate{
+		ID:                        domain.StackTemplateID("stack_template_123"),
+		StackID:                   domain.StackID("stack_123"),
+		DesiredTemplateRevisionID: domain.TemplateRevisionID("template_123"),
+		DesiredConfigJSON:         json.RawMessage(`{"region":"eu-west-1"}`),
+		WorkspaceName:             "smoke-workspace",
+		Lifecycle:                 domain.StackTemplateActive,
+	}
+	// What the store returns when template_runs_in_flight_idx refuses the insert.
+	deps.templateRuns.createErr = app.ErrTemplateRunInFlight
+	server := NewServer(deps.service(), configuredTenantID)
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(
+		http.MethodPost,
+		"/v1/tenants/tenant_123/stack-templates/stack_template_123/runs",
+		strings.NewReader(`{"operation":"plan"}`),
+	)
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusConflict, response.Body.String())
+	}
+	var body errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	// Distinct from the generic "conflict" so the client knows its run history is
+	// stale and can refetch, rather than showing an unexplained failure.
+	if body.Error != "run_in_flight" {
+		t.Fatalf("error code = %q, want run_in_flight", body.Error)
+	}
+}
+
 func TestStackTemplateResponseCarriesDerivedStatesNotRawConfigs(t *testing.T) {
 	t.Parallel()
 
@@ -2829,11 +2867,15 @@ type recordingTemplateRunRepository struct {
 	gotListTenantID        domain.TenantID
 	gotListStackTemplateID domain.StackTemplateID
 	getErr                 error
+	createErr              error
 	approvalErr            error
 	cancellationErr        error
 }
 
 func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run domain.TemplateRun) error {
+	if repository.createErr != nil {
+		return repository.createErr
+	}
 	repository.created = run
 	return nil
 }

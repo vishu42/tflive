@@ -961,6 +961,52 @@ func TestStartTemplateRunRejectsApplyWhosePlanNoLongerMatchesDesired(t *testing.
 	}
 }
 
+// The gate against concurrent runs is the template_runs_in_flight_idx unique
+// index, not a check in this method, so the rejection arrives from the store
+// through the transaction rather than from a branch above it. What the service
+// owes is passage: the sentinel has to survive the InTx closure and the wrap
+// around it, or the API cannot map it to its 409 and the user gets a 500.
+func TestStartTemplateRunSurfacesTheStoresInFlightRejection(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{createErr: ErrTemplateRunInFlight}
+	work := &recordingUnitOfWork{templateRuns: runs}
+	service := NewService(Service{
+		Work:         work,
+		Authorizer:   &permissionAuthorizer{allowed: true},
+		TemplateRuns: runs,
+		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{
+			ID:                        domain.StackTemplateID("stack_template_123"),
+			DesiredTemplateRevisionID: domain.TemplateRevisionID("template_123"),
+			WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
+			Lifecycle:                 domain.StackTemplateActive,
+		}},
+		TemplateRevisionMetadata: &recordingTemplateRepository{
+			template: domain.TemplateRevision{ID: domain.TemplateRevisionID("template_123"), Status: domain.TemplateRevisionActive},
+		},
+		RunIDs: fixedTemplateRunIDGenerator{runID: domain.TemplateRunID("run_123")},
+		Clock:  fixedClock{now: time.Now()},
+	})
+
+	_, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
+	})
+	if !errors.Is(err, ErrTemplateRunInFlight) {
+		t.Fatalf("error = %v, want ErrTemplateRunInFlight", err)
+	}
+	if runs.created.ID != "" {
+		t.Fatalf("created run ID = %q, want no persisted run", runs.created.ID)
+	}
+	// The insert and the start intent share the transaction, so a refused run
+	// must not leave a queue item that would dispatch a workflow for a run row
+	// that does not exist.
+	if len(work.requests) != 0 {
+		t.Fatalf("queued requests = %#v, want none", work.requests)
+	}
+}
+
 // The component does not own a ref. It used to keep the one chosen at install
 // and stamp it onto every run, which stayed stale after a revision change: a
 // component installed from main and moved to a v2.0.0 revision kept reporting
@@ -2209,6 +2255,7 @@ type recordingTemplateRunRepository struct {
 	gotListTenantID        domain.TenantID
 	gotListStackTemplateID domain.StackTemplateID
 	getErr                 error
+	createErr              error
 	approvalErr            error
 	cancellationErr        error
 	reconciledRunID        domain.TemplateRunID
@@ -2216,6 +2263,9 @@ type recordingTemplateRunRepository struct {
 }
 
 func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run domain.TemplateRun) error {
+	if repository.createErr != nil {
+		return repository.createErr
+	}
 	repository.created = run
 	return nil
 }

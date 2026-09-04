@@ -8,6 +8,7 @@ import type { StackTemplate, TemplateRun } from "../../api/types";
 import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
 import { canDestroyStackTemplate, isDestroyingStackTemplate } from "../stacks/stackWorkflow";
+import { isRunInFlightError } from "./runErrors";
 
 interface TemplateDestroyPanelProps {
   stackId: string;
@@ -50,6 +51,9 @@ export default function TemplateDestroyPanel({ stackId, stackTemplate }: Templat
       await queryClient.invalidateQueries({ queryKey: queryKeys.templateRuns(tenantID, stackTemplate.id) });
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Request failed");
+      if (isRunInFlightError(error)) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.templateRuns(tenantID, stackTemplate.id) });
+      }
     }
   }
 

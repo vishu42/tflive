@@ -943,6 +943,12 @@ func createTemplateRun(ctx context.Context, exec pgxExecutor, run domain.Templat
 		nullTime(run.CompletedAt),
 		run.ErrorSummary,
 	)
+	// The gate against concurrent runs on one stack template: the insert is the
+	// check, so there is no window between deciding and writing. See migration
+	// 0021 for why it lives here rather than in StartTemplateRun.
+	if duplicateConstraint(err, "template_runs_in_flight_idx") {
+		return app.ErrTemplateRunInFlight
+	}
 	if err != nil {
 		return fmt.Errorf("create template run: %w", err)
 	}

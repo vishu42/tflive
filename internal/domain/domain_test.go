@@ -106,6 +106,34 @@ func TestTemplateRegistrationStatusValid(t *testing.T) {
 	}
 }
 
+func TestTemplateRunStatusValid(t *testing.T) {
+	t.Parallel()
+
+	// The count is asserted, not just the membership, because two things outside
+	// this package are written against the whole vocabulary: the status check
+	// constraint in the migrations, and template_runs_in_flight_idx's terminal
+	// predicate. Adding a status means visiting both, so the failure here is the
+	// prompt to do it.
+	if len(AllTemplateRunStatuses) != 21 {
+		t.Fatalf("AllTemplateRunStatuses has %d statuses, want 21 - add the new one to the migrations' status check constraint, and decide whether it is terminal", len(AllTemplateRunStatuses))
+	}
+
+	for _, status := range AllTemplateRunStatuses {
+		status := status
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+
+			if !status.Valid() {
+				t.Fatalf("expected %q to be valid", status)
+			}
+		})
+	}
+
+	if TemplateRunStatus("started").Valid() {
+		t.Fatal("expected unknown template run status to be invalid")
+	}
+}
+
 func TestTemplateRunStatusTerminal(t *testing.T) {
 	t.Parallel()
 

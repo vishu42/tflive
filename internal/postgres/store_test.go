@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1539,6 +1540,152 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 	}
 }
 
+// The gate against concurrent runs on one stack template, which is a partial
+// unique index rather than a check in the service, so that the check and the
+// write are the same operation and nothing can slip between them.
+//
+// Walking every status is the point: the index predicate names the three
+// terminal statuses in SQL and nothing ties that list to Terminal(). A status
+// added on one side and not the other shows up here as a run that was let
+// through while one was still going, or refused while none was.
+func TestCreateTemplateRunAllowsOneNonTerminalRunPerStackTemplate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+
+	for _, status := range domain.AllTemplateRunStatuses {
+		status := status
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+
+			// Scoped to this subtest so the parallel cases cannot collide.
+			stackTemplateID := domain.StackTemplateID("stack_template_" + string(status))
+			seedTemplateRun(t, ctx, pool, templateRunAt(stackTemplateID, domain.TemplateRunID("run_first_"+status), status))
+
+			err := store.CreateTemplateRun(ctx, templateRunAt(stackTemplateID, domain.TemplateRunID("run_second_"+status), domain.TemplateRunQueued))
+
+			if status.Terminal() {
+				if err != nil {
+					t.Fatalf("CreateTemplateRun after a %q run returned error: %v", status, err)
+				}
+				return
+			}
+			if !errors.Is(err, app.ErrTemplateRunInFlight) {
+				t.Fatalf("CreateTemplateRun during a %q run: error = %v, want app.ErrTemplateRunInFlight", status, err)
+			}
+		})
+	}
+}
+
+// The gate is per stack template, and history is unbounded: neither a run on a
+// neighbouring template nor a shelf of finished runs may block a new one.
+func TestCreateTemplateRunScopesTheInFlightGate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+
+	seedTemplateRun(t, ctx, pool, templateRunAt("stack_template_a", "run_a_active", domain.TemplateRunApplyStarted))
+	// A different stack template, and the same template under a different
+	// tenant: the index keys on the pair, so neither is the same slot.
+	if err := store.CreateTemplateRun(ctx, templateRunAt("stack_template_b", "run_b_active", domain.TemplateRunQueued)); err != nil {
+		t.Fatalf("CreateTemplateRun on a second stack template returned error: %v", err)
+	}
+	otherTenant := templateRunAt("stack_template_a", "run_other_tenant", domain.TemplateRunQueued)
+	otherTenant.TenantID = domain.TenantID("tenant_456")
+	if err := store.CreateTemplateRun(ctx, otherTenant); err != nil {
+		t.Fatalf("CreateTemplateRun for a second tenant returned error: %v", err)
+	}
+
+	// Finished runs leave the index, so they accumulate without ever filling
+	// the slot - and the slot reopens once the active run reaches a terminal
+	// status through the ordinary status-recording path. Failure is the case
+	// worth proving: it is the one #157 used to leave stuck non-terminal, which
+	// under this index would wedge the stack template permanently.
+	seedTemplateRun(t, ctx, pool, templateRunAt("stack_template_c", "run_c_1", domain.TemplateRunCompleted))
+	seedTemplateRun(t, ctx, pool, templateRunAt("stack_template_c", "run_c_2", domain.TemplateRunFailed))
+	seedTemplateRun(t, ctx, pool, templateRunAt("stack_template_c", "run_c_3", domain.TemplateRunCanceled))
+	if err := store.CreateTemplateRun(ctx, templateRunAt("stack_template_c", "run_c_4", domain.TemplateRunQueued)); err != nil {
+		t.Fatalf("CreateTemplateRun after three finished runs returned error: %v", err)
+	}
+	if err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
+		RunID:           domain.TemplateRunID("run_c_4"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_c"),
+		Operation:       domain.OperationPlan,
+		Status:          domain.TemplateRunFailed,
+	}); err != nil {
+		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+	}
+	if err := store.CreateTemplateRun(ctx, templateRunAt("stack_template_c", "run_c_5", domain.TemplateRunQueued)); err != nil {
+		t.Fatalf("CreateTemplateRun after the active run failed returned error: %v", err)
+	}
+}
+
+// The reason the gate is an index and not a check in StartTemplateRun. A
+// read-then-insert lets both requests see an empty stack template and both
+// write; here the check and the write are one statement, so the second insert
+// is refused however close together they arrive.
+func TestCreateTemplateRunAdmitsOneOfManyConcurrentRuns(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+
+	const racers = 8
+	start := make(chan struct{})
+	errs := make(chan error, racers)
+	var waiting sync.WaitGroup
+	waiting.Add(racers)
+	for index := range racers {
+		go func() {
+			defer waiting.Done()
+			<-start
+			errs <- store.CreateTemplateRun(ctx, templateRunAt(
+				"stack_template_race",
+				domain.TemplateRunID(fmt.Sprintf("run_race_%d", index)),
+				domain.TemplateRunQueued,
+			))
+		}()
+	}
+	close(start)
+	waiting.Wait()
+	close(errs)
+
+	admitted := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			admitted++
+		case errors.Is(err, app.ErrTemplateRunInFlight):
+		default:
+			t.Fatalf("CreateTemplateRun returned an unexpected error: %v", err)
+		}
+	}
+	if admitted != 1 {
+		t.Fatalf("admitted %d of %d concurrent runs, want exactly 1", admitted, racers)
+	}
+}
+
+func templateRunAt(stackTemplateID domain.StackTemplateID, runID domain.TemplateRunID, status domain.TemplateRunStatus) domain.TemplateRun {
+	return domain.TemplateRun{
+		ID:              runID,
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: stackTemplateID,
+		Operation:       domain.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "workspace",
+		ConfigJSON:      json.RawMessage(`{}`),
+		Status:          status,
+		TriggerActor:    domain.UserID("user_123"),
+		StartedAt:       time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC),
+	}
+}
+
 func TestUnitOfWorkTemplateWritesRollbackTogether(t *testing.T) {
 	t.Parallel()
 
@@ -1549,8 +1696,12 @@ func TestUnitOfWorkTemplateWritesRollbackTogether(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed template revision: %v", err)
 	}
-	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_approval", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunWaitingApproval, TriggerActor: "user_123"})
-	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_cancel", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunQueued, TriggerActor: "user_123"})
+	// One stack template each: all three runs here are non-terminal, and
+	// template_runs_in_flight_idx allows only one of those per stack template.
+	// What this test is about is that four unrelated writes roll back together,
+	// so which template each run belongs to does not matter to it.
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_approval", TenantID: "tenant_123", StackTemplateID: "stack_template_approval", Operation: domain.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunWaitingApproval, TriggerActor: "user_123"})
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_cancel", TenantID: "tenant_123", StackTemplateID: "stack_template_cancel", Operation: domain.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunQueued, TriggerActor: "user_123"})
 	sentinel := errors.New("rollback")
 
 	err = store.InTx(ctx, func(repo app.TxRepo, _ queue.Enqueuer) error {

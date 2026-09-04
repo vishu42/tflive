@@ -11,6 +11,7 @@ import { tenantID } from "../../config";
 import StatusRow from "../../shared/StatusRow";
 import { hasFreshPlan, planStaleReason } from "../stacks/stackWorkflow";
 import RunActionButton, { type RunActionButtonProps } from "./RunActionButton";
+import { isRunInFlightError } from "./runErrors";
 
 interface TemplateRunActionsProps {
   stackId: string;
@@ -72,6 +73,9 @@ export default function TemplateRunActions({ stackId, stackTemplate }: TemplateR
       await queryClient.invalidateQueries({ queryKey: queryKeys.templateRuns(tenantID, stackTemplate.id) });
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Request failed");
+      if (isRunInFlightError(error)) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.templateRuns(tenantID, stackTemplate.id) });
+      }
     }
   }
 

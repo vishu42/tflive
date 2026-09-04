@@ -243,6 +243,42 @@ describe("TemplateRunActions", () => {
     expect(screen.getByTestId("template-run-plan-stale").textContent).toContain("re-plan before applying");
   });
 
+  // The server owns the "one run at a time" rule now, and a 409 means this tab's
+  // history is behind: another tab or another user started a run since the last
+  // poll. Showing the message is not enough - the buttons would stay enabled and
+  // invite the same refused click again.
+  it("refetches run history when the server refuses a second run as already in flight", async () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    // What this tab believes: nothing running, so Plan is enabled.
+    let runsState: TemplateRun[] = [];
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/stack-templates/stpl_1/runs") && method === "GET") {
+        return jsonResponse(runsState);
+      }
+      if (url.endsWith("/stack-templates/stpl_1/runs") && method === "POST") {
+        // What the server knows: someone else's run is already going.
+        runsState = [run({ id: "run_elsewhere", operation: "apply", status: "apply_started" })];
+        return jsonResponse({ error: "run_in_flight", message: "create template run: a run is already in flight for this stack template" }, 409);
+      }
+      throw new Error(`unexpected fetch: ${url} ${method}`);
+    });
+
+    renderActions(queryClient);
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
+
+    await waitFor(() => expect(screen.getByText(/already in flight/)).toBeTruthy());
+    // The refetch is what puts the buttons back in the state the server already
+    // believes they are in: Plan refused, Cancel offered for the run that won.
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(true));
+    expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(false);
+  });
+
   it("walks plan → apply → approve using persisted history, and immediately reflects each step without a page reload", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);

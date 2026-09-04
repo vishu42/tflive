@@ -159,6 +159,37 @@ describe("TemplateDestroyPanel", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  // The panel re-reads the runs cache at submit time, which closes the window
+  // between render and click but not the one between this tab's last poll and
+  // the server's actual state. The 409 is what closes that one, and the refetch
+  // is what stops the button inviting the same refused click again.
+  it("refetches run history when the server refuses the destroy as already in flight", async () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    let runsState: TemplateRun[] = [];
+    seedRuns(queryClient, runsState);
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/stack-templates/stpl_1/runs") && method === "GET") {
+        return jsonResponse(runsState);
+      }
+      if (url.endsWith("/stack-templates/stpl_1/runs") && method === "POST") {
+        runsState = [run({ id: "run_elsewhere", operation: "apply", status: "apply_started" })];
+        return jsonResponse({ error: "run_in_flight", message: "create template run: a run is already in flight for this stack template" }, 409);
+      }
+      throw new Error(`unexpected fetch: ${url} ${method}`);
+    });
+
+    renderPanel(queryClient);
+    fireEvent.click(screen.getByRole("button", { name: /Destroy/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Confirm destroy/ }));
+
+    await waitFor(() => expect(screen.getByText(/already in flight/)).toBeTruthy());
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Confirm destroy/ }))).toBe(true));
+  });
+
   it("disables destroy when lifecycle is destroying", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);

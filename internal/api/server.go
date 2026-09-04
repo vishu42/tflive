@@ -1091,6 +1091,11 @@ func writeAppError(response http.ResponseWriter, err error) {
 	// Its own code, because the client can act on this one: re-plan, then apply.
 	case errors.Is(err, app.ErrStackTemplatePlanStale):
 		writeError(response, http.StatusConflict, "plan_stale", err.Error())
+	// Its own code, because the client can act on this one too: the run it is
+	// competing with is visible, so it can wait for it or cancel it. It also tells
+	// the client its view of the run history is stale and worth refetching.
+	case errors.Is(err, app.ErrTemplateRunInFlight):
+		writeError(response, http.StatusConflict, "run_in_flight", err.Error())
 	case errors.Is(err, app.ErrStackTemplateNotRunnable),
 		errors.Is(err, app.ErrRunNotApprovable),
 		errors.Is(err, app.ErrRunNotCancelable),
