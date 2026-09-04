@@ -4,14 +4,31 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useAddTemplateToStackMutation, useTemplateRevisionVariablesQuery, useTemplateRevisionsQuery } from "../../api/queries";
 import { tenantID } from "../../config";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
-import { groupTemplateRevisionsByRepository, templateRevisionRefLabel } from "../templates/templateWorkflow";
+import { formatTimestamp } from "../../shared/formatTimestamp";
+import { statusGlyph } from "../../shared/statusTone";
+import {
+  activeRevisions,
+  groupTemplatesByRepository,
+  latestActiveRevision,
+  revisionCountLabel,
+  shortCommitSHA,
+  templateRootPathLabel,
+  unsettledStatusTone
+} from "../templates/templateWorkflow";
 import { configFromVariableValues } from "./stackWorkflow";
 import VariableFields from "./VariableFields";
 
 // /stacks/:stackId/template/new — installing a template, extracted from the
 // template screen where an always-present Install button sat next to an
 // unrelated config form. The picker mirrors /templates so choosing here looks
-// like browsing the registry.
+// like browsing the registry: one row per template, named, with the ref and
+// commit demoted to the row's trailing meta.
+//
+// The install still posts a template_revision_id, so a row click resolves to
+// the template's latest *active* revision and a template with more than one
+// offers the rest in a dropdown. Picking a revision outright was the wrong
+// default: installing almost always wants the newest validated commit, and
+// moving between commits afterwards is UpgradeStackTemplateScreen's job.
 export default function AddStackTemplateScreen() {
   const { stackId = "" } = useParams<{ stackId: string }>();
   const navigate = useNavigate();
@@ -23,6 +40,20 @@ export default function AddStackTemplateScreen() {
   const boundary = useQueryErrorBoundary(templateRevisionsQuery.error);
   const templateRevisions = templateRevisionsQuery.data ?? [];
   const chosenRevision = templateRevisions.find((revision) => revision.id === chosenRevisionID) ?? null;
+
+  // Grouped once and shared: the picker renders these buckets, and the panel
+  // below finds the chosen template among them rather than re-deriving it from
+  // the revision's source_template_id — which would need the same empty-id
+  // fallback sourceTemplateKey already applies here.
+  const repositoryGroups = groupTemplatesByRepository(templateRevisions);
+  const chosenTemplate =
+    repositoryGroups
+      .flatMap((group) => group.sourceTemplates)
+      .find((sourceTemplate) => sourceTemplate.revisions.some((revision) => revision.id === chosenRevisionID)) ?? null;
+  // Newest-registered first, straight from the API's order — see
+  // activeRevisions. The dropdown offers these in exactly this order, so its
+  // first option is the one a row click already selected.
+  const chosenTemplateRevisions = chosenTemplate ? activeRevisions(chosenTemplate.revisions) : [];
 
   const variablesQuery = useTemplateRevisionVariablesQuery(tenantID, chosenRevision?.id ?? "");
   const variables = variablesQuery.data ?? [];
@@ -122,76 +153,151 @@ export default function AddStackTemplateScreen() {
           </Link>
         </section>
       ) : (
-        <div className="templates-groups">
-          {groupTemplateRevisionsByRepository(templateRevisions).map((group) => (
-            <section className="templates-group" key={group.key} data-testid={`template-group-${group.key}`}>
-              <h2 className="templates-group__heading">
-                <span className="templates-group__repo">
-                  {group.repoOwner}/{group.repoName}
-                </span>
-              </h2>
-              <ul className="templates-list">
-                {group.templateRevisions.map((templateRevision) => (
-                  <li key={templateRevision.id}>
-                    <button
-                      type="button"
-                      className="template-choice"
-                      data-testid={`add-template-choice-${templateRevision.id}`}
-                      data-selected={templateRevision.id === chosenRevisionID ? "true" : undefined}
-                      disabled={templateRevision.status !== "active"}
-                      onClick={() => handleChoose(templateRevision.id)}
-                    >
-                      <span className="templates-list__name">{templateRevisionRefLabel(templateRevision)}</span>
-                      <small className="muted">{templateRevision.status}</small>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
-        </div>
-      )}
-
-      {chosenRevision && (
-        <section className="panel wide" data-testid="add-stack-template-variables">
-          <h2>Variables</h2>
-          {variablesLoading ? (
-            <p className="muted" data-testid="add-stack-template-variables-loading">
-              <Loader2 size={16} className="spin" /> Loading variables…
-            </p>
-          ) : variablesFailed ? (
-            // Distinct from the empty message on purpose: an unresolved fetch
-            // must never read as "this template declares no variables", which
-            // is a claim we cannot make when we could not load them. Kept
-            // inline rather than replacing the screen, so the picker above
-            // stays usable and another revision can be chosen.
-            <p className="muted" data-testid="add-stack-template-variables-error">
-              Could not load this template&rsquo;s variables.{" "}
-              <button className="secondary-button" type="button" onClick={() => variablesQuery.refetch()}>
-                <RefreshCw size={16} />
-                Retry
-              </button>
-            </p>
-          ) : (
-            <VariableFields
-              variables={variables}
-              variableValues={values}
-              onVariableValueChange={(name, value) => setValues((current) => ({ ...current, [name]: value }))}
-              emptyMessage="This template declares no variables"
-            />
-          )}
-          <div className="button-row form-actions">
-            <button
-              className="primary-button"
-              type="button"
-              disabled={variablesLoading || variablesFailed || addTemplateToStackMutation.isPending}
-              onClick={handleInstall}
-            >
-              {addTemplateToStackMutation.isPending ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
-              Install
-            </button>
+        // Browse on the left, configure on the right. Stacked, the config panel
+        // landed under the last repository group and read as belonging to it
+        // rather than to the row actually chosen further up the page.
+        <div className="workflow-grid">
+          <div className="templates-groups">
+            {repositoryGroups.map((group) => (
+              <section className="templates-group" key={group.key} data-testid={`template-group-${group.key}`}>
+                {/* No count pill here, unlike the registry. It counts
+                    templates while the rows count installable revisions, and
+                    two small numbers a few pixels apart reading "1" then
+                    "2 revisions" invite the guess that they disagree. */}
+                <h2 className="templates-group__heading">
+                  <span className="templates-group__repo">
+                    {group.repoOwner}/{group.repoName}
+                  </span>
+                </h2>
+                <ul className="template-choices">
+                  {group.sourceTemplates.map((sourceTemplate) => {
+                    const installable = latestActiveRevision(sourceTemplate.revisions);
+                    const chosenHere = sourceTemplate.revisions.some((revision) => revision.id === chosenRevisionID);
+                    const tone = unsettledStatusTone(sourceTemplate.latestRevision.status);
+                    const rootPath = templateRootPathLabel(sourceTemplate.rootPath, sourceTemplate.name);
+                    const installableCount = activeRevisions(sourceTemplate.revisions).length;
+                    // The commit shown is the one a click would install, which is
+                    // not necessarily the newest revision — see
+                    // latestActiveRevision.
+                    const shownRevision = installable ?? sourceTemplate.latestRevision;
+                    return (
+                      <li key={sourceTemplate.sourceTemplateID}>
+                        <button
+                          type="button"
+                          className="template-choice"
+                          data-testid={`add-template-choice-${sourceTemplate.sourceTemplateID}`}
+                          data-selected={chosenHere ? "true" : undefined}
+                          // No active revision means nothing here can be
+                          // installed. The row stays visible, and its status pill
+                          // below says why, rather than leaving a dead button.
+                          disabled={installable === null}
+                          onClick={() => installable && handleChoose(installable.id)}
+                        >
+                          <span className="templates-list__main">
+                            <span className="templates-list__name">{sourceTemplate.name}</span>
+                            {rootPath !== "" && <small className="muted">{rootPath}</small>}
+                          </span>
+                          <span className="templates-list__meta">
+                            {tone !== null && (
+                              <span className={`status-tone status-tone--${tone}`}>
+                                <span className="status-tone__glyph" aria-hidden="true">
+                                  {statusGlyph(tone)}
+                                </span>
+                                {sourceTemplate.latestRevision.status}
+                              </span>
+                            )}
+                            <span className="templates-list__rev">
+                              {sourceTemplate.sourceRef} · {shortCommitSHA(shownRevision.resolved_commit_sha)}
+                              {/* Only worth saying where it means the dropdown
+                                  below has something to offer. */}
+                              {installableCount > 1 && <> · {revisionCountLabel(installableCount)}</>}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))}
           </div>
-        </section>
+
+          <div className="template-configure">
+            {chosenRevision && chosenTemplate ? (
+              <section className="panel" data-testid="add-stack-template-variables">
+                {/* Names what is being configured. Proximity alone was not
+                    enough: stacked below the list, this panel read as belonging
+                    to whichever template happened to be rendered last. */}
+                <h2 className="template-configure__name">{chosenTemplate.name}</h2>
+                {/* Only where there is a choice to make. One active revision needs no
+                    control, and the row click has already selected it. Options carry
+                    the commit and its registration date — the name and ref are fixed
+                    for the whole template and already named in the row above. */}
+                {chosenTemplateRevisions.length > 1 && (
+                  <label className="selector-label">
+                    Revision
+                    <select
+                      data-testid="add-template-revision-select"
+                      value={chosenRevisionID}
+                      onChange={(event) => handleChoose(event.target.value)}
+                    >
+                      {chosenTemplateRevisions.map((candidate, index) => (
+                        <option key={candidate.id} value={candidate.id}>
+                          {shortCommitSHA(candidate.resolved_commit_sha)} · {formatTimestamp(candidate.created_at)}
+                          {index === 0 ? " · latest" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
+                <h2>Variables</h2>
+                {variablesLoading ? (
+                  <p className="muted" data-testid="add-stack-template-variables-loading">
+                    <Loader2 size={16} className="spin" /> Loading variables…
+                  </p>
+                ) : variablesFailed ? (
+                  // Distinct from the empty message on purpose: an unresolved fetch
+                  // must never read as "this template declares no variables", which
+                  // is a claim we cannot make when we could not load them. Kept
+                  // inline rather than replacing the screen, so the picker above
+                  // stays usable and another revision can be chosen.
+                  <p className="muted" data-testid="add-stack-template-variables-error">
+                    Could not load this template&rsquo;s variables.{" "}
+                    <button className="secondary-button" type="button" onClick={() => variablesQuery.refetch()}>
+                      <RefreshCw size={16} />
+                      Retry
+                    </button>
+                  </p>
+                ) : (
+                  <VariableFields
+                    variables={variables}
+                    variableValues={values}
+                    onVariableValueChange={(name, value) => setValues((current) => ({ ...current, [name]: value }))}
+                    emptyMessage="This template declares no variables"
+                  />
+                )}
+                <div className="button-row form-actions">
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={variablesLoading || variablesFailed || addTemplateToStackMutation.isPending}
+                    onClick={handleInstall}
+                  >
+                    {addTemplateToStackMutation.isPending ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
+                    Install
+                  </button>
+                </div>
+              </section>
+            ) : (
+              // Not a panel: a full card of chrome around one sentence
+              // outweighed the sentence.
+              <p className="muted" data-testid="add-stack-template-unchosen">
+                Choose a template to configure and install it.
+              </p>
+            )}
+          </div>
+        </div>
       )}
     </section>
   );

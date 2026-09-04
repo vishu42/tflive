@@ -6,9 +6,11 @@ export function findSelectedStackTemplate(stackTemplates: StackTemplate[], selec
   return findSelectedID(stackTemplates, selectedStackTemplateID);
 }
 
+// No ref suffix: source_ref is part of a source template's identity, so it read
+// the same on every install of that template and separated nothing. The ref
+// still shows in the revision panel, where it is about a specific commit.
 export function stackTemplateLabel(stackTemplate: StackTemplate): string {
-  const name = stackTemplate.display_name || stackTemplate.workspace_name;
-  return `${name} @ ${stackTemplate.source_ref}`;
+  return stackTemplate.display_name || stackTemplate.workspace_name;
 }
 
 export function canUpgradeStackTemplate(stackTemplate: StackTemplate | null, templateRevision: TemplateRevision | null): boolean {

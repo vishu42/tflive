@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { TemplateRevision } from "../../api/types";
 import {
+  activeRevisions,
   groupTemplatesByRepository,
+  latestActiveRevision,
   revisionCountLabel,
   revisionsForSourceTemplate,
   templateDisplayName,
@@ -141,6 +143,39 @@ describe("groupTemplatesByRepository", () => {
     ]);
 
     expect(groups[0].sourceTemplates).toHaveLength(2);
+  });
+});
+
+describe("activeRevisions", () => {
+  it("keeps only what can be installed, in the order received", () => {
+    // The API's order is created_at desc, id desc; filtering must not disturb
+    // it, because the install picker offers these in this order.
+    const kept = activeRevisions([
+      templateRevision({ id: "rev_3", status: "invalid" }),
+      templateRevision({ id: "rev_2", status: "active" }),
+      templateRevision({ id: "rev_1", status: "active" }),
+      templateRevision({ id: "rev_0", status: "pending_validation" })
+    ]);
+
+    expect(kept.map((revision) => revision.id)).toEqual(["rev_2", "rev_1"]);
+  });
+});
+
+describe("latestActiveRevision", () => {
+  it("skips a newer revision that failed validation", () => {
+    // The whole point: a template whose newest revision is broken must stay
+    // installable at the last one that passed.
+    const latest = latestActiveRevision([
+      templateRevision({ id: "rev_bad", status: "invalid" }),
+      templateRevision({ id: "rev_good", status: "active" })
+    ]);
+
+    expect(latest?.id).toBe("rev_good");
+  });
+
+  it("returns null when nothing can be installed", () => {
+    expect(latestActiveRevision([templateRevision({ status: "validating" })])).toBeNull();
+    expect(latestActiveRevision([])).toBeNull();
   });
 });
 
