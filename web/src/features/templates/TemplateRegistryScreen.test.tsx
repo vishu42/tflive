@@ -74,26 +74,55 @@ describe("TemplateRegistryScreen", () => {
     expect(screen.getByTestId("template-registry-loading")).toBeTruthy();
   });
 
-  it("lists registered template revisions as rows", () => {
+  it("lists one row per template, named after the template", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
       revision(),
-      revision({ id: "rev_2", name: "EKS", repo_name: "terraform-aws-eks" })
+      revision({ id: "rev_2", source_template_id: "tpl_2", name: "EKS", repo_name: "terraform-aws-eks" })
     ]);
 
     renderScreen(queryClient);
 
     expect(screen.getByTestId("templates-list")).toBeTruthy();
-    expect(screen.getByTestId("template-row-rev_1").textContent).toContain("VPC");
-    expect(screen.getByTestId("template-row-rev_2").textContent).toContain("EKS");
+    // The name leads the row — it is what answers "what is this?".
+    expect(screen.getByTestId("template-row-tpl_1").querySelector(".templates-list__name")?.textContent).toBe("VPC");
+    expect(screen.getByTestId("template-row-tpl_2").querySelector(".templates-list__name")?.textContent).toBe("EKS");
   });
 
-  it("groups revisions under one heading per repository", () => {
+  it("collapses every revision of one template into a single row", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
-      revision({ id: "rev_1", source_ref: "main" }),
-      revision({ id: "rev_2", source_ref: "v2", resolved_commit_sha: "44b2e0199999" }),
-      revision({ id: "rev_3", name: "EKS", repo_name: "terraform-aws-eks" })
+      revision({ id: "rev_2", resolved_commit_sha: "44b2e0199999" }),
+      revision({ id: "rev_1" })
+    ]);
+
+    renderScreen(queryClient);
+
+    const row = screen.getByTestId("template-row-tpl_1");
+    expect(screen.getByTestId("templates-list").querySelectorAll("li")).toHaveLength(1);
+    // The count is the affordance saying there is something behind the click.
+    expect(row.textContent).toContain("2 revisions");
+    // The newest revision names the row's commit.
+    expect(row.textContent).toContain("44b2e01");
+  });
+
+  it("links a row to its template's revisions", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
+
+    renderScreen(queryClient);
+
+    const link = screen.getByTestId("template-row-tpl_1").querySelector("a");
+    expect(link?.getAttribute("href")).toBe("/templates/tpl_1");
+  });
+
+  it("groups templates under one heading per repository", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      revision({ id: "rev_1", source_template_id: "tpl_1", source_ref: "main" }),
+      // A different ref is a different source template, not another revision.
+      revision({ id: "rev_2", source_template_id: "tpl_2", source_ref: "v2", resolved_commit_sha: "44b2e0199999" }),
+      revision({ id: "rev_3", source_template_id: "tpl_3", name: "EKS", repo_name: "terraform-aws-eks" })
     ]);
 
     renderScreen(queryClient);
@@ -105,11 +134,11 @@ describe("TemplateRegistryScreen", () => {
     expect(vpcGroup.querySelectorAll("li")).toHaveLength(2);
     expect(eksGroup.querySelectorAll("li")).toHaveLength(1);
     // Each row belongs to exactly one group.
-    expect(vpcGroup.contains(screen.getByTestId("template-row-rev_2"))).toBe(true);
-    expect(eksGroup.contains(screen.getByTestId("template-row-rev_3"))).toBe(true);
+    expect(vpcGroup.contains(screen.getByTestId("template-row-tpl_2"))).toBe(true);
+    expect(eksGroup.contains(screen.getByTestId("template-row-tpl_3"))).toBe(true);
   });
 
-  it("shows how many revisions each repository has", () => {
+  it("counts templates per repository, not revisions", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
       revision({ id: "rev_1" }),
@@ -118,7 +147,8 @@ describe("TemplateRegistryScreen", () => {
 
     renderScreen(queryClient);
 
-    expect(screen.getByTestId("template-group-count-hashicorp/terraform-aws-vpc").textContent).toBe("2");
+    // Two revisions of one template are one template.
+    expect(screen.getByTestId("template-group-count-hashicorp/terraform-aws-vpc").textContent).toBe("1");
   });
 
   it("keeps the repository out of the row itself now that the heading carries it", () => {
@@ -127,23 +157,40 @@ describe("TemplateRegistryScreen", () => {
 
     renderScreen(queryClient);
 
-    const row = screen.getByTestId("template-row-rev_1");
+    const row = screen.getByTestId("template-row-tpl_1");
     expect(row.textContent).not.toContain("hashicorp/terraform-aws-vpc");
     expect(row.textContent).toContain("main");
     expect(row.textContent).toContain("abcdef1");
   });
 
-  it("highlights a selected revision inside its repository group", () => {
+  it("says nothing about an active template, and spells out any other status", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
+      revision(),
+      revision({ id: "rev_2", source_template_id: "tpl_2", name: "EKS", status: "invalid" })
+    ]);
+
+    renderScreen(queryClient);
+
+    // Active is the ordinary outcome; its absence is the signal.
+    expect(screen.getByTestId("template-row-tpl_1").textContent).not.toContain("active");
+    expect(screen.getByTestId("template-row-tpl_1").querySelector(".status-tone")).toBeNull();
+    // Invalid is the one status a user must act on, so it keeps its pill.
+    expect(screen.getByTestId("template-row-tpl_2").textContent).toContain("invalid");
+    expect(screen.getByTestId("template-row-tpl_2").querySelector(".status-tone")).toBeTruthy();
+  });
+
+  it("highlights the template holding the revision named by the selected param", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
       revision({ id: "rev_1" }),
-      revision({ id: "rev_2", name: "EKS", repo_name: "terraform-aws-eks" })
+      revision({ id: "rev_2", source_template_id: "tpl_2", name: "EKS", repo_name: "terraform-aws-eks" })
     ]);
 
     renderScreen(queryClient, "/templates?selected=rev_2");
 
     const eksGroup = screen.getByTestId("template-group-hashicorp/terraform-aws-eks");
-    const selected = screen.getByTestId("template-row-rev_2");
+    const selected = screen.getByTestId("template-row-tpl_2");
     expect(selected.getAttribute("data-selected")).toBe("true");
     expect(eksGroup.contains(selected)).toBe(true);
   });
@@ -168,17 +215,17 @@ describe("TemplateRegistryScreen", () => {
     expect(link.getAttribute("href")).toBe("/templates/new");
   });
 
-  it("highlights the revision named by the selected search param", () => {
+  it("leaves every other template unhighlighted", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [
       revision(),
-      revision({ id: "rev_2", name: "EKS", repo_name: "terraform-aws-eks" })
+      revision({ id: "rev_2", source_template_id: "tpl_2", name: "EKS", repo_name: "terraform-aws-eks" })
     ]);
 
     renderScreen(queryClient, "/templates?selected=rev_2");
 
-    expect(screen.getByTestId("template-row-rev_2").getAttribute("data-selected")).toBe("true");
-    expect(screen.getByTestId("template-row-rev_1").getAttribute("data-selected")).toBeNull();
+    expect(screen.getByTestId("template-row-tpl_2").getAttribute("data-selected")).toBe("true");
+    expect(screen.getByTestId("template-row-tpl_1").getAttribute("data-selected")).toBeNull();
   });
 
   it("renders an empty state when no templates are registered", () => {

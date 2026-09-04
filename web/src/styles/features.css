@@ -295,7 +295,8 @@
   font-weight: 600;
 }
 
-.stacks-list li a {
+.stacks-list li a,
+.templates-list__name {
   text-decoration: none;
 }
 
@@ -314,6 +315,11 @@
 .templates-groups {
   display: grid;
   gap: var(--space-6);
+  /* Groups size to their contents. As a stretched grid item — which is what it
+     becomes in the install picker's left pane — align-content resolves to
+     stretch and inflates these auto rows to fill the taller column, opening a
+     gap inside a group that reads as a missing row. */
+  align-content: start;
 }
 
 .templates-group__heading {
@@ -365,11 +371,87 @@
   overflow-wrap: anywhere;
 }
 
-.templates-list li small {
+.templates-list li small,
+.template-choices small {
   color: var(--color-muted-fg);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   overflow-wrap: anywhere;
+}
+
+/* The trailing half of a template row: the ref and latest commit, plus a
+   status pill only when the latest revision is not active. Held together so
+   the row's space-between still resolves to one block left, one right. */
+.templates-list__meta {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.templates-list__rev {
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* ---- Template detail: the revisions of one template ---- */
+/* The repository, root path and ref are fixed for every row here — they are
+   part of the template's identity and are stated once in the header. Only the
+   commit varies, so it leads. */
+.template-detail__identity {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.revisions-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.revisions-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-3) 0;
+}
+
+.revisions-list li[data-selected="true"] .revisions-list__sha {
+  color: var(--color-accent);
+}
+
+.revisions-list__sha {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.revisions-list__date {
+  flex: 1;
+  color: var(--color-muted-fg);
+  font-size: var(--text-sm);
+}
+
+/* Marks the revision a new stack install would pick. It annotates the status
+   beside it, so it stays quieter than that pill — the uppercase + label
+   tracking treatment reads as a section heading and out-shouted it. */
+.revisions-list__latest {
+  flex: none;
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* Reserves the word's width on the rows it does not apply to. Without it the
+   marker pushes the newest row's status pill out of line with every other. */
+.revisions-list__latest:not([data-latest]) {
+  visibility: hidden;
 }
 
 /* ---- Tabs ---- */
@@ -1011,18 +1093,44 @@
   color: var(--color-danger);
 }
 
+/* The install picker's rows. Deliberately NOT .templates-list: that class
+   exists to paint a card on the li, and a bordered button inside it read as a
+   box inside a box. Here the button is the card, so the list contributes
+   nothing but layout. Its rows still borrow .templates-list__main and the meta
+   cluster, which are only ever about the row's contents. */
+.template-choices {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The button's body is the same two-line block the registry list uses
+   (.templates-list__main plus a .templates-list__meta cluster), so it aligns to
+   the top rather than centring a name against a taller neighbour, and its text
+   reads left like a row instead of centring like a button label. */
 .template-choice {
-  align-items: center;
-  background: transparent;
+  align-items: flex-start;
+  text-align: left;
+  background: var(--color-card);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
   color: var(--color-fg);
   cursor: pointer;
   display: flex;
-  gap: var(--space-3);
+  gap: var(--space-4);
   justify-content: space-between;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  transition: all var(--duration-lift) var(--ease-out);
   width: 100%;
+}
+
+.template-choice:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-color: var(--color-accent-border);
+  box-shadow: var(--shadow-lg);
 }
 
 .template-choice:disabled {
@@ -1033,6 +1141,26 @@
 .template-choice[data-selected="true"] {
   border-color: var(--color-accent-border);
   box-shadow: var(--shadow-ring);
+}
+
+/* ---- Install: browse on the left, configure on the right ---- */
+/* Sticky so the panel stays beside the row that opened it however far the
+   template list runs on. .workflow-grid collapses to one column at its own
+   breakpoint, where a sticky panel would pin the form over the list instead. */
+.template-configure {
+  position: sticky;
+  top: var(--space-6);
+  align-self: start;
+}
+
+.template-configure__name {
+  margin: 0;
+}
+
+@media (max-width: 900px) {
+  .template-configure {
+    position: static;
+  }
 }
 
 .upgrade-variable-notes {

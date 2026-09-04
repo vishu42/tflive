@@ -25,16 +25,18 @@ describe("stack workflow helpers", () => {
     expect(findSelectedStackTemplate(stackTemplates, "missing_stack_template")).toBeNull();
   });
 
-  // The lifecycle suffix is gone from the label: it read "(active)" on every row
-  // a user ever sees, and the status pill carries lifecycle now.
-  it("formats stack template rows from display_name and ref", () => {
+  // Two suffixes have now been dropped from this label. The lifecycle read
+  // "(active)" on every row a user ever sees, and the status pill carries it.
+  // The ref is part of a source template's identity, so it read the same on
+  // every install of that template and separated nothing.
+  it("formats stack template rows from display_name alone", () => {
     const withDisplayName = stackTemplate({
       display_name: "infra-templates/modules/vpc",
       source_ref: "release-2026-07",
       lifecycle: "active"
     });
 
-    expect(stackTemplateLabel(withDisplayName)).toBe("infra-templates/modules/vpc @ release-2026-07");
+    expect(stackTemplateLabel(withDisplayName)).toBe("infra-templates/modules/vpc");
   });
 
   it("falls back to workspace_name when display_name is empty", () => {
@@ -44,7 +46,7 @@ describe("stack workflow helpers", () => {
       lifecycle: "active"
     });
 
-    expect(stackTemplateLabel(withoutDisplayName)).toBe("meg_prod_a4de3e48 @ main");
+    expect(stackTemplateLabel(withoutDisplayName)).toBe("meg_prod_a4de3e48");
   });
 
   // One case per cell of the stack template state matrix. Only three outcomes

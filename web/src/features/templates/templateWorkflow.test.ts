@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { TemplateRevision } from "../../api/types";
 import {
-  groupTemplateRevisionsByRepository,
-  templateRevisionLabel
+  activeRevisions,
+  groupTemplatesByRepository,
+  latestActiveRevision,
+  revisionCountLabel,
+  revisionsForSourceTemplate,
+  templateDisplayName,
+  templateRevisionLabel,
+  templateRootPathLabel,
+  unsettledStatusTone
 } from "./templateWorkflow";
 
 describe("template workflow helpers", () => {
@@ -20,44 +27,172 @@ describe("template workflow helpers", () => {
   });
 });
 
-describe("groupTemplateRevisionsByRepository", () => {
-  it("returns no groups for an empty list", () => {
-    expect(groupTemplateRevisionsByRepository([])).toEqual([]);
+describe("templateDisplayName", () => {
+  it("prefers the revision's own name", () => {
+    expect(templateDisplayName(templateRevision({ name: "Supabase" }))).toBe("Supabase");
   });
 
-  it("collects every revision of one repository into a single group", () => {
-    const groups = groupTemplateRevisionsByRepository([
-      templateRevision({ id: "rev_1", repo_owner: "acme", repo_name: "infra", source_ref: "main" }),
-      templateRevision({ id: "rev_2", repo_owner: "acme", repo_name: "infra", source_ref: "v2" })
+  it("falls back to the root path when the name is blank", () => {
+    expect(templateDisplayName(templateRevision({ name: "  ", root_path: "environments/dev" }))).toBe(
+      "environments/dev"
+    );
+  });
+
+  it("falls back to the repository when the module sits at the root", () => {
+    expect(templateDisplayName(templateRevision({ name: "", root_path: ".", repo_name: "infra" }))).toBe("infra");
+  });
+});
+
+describe("templateRootPathLabel", () => {
+  it("drops a path that would add nothing", () => {
+    expect(templateRootPathLabel(".", "infra")).toBe("");
+    expect(templateRootPathLabel("", "infra")).toBe("");
+    // Already serving as the name, so repeating it below is noise.
+    expect(templateRootPathLabel("environments/dev", "environments/dev")).toBe("");
+  });
+
+  it("keeps a path that locates the module", () => {
+    expect(templateRootPathLabel("environments/dev", "Supabase")).toBe("environments/dev");
+  });
+});
+
+describe("revisionCountLabel", () => {
+  it("singularises one revision", () => {
+    expect(revisionCountLabel(1)).toBe("1 revision");
+    expect(revisionCountLabel(4)).toBe("4 revisions");
+  });
+});
+
+describe("unsettledStatusTone", () => {
+  it("gives active no indicator at all", () => {
+    expect(unsettledStatusTone("active")).toBeNull();
+  });
+
+  it("tones every status a user might have to act on", () => {
+    expect(unsettledStatusTone("invalid")).toBe("failed");
+    expect(unsettledStatusTone("validating")).toBe("progress");
+    expect(unsettledStatusTone("pending_validation")).toBe("waiting");
+  });
+});
+
+describe("groupTemplatesByRepository", () => {
+  it("returns no groups for an empty list", () => {
+    expect(groupTemplatesByRepository([])).toEqual([]);
+  });
+
+  it("collapses every revision of one source template into a single template", () => {
+    const groups = groupTemplatesByRepository([
+      templateRevision({ id: "rev_2", source_template_id: "src_1", resolved_commit_sha: "bbbbbbb" }),
+      templateRevision({ id: "rev_1", source_template_id: "src_1", resolved_commit_sha: "aaaaaaa" })
     ]);
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].repoOwner).toBe("acme");
-    expect(groups[0].repoName).toBe("infra");
-    expect(groups[0].templateRevisions.map((revision) => revision.id)).toEqual(["rev_1", "rev_2"]);
+    expect(groups[0].sourceTemplates).toHaveLength(1);
+    expect(groups[0].sourceTemplates[0].revisions.map((revision) => revision.id)).toEqual(["rev_2", "rev_1"]);
+  });
+
+  it("keeps different refs of one repository apart, because the ref is part of the identity", () => {
+    const groups = groupTemplatesByRepository([
+      templateRevision({ id: "rev_1", source_template_id: "src_main", source_ref: "main" }),
+      templateRevision({ id: "rev_2", source_template_id: "src_v2", source_ref: "v2" })
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].sourceTemplates.map((template) => template.sourceRef)).toEqual(["main", "v2"]);
   });
 
   it("separates repositories that share a name under different owners", () => {
-    const groups = groupTemplateRevisionsByRepository([
-      templateRevision({ id: "rev_1", repo_owner: "acme", repo_name: "infra" }),
-      templateRevision({ id: "rev_2", repo_owner: "globex", repo_name: "infra" })
+    const groups = groupTemplatesByRepository([
+      templateRevision({ id: "rev_1", source_template_id: "src_1", repo_owner: "acme", repo_name: "infra" }),
+      templateRevision({ id: "rev_2", source_template_id: "src_2", repo_owner: "globex", repo_name: "infra" })
     ]);
 
-    expect(groups).toHaveLength(2);
     expect(groups.map((group) => group.key)).toEqual(["acme/infra", "globex/infra"]);
   });
 
-  it("preserves the incoming newest-first order both across and within groups", () => {
-    // The API returns revisions ordered created_at desc, so first appearance
-    // of a repository is its newest revision — that is what orders the groups.
-    const groups = groupTemplateRevisionsByRepository([
-      templateRevision({ id: "rev_3", repo_owner: "acme", repo_name: "newest" }),
-      templateRevision({ id: "rev_2", repo_owner: "acme", repo_name: "older" }),
-      templateRevision({ id: "rev_1", repo_owner: "acme", repo_name: "newest" })
+  it("takes the newest revision as the template's name and latest", () => {
+    // The API returns revisions created_at desc, so the first sighting is the
+    // newest — and `name` is per-revision, so it can drift between them.
+    const groups = groupTemplatesByRepository([
+      templateRevision({ id: "rev_2", source_template_id: "src_1", name: "Renamed", resolved_commit_sha: "f17f983a" }),
+      templateRevision({ id: "rev_1", source_template_id: "src_1", name: "Original", resolved_commit_sha: "c17860ca" })
+    ]);
+
+    const template = groups[0].sourceTemplates[0];
+    expect(template.name).toBe("Renamed");
+    expect(template.latestRevision.id).toBe("rev_2");
+  });
+
+  it("preserves the incoming newest-first order across templates and repositories", () => {
+    const groups = groupTemplatesByRepository([
+      templateRevision({ id: "rev_3", source_template_id: "src_a", repo_owner: "acme", repo_name: "newest" }),
+      templateRevision({ id: "rev_2", source_template_id: "src_b", repo_owner: "acme", repo_name: "older" }),
+      templateRevision({ id: "rev_1", source_template_id: "src_a", repo_owner: "acme", repo_name: "newest" })
     ]);
 
     expect(groups.map((group) => group.key)).toEqual(["acme/newest", "acme/older"]);
-    expect(groups[0].templateRevisions.map((revision) => revision.id)).toEqual(["rev_3", "rev_1"]);
+    expect(groups[0].sourceTemplates[0].revisions.map((revision) => revision.id)).toEqual(["rev_3", "rev_1"]);
+  });
+
+  it("keeps templates apart when the source template id is missing", () => {
+    // `source_template_id` is `not null default ''`; without the tuple fallback
+    // every such row would collapse into one bogus template.
+    const groups = groupTemplatesByRepository([
+      templateRevision({ id: "rev_1", source_template_id: "", root_path: "a" }),
+      templateRevision({ id: "rev_2", source_template_id: "", root_path: "b" })
+    ]);
+
+    expect(groups[0].sourceTemplates).toHaveLength(2);
+  });
+});
+
+describe("activeRevisions", () => {
+  it("keeps only what can be installed, in the order received", () => {
+    // The API's order is created_at desc, id desc; filtering must not disturb
+    // it, because the install picker offers these in this order.
+    const kept = activeRevisions([
+      templateRevision({ id: "rev_3", status: "invalid" }),
+      templateRevision({ id: "rev_2", status: "active" }),
+      templateRevision({ id: "rev_1", status: "active" }),
+      templateRevision({ id: "rev_0", status: "pending_validation" })
+    ]);
+
+    expect(kept.map((revision) => revision.id)).toEqual(["rev_2", "rev_1"]);
+  });
+});
+
+describe("latestActiveRevision", () => {
+  it("skips a newer revision that failed validation", () => {
+    // The whole point: a template whose newest revision is broken must stay
+    // installable at the last one that passed.
+    const latest = latestActiveRevision([
+      templateRevision({ id: "rev_bad", status: "invalid" }),
+      templateRevision({ id: "rev_good", status: "active" })
+    ]);
+
+    expect(latest?.id).toBe("rev_good");
+  });
+
+  it("returns null when nothing can be installed", () => {
+    expect(latestActiveRevision([templateRevision({ status: "validating" })])).toBeNull();
+    expect(latestActiveRevision([])).toBeNull();
+  });
+});
+
+describe("revisionsForSourceTemplate", () => {
+  const revisions = [
+    templateRevision({ id: "rev_3", source_template_id: "src_1" }),
+    templateRevision({ id: "rev_2", source_template_id: "src_2" }),
+    templateRevision({ id: "rev_1", source_template_id: "src_1" })
+  ];
+
+  it("returns only that template's revisions, in the order received", () => {
+    expect(revisionsForSourceTemplate(revisions, "src_1").map((revision) => revision.id)).toEqual(["rev_3", "rev_1"]);
+  });
+
+  it("returns nothing for an unknown or empty id", () => {
+    expect(revisionsForSourceTemplate(revisions, "src_missing")).toEqual([]);
+    expect(revisionsForSourceTemplate(revisions, "")).toEqual([]);
   });
 });
 
