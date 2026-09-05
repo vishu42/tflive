@@ -75,11 +75,14 @@ const (
 
 // AllTemplateRunStatuses is every status a run may hold, in lifecycle order.
 //
-// It exists because two things outside this package have to reason about the
-// whole vocabulary rather than one status at a time: Valid below, and the
-// template_runs_in_flight_idx test, which asserts the index's terminal-status
-// predicate agrees with Terminal for every status there is. A status added to
-// the constants above but not to this slice fails both.
+// It exists because two things have to reason about the whole vocabulary rather
+// than one status at a time: Valid below, and the template_runs_in_flight_idx
+// test, which asserts the index's terminal-status predicate agrees with
+// Terminal for every status there is.
+//
+// A status added to the constants above but not to this slice would be rejected
+// by Valid and never reach that index test, so TestTemplateRunStatusValid reads
+// the constants back out of this file and fails if the two disagree.
 var AllTemplateRunStatuses = []TemplateRunStatus{
 	TemplateRunQueued,
 	TemplateRunLocked,
