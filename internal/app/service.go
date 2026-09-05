@@ -31,6 +31,7 @@ var (
 	ErrStackTemplateUpgradeInvalid        = errors.New("stack template upgrade is invalid")
 	ErrStackTemplateNotRunnable           = errors.New("stack template is not runnable")
 	ErrStackTemplatePlanStale             = errors.New("stack template plan does not match desired state")
+	ErrTemplateRunInFlight                = errors.New("a run is already in flight for this stack template")
 	ErrRunNotApprovable                   = errors.New("run is not approvable")
 	ErrRunNotCancelable                   = errors.New("run is not cancelable")
 	ErrSelfApprovalForbidden              = errors.New("self-approval forbidden")

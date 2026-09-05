@@ -1,6 +1,12 @@
 package domain
 
-import "testing"
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strconv"
+	"testing"
+)
 
 func TestOperationTypeValid(t *testing.T) {
 	t.Parallel()
@@ -104,6 +110,90 @@ func TestTemplateRegistrationStatusValid(t *testing.T) {
 	if TemplateRegistrationStatus("queued").Valid() {
 		t.Fatal("expected unknown template registration status to be invalid")
 	}
+}
+
+func TestTemplateRunStatusValid(t *testing.T) {
+	t.Parallel()
+
+	// Read back from the const block rather than counted, because a count is
+	// derived from the slice it would be checking: adding a constant and
+	// forgetting the slice leaves the length untouched and every test green.
+	// The slice is what the migrations' status check constraint and
+	// template_runs_in_flight_idx's terminal predicate are written against, so
+	// a status missing from it is a status nothing downstream ever sees.
+	declared := declaredTemplateRunStatuses(t)
+	listed := make(map[TemplateRunStatus]bool, len(AllTemplateRunStatuses))
+	for _, status := range AllTemplateRunStatuses {
+		listed[status] = true
+	}
+	for _, status := range declared {
+		if !listed[status] {
+			t.Errorf("%q is declared as a TemplateRunStatus but missing from AllTemplateRunStatuses - add it there, to the status check constraint in the migrations, and decide whether it is terminal", status)
+		}
+	}
+	if len(AllTemplateRunStatuses) != len(declared) {
+		t.Errorf("AllTemplateRunStatuses has %d entries, %d statuses are declared - it has a duplicate or a status no constant declares", len(AllTemplateRunStatuses), len(declared))
+	}
+
+	for _, status := range AllTemplateRunStatuses {
+		status := status
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+
+			if !status.Valid() {
+				t.Fatalf("expected %q to be valid", status)
+			}
+		})
+	}
+
+	if TemplateRunStatus("started").Valid() {
+		t.Fatal("expected unknown template run status to be invalid")
+	}
+}
+
+// declaredTemplateRunStatuses reads the TemplateRunStatus constants out of the
+// source, which is the one place a new status has to appear. Comparing the
+// slice against it is what makes the drift detectable at all; comparing the
+// slice against itself is not.
+func declaredTemplateRunStatuses(t *testing.T) []TemplateRunStatus {
+	t.Helper()
+
+	file, err := parser.ParseFile(token.NewFileSet(), "template_run.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse template_run.go: %v", err)
+	}
+
+	var statuses []TemplateRunStatus
+	for _, declaration := range file.Decls {
+		general, ok := declaration.(*ast.GenDecl)
+		if !ok || general.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range general.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			if typeName, ok := value.Type.(*ast.Ident); !ok || typeName.Name != "TemplateRunStatus" {
+				continue
+			}
+			for _, expression := range value.Values {
+				literal, ok := expression.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					t.Fatalf("TemplateRunStatus constant is not a string literal: %#v", expression)
+				}
+				unquoted, err := strconv.Unquote(literal.Value)
+				if err != nil {
+					t.Fatalf("unquote %s: %v", literal.Value, err)
+				}
+				statuses = append(statuses, TemplateRunStatus(unquoted))
+			}
+		}
+	}
+	if len(statuses) == 0 {
+		t.Fatal("found no TemplateRunStatus constants - the parser is looking in the wrong place")
+	}
+	return statuses
 }
 
 func TestTemplateRunStatusTerminal(t *testing.T) {
