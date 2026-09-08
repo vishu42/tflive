@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/vishu42/tflive/internal/domain"
-	"github.com/vishu42/tflive/internal/runner"
+	gitrunner "github.com/vishu42/tflive/internal/runner"
 )
 
 func TestRecordTemplateRunStatusDelegatesToRecorder(t *testing.T) {
@@ -267,7 +267,7 @@ func TestLocalTerraformRunnerWritesCommandLogFile(t *testing.T) {
 		stderr: "plan stderr\n",
 	}
 	terraformRunner := localTerraformRunner{
-		runner: runner.NewLocalProcessRunnerWithExecutor(executor),
+		runner: gitrunner.NewLocalProcessRunnerWithExecutor(executor),
 	}
 
 	err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
@@ -304,7 +304,7 @@ func TestLocalTerraformRunnerUploadsCommandLogFile(t *testing.T) {
 	}
 	logStore := &recordingTemplateRunLogStore{}
 	terraformRunner := localTerraformRunner{
-		runner:   runner.NewLocalProcessRunnerWithExecutor(executor),
+		runner:   gitrunner.NewLocalProcessRunnerWithExecutor(executor),
 		logStore: logStore,
 	}
 
@@ -344,7 +344,7 @@ func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
 	}
 	logStore := &recordingTemplateRunLogStore{}
 	terraformRunner := localTerraformRunner{
-		runner:   runner.NewLocalProcessRunnerWithExecutor(executor),
+		runner:   gitrunner.NewLocalProcessRunnerWithExecutor(executor),
 		logStore: logStore,
 	}
 
@@ -405,14 +405,16 @@ func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input do
 }
 
 type recordingSourceGitRunner struct {
-	repoURL   string
-	ref       string
-	commitSHA string
-	dest      string
-	err       error
+	repoURL    string
+	ref        string
+	commitSHA  string
+	dest       string
+	credential gitrunner.GitCredential
+	err        error
 }
 
-func (runner *recordingSourceGitRunner) Clone(_ context.Context, repoURL string, ref string, dest string) error {
+func (runner *recordingSourceGitRunner) Clone(_ context.Context, repoURL string, ref string, dest string, credential gitrunner.GitCredential) error {
+	runner.credential = credential
 	runner.repoURL = repoURL
 	runner.ref = ref
 	runner.dest = dest
@@ -422,7 +424,8 @@ func (runner *recordingSourceGitRunner) Clone(_ context.Context, repoURL string,
 	return os.MkdirAll(filepath.Join(dest, "modules", "vpc"), 0o700)
 }
 
-func (runner *recordingSourceGitRunner) CheckoutCommit(_ context.Context, repoURL string, commitSHA string, dest string) error {
+func (runner *recordingSourceGitRunner) CheckoutCommit(_ context.Context, repoURL string, commitSHA string, dest string, credential gitrunner.GitCredential) error {
+	runner.credential = credential
 	runner.repoURL = repoURL
 	runner.commitSHA = commitSHA
 	runner.dest = dest

@@ -164,10 +164,10 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 	// queue has drained the branch is dead, and with it the last path by which a
 	// run resolves its own source.
 	if commitSHA := strings.TrimSpace(input.ResolvedCommitSHA); commitSHA != "" {
-		if err := git.CheckoutCommit(ctx, repoURL, commitSHA, sourcePath); err != nil {
+		if err := git.CheckoutCommit(ctx, repoURL, commitSHA, sourcePath, runner.GitCredential{}); err != nil {
 			return domain.FetchSourceActivityOutput{}, fmt.Errorf("checkout source commit %s: %w", commitSHA, err)
 		}
-	} else if err := git.Clone(ctx, repoURL, input.SourceRef, sourcePath); err != nil {
+	} else if err := git.Clone(ctx, repoURL, input.SourceRef, sourcePath, runner.GitCredential{}); err != nil {
 		return domain.FetchSourceActivityOutput{}, fmt.Errorf("clone source: %w", err)
 	}
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/vishu42/tflive/internal/domain"
+	gitrunner "github.com/vishu42/tflive/internal/runner"
 )
 
 func TestRecordTemplateRegistrationStatusDelegatesToRecorder(t *testing.T) {
@@ -296,15 +297,17 @@ func (store *recordingTemplateSyncStore) UpsertTemplateRevisionWithVariables(_ c
 }
 
 type recordingGitRunner struct {
-	repoURL   string
-	ref       string
-	dest      string
-	commitSHA string
-	populate  func(string) error
+	repoURL    string
+	ref        string
+	dest       string
+	commitSHA  string
+	credential gitrunner.GitCredential
+	populate   func(string) error
 }
 
-func (runner *recordingGitRunner) Clone(ctx context.Context, repoURL string, ref string, dest string) error {
+func (runner *recordingGitRunner) Clone(ctx context.Context, repoURL string, ref string, dest string, credential gitrunner.GitCredential) error {
 	_ = ctx
+	runner.credential = credential
 	runner.repoURL = repoURL
 	runner.ref = ref
 	runner.dest = dest
@@ -317,7 +320,7 @@ func (runner *recordingGitRunner) Clone(ctx context.Context, repoURL string, ref
 // CheckoutCommit exists to satisfy runner.GitRunner and fails loudly: template
 // sync is the path that resolves a ref to a commit in the first place, so it
 // has no commit to check out and must clone the ref.
-func (runner *recordingGitRunner) CheckoutCommit(context.Context, string, string, string) error {
+func (runner *recordingGitRunner) CheckoutCommit(context.Context, string, string, string, gitrunner.GitCredential) error {
 	return errors.New("template sync must clone a ref, not check out a commit")
 }
 

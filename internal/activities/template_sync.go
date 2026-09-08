@@ -79,7 +79,7 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 
 	repoPath := filepath.Join(workspace, "repo")
 	repoURL := publicGitHubRepoURL(input.RepoOwner, input.RepoName)
-	if err := activities.git.Clone(ctx, repoURL, input.SourceRef, repoPath); err != nil {
+	if err := activities.git.Clone(ctx, repoURL, input.SourceRef, repoPath, runner.GitCredential{}); err != nil {
 		return invalidTemplateSyncOutput("clone public repository: %v", err), nil
 	}
 
