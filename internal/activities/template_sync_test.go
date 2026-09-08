@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/vishu42/tflive/internal/domain"
+	"github.com/vishu42/tflive/internal/githubapp"
 	gitrunner "github.com/vishu42/tflive/internal/runner"
 )
 
@@ -334,4 +335,109 @@ func writeFile(t *testing.T, path string, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+// The credential must reach the clone. Without this the whole feature is a
+// no-op that still passes every other test.
+func TestSyncTemplatePassesInstallationTokenToClone(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingTemplateSyncStore{}
+	gitRunner := &recordingGitRunner{
+		commitSHA: "abc123",
+		populate: func(repoPath string) error {
+			return os.MkdirAll(filepath.Join(repoPath, "modules", "vpc"), 0o700)
+		},
+	}
+	activities := NewTemplateSyncActivities(
+		store,
+		WithTemplateSyncGitRunner(gitRunner),
+		WithTemplateSyncTempRoot(t.TempDir()),
+		WithTemplateSyncTokenSource(stubTokenSource{token: "ghs_minted"}),
+	)
+
+	if _, err := activities.SyncTemplate(context.Background(), domain.TemplateSyncActivityInput{
+		TenantID:  domain.TenantID("tenant_123"),
+		RepoOwner: "acme",
+		RepoName:  "private-infra",
+		SourceRef: "main",
+		RootPath:  "modules/vpc",
+	}); err != nil {
+		t.Fatalf("SyncTemplate returned error: %v", err)
+	}
+
+	if gitRunner.credential != gitrunner.NewGitCredential("ghs_minted") {
+		t.Fatal("clone did not receive the installation credential")
+	}
+}
+
+// The one failure a user can act on must say what to do, and must be classified
+// non-retryable -- retrying an uninstalled App four times helps nobody.
+func TestSyncTemplateReportsUninstalledApp(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingTemplateSyncStore{}
+	activities := NewTemplateSyncActivities(
+		store,
+		WithTemplateSyncGitRunner(&recordingGitRunner{commitSHA: "abc123"}),
+		WithTemplateSyncTempRoot(t.TempDir()),
+		WithTemplateSyncTokenSource(stubTokenSource{err: githubapp.ErrAppNotInstalled}),
+	)
+
+	output, err := activities.SyncTemplate(context.Background(), domain.TemplateSyncActivityInput{
+		TenantID:  domain.TenantID("tenant_123"),
+		RepoOwner: "acme",
+		RepoName:  "private-infra",
+		SourceRef: "main",
+		RootPath:  "modules/vpc",
+	})
+	if err != nil {
+		t.Fatalf("SyncTemplate returned error: %v", err)
+	}
+	if output.Status != domain.TemplateRegistrationInvalid {
+		t.Fatalf("status = %q, want %q", output.Status, domain.TemplateRegistrationInvalid)
+	}
+	if !strings.Contains(output.ErrorSummary, "not installed") {
+		t.Fatalf("summary = %q, want it to name the missing installation", output.ErrorSummary)
+	}
+	if !strings.Contains(output.ErrorSummary, "acme/private-infra") {
+		t.Fatalf("summary = %q, want it to name the repository", output.ErrorSummary)
+	}
+}
+
+// An owner or repo carrying URL metacharacters must be rejected at the boundary
+// rather than folded into a request URL.
+func TestSyncTemplateRejectsUnsafeRepoIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	activities := NewTemplateSyncActivities(
+		&recordingTemplateSyncStore{},
+		WithTemplateSyncGitRunner(&recordingGitRunner{commitSHA: "abc123"}),
+		WithTemplateSyncTempRoot(t.TempDir()),
+	)
+
+	for _, owner := range []string{"acme/evil", "acme?x=1", "acme#frag", "acme corp", "acme\nx"} {
+		output, err := activities.SyncTemplate(context.Background(), domain.TemplateSyncActivityInput{
+			TenantID:  domain.TenantID("tenant_123"),
+			RepoOwner: owner,
+			RepoName:  "infra",
+			SourceRef: "main",
+			RootPath:  ".",
+		})
+		if err != nil {
+			t.Fatalf("SyncTemplate(%q) returned error: %v", owner, err)
+		}
+		if output.Status != domain.TemplateRegistrationInvalid {
+			t.Fatalf("SyncTemplate(%q) status = %q, want invalid", owner, output.Status)
+		}
+	}
+}
+
+type stubTokenSource struct {
+	token string
+	err   error
+}
+
+func (source stubTokenSource) Token(context.Context, string, string) (string, error) {
+	return source.token, source.err
 }

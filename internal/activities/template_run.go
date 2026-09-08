@@ -63,6 +63,8 @@ type TemplateRunActivities struct {
 	git                 runner.GitRunner
 	credentialReader    CredentialReader
 	credentialDecryptor CredentialDecryptor
+	// tokens resolves short-lived GitHub App tokens for private source repositories.
+	tokens GitHubTokenSource
 }
 
 // NewTemplateRunActivities constructs the activity handler set registered by the worker.
@@ -76,11 +78,13 @@ func NewTemplateRunActivities(recorder StatusRecorder, runRoot string, terraform
 }
 
 func NewTemplateRunActivitiesWithLogStore(recorder StatusRecorder, runRoot string, logStore TemplateRunLogStore, terraformRunners ...TerraformRunner) *TemplateRunActivities {
-	return NewTemplateRunActivitiesWithCredentials(recorder, runRoot, logStore, nil, nil, terraformRunners...)
+	return NewTemplateRunActivitiesWithCredentials(recorder, runRoot, logStore, nil, nil, nil, terraformRunners...)
 }
 
-// NewTemplateRunActivitiesWithCredentials wires runtime credential lookup and decryption into activities.
-func NewTemplateRunActivitiesWithCredentials(recorder StatusRecorder, runRoot string, logStore TemplateRunLogStore, credentialReader CredentialReader, credentialDecryptor CredentialDecryptor, terraformRunners ...TerraformRunner) *TemplateRunActivities {
+// NewTemplateRunActivitiesWithCredentials wires runtime credential lookup and
+// decryption into activities, plus the GitHub token source used to fetch source
+// from a private repository.
+func NewTemplateRunActivitiesWithCredentials(recorder StatusRecorder, runRoot string, logStore TemplateRunLogStore, credentialReader CredentialReader, credentialDecryptor CredentialDecryptor, tokens GitHubTokenSource, terraformRunners ...TerraformRunner) *TemplateRunActivities {
 	terraformRunner := TerraformRunner(localTerraformRunner{
 		runner:   runner.NewLocalProcessRunner(),
 		logStore: logStore,
@@ -96,6 +100,7 @@ func NewTemplateRunActivitiesWithCredentials(recorder StatusRecorder, runRoot st
 		git:                 runner.NewLocalGitRunner(),
 		credentialReader:    credentialReader,
 		credentialDecryptor: credentialDecryptor,
+		tokens:              tokens,
 	}
 }
 
@@ -153,7 +158,14 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 	if git == nil {
 		git = runner.NewLocalGitRunner()
 	}
-	repoURL := publicGitHubRepoURL(input.RepoOwner, input.RepoName)
+	repoURL, err := gitHubRepoURL(input.RepoOwner, input.RepoName)
+	if err != nil {
+		return domain.FetchSourceActivityOutput{}, err
+	}
+	credential, err := repoCredential(ctx, activities.tokens, input.RepoOwner, input.RepoName)
+	if err != nil {
+		return domain.FetchSourceActivityOutput{}, fmt.Errorf("resolve github credential for %s/%s: %w", input.RepoOwner, input.RepoName, err)
+	}
 	// The commit is what the revision means, so it is what runs. Checking out a
 	// ref would let the source move between a plan and the apply that was
 	// approved against it, and would ignore the revision entirely once an
@@ -164,10 +176,10 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 	// queue has drained the branch is dead, and with it the last path by which a
 	// run resolves its own source.
 	if commitSHA := strings.TrimSpace(input.ResolvedCommitSHA); commitSHA != "" {
-		if err := git.CheckoutCommit(ctx, repoURL, commitSHA, sourcePath, runner.GitCredential{}); err != nil {
+		if err := git.CheckoutCommit(ctx, repoURL, commitSHA, sourcePath, credential); err != nil {
 			return domain.FetchSourceActivityOutput{}, fmt.Errorf("checkout source commit %s: %w", commitSHA, err)
 		}
-	} else if err := git.Clone(ctx, repoURL, input.SourceRef, sourcePath, runner.GitCredential{}); err != nil {
+	} else if err := git.Clone(ctx, repoURL, input.SourceRef, sourcePath, credential); err != nil {
 		return domain.FetchSourceActivityOutput{}, fmt.Errorf("clone source: %w", err)
 	}
 

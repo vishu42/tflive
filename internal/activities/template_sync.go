@@ -15,10 +15,21 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/vishu42/tflive/internal/domain"
+	"github.com/vishu42/tflive/internal/githubapp"
 	"github.com/vishu42/tflive/internal/runner"
 	"github.com/zclconf/go-cty/cty"
 	"gopkg.in/yaml.v3"
 )
+
+// GitHubTokenSource resolves a short-lived token granting read access to one
+// repository.
+//
+// The interface lives here, on the consumer, so the activity packages depend on
+// the capability rather than on githubapp's concrete client -- and so tests can
+// supply a token without an HTTP server.
+type GitHubTokenSource interface {
+	Token(ctx context.Context, owner string, repo string) (string, error)
+}
 
 type TemplateSyncStore interface {
 	RecordTemplateRegistrationStatus(context.Context, domain.TemplateRegistrationStatusActivityInput) error
@@ -29,6 +40,7 @@ type TemplateSyncActivities struct {
 	store    TemplateSyncStore
 	git      runner.GitRunner
 	tempRoot string
+	tokens   GitHubTokenSource
 }
 
 type TemplateSyncOption func(*TemplateSyncActivities)
@@ -44,6 +56,14 @@ func WithTemplateSyncGitRunner(git runner.GitRunner) TemplateSyncOption {
 func WithTemplateSyncTempRoot(tempRoot string) TemplateSyncOption {
 	return func(activities *TemplateSyncActivities) {
 		activities.tempRoot = tempRoot
+	}
+}
+
+// WithTemplateSyncTokenSource authenticates source fetches against private
+// repositories. Without it, only public repositories can be registered.
+func WithTemplateSyncTokenSource(tokens GitHubTokenSource) TemplateSyncOption {
+	return func(activities *TemplateSyncActivities) {
+		activities.tokens = tokens
 	}
 }
 
@@ -78,9 +98,22 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 	defer os.RemoveAll(workspace)
 
 	repoPath := filepath.Join(workspace, "repo")
-	repoURL := publicGitHubRepoURL(input.RepoOwner, input.RepoName)
-	if err := activities.git.Clone(ctx, repoURL, input.SourceRef, repoPath, runner.GitCredential{}); err != nil {
-		return invalidTemplateSyncOutput("clone public repository: %v", err), nil
+	repoURL, err := gitHubRepoURL(input.RepoOwner, input.RepoName)
+	if err != nil {
+		return invalidTemplateSyncOutput("%v", err), nil
+	}
+	credential, err := repoCredential(ctx, activities.tokens, input.RepoOwner, input.RepoName)
+	if err != nil {
+		if errors.Is(err, githubapp.ErrAppNotInstalled) {
+			return invalidTemplateSyncOutput(
+				"the tflive GitHub App is not installed on %s/%s; ask an organization admin to install it before registering this template",
+				input.RepoOwner, input.RepoName,
+			), nil
+		}
+		return domain.TemplateSyncActivityOutput{}, fmt.Errorf("resolve github credential: %w", err)
+	}
+	if err := activities.git.Clone(ctx, repoURL, input.SourceRef, repoPath, credential); err != nil {
+		return invalidTemplateSyncOutput("clone repository %s/%s at %q: %v", input.RepoOwner, input.RepoName, input.SourceRef, err), nil
 	}
 
 	// resolve SHA of head
@@ -140,8 +173,55 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 	}, nil
 }
 
-func publicGitHubRepoURL(owner string, repo string) string {
-	return fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
+// gitHubRepoURL builds the clone URL for owner/repo.
+//
+// The identifiers are validated rather than trusted: they arrive from an API
+// request, and a value carrying a slash, a query, a fragment, or whitespace
+// would produce a URL that is not the repository the caller named. The
+// authority is fixed before the first path separator, so no value can redirect
+// the request to another host -- but a malformed one still deserves a clear
+// rejection at the boundary instead of an obscure git failure.
+func gitHubRepoURL(owner string, repo string) (string, error) {
+	if err := validateRepoIdentifier("repository owner", owner); err != nil {
+		return "", err
+	}
+	if err := validateRepoIdentifier("repository name", repo); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("https://github.com/%s/%s.git", owner, repo), nil
+}
+
+func validateRepoIdentifier(field string, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s is required", field)
+	}
+	if value != strings.TrimSpace(value) {
+		return fmt.Errorf("%s %q must not have leading or trailing whitespace", field, value)
+	}
+	for _, character := range value {
+		if character <= ' ' || character == '/' || character == '?' || character == '#' ||
+			character == '@' || character == ':' || character == '\\' || character == 0x7f {
+			return fmt.Errorf("%s %q contains an unsupported character", field, value)
+		}
+	}
+	return nil
+}
+
+// repoCredential resolves the credential for one repository.
+//
+// It runs inside the activity, never in workflow code, so the token stays out
+// of Temporal history -- the same boundary CredentialDecryptor already
+// establishes for Terraform credentials. With no token source configured it
+// returns the zero credential and the clone proceeds unauthenticated.
+func repoCredential(ctx context.Context, tokens GitHubTokenSource, owner string, repo string) (runner.GitCredential, error) {
+	if tokens == nil {
+		return runner.GitCredential{}, nil
+	}
+	token, err := tokens.Token(ctx, owner, repo)
+	if err != nil {
+		return runner.GitCredential{}, err
+	}
+	return runner.NewGitCredential(token), nil
 }
 
 func invalidTemplateSyncOutput(format string, args ...any) domain.TemplateSyncActivityOutput {

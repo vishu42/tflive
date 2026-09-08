@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/vishu42/tflive/internal/domain"
+	"github.com/vishu42/tflive/internal/githubapp"
 	gitrunner "github.com/vishu42/tflive/internal/runner"
 )
 
@@ -475,4 +476,59 @@ func (executor *recordingCommandExecutor) Run(_ context.Context, _ string, env [
 		return err
 	}
 	return executor.err
+}
+
+// A run's checkout needs the credential just as a registration's clone does;
+// this is the path that feeds Terraform.
+func TestFetchSourcePassesInstallationTokenToCheckout(t *testing.T) {
+	t.Parallel()
+
+	git := &recordingSourceGitRunner{}
+	activities := &TemplateRunActivities{
+		recorder:        &recordingStatusRecorder{},
+		runRoot:         t.TempDir(),
+		terraformRunner: &recordingTerraformRunner{},
+		git:             git,
+		tokens:          stubTokenSource{token: "ghs_minted"},
+	}
+
+	if _, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		WorkspacePath:     t.TempDir(),
+		RepoOwner:         "acme",
+		RepoName:          "private-infra",
+		ResolvedCommitSHA: "a1b2c3d",
+		RootPath:          "modules/vpc",
+	}); err != nil {
+		t.Fatalf("FetchSource returned error: %v", err)
+	}
+
+	if git.credential != gitrunner.NewGitCredential("ghs_minted") {
+		t.Fatal("checkout did not receive the installation credential")
+	}
+}
+
+func TestFetchSourceReportsUninstalledApp(t *testing.T) {
+	t.Parallel()
+
+	activities := &TemplateRunActivities{
+		recorder:        &recordingStatusRecorder{},
+		runRoot:         t.TempDir(),
+		terraformRunner: &recordingTerraformRunner{},
+		git:             &recordingSourceGitRunner{},
+		tokens:          stubTokenSource{err: githubapp.ErrAppNotInstalled},
+	}
+
+	_, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		WorkspacePath:     t.TempDir(),
+		RepoOwner:         "acme",
+		RepoName:          "private-infra",
+		ResolvedCommitSHA: "a1b2c3d",
+		RootPath:          "modules/vpc",
+	})
+	if !errors.Is(err, githubapp.ErrAppNotInstalled) {
+		t.Fatalf("error = %v, want ErrAppNotInstalled", err)
+	}
+	if !strings.Contains(err.Error(), "acme/private-infra") {
+		t.Fatalf("error = %v, want it to name the repository", err)
+	}
 }
