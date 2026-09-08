@@ -1,7 +1,12 @@
 package config
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -445,5 +450,111 @@ func withValidSecurity(getenv func(string) string) func(string) string {
 			return value
 		}
 		return getenv(name)
+	}
+}
+
+func TestLoadWorkerConfigReadsGitHubApp(t *testing.T) {
+	t.Parallel()
+
+	encoded, _ := testRSAPrivateKeyPEM(t)
+	cfg, err := LoadWorkerConfig(withValidWorkerEnv(map[string]string{
+		"GITHUB_APP_ID":          " 12345 ",
+		"GITHUB_APP_PRIVATE_KEY": encoded,
+	}))
+	if err != nil {
+		t.Fatalf("LoadWorkerConfig returned error: %v", err)
+	}
+	if !cfg.GitHubApp.Enabled() {
+		t.Fatal("GitHubApp should be enabled")
+	}
+	if cfg.GitHubApp.AppID != "12345" {
+		t.Fatalf("AppID = %q, want 12345", cfg.GitHubApp.AppID)
+	}
+}
+
+// An unconfigured App is the supported default, not a misconfiguration: the
+// deployment simply cannot reach private repositories.
+func TestLoadWorkerConfigAllowsAbsentGitHubApp(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadWorkerConfig(withValidWorkerEnv(nil))
+	if err != nil {
+		t.Fatalf("LoadWorkerConfig returned error: %v", err)
+	}
+	if cfg.GitHubApp.Enabled() {
+		t.Fatal("GitHubApp should be disabled")
+	}
+}
+
+// Half a configuration is always a mistake, and one that would otherwise
+// surface as a puzzling clone failure much later.
+func TestLoadWorkerConfigRejectsPartialGitHubApp(t *testing.T) {
+	t.Parallel()
+
+	encoded, _ := testRSAPrivateKeyPEM(t)
+	for name, env := range map[string]map[string]string{
+		"id without key": {"GITHUB_APP_ID": "12345"},
+		"key without id": {"GITHUB_APP_PRIVATE_KEY": encoded},
+	} {
+		if _, err := LoadWorkerConfig(withValidWorkerEnv(env)); !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("%s: error = %v, want ErrInvalidConfig", name, err)
+		}
+	}
+}
+
+func TestLoadWorkerConfigRejectsMalformedGitHubAppValues(t *testing.T) {
+	t.Parallel()
+
+	encoded, _ := testRSAPrivateKeyPEM(t)
+	for name, env := range map[string]map[string]string{
+		"non-numeric app id": {"GITHUB_APP_ID": "not-a-number", "GITHUB_APP_PRIVATE_KEY": encoded},
+		"malformed key":      {"GITHUB_APP_ID": "12345", "GITHUB_APP_PRIVATE_KEY": "not-a-key"},
+	} {
+		if _, err := LoadWorkerConfig(withValidWorkerEnv(env)); !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("%s: error = %v, want ErrInvalidConfig", name, err)
+		}
+	}
+}
+
+// The key must not be recoverable from a config value printed in a log.
+func TestGitHubAppConfigRedactsPrivateKey(t *testing.T) {
+	t.Parallel()
+
+	encoded, _ := testRSAPrivateKeyPEM(t)
+	cfg := GitHubAppConfig{AppID: "12345", PrivateKey: newSecret(encoded)}
+
+	if rendered := fmt.Sprintf("%v", cfg.PrivateKey); rendered != "[REDACTED]" {
+		t.Fatalf("PrivateKey = %q, want [REDACTED]", rendered)
+	}
+}
+
+func testRSAPrivateKeyPEM(t *testing.T) (string, *rsa.PrivateKey) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	encoded := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+	return string(encoded), key
+}
+
+// withValidWorkerEnv returns a getenv covering the worker's required settings,
+// with overrides layered on top.
+func withValidWorkerEnv(overrides map[string]string) func(string) string {
+	base := map[string]string{
+		"DATABASE_URL":     "postgres://user:pass@localhost:5432/db?sslmode=disable",
+		"TEMPORAL_ADDRESS": "localhost:7233",
+		"OPENFGA_API_URL":  "http://localhost:8080",
+		"OPENFGA_STORE_ID": "store-id",
+		"OPENFGA_MODEL_ID": "model-id",
+	}
+	return func(key string) string {
+		if value, ok := overrides[key]; ok {
+			return value
+		}
+		return base[key]
 	}
 }
