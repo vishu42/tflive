@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -24,6 +25,40 @@ import (
 	temporalworker "go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )
+
+// scrubConsumedSecret is what stands between a parsed GitHub App private key
+// or credential encryption key and every Terraform subprocess this worker
+// starts (runner.CommandExecutor inherits the full process environment). This
+// test exercises the two real variable names directly rather than driving the
+// whole of runWithDependencies, since standing up Postgres and Temporal just
+// to observe two Unsetenv calls would make the test about wiring, not about
+// the guarantee that matters: the value is gone from the environment
+// afterward.
+func TestScrubConsumedSecretRemovesTheVariableFromTheEnvironment(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"GITHUB_APP_PRIVATE_KEY", "CREDENTIAL_ENCRYPTION_KEY"} {
+		t.Run(name, func(t *testing.T) {
+			original, hadOriginal := os.LookupEnv(name)
+			if err := os.Setenv(name, "super-secret-value"); err != nil {
+				t.Fatalf("setenv %s: %v", name, err)
+			}
+			defer func() {
+				if hadOriginal {
+					os.Setenv(name, original)
+				} else {
+					os.Unsetenv(name)
+				}
+			}()
+
+			scrubConsumedSecret(name)
+
+			if value := os.Getenv(name); value != "" {
+				t.Fatalf("Getenv(%q) = %q, want empty after scrubbing", name, value)
+			}
+		})
+	}
+}
 
 func TestRunRequiresTemporalAddress(t *testing.T) {
 	t.Parallel()

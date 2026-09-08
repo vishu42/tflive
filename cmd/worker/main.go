@@ -195,6 +195,19 @@ func run(ctx context.Context, getenv func(string) string) error {
 	return runWithDependencies(ctx, getenv, defaultWorkerDependencies())
 }
 
+// scrubConsumedSecret removes a secret from the process environment once its
+// value has already been parsed into the in-memory object the worker
+// actually uses. It exists as its own function so the scrub can be verified
+// by test without exercising the rest of worker startup (real Postgres,
+// Temporal, etc.).
+//
+// os.Unsetenv only errors when given a malformed variable name (one
+// containing "="), which never happens for the fixed names this is called
+// with, so the error is not worth surfacing.
+func scrubConsumedSecret(name string) {
+	_ = os.Unsetenv(name)
+}
+
 func runWithDependencies(ctx context.Context, getenv func(string) string, deps workerDependencies) error {
 	cfg, err := config.LoadWorkerConfig(getenv)
 	if err != nil {
@@ -221,6 +234,14 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 		if err != nil {
 			return fmt.Errorf("create credential cipher: %w", err)
 		}
+		// The key text is now sealed inside credentialCipher and never read from
+		// the environment again. Leaving it in os.Environ would hand it to every
+		// Terraform subprocess this worker starts: runner.CommandExecutor inherits
+		// the full process environment (see internal/runner/executor.go) because
+		// Terraform legitimately needs PATH, HOME, and provider credentials from
+		// it, and that inheritance cannot distinguish "meant for Terraform" from
+		// "meant for us."
+		scrubConsumedSecret("CREDENTIAL_ENCRYPTION_KEY")
 	}
 
 	var gitHubTokens *githubapp.TokenSource
@@ -232,6 +253,15 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 			return fmt.Errorf("parse github app private key: %w", err)
 		}
 		gitHubTokens = githubapp.NewTokenSource(githubapp.NewClient(cfg.GitHubApp.AppID, privateKey))
+		// The PEM text is now parsed into privateKey and never read from the
+		// environment again. This key mints installation tokens for every
+		// repository across every installation of the App -- strictly more
+		// powerful than the repo-scoped token the rest of this branch works hard
+		// to contain -- so it must not sit in os.Environ where every Terraform
+		// subprocess (an `external` data source, local-exec, a provider binary)
+		// can read it. See the CREDENTIAL_ENCRYPTION_KEY comment above for why
+		// executor.go's environment inheritance can't be the place this is fixed.
+		scrubConsumedSecret("GITHUB_APP_PRIVATE_KEY")
 	}
 
 	store, err := deps.newStore(pool, credentialCipher)
