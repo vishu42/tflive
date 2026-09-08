@@ -545,6 +545,25 @@ GitHubIntegration
   status
 ```
 
+As of the private-repository work (#239) no `GitHubIntegration` row exists yet. The worker holds
+the App's id and private key in configuration and resolves the installation covering a repository
+on demand via `GET /repos/{owner}/{repo}/installation`, then mints a repository-scoped read-only
+token for the clone. Nothing is persisted, so no schema or lifecycle has to stay in sync with
+GitHub, and one App installed on several organizations works without additional configuration.
+
+The table above becomes real with the installation-lifecycle work, where it serves as a cache and
+an allowlist in front of that same resolver, governed by the `github_integration` OpenFGA type
+(#144). Until it exists, any principal who can publish a template can cause a clone from any
+repository the App was installed on.
+
+The installation token reaches git through `GIT_CONFIG_*` environment variables carrying an
+`http.https://github.com/.extraheader` header, never through the clone URL or argv, so it is not
+written into the run workspace's `.git/config` — the directory Terraform then executes from.
+
+Not covered: repositories using git-LFS, and Terraform module sources of the form
+`source = "git::https://github.com/org/private-module"`, which Terraform fetches itself without
+the credential.
+
 During template registration or execution, the worker generates a short-lived GitHub App installation token and clones the repository over HTTPS.
 
 Selected refs are resolved to immutable commit SHAs during template sync and every run. A `TemplateRun` stores both the user-selected ref and the resolved commit SHA. For apply operations, the post-approval apply uses the same resolved commit SHA that produced the displayed plan unless the user starts a new run.

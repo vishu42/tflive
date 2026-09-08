@@ -15,6 +15,7 @@ import (
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
+	"github.com/vishu42/tflive/internal/githubapp"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/queue"
@@ -78,7 +79,7 @@ type workerDependencies struct {
 	// registerWorkflow attaches the workflow implementations this process can execute.
 	registerWorkflow func(temporalWorker)
 	// registerActivities attaches activity handlers and their shared dependencies to the worker.
-	registerActivities func(temporalWorker, workerStore, string, activities.TemplateRunLogStore)
+	registerActivities func(temporalWorker, workerStore, string, activities.TemplateRunLogStore, activities.GitHubTokenSource)
 	// newLogStore builds the artifact-backed log store used by Terraform activities.
 	newLogStore func(config.ArtifactStoreConfig, artifacts.LogMetadataRecorder) (activities.TemplateRunLogStore, error)
 	// interruptCh provides the shutdown signal consumed by the Temporal worker run loop.
@@ -154,10 +155,10 @@ func defaultWorkerDependencies() workerDependencies {
 				Name: domain.TemplateSyncWorkflowName,
 			})
 		},
-		registerActivities: func(worker temporalWorker, store workerStore, runRoot string, logStore activities.TemplateRunLogStore) {
+		registerActivities: func(worker temporalWorker, store workerStore, runRoot string, logStore activities.TemplateRunLogStore, gitHubTokens activities.GitHubTokenSource) {
 			reader, _ := store.(activities.CredentialReader)
 			decryptor, _ := store.(activities.CredentialDecryptor)
-			templateRunActivities := activities.NewTemplateRunActivitiesWithCredentials(store, runRoot, logStore, reader, decryptor)
+			templateRunActivities := activities.NewTemplateRunActivitiesWithCredentials(store, runRoot, logStore, reader, decryptor, gitHubTokens)
 			worker.RegisterActivityWithOptions(templateRunActivities.PrepareWorkspace, activity.RegisterOptions{
 				Name: domain.PrepareWorkspaceActivityName,
 			})
@@ -171,7 +172,7 @@ func defaultWorkerDependencies() workerDependencies {
 				Name: domain.RecordTemplateRunStatusActivityName,
 			})
 
-			templateSyncActivities := activities.NewTemplateSyncActivities(store)
+			templateSyncActivities := activities.NewTemplateSyncActivities(store, activities.WithTemplateSyncTokenSource(gitHubTokens))
 			worker.RegisterActivityWithOptions(templateSyncActivities.RecordTemplateRegistrationStatus, activity.RegisterOptions{
 				Name: domain.RecordTemplateRegistrationStatusActivityName,
 			})
@@ -221,6 +222,18 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 			return fmt.Errorf("create credential cipher: %w", err)
 		}
 	}
+
+	var gitHubTokens *githubapp.TokenSource
+	if cfg.GitHubApp.Enabled() {
+		privateKey, err := githubapp.ParsePrivateKey(cfg.GitHubApp.PrivateKey.Value())
+		if err != nil {
+			// Unreachable in practice: LoadWorkerConfig parses the same key at
+			// startup precisely so this cannot fail here.
+			return fmt.Errorf("parse github app private key: %w", err)
+		}
+		gitHubTokens = githubapp.NewTokenSource(githubapp.NewClient(cfg.GitHubApp.AppID, privateKey))
+	}
+
 	store, err := deps.newStore(pool, credentialCipher)
 	if err != nil {
 		return fmt.Errorf("wire activities: %w", err)
@@ -245,7 +258,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 
 	worker := deps.newWorker(temporalClient, cfg.TemporalTaskQueue, temporalworker.Options{EnableSessionWorker: true})
 	deps.registerWorkflow(worker)
-	deps.registerActivities(worker, store, cfg.WorkerRunRoot, logStore)
+	deps.registerActivities(worker, store, cfg.WorkerRunRoot, logStore, gitHubTokens)
 	dispatcher := deps.newDispatcher(temporalClient, cfg.TemporalTaskQueue)
 	controller, err := deps.newQueueController(store, authorizer, dispatcher)
 	if err != nil {

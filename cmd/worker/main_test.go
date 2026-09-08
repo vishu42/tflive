@@ -192,7 +192,7 @@ func TestDefaultWorkerDependenciesRegisterTerraformActivities(t *testing.T) {
 	worker := &recordingTemporalWorker{}
 	deps := defaultWorkerDependencies()
 
-	deps.registerActivities(worker, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{})
+	deps.registerActivities(worker, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{}, nil)
 
 	if !worker.registeredActivities[domain.PrepareWorkspaceActivityName] {
 		t.Fatalf("activity %q was not registered", domain.PrepareWorkspaceActivityName)
@@ -230,7 +230,7 @@ func TestDefaultWorkerDependenciesRegisterTemplateSyncActivities(t *testing.T) {
 	worker := &recordingTemporalWorker{}
 	deps := defaultWorkerDependencies()
 
-	deps.registerActivities(worker, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{})
+	deps.registerActivities(worker, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{}, nil)
 
 	if !worker.registeredActivities[domain.RecordTemplateRegistrationStatusActivityName] {
 		t.Fatalf("activity %q was not registered", domain.RecordTemplateRegistrationStatusActivityName)
@@ -392,7 +392,7 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 				Name: domain.TemplateRunWorkflowName,
 			})
 		},
-		registerActivities: func(worker temporalWorker, recorder workerStore, runRoot string, logStore activities.TemplateRunLogStore) {
+		registerActivities: func(worker temporalWorker, recorder workerStore, runRoot string, logStore activities.TemplateRunLogStore, gitHubTokens activities.GitHubTokenSource) {
 			if worker != deps.worker {
 				t.Fatalf("registerActivities worker = %p, want %p", worker, deps.worker)
 			}

@@ -146,3 +146,23 @@ func TestTokenSourcePropagatesNotInstalled(t *testing.T) {
 		t.Fatalf("error = %v, want ErrAppNotInstalled", err)
 	}
 }
+
+// The worker stores a nil *TokenSource in an interface when no App is
+// configured. A nil receiver guard is what keeps that from panicking on the
+// first clone of a public repository.
+func TestNilTokenSourceThroughInterfaceIsSafe(t *testing.T) {
+	t.Parallel()
+
+	var source *TokenSource
+	var iface interface {
+		Token(ctx context.Context, owner string, repo string) (string, error)
+	} = source
+
+	token, err := iface.Token(context.Background(), "acme", "public")
+	if err != nil {
+		t.Fatalf("Token returned error: %v", err)
+	}
+	if token != "" {
+		t.Fatalf("token = %q, want empty", token)
+	}
+}
