@@ -47,8 +47,7 @@ func TestLocalGitRunnerChecksOutExactCommit(t *testing.T) {
 
 	want := []recordedCommand{
 		{name: "git", args: []string{"init", "--quiet", "/tmp/repo"}},
-		{name: "git", args: []string{"-C", "/tmp/repo", "remote", "add", "origin", "https://github.com/acme/infra-templates.git"}},
-		{name: "git", args: []string{"-C", "/tmp/repo", "fetch", "--depth", "1", "origin", "a1b2c3d"}},
+		{name: "git", args: []string{"-C", "/tmp/repo", "fetch", "--depth", "1", "https://github.com/acme/infra-templates.git", "a1b2c3d"}},
 		{name: "git", args: []string{"-C", "/tmp/repo", "checkout", "--quiet", "FETCH_HEAD"}},
 	}
 	if !reflect.DeepEqual(executor.commands, want) {
@@ -62,8 +61,8 @@ func TestLocalGitRunnerReportsWhichCheckoutStepFailed(t *testing.T) {
 	commandErr := errors.New("exit status 128")
 	executor := &recordingCommandExecutor{
 		stdout: "fatal: could not read Username\n",
-		// init and remote add succeed; the fetch is what fails.
-		errs: []error{nil, nil, commandErr},
+		// init succeeds; the fetch is what fails.
+		errs: []error{nil, commandErr},
 	}
 	runner := NewLocalGitRunnerWithExecutor(executor)
 
@@ -79,8 +78,8 @@ func TestLocalGitRunnerReportsWhichCheckoutStepFailed(t *testing.T) {
 		t.Fatalf("cmdErr.Command = %q, want %q", cmdErr.Command, GitCommandFetch)
 	}
 	// It stops at the failing step rather than running checkout on an empty repo.
-	if len(executor.commands) != 3 {
-		t.Fatalf("commands = %d, want 3", len(executor.commands))
+	if len(executor.commands) != 2 {
+		t.Fatalf("commands = %d, want 2", len(executor.commands))
 	}
 	if !strings.Contains(cmdErr.Output, "could not read Username") {
 		t.Fatalf("cmdErr.Output = %q, want command output", cmdErr.Output)

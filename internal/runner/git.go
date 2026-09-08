@@ -43,14 +43,19 @@ func (runner *LocalGitRunner) Clone(ctx context.Context, repoURL string, ref str
 // It cannot be a `git clone --branch` — that flag takes a branch or tag name
 // and rejects a commit SHA — so this fetches the commit directly instead.
 // The fetch stays shallow; only the one commit is transferred.
+//
+// The URL is passed to the fetch positionally rather than registered as a
+// remote. Nothing reads remote.origin.url from this clone, and keeping it out
+// of .git/config keeps the run workspace free of the repository URL -- which
+// matters once that URL, or a credential alongside it, would otherwise persist
+// in the directory Terraform executes from.
 func (runner *LocalGitRunner) CheckoutCommit(ctx context.Context, repoURL string, commitSHA string, dest string) error {
 	steps := []struct {
 		command GitCommand
 		args    []string
 	}{
 		{GitCommandInit, []string{"init", "--quiet", dest}},
-		{GitCommandRemoteAdd, []string{"-C", dest, "remote", "add", "origin", repoURL}},
-		{GitCommandFetch, []string{"-C", dest, "fetch", "--depth", "1", "origin", commitSHA}},
+		{GitCommandFetch, []string{"-C", dest, "fetch", "--depth", "1", repoURL, commitSHA}},
 		{GitCommandCheckout, []string{"-C", dest, "checkout", "--quiet", "FETCH_HEAD"}},
 	}
 	for _, step := range steps {

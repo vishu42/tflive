@@ -28,7 +28,6 @@ type GitCommand string
 const (
 	GitCommandClone       GitCommand = "clone"
 	GitCommandInit        GitCommand = "init"
-	GitCommandRemoteAdd   GitCommand = "remote_add"
 	GitCommandFetch       GitCommand = "fetch"
 	GitCommandCheckout    GitCommand = "checkout"
 	GitCommandResolveHead GitCommand = "resolve_head"
