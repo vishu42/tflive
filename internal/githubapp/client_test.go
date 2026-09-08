@@ -58,6 +58,9 @@ func TestClientSignsAppJWTWithinGitHubBounds(t *testing.T) {
 	if !ok {
 		t.Fatal("exp is missing")
 	}
+	if expiration.Sub(issuedAt) > 10*time.Minute {
+		t.Fatalf("exp - iat = %v, more than GitHub's 10 minute maximum", expiration.Sub(issuedAt))
+	}
 	if expiration.Sub(issued) > 10*time.Minute {
 		t.Fatalf("exp = %v, more than 10 minutes after %v", expiration, issued)
 	}
