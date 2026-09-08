@@ -507,14 +507,19 @@ func TestFetchSourcePassesInstallationTokenToCheckout(t *testing.T) {
 	}
 }
 
+// A missing installation is not itself a failure -- see the doc comment on
+// repoCredential's call site in FetchSource. The checkout still goes ahead
+// unauthenticated, and only once that checkout fails for its own reason does
+// the missing installation become the user's problem.
 func TestFetchSourceReportsUninstalledApp(t *testing.T) {
 	t.Parallel()
 
+	checkoutErr := errors.New("authentication required")
 	activities := &TemplateRunActivities{
 		recorder:        &recordingStatusRecorder{},
 		runRoot:         t.TempDir(),
 		terraformRunner: &recordingTerraformRunner{},
-		git:             &recordingSourceGitRunner{},
+		git:             &recordingSourceGitRunner{err: checkoutErr},
 		tokens:          stubTokenSource{err: githubapp.ErrAppNotInstalled},
 	}
 
@@ -525,10 +530,44 @@ func TestFetchSourceReportsUninstalledApp(t *testing.T) {
 		ResolvedCommitSHA: "a1b2c3d",
 		RootPath:          "modules/vpc",
 	})
-	if !errors.Is(err, githubapp.ErrAppNotInstalled) {
-		t.Fatalf("error = %v, want ErrAppNotInstalled", err)
+	if !errors.Is(err, checkoutErr) {
+		t.Fatalf("error = %v, want it to wrap the underlying checkout failure", err)
 	}
 	if !strings.Contains(err.Error(), "acme/private-infra") {
 		t.Fatalf("error = %v, want it to name the repository", err)
+	}
+	if !strings.Contains(err.Error(), "not installed") {
+		t.Fatalf("error = %v, want it to name the missing installation", err)
+	}
+}
+
+// The regression this guards: configuring a GitHub App must not break
+// fetching source from a public repository it was never installed on. A 404
+// from the installation lookup cannot be told apart from that case, so
+// FetchSource must fall back to an unauthenticated checkout and succeed
+// exactly as it would with no token source configured at all.
+func TestFetchSourceSucceedsWithZeroCredentialWhenAppNotInstalled(t *testing.T) {
+	t.Parallel()
+
+	git := &recordingSourceGitRunner{}
+	activities := &TemplateRunActivities{
+		recorder:        &recordingStatusRecorder{},
+		runRoot:         t.TempDir(),
+		terraformRunner: &recordingTerraformRunner{},
+		git:             git,
+		tokens:          stubTokenSource{err: githubapp.ErrAppNotInstalled},
+	}
+
+	if _, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		WorkspacePath:     t.TempDir(),
+		RepoOwner:         "hashicorp",
+		RepoName:          "terraform-aws-modules",
+		ResolvedCommitSHA: "a1b2c3d",
+		RootPath:          "modules/vpc",
+	}); err != nil {
+		t.Fatalf("FetchSource returned error: %v", err)
+	}
+	if git.credential != (gitrunner.GitCredential{}) {
+		t.Fatal("checkout received a non-zero credential for a repo the App is not installed on")
 	}
 }

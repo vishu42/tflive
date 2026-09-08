@@ -102,18 +102,25 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 	if err != nil {
 		return invalidTemplateSyncOutput("%v", err), nil
 	}
+	// ErrAppNotInstalled means the installation lookup 404d, and that endpoint
+	// 404s for any repo the App has no installation covering -- a private repo
+	// nobody granted access to, or a public repo nobody ever needed to install
+	// the App on. Those two cases are indistinguishable from here, so treating
+	// this as fatal would break every public registration once a GitHub App is
+	// configured at all. Instead the fetch proceeds with the zero credential:
+	// a public repo clones fine unauthenticated, and only a private one fails,
+	// at which point appNotInstalledHint turns that failure into something
+	// actionable.
 	credential, err := repoCredential(ctx, activities.tokens, input.RepoOwner, input.RepoName)
+	appNotInstalled := false
 	if err != nil {
-		if errors.Is(err, githubapp.ErrAppNotInstalled) {
-			return invalidTemplateSyncOutput(
-				"the tflive GitHub App is not installed on %s/%s; ask an organization admin to install it before registering this template",
-				input.RepoOwner, input.RepoName,
-			), nil
+		if !errors.Is(err, githubapp.ErrAppNotInstalled) {
+			return domain.TemplateSyncActivityOutput{}, fmt.Errorf("resolve github credential: %w", err)
 		}
-		return domain.TemplateSyncActivityOutput{}, fmt.Errorf("resolve github credential: %w", err)
+		appNotInstalled = true
 	}
 	if err := activities.git.Clone(ctx, repoURL, input.SourceRef, repoPath, credential); err != nil {
-		return invalidTemplateSyncOutput("clone repository %s/%s at %q: %v", input.RepoOwner, input.RepoName, input.SourceRef, err), nil
+		return invalidTemplateSyncOutput("clone repository %s/%s at %q: %v%s", input.RepoOwner, input.RepoName, input.SourceRef, err, appNotInstalledHint(appNotInstalled, input.RepoOwner, input.RepoName)), nil
 	}
 
 	// resolve SHA of head
@@ -222,6 +229,21 @@ func repoCredential(ctx context.Context, tokens GitHubTokenSource, owner string,
 		return runner.GitCredential{}, err
 	}
 	return runner.NewGitCredential(token), nil
+}
+
+// appNotInstalledHint appends actionable guidance to a fetch failure that
+// happened while unauthenticated because the GitHub App has no installation
+// covering owner/repo. The hint rides along with the failure that actually
+// occurred, rather than being raised on its own, because a missing
+// installation alone is not an error -- see the doc comment at repoCredential's
+// call sites. It only becomes worth mentioning once a fetch has already failed
+// for some other reason, at which point it is the one thing an operator can
+// act on.
+func appNotInstalledHint(appNotInstalled bool, owner string, repo string) string {
+	if !appNotInstalled {
+		return ""
+	}
+	return fmt.Sprintf("; the tflive GitHub App is not installed on %s/%s, so this fetch was unauthenticated -- if the repository is private, ask an organization admin to install the App", owner, repo)
 }
 
 func invalidTemplateSyncOutput(format string, args ...any) domain.TemplateSyncActivityOutput {

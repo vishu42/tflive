@@ -304,6 +304,7 @@ type recordingGitRunner struct {
 	commitSHA  string
 	credential gitrunner.GitCredential
 	populate   func(string) error
+	err        error
 }
 
 func (runner *recordingGitRunner) Clone(ctx context.Context, repoURL string, ref string, dest string, credential gitrunner.GitCredential) error {
@@ -312,6 +313,9 @@ func (runner *recordingGitRunner) Clone(ctx context.Context, repoURL string, ref
 	runner.repoURL = repoURL
 	runner.ref = ref
 	runner.dest = dest
+	if runner.err != nil {
+		return runner.err
+	}
 	if runner.populate != nil {
 		return runner.populate(dest)
 	}
@@ -371,15 +375,20 @@ func TestSyncTemplatePassesInstallationTokenToClone(t *testing.T) {
 	}
 }
 
-// The one failure a user can act on must say what to do, and must be classified
-// non-retryable -- retrying an uninstalled App four times helps nobody.
+// A missing installation is not itself a failure -- see the doc comment on
+// repoCredential's call site in SyncTemplate. The clone still goes ahead
+// unauthenticated, and only once that clone fails for its own reason does the
+// missing installation become the user's problem. That failure must say what
+// to do, and must be classified non-retryable -- retrying an uninstalled App
+// four times helps nobody.
 func TestSyncTemplateReportsUninstalledApp(t *testing.T) {
 	t.Parallel()
 
 	store := &recordingTemplateSyncStore{}
+	cloneErr := errors.New("authentication required")
 	activities := NewTemplateSyncActivities(
 		store,
-		WithTemplateSyncGitRunner(&recordingGitRunner{commitSHA: "abc123"}),
+		WithTemplateSyncGitRunner(&recordingGitRunner{commitSHA: "abc123", err: cloneErr}),
 		WithTemplateSyncTempRoot(t.TempDir()),
 		WithTemplateSyncTokenSource(stubTokenSource{err: githubapp.ErrAppNotInstalled}),
 	)
@@ -397,11 +406,54 @@ func TestSyncTemplateReportsUninstalledApp(t *testing.T) {
 	if output.Status != domain.TemplateRegistrationInvalid {
 		t.Fatalf("status = %q, want %q", output.Status, domain.TemplateRegistrationInvalid)
 	}
+	if !strings.Contains(output.ErrorSummary, cloneErr.Error()) {
+		t.Fatalf("summary = %q, want the underlying clone failure", output.ErrorSummary)
+	}
 	if !strings.Contains(output.ErrorSummary, "not installed") {
 		t.Fatalf("summary = %q, want it to name the missing installation", output.ErrorSummary)
 	}
 	if !strings.Contains(output.ErrorSummary, "acme/private-infra") {
 		t.Fatalf("summary = %q, want it to name the repository", output.ErrorSummary)
+	}
+}
+
+// This is the regression the finding was about: configuring a GitHub App must
+// not break registering a public repository the App was never installed on.
+// A 404 from the installation lookup cannot be told apart from that case, so
+// SyncTemplate must fall back to an unauthenticated clone and succeed exactly
+// as it would with no token source configured at all.
+func TestSyncTemplateSucceedsWithZeroCredentialWhenAppNotInstalled(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingTemplateSyncStore{}
+	gitRunner := &recordingGitRunner{
+		commitSHA: "abc123",
+		populate: func(repoPath string) error {
+			return os.MkdirAll(filepath.Join(repoPath, "modules", "vpc"), 0o700)
+		},
+	}
+	activities := NewTemplateSyncActivities(
+		store,
+		WithTemplateSyncGitRunner(gitRunner),
+		WithTemplateSyncTempRoot(t.TempDir()),
+		WithTemplateSyncTokenSource(stubTokenSource{err: githubapp.ErrAppNotInstalled}),
+	)
+
+	output, err := activities.SyncTemplate(context.Background(), domain.TemplateSyncActivityInput{
+		TenantID:  domain.TenantID("tenant_123"),
+		RepoOwner: "hashicorp",
+		RepoName:  "terraform-aws-modules",
+		SourceRef: "main",
+		RootPath:  "modules/vpc",
+	})
+	if err != nil {
+		t.Fatalf("SyncTemplate returned error: %v", err)
+	}
+	if output.Status != domain.TemplateRegistrationCompleted {
+		t.Fatalf("status = %q, want completed; summary = %q", output.Status, output.ErrorSummary)
+	}
+	if gitRunner.credential != (gitrunner.GitCredential{}) {
+		t.Fatal("clone received a non-zero credential for a repo the App is not installed on")
 	}
 }
 

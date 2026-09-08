@@ -3,6 +3,7 @@ package activities
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/vishu42/tflive/internal/domain"
+	"github.com/vishu42/tflive/internal/githubapp"
 	"github.com/vishu42/tflive/internal/logsink"
 	"github.com/vishu42/tflive/internal/runner"
 )
@@ -162,9 +164,21 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 	if err != nil {
 		return domain.FetchSourceActivityOutput{}, err
 	}
+	// ErrAppNotInstalled means the installation lookup 404d, which happens for
+	// any repo the App has no installation covering -- a private repo nobody
+	// granted access to, or a public repo nobody ever needed to install the App
+	// on. Those are indistinguishable from here, so treating this as fatal would
+	// break every public repo's runs the moment a GitHub App is configured.
+	// Instead the fetch proceeds with the zero credential: a public repo clones
+	// fine unauthenticated, and only a private one fails, at which point
+	// appNotInstalledHint turns that failure into something actionable.
 	credential, err := repoCredential(ctx, activities.tokens, input.RepoOwner, input.RepoName)
+	appNotInstalled := false
 	if err != nil {
-		return domain.FetchSourceActivityOutput{}, fmt.Errorf("resolve github credential for %s/%s: %w", input.RepoOwner, input.RepoName, err)
+		if !errors.Is(err, githubapp.ErrAppNotInstalled) {
+			return domain.FetchSourceActivityOutput{}, fmt.Errorf("resolve github credential for %s/%s: %w", input.RepoOwner, input.RepoName, err)
+		}
+		appNotInstalled = true
 	}
 	// The commit is what the revision means, so it is what runs. Checking out a
 	// ref would let the source move between a plan and the apply that was
@@ -177,10 +191,10 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 	// run resolves its own source.
 	if commitSHA := strings.TrimSpace(input.ResolvedCommitSHA); commitSHA != "" {
 		if err := git.CheckoutCommit(ctx, repoURL, commitSHA, sourcePath, credential); err != nil {
-			return domain.FetchSourceActivityOutput{}, fmt.Errorf("checkout source commit %s: %w", commitSHA, err)
+			return domain.FetchSourceActivityOutput{}, fmt.Errorf("checkout source commit %s: %w%s", commitSHA, err, appNotInstalledHint(appNotInstalled, input.RepoOwner, input.RepoName))
 		}
 	} else if err := git.Clone(ctx, repoURL, input.SourceRef, sourcePath, credential); err != nil {
-		return domain.FetchSourceActivityOutput{}, fmt.Errorf("clone source: %w", err)
+		return domain.FetchSourceActivityOutput{}, fmt.Errorf("clone source: %w%s", err, appNotInstalledHint(appNotInstalled, input.RepoOwner, input.RepoName))
 	}
 
 	terraformPath := filepath.Clean(filepath.Join(sourcePath, rootPath))
