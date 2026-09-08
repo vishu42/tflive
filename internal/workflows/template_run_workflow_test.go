@@ -96,6 +96,38 @@ func TestTemplateRunWorkflowUsesSessionForWorkspaceActivities(t *testing.T) {
 	}
 }
 
+// TestTemplateRunWorkflowGivesFetchSourceALongerTimeout guards against the
+// default one-minute activity budget silently swallowing FetchSource again.
+// That activity now resolves a GitHub token before it ever invokes git, which
+// can cost up to two HTTP round trips on top of the clone/checkout itself, so
+// it needs -- and must keep -- a longer StartToCloseTimeout than the rest of
+// the run's activities.
+func TestTemplateRunWorkflowGivesFetchSourceALongerTimeout(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	input := templateRunWorkflowInput(domain.OperationPlan)
+	var fetchSourceTimeout time.Duration
+
+	env.OnActivity(domain.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(domain.PrepareWorkspaceActivityOutput{WorkspacePath: "run/workspace"}, nil)
+	env.OnActivity(domain.FetchSourceActivityName, mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, _ domain.FetchSourceActivityInput) (domain.FetchSourceActivityOutput, error) {
+			fetchSourceTimeout = activity.GetInfo(ctx).StartToCloseTimeout
+			return domain.FetchSourceActivityOutput{TerraformPath: "run/workspace/source"}, nil
+		})
+	var commands []domain.TerraformCommandType
+	mockRunTerraform(t, env, &commands)
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+	assertWorkflowCompleted(t, env)
+	if fetchSourceTimeout != 3*time.Minute {
+		t.Fatalf("FetchSource StartToCloseTimeout = %v, want 3m", fetchSourceTimeout)
+	}
+}
+
 func TestTemplateRunWorkflowReturnsSessionFailureDuringApproval(t *testing.T) {
 	env := newTemplateRunWorkflowTestEnvironment(t)
 	env.SetTestTimeout(time.Second)
