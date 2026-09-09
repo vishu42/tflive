@@ -556,6 +556,19 @@ an allowlist in front of that same resolver, governed by the `github_integration
 (#144). Until it exists, any principal who can publish a template can cause a clone from any
 repository the App was installed on.
 
+Resolving that token is best effort, and deliberately so. The installation endpoint 404s both for
+a private repository nobody granted access to and for a public one nobody ever needed to install
+the App on, and those two are indistinguishable from the worker; a 503 says nothing about the
+repository at all. So a failed resolution never fails the fetch. The clone proceeds with no
+credential, which is exactly right for a public repository and fails at git for a private one,
+carrying the reason it was unauthenticated.
+
+What that failure means then depends on the cause. A missing installation is permanent and is
+recorded as an invalid registration for the user to act on. A transient API failure is returned as
+an error instead, so Temporal retries it under `syncRetryPolicy` rather than burning the
+registration on an outage -- an outcome returned with a nil error reads as a successful activity
+and would spend none of the attempts the policy grants.
+
 The installation token reaches git through `GIT_CONFIG_*` environment variables carrying an
 `http.https://github.com/.extraheader` header, never through the clone URL or argv, so it is not
 written into the run workspace's `.git/config` — the directory Terraform then executes from.

@@ -102,25 +102,26 @@ func (activities *TemplateSyncActivities) SyncTemplate(ctx context.Context, inpu
 	if err != nil {
 		return invalidTemplateSyncOutput("%v", err), nil
 	}
-	// ErrAppNotInstalled means the installation lookup 404d, and that endpoint
-	// 404s for any repo the App has no installation covering -- a private repo
-	// nobody granted access to, or a public repo nobody ever needed to install
-	// the App on. Those two cases are indistinguishable from here, so treating
-	// this as fatal would break every public registration once a GitHub App is
-	// configured at all. Instead the fetch proceeds with the zero credential:
-	// a public repo clones fine unauthenticated, and only a private one fails,
-	// at which point appNotInstalledHint turns that failure into something
-	// actionable.
-	credential, err := repoCredential(ctx, activities.tokens, input.RepoOwner, input.RepoName)
-	appNotInstalled := false
-	if err != nil {
-		if !errors.Is(err, githubapp.ErrAppNotInstalled) {
-			return domain.TemplateSyncActivityOutput{}, fmt.Errorf("resolve github credential: %w", err)
-		}
-		appNotInstalled = true
-	}
+	// Resolving a credential is best effort: the clone is the operation allowed
+	// to fail, not the lookup standing in front of it. A 404 from the
+	// installation endpoint cannot be told apart from a public repo nobody ever
+	// needed to install the App on, and a 503 says nothing about the repository
+	// at all -- so in every case the fetch proceeds with the zero credential.
+	// A public repo clones fine unauthenticated, only a private one fails, and
+	// unauthenticatedFetchHint turns that failure into something actionable by
+	// naming whichever cause applies.
+	credential, credentialErr := repoCredential(ctx, activities.tokens, input.RepoOwner, input.RepoName)
 	if err := activities.git.Clone(ctx, repoURL, input.SourceRef, repoPath, credential); err != nil {
-		return invalidTemplateSyncOutput("clone repository %s/%s at %q: %v%s", input.RepoOwner, input.RepoName, input.SourceRef, err, appNotInstalledHint(appNotInstalled, input.RepoOwner, input.RepoName)), nil
+		hint := unauthenticatedFetchHint(credentialErr, input.RepoOwner, input.RepoName)
+		// A clone that failed while the token lookup was also failing is
+		// infrastructure, not a bad registration, and returning it as an error
+		// is what hands the retry back to Temporal. An outcome returned with a
+		// nil error tells Temporal the activity succeeded, spending none of the
+		// four attempts syncRetryPolicy grants.
+		if transientCredentialFailure(credentialErr) {
+			return domain.TemplateSyncActivityOutput{}, fmt.Errorf("clone repository %s/%s at %q: %w%s", input.RepoOwner, input.RepoName, input.SourceRef, err, hint)
+		}
+		return invalidTemplateSyncOutput("clone repository %s/%s at %q: %v%s", input.RepoOwner, input.RepoName, input.SourceRef, err, hint), nil
 	}
 
 	// resolve SHA of head
@@ -231,19 +232,39 @@ func repoCredential(ctx context.Context, tokens GitHubTokenSource, owner string,
 	return runner.NewGitCredential(token), nil
 }
 
-// appNotInstalledHint appends actionable guidance to a fetch failure that
-// happened while unauthenticated because the GitHub App has no installation
-// covering owner/repo. The hint rides along with the failure that actually
-// occurred, rather than being raised on its own, because a missing
-// installation alone is not an error -- see the doc comment at repoCredential's
-// call sites. It only becomes worth mentioning once a fetch has already failed
-// for some other reason, at which point it is the one thing an operator can
-// act on.
-func appNotInstalledHint(appNotInstalled bool, owner string, repo string) string {
-	if !appNotInstalled {
+// transientCredentialFailure reports whether a credential lookup failed for a
+// reason worth retrying.
+//
+// Everything except a missing installation qualifies: a 503, a rate limit or a
+// timeout says nothing about the repository and will likely succeed on the next
+// attempt. An uninstalled App is a standing condition that no number of retries
+// changes, so it stays a permanent outcome the user has to act on.
+func transientCredentialFailure(cause error) bool {
+	return cause != nil && !errors.Is(cause, githubapp.ErrAppNotInstalled)
+}
+
+// unauthenticatedFetchHint appends actionable guidance to a fetch that failed
+// while unauthenticated, naming the reason no credential was in hand.
+//
+// The hint rides along with the failure that actually occurred rather than
+// being raised on its own, because failing to resolve a credential is not by
+// itself an error -- see the doc comment at repoCredential's call sites. It
+// only becomes worth mentioning once a fetch has already failed, at which point
+// it is the one thing an operator can act on.
+//
+// Which guidance is right depends on the cause. An uninstalled App needs an
+// organization admin; a GitHub API failure needs nothing but a retry. Sending
+// an operator to inspect an installation that is fine wastes the outage, so the
+// two cases must not share a message.
+func unauthenticatedFetchHint(cause error, owner string, repo string) string {
+	switch {
+	case cause == nil:
 		return ""
+	case errors.Is(cause, githubapp.ErrAppNotInstalled):
+		return fmt.Sprintf("; the tflive GitHub App is not installed on %s/%s, so this fetch was unauthenticated -- if the repository is private, ask an organization admin to install the App", owner, repo)
+	default:
+		return fmt.Sprintf("; could not resolve a GitHub App token for %s/%s (%v), so this fetch was unauthenticated -- if the repository is private this is likely transient, retry", owner, repo, cause)
 	}
-	return fmt.Sprintf("; the tflive GitHub App is not installed on %s/%s, so this fetch was unauthenticated -- if the repository is private, ask an organization admin to install the App", owner, repo)
 }
 
 func invalidTemplateSyncOutput(format string, args ...any) domain.TemplateSyncActivityOutput {

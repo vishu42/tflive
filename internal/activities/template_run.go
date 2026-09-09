@@ -3,7 +3,6 @@ package activities
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/vishu42/tflive/internal/domain"
-	"github.com/vishu42/tflive/internal/githubapp"
 	"github.com/vishu42/tflive/internal/logsink"
 	"github.com/vishu42/tflive/internal/runner"
 )
@@ -164,22 +162,14 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 	if err != nil {
 		return domain.FetchSourceActivityOutput{}, err
 	}
-	// ErrAppNotInstalled means the installation lookup 404d, which happens for
-	// any repo the App has no installation covering -- a private repo nobody
-	// granted access to, or a public repo nobody ever needed to install the App
-	// on. Those are indistinguishable from here, so treating this as fatal would
-	// break every public repo's runs the moment a GitHub App is configured.
-	// Instead the fetch proceeds with the zero credential: a public repo clones
-	// fine unauthenticated, and only a private one fails, at which point
-	// appNotInstalledHint turns that failure into something actionable.
-	credential, err := repoCredential(ctx, activities.tokens, input.RepoOwner, input.RepoName)
-	appNotInstalled := false
-	if err != nil {
-		if !errors.Is(err, githubapp.ErrAppNotInstalled) {
-			return domain.FetchSourceActivityOutput{}, fmt.Errorf("resolve github credential for %s/%s: %w", input.RepoOwner, input.RepoName, err)
-		}
-		appNotInstalled = true
-	}
+	// Resolving a credential is best effort: the checkout is the operation
+	// allowed to fail, not the lookup standing in front of it. A 404 from the
+	// installation endpoint cannot be told apart from a public repo nobody ever
+	// needed to install the App on, and a 503 says nothing about the repository
+	// at all -- so in every case the fetch proceeds with the zero credential.
+	// Otherwise a GitHub API hiccup would fail runs against public repos that
+	// never needed a token in the first place.
+	credential, credentialErr := repoCredential(ctx, activities.tokens, input.RepoOwner, input.RepoName)
 	// The commit is what the revision means, so it is what runs. Checking out a
 	// ref would let the source move between a plan and the apply that was
 	// approved against it, and would ignore the revision entirely once an
@@ -191,10 +181,10 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 	// run resolves its own source.
 	if commitSHA := strings.TrimSpace(input.ResolvedCommitSHA); commitSHA != "" {
 		if err := git.CheckoutCommit(ctx, repoURL, commitSHA, sourcePath, credential); err != nil {
-			return domain.FetchSourceActivityOutput{}, fmt.Errorf("checkout source commit %s: %w%s", commitSHA, err, appNotInstalledHint(appNotInstalled, input.RepoOwner, input.RepoName))
+			return domain.FetchSourceActivityOutput{}, fmt.Errorf("checkout source commit %s: %w%s", commitSHA, err, unauthenticatedFetchHint(credentialErr, input.RepoOwner, input.RepoName))
 		}
 	} else if err := git.Clone(ctx, repoURL, input.SourceRef, sourcePath, credential); err != nil {
-		return domain.FetchSourceActivityOutput{}, fmt.Errorf("clone source: %w%s", err, appNotInstalledHint(appNotInstalled, input.RepoOwner, input.RepoName))
+		return domain.FetchSourceActivityOutput{}, fmt.Errorf("clone source: %w%s", err, unauthenticatedFetchHint(credentialErr, input.RepoOwner, input.RepoName))
 	}
 
 	terraformPath := filepath.Clean(filepath.Join(sourcePath, rootPath))

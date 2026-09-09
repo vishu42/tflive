@@ -571,3 +571,65 @@ func TestFetchSourceSucceedsWithZeroCredentialWhenAppNotInstalled(t *testing.T) 
 		t.Fatal("checkout received a non-zero credential for a repo the App is not installed on")
 	}
 }
+
+// The same for a run's checkout: a GitHub API failure that is not a missing
+// installation must not fail a run against a public repository, which never
+// needed the token the lookup failed to produce.
+func TestFetchSourceSucceedsWithZeroCredentialWhenTokenLookupFails(t *testing.T) {
+	t.Parallel()
+
+	git := &recordingSourceGitRunner{}
+	activities := &TemplateRunActivities{
+		recorder:        &recordingStatusRecorder{},
+		runRoot:         t.TempDir(),
+		terraformRunner: &recordingTerraformRunner{},
+		git:             git,
+		tokens:          stubTokenSource{err: errors.New("resolve installation: unexpected status 503 Service Unavailable")},
+	}
+
+	if _, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		WorkspacePath:     t.TempDir(),
+		RepoOwner:         "hashicorp",
+		RepoName:          "terraform-aws-modules",
+		ResolvedCommitSHA: "a1b2c3d",
+		RootPath:          "modules/vpc",
+	}); err != nil {
+		t.Fatalf("FetchSource returned error: %v", err)
+	}
+	if git.credential != (gitrunner.GitCredential{}) {
+		t.Fatal("checkout received a non-zero credential after the token lookup failed")
+	}
+}
+
+// And when the unauthenticated checkout fails, the run's error must name the
+// token lookup that failed rather than an installation that is fine.
+func TestFetchSourceReportsTokenLookupFailure(t *testing.T) {
+	t.Parallel()
+
+	checkoutErr := errors.New("authentication required")
+	lookupErr := errors.New("resolve installation: unexpected status 503 Service Unavailable")
+	activities := &TemplateRunActivities{
+		recorder:        &recordingStatusRecorder{},
+		runRoot:         t.TempDir(),
+		terraformRunner: &recordingTerraformRunner{},
+		git:             &recordingSourceGitRunner{err: checkoutErr},
+		tokens:          stubTokenSource{err: lookupErr},
+	}
+
+	_, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		WorkspacePath:     t.TempDir(),
+		RepoOwner:         "acme",
+		RepoName:          "private-infra",
+		ResolvedCommitSHA: "a1b2c3d",
+		RootPath:          "modules/vpc",
+	})
+	if !errors.Is(err, checkoutErr) {
+		t.Fatalf("error = %v, want it to wrap the underlying checkout failure", err)
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Fatalf("error = %v, want it to name the token lookup failure", err)
+	}
+	if strings.Contains(err.Error(), "not installed") {
+		t.Fatalf("error = %v, must not blame a missing installation for an API failure", err)
+	}
+}
