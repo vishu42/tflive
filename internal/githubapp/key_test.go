@@ -77,6 +77,43 @@ func TestParsePrivateKeyAcceptsBase64EncodedPEM(t *testing.T) {
 	}
 }
 
+// Whitespace inside the blob must not matter. A YAML folded scalar (">") joins
+// its lines with spaces where a literal scalar ("|") keeps newlines, so the same
+// base64 key works or fails on one character of the manifest that carries it.
+// Go's base64 decoder skips CR and LF on its own but not spaces or tabs.
+func TestParsePrivateKeyAcceptsBase64WithInternalWhitespace(t *testing.T) {
+	t.Parallel()
+
+	encoded, key := pkcs1PEM(t)
+	blob := base64.StdEncoding.EncodeToString([]byte(encoded))
+
+	for name, separator := range map[string]string{
+		"spaces":   " ",
+		"newlines": "\n",
+		"crlf":     "\r\n",
+		"tabs":     "\t",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var wrapped strings.Builder
+			for start := 0; start < len(blob); start += 64 {
+				end := min(start+64, len(blob))
+				wrapped.WriteString(blob[start:end])
+				wrapped.WriteString(separator)
+			}
+
+			parsed, err := ParsePrivateKey(wrapped.String())
+			if err != nil {
+				t.Fatalf("ParsePrivateKey returned error: %v", err)
+			}
+			if !parsed.Equal(key) {
+				t.Fatal("parsed key does not match the original")
+			}
+		})
+	}
+}
+
 func TestParsePrivateKeyRejectsGarbage(t *testing.T) {
 	t.Parallel()
 

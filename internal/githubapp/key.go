@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // ParsePrivateKey reads a GitHub App's RSA signing key.
@@ -28,7 +29,12 @@ func ParsePrivateKey(value string) (*rsa.PrivateKey, error) {
 		return nil, errors.New("private key is empty")
 	}
 	if !strings.HasPrefix(string(raw), "-----BEGIN") {
-		decoded, err := base64.StdEncoding.DecodeString(string(raw))
+		// Whitespace is dropped from the whole blob, not just its ends. The
+		// decoder skips CR and LF by itself but rejects spaces and tabs, and a
+		// YAML folded scalar (">") joins its lines with spaces where a literal
+		// scalar ("|") keeps newlines -- so the same key would otherwise work or
+		// fail on one character of the manifest carrying it.
+		decoded, err := base64.StdEncoding.DecodeString(strings.Map(dropWhitespace, string(raw)))
 		if err != nil {
 			return nil, errors.New("private key is neither PEM nor base64-encoded PEM")
 		}
@@ -51,4 +57,11 @@ func ParsePrivateKey(value string) (*rsa.PrivateKey, error) {
 		return nil, fmt.Errorf("private key is %T, want an RSA key", parsed)
 	}
 	return key, nil
+}
+
+func dropWhitespace(character rune) rune {
+	if unicode.IsSpace(character) {
+		return -1
+	}
+	return character
 }
