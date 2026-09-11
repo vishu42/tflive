@@ -15,6 +15,7 @@ import (
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
+	"github.com/vishu42/tflive/internal/githubapp"
 	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/queue"
@@ -78,7 +79,7 @@ type workerDependencies struct {
 	// registerWorkflow attaches the workflow implementations this process can execute.
 	registerWorkflow func(temporalWorker)
 	// registerActivities attaches activity handlers and their shared dependencies to the worker.
-	registerActivities func(temporalWorker, workerStore, string, activities.TemplateRunLogStore)
+	registerActivities func(temporalWorker, workerStore, string, activities.TemplateRunLogStore, activities.GitHubTokenSource)
 	// newLogStore builds the artifact-backed log store used by Terraform activities.
 	newLogStore func(config.ArtifactStoreConfig, artifacts.LogMetadataRecorder) (activities.TemplateRunLogStore, error)
 	// interruptCh provides the shutdown signal consumed by the Temporal worker run loop.
@@ -154,10 +155,10 @@ func defaultWorkerDependencies() workerDependencies {
 				Name: domain.TemplateSyncWorkflowName,
 			})
 		},
-		registerActivities: func(worker temporalWorker, store workerStore, runRoot string, logStore activities.TemplateRunLogStore) {
+		registerActivities: func(worker temporalWorker, store workerStore, runRoot string, logStore activities.TemplateRunLogStore, gitHubTokens activities.GitHubTokenSource) {
 			reader, _ := store.(activities.CredentialReader)
 			decryptor, _ := store.(activities.CredentialDecryptor)
-			templateRunActivities := activities.NewTemplateRunActivitiesWithCredentials(store, runRoot, logStore, reader, decryptor)
+			templateRunActivities := activities.NewTemplateRunActivitiesWithCredentials(store, runRoot, logStore, reader, decryptor, gitHubTokens)
 			worker.RegisterActivityWithOptions(templateRunActivities.PrepareWorkspace, activity.RegisterOptions{
 				Name: domain.PrepareWorkspaceActivityName,
 			})
@@ -171,7 +172,7 @@ func defaultWorkerDependencies() workerDependencies {
 				Name: domain.RecordTemplateRunStatusActivityName,
 			})
 
-			templateSyncActivities := activities.NewTemplateSyncActivities(store)
+			templateSyncActivities := activities.NewTemplateSyncActivities(store, activities.WithTemplateSyncTokenSource(gitHubTokens))
 			worker.RegisterActivityWithOptions(templateSyncActivities.RecordTemplateRegistrationStatus, activity.RegisterOptions{
 				Name: domain.RecordTemplateRegistrationStatusActivityName,
 			})
@@ -192,6 +193,19 @@ func defaultWorkerDependencies() workerDependencies {
 
 func run(ctx context.Context, getenv func(string) string) error {
 	return runWithDependencies(ctx, getenv, defaultWorkerDependencies())
+}
+
+// scrubConsumedSecret removes a secret from the process environment once its
+// value has already been parsed into the in-memory object the worker
+// actually uses. It exists as its own function so the scrub can be verified
+// by test without exercising the rest of worker startup (real Postgres,
+// Temporal, etc.).
+//
+// os.Unsetenv only errors when given a malformed variable name (one
+// containing "="), which never happens for the fixed names this is called
+// with, so the error is not worth surfacing.
+func scrubConsumedSecret(name string) {
+	_ = os.Unsetenv(name)
 }
 
 func runWithDependencies(ctx context.Context, getenv func(string) string, deps workerDependencies) error {
@@ -220,7 +234,36 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 		if err != nil {
 			return fmt.Errorf("create credential cipher: %w", err)
 		}
+		// The key text is now sealed inside credentialCipher and never read from
+		// the environment again. Leaving it in os.Environ would hand it to every
+		// Terraform subprocess this worker starts: runner.CommandExecutor inherits
+		// the full process environment (see internal/runner/executor.go) because
+		// Terraform legitimately needs PATH, HOME, and provider credentials from
+		// it, and that inheritance cannot distinguish "meant for Terraform" from
+		// "meant for us."
+		scrubConsumedSecret("CREDENTIAL_ENCRYPTION_KEY")
 	}
+
+	var gitHubTokens *githubapp.TokenSource
+	if cfg.GitHubApp.Enabled() {
+		privateKey, err := githubapp.ParsePrivateKey(cfg.GitHubApp.PrivateKey.Value())
+		if err != nil {
+			// Unreachable in practice: LoadWorkerConfig parses the same key at
+			// startup precisely so this cannot fail here.
+			return fmt.Errorf("parse github app private key: %w", err)
+		}
+		gitHubTokens = githubapp.NewTokenSource(githubapp.NewClient(cfg.GitHubApp.AppID, privateKey))
+		// The PEM text is now parsed into privateKey and never read from the
+		// environment again. This key mints installation tokens for every
+		// repository across every installation of the App -- strictly more
+		// powerful than the repo-scoped token the rest of this branch works hard
+		// to contain -- so it must not sit in os.Environ where every Terraform
+		// subprocess (an `external` data source, local-exec, a provider binary)
+		// can read it. See the CREDENTIAL_ENCRYPTION_KEY comment above for why
+		// executor.go's environment inheritance can't be the place this is fixed.
+		scrubConsumedSecret("GITHUB_APP_PRIVATE_KEY")
+	}
+
 	store, err := deps.newStore(pool, credentialCipher)
 	if err != nil {
 		return fmt.Errorf("wire activities: %w", err)
@@ -245,7 +288,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 
 	worker := deps.newWorker(temporalClient, cfg.TemporalTaskQueue, temporalworker.Options{EnableSessionWorker: true})
 	deps.registerWorkflow(worker)
-	deps.registerActivities(worker, store, cfg.WorkerRunRoot, logStore)
+	deps.registerActivities(worker, store, cfg.WorkerRunRoot, logStore, gitHubTokens)
 	dispatcher := deps.newDispatcher(temporalClient, cfg.TemporalTaskQueue)
 	controller, err := deps.newQueueController(store, authorizer, dispatcher)
 	if err != nil {

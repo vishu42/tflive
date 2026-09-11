@@ -184,12 +184,27 @@ func (run *templateRunWorkflow) fetchSource() error {
 		ResolvedCommitSHA: run.input.ResolvedCommitSHA,
 		RootPath:          run.input.RootPath,
 	}
+
+	// FetchSource resolves a GitHub App installation token before it ever
+	// invokes git, which can cost up to two API round trips at the client's
+	// HTTP timeout on top of the clone/checkout itself. A per-worker-process
+	// cache absorbs that cost after the first fetch for a repository, but the
+	// first run -- and every run immediately after a worker restart -- pays it
+	// in full, and the default one-minute budget below was sized for a bare
+	// git operation, not one with token resolution in front of it. This
+	// activity gets a longer budget of its own rather than raising the
+	// default for every other activity in the run.
+	fetchSourceCtx := workflow.WithActivityOptions(run.sessionCtx, workflow.ActivityOptions{
+		StartToCloseTimeout: 3 * time.Minute,
+		RetryPolicy:         defaultRunRetryPolicy,
+	})
+
 	var output domain.FetchSourceActivityOutput
 	if err := workflow.ExecuteActivity(
-		run.sessionCtx,
+		fetchSourceCtx,
 		domain.FetchSourceActivityName,
 		input,
-	).Get(run.sessionCtx, &output); err != nil {
+	).Get(fetchSourceCtx, &output); err != nil {
 		return err
 	}
 	run.terraformPath = output.TerraformPath

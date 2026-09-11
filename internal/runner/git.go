@@ -7,9 +7,14 @@ import (
 )
 
 // GitRunner is the subprocess boundary for source repository operations.
+//
+// Clone and CheckoutCommit take a credential because the remote may be private.
+// It is a parameter rather than runner state on purpose: one runner serves every
+// repository, and the token is scoped to a single one, so holding it would be
+// both wrong and a data race. ResolveHead needs none -- it reads a local clone.
 type GitRunner interface {
-	Clone(ctx context.Context, repoURL string, ref string, dest string) error
-	CheckoutCommit(ctx context.Context, repoURL string, commitSHA string, dest string) error
+	Clone(ctx context.Context, repoURL string, ref string, dest string, credential GitCredential) error
+	CheckoutCommit(ctx context.Context, repoURL string, commitSHA string, dest string, credential GitCredential) error
 	ResolveHead(ctx context.Context, repoPath string) (string, error)
 }
 
@@ -28,10 +33,11 @@ func NewLocalGitRunnerWithExecutor(executor CommandExecutor) *LocalGitRunner {
 	return &LocalGitRunner{executor: executor}
 }
 
-func (runner *LocalGitRunner) Clone(ctx context.Context, repoURL string, ref string, dest string) error {
-	output, err := runner.combinedOutput(ctx, "git", "clone", "--depth", "1", "--branch", ref, repoURL, dest)
+func (runner *LocalGitRunner) Clone(ctx context.Context, repoURL string, ref string, dest string, credential GitCredential) error {
+	environment := gitEnvironment(credential)
+	output, err := runner.combinedOutput(ctx, environment, "git", "clone", "--depth", "1", "--branch", ref, repoURL, dest)
 	if err != nil {
-		return &GitCommandError{Command: GitCommandClone, Output: strings.TrimSpace(output), Err: err}
+		return newGitCommandError(GitCommandClone, output, credential, err)
 	}
 	return nil
 }
@@ -43,37 +49,48 @@ func (runner *LocalGitRunner) Clone(ctx context.Context, repoURL string, ref str
 // It cannot be a `git clone --branch` — that flag takes a branch or tag name
 // and rejects a commit SHA — so this fetches the commit directly instead.
 // The fetch stays shallow; only the one commit is transferred.
-func (runner *LocalGitRunner) CheckoutCommit(ctx context.Context, repoURL string, commitSHA string, dest string) error {
+//
+// The URL is passed to the fetch positionally rather than registered as a
+// remote. Nothing reads remote.origin.url from this clone, and keeping it out
+// of .git/config keeps the run workspace free of the repository URL -- which
+// matters once that URL, or a credential alongside it, would otherwise persist
+// in the directory Terraform executes from.
+func (runner *LocalGitRunner) CheckoutCommit(ctx context.Context, repoURL string, commitSHA string, dest string, credential GitCredential) error {
 	steps := []struct {
 		command GitCommand
 		args    []string
 	}{
 		{GitCommandInit, []string{"init", "--quiet", dest}},
-		{GitCommandRemoteAdd, []string{"-C", dest, "remote", "add", "origin", repoURL}},
-		{GitCommandFetch, []string{"-C", dest, "fetch", "--depth", "1", "origin", commitSHA}},
+		{GitCommandFetch, []string{"-C", dest, "fetch", "--depth", "1", repoURL, commitSHA}},
 		{GitCommandCheckout, []string{"-C", dest, "checkout", "--quiet", "FETCH_HEAD"}},
 	}
+	// Every step gets the environment, not only the networked fetch. Restricting
+	// it to the fetch would be correct today and silently wrong the moment a
+	// checkout reaches the network -- which it does for a repository using
+	// git-LFS, whose smudge filter fetches during checkout.
+	environment := gitEnvironment(credential)
 	for _, step := range steps {
-		output, err := runner.combinedOutput(ctx, "git", step.args...)
+		output, err := runner.combinedOutput(ctx, environment, "git", step.args...)
 		if err != nil {
-			return &GitCommandError{Command: step.command, Output: strings.TrimSpace(output), Err: err}
+			return newGitCommandError(step.command, output, credential, err)
 		}
 	}
 	return nil
 }
 
 func (runner *LocalGitRunner) ResolveHead(ctx context.Context, repoPath string) (string, error) {
-	output, err := runner.combinedOutput(ctx, "git", "-C", repoPath, "rev-parse", "HEAD")
+	environment := gitEnvironment(GitCredential{})
+	output, err := runner.combinedOutput(ctx, environment, "git", "-C", repoPath, "rev-parse", "HEAD")
 	if err != nil {
-		return "", &GitCommandError{Command: GitCommandResolveHead, Output: strings.TrimSpace(output), Err: err}
+		return "", newGitCommandError(GitCommandResolveHead, output, GitCredential{}, err)
 	}
 	return strings.TrimSpace(output), nil
 }
 
 // combinedOutput runs a git command and returns its combined stdout/stderr,
 // mirroring exec.Cmd.CombinedOutput on top of the shared CommandExecutor.
-func (runner *LocalGitRunner) combinedOutput(ctx context.Context, name string, args ...string) (string, error) {
+func (runner *LocalGitRunner) combinedOutput(ctx context.Context, env []string, name string, args ...string) (string, error) {
 	var output bytes.Buffer
-	err := runner.executor.Run(ctx, "", nil, &output, &output, name, args...)
+	err := runner.executor.Run(ctx, "", env, &output, &output, name, args...)
 	return output.String(), err
 }

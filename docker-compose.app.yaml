@@ -81,6 +81,8 @@ services:
       ARTIFACT_STORE_KIND: filesystem
       ARTIFACT_STORE_FILESYSTEM_ROOT: /var/lib/tflive/artifacts
       WORKER_RUN_ROOT: /var/lib/tflive/runs
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
     restart: on-failure
     volumes:
       - artifacts:/var/lib/tflive/artifacts

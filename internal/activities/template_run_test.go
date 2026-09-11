@@ -11,7 +11,8 @@ import (
 	"testing"
 
 	"github.com/vishu42/tflive/internal/domain"
-	"github.com/vishu42/tflive/internal/runner"
+	"github.com/vishu42/tflive/internal/githubapp"
+	gitrunner "github.com/vishu42/tflive/internal/runner"
 )
 
 func TestRecordTemplateRunStatusDelegatesToRecorder(t *testing.T) {
@@ -267,7 +268,7 @@ func TestLocalTerraformRunnerWritesCommandLogFile(t *testing.T) {
 		stderr: "plan stderr\n",
 	}
 	terraformRunner := localTerraformRunner{
-		runner: runner.NewLocalProcessRunnerWithExecutor(executor),
+		runner: gitrunner.NewLocalProcessRunnerWithExecutor(executor),
 	}
 
 	err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
@@ -304,7 +305,7 @@ func TestLocalTerraformRunnerUploadsCommandLogFile(t *testing.T) {
 	}
 	logStore := &recordingTemplateRunLogStore{}
 	terraformRunner := localTerraformRunner{
-		runner:   runner.NewLocalProcessRunnerWithExecutor(executor),
+		runner:   gitrunner.NewLocalProcessRunnerWithExecutor(executor),
 		logStore: logStore,
 	}
 
@@ -344,7 +345,7 @@ func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
 	}
 	logStore := &recordingTemplateRunLogStore{}
 	terraformRunner := localTerraformRunner{
-		runner:   runner.NewLocalProcessRunnerWithExecutor(executor),
+		runner:   gitrunner.NewLocalProcessRunnerWithExecutor(executor),
 		logStore: logStore,
 	}
 
@@ -405,14 +406,16 @@ func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input do
 }
 
 type recordingSourceGitRunner struct {
-	repoURL   string
-	ref       string
-	commitSHA string
-	dest      string
-	err       error
+	repoURL    string
+	ref        string
+	commitSHA  string
+	dest       string
+	credential gitrunner.GitCredential
+	err        error
 }
 
-func (runner *recordingSourceGitRunner) Clone(_ context.Context, repoURL string, ref string, dest string) error {
+func (runner *recordingSourceGitRunner) Clone(_ context.Context, repoURL string, ref string, dest string, credential gitrunner.GitCredential) error {
+	runner.credential = credential
 	runner.repoURL = repoURL
 	runner.ref = ref
 	runner.dest = dest
@@ -422,7 +425,8 @@ func (runner *recordingSourceGitRunner) Clone(_ context.Context, repoURL string,
 	return os.MkdirAll(filepath.Join(dest, "modules", "vpc"), 0o700)
 }
 
-func (runner *recordingSourceGitRunner) CheckoutCommit(_ context.Context, repoURL string, commitSHA string, dest string) error {
+func (runner *recordingSourceGitRunner) CheckoutCommit(_ context.Context, repoURL string, commitSHA string, dest string, credential gitrunner.GitCredential) error {
+	runner.credential = credential
 	runner.repoURL = repoURL
 	runner.commitSHA = commitSHA
 	runner.dest = dest
@@ -472,4 +476,160 @@ func (executor *recordingCommandExecutor) Run(_ context.Context, _ string, env [
 		return err
 	}
 	return executor.err
+}
+
+// A run's checkout needs the credential just as a registration's clone does;
+// this is the path that feeds Terraform.
+func TestFetchSourcePassesInstallationTokenToCheckout(t *testing.T) {
+	t.Parallel()
+
+	git := &recordingSourceGitRunner{}
+	activities := &TemplateRunActivities{
+		recorder:        &recordingStatusRecorder{},
+		runRoot:         t.TempDir(),
+		terraformRunner: &recordingTerraformRunner{},
+		git:             git,
+		tokens:          stubTokenSource{token: "ghs_minted"},
+	}
+
+	if _, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		WorkspacePath:     t.TempDir(),
+		RepoOwner:         "acme",
+		RepoName:          "private-infra",
+		ResolvedCommitSHA: "a1b2c3d",
+		RootPath:          "modules/vpc",
+	}); err != nil {
+		t.Fatalf("FetchSource returned error: %v", err)
+	}
+
+	if git.credential != gitrunner.NewGitCredential("ghs_minted") {
+		t.Fatal("checkout did not receive the installation credential")
+	}
+}
+
+// A missing installation is not itself a failure -- see the doc comment on
+// repoCredential's call site in FetchSource. The checkout still goes ahead
+// unauthenticated, and only once that checkout fails for its own reason does
+// the missing installation become the user's problem.
+func TestFetchSourceReportsUninstalledApp(t *testing.T) {
+	t.Parallel()
+
+	checkoutErr := errors.New("authentication required")
+	activities := &TemplateRunActivities{
+		recorder:        &recordingStatusRecorder{},
+		runRoot:         t.TempDir(),
+		terraformRunner: &recordingTerraformRunner{},
+		git:             &recordingSourceGitRunner{err: checkoutErr},
+		tokens:          stubTokenSource{err: githubapp.ErrAppNotInstalled},
+	}
+
+	_, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		WorkspacePath:     t.TempDir(),
+		RepoOwner:         "acme",
+		RepoName:          "private-infra",
+		ResolvedCommitSHA: "a1b2c3d",
+		RootPath:          "modules/vpc",
+	})
+	if !errors.Is(err, checkoutErr) {
+		t.Fatalf("error = %v, want it to wrap the underlying checkout failure", err)
+	}
+	if !strings.Contains(err.Error(), "acme/private-infra") {
+		t.Fatalf("error = %v, want it to name the repository", err)
+	}
+	if !strings.Contains(err.Error(), "not installed") {
+		t.Fatalf("error = %v, want it to name the missing installation", err)
+	}
+}
+
+// The regression this guards: configuring a GitHub App must not break
+// fetching source from a public repository it was never installed on. A 404
+// from the installation lookup cannot be told apart from that case, so
+// FetchSource must fall back to an unauthenticated checkout and succeed
+// exactly as it would with no token source configured at all.
+func TestFetchSourceSucceedsWithZeroCredentialWhenAppNotInstalled(t *testing.T) {
+	t.Parallel()
+
+	git := &recordingSourceGitRunner{}
+	activities := &TemplateRunActivities{
+		recorder:        &recordingStatusRecorder{},
+		runRoot:         t.TempDir(),
+		terraformRunner: &recordingTerraformRunner{},
+		git:             git,
+		tokens:          stubTokenSource{err: githubapp.ErrAppNotInstalled},
+	}
+
+	if _, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		WorkspacePath:     t.TempDir(),
+		RepoOwner:         "hashicorp",
+		RepoName:          "terraform-aws-modules",
+		ResolvedCommitSHA: "a1b2c3d",
+		RootPath:          "modules/vpc",
+	}); err != nil {
+		t.Fatalf("FetchSource returned error: %v", err)
+	}
+	if git.credential != (gitrunner.GitCredential{}) {
+		t.Fatal("checkout received a non-zero credential for a repo the App is not installed on")
+	}
+}
+
+// The same for a run's checkout: a GitHub API failure that is not a missing
+// installation must not fail a run against a public repository, which never
+// needed the token the lookup failed to produce.
+func TestFetchSourceSucceedsWithZeroCredentialWhenTokenLookupFails(t *testing.T) {
+	t.Parallel()
+
+	git := &recordingSourceGitRunner{}
+	activities := &TemplateRunActivities{
+		recorder:        &recordingStatusRecorder{},
+		runRoot:         t.TempDir(),
+		terraformRunner: &recordingTerraformRunner{},
+		git:             git,
+		tokens:          stubTokenSource{err: errors.New("resolve installation: unexpected status 503 Service Unavailable")},
+	}
+
+	if _, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		WorkspacePath:     t.TempDir(),
+		RepoOwner:         "hashicorp",
+		RepoName:          "terraform-aws-modules",
+		ResolvedCommitSHA: "a1b2c3d",
+		RootPath:          "modules/vpc",
+	}); err != nil {
+		t.Fatalf("FetchSource returned error: %v", err)
+	}
+	if git.credential != (gitrunner.GitCredential{}) {
+		t.Fatal("checkout received a non-zero credential after the token lookup failed")
+	}
+}
+
+// And when the unauthenticated checkout fails, the run's error must name the
+// token lookup that failed rather than an installation that is fine.
+func TestFetchSourceReportsTokenLookupFailure(t *testing.T) {
+	t.Parallel()
+
+	checkoutErr := errors.New("authentication required")
+	lookupErr := errors.New("resolve installation: unexpected status 503 Service Unavailable")
+	activities := &TemplateRunActivities{
+		recorder:        &recordingStatusRecorder{},
+		runRoot:         t.TempDir(),
+		terraformRunner: &recordingTerraformRunner{},
+		git:             &recordingSourceGitRunner{err: checkoutErr},
+		tokens:          stubTokenSource{err: lookupErr},
+	}
+
+	_, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		WorkspacePath:     t.TempDir(),
+		RepoOwner:         "acme",
+		RepoName:          "private-infra",
+		ResolvedCommitSHA: "a1b2c3d",
+		RootPath:          "modules/vpc",
+	})
+	if !errors.Is(err, checkoutErr) {
+		t.Fatalf("error = %v, want it to wrap the underlying checkout failure", err)
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Fatalf("error = %v, want it to name the token lookup failure", err)
+	}
+	if strings.Contains(err.Error(), "not installed") {
+		t.Fatalf("error = %v, must not blame a missing installation for an API failure", err)
+	}
 }
