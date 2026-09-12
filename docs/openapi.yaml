@@ -520,10 +520,10 @@ paths:
       tags: [Stacks]
       summary: Create a stack
       description: |
-        Creation is queue-driven: the response may carry `status:
-        "provisioning"` while the authorization edges are written. Watch
-        `GET /v1/tenants/{tenant_id}/queue`, or re-read the stack, until it is
-        `ready`.
+        Synchronous. The stack row, the audit event and the authorization edges
+        that make the stack reachable are written in one transaction, so a
+        `201` response describes a stack that is already usable and a failure
+        leaves no stack behind. There is nothing to poll.
       operationId: createStack
       requestBody:
         required: true
@@ -1268,8 +1268,8 @@ paths:
       tags: [Queue]
       summary: List the caller's queued work items
       description: |
-        The asynchronous work the caller queued — stack provisioning, template
-        registration. Scoped by actor alone, so no new permission concept is
+        The asynchronous work the caller queued — template registration,
+        template runs. Scoped by actor alone, so no new permission concept is
         involved: a caller only ever sees their own items. Capped at the 50
         most recent.
       operationId: listQueue
@@ -1638,10 +1638,12 @@ components:
 
     StackStatus:
       type: string
-      enum: [provisioning, ready]
+      enum: [ready]
       description: |
-        `provisioning` means the queue is still writing the stack's
-        authorization edges; only the creation path can leave a stack there.
+        `ready` is currently the only value: a stack is created together with
+        its authorization edges in one transaction, so it is never observable
+        in an intermediate state. The field is kept because a future
+        non-instant state, such as deletion, would belong here.
 
     StackCapabilities:
       type: object
@@ -1979,7 +1981,7 @@ components:
       properties:
         kind:
           type: string
-          description: What kind of work this is, such as stack provisioning.
+          description: What kind of work this is, such as a template run.
         state: { type: string }
         summary:
           type: string

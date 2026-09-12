@@ -135,11 +135,7 @@ connects to Postgres or Temporal or starts its HTTP listener.
 | `SESSION_ENCRYPTION_KEY` | Yes | Required 32-byte key (raw, base64, or hex) that seals the short-lived login transaction cookie (`state`, `nonce`, PKCE verifier, `return_to`) and encrypts each session row's stored ID token at rest |
 | `TFLIVE_SESSION_ABSOLUTE_TTL` | No | Optional hard cap on a session from sign-in, never extended; defaults to `8h` |
 | `TFLIVE_SESSION_IDLE_TTL` | No | Optional idle bound, sliding on activity; defaults to `1h`; must not exceed `TFLIVE_SESSION_ABSOLUTE_TTL` |
-| `OPENFGA_API_URL` | No | Required OpenFGA API base URL |
-| `OPENFGA_STORE_ID` | No | Required exact store ID emitted by bootstrap |
-| `OPENFGA_MODEL_ID` | No | Required exact immutable model ID emitted by bootstrap |
-| `OPENFGA_API_TOKEN` | Yes | Optional for local development and required in production |
-| `OPENFGA_HTTP_TIMEOUT` | No | Positive per-request deadline; defaults to `10s` |
+| `OPENFGA_STORE_NAME` | No | Optional name of the store the API adopts; defaults to `tflive` |
 
 `TFLIVE_TENANT_ID` is the authoritative security boundary. Every authenticated
 tenant-scoped route compares its `{tenant_id}` path value with that configured
@@ -153,16 +149,18 @@ context. Deployments must set it to the same value as `TFLIVE_TENANT_ID`; a
 mismatch is safe but prevents tenant-scoped requests from succeeding. Changing
 this value requires rebuilding and redeploying the frontend bundle.
 
-Development permits the documented loopback HTTP issuer, local HTTP OpenFGA
-endpoint, and tokenless OpenFGA service. Production must be selected explicitly
-with `TFLIVE_ENVIRONMENT=production`; it requires HTTPS for both external
-dependencies and a non-empty OpenFGA bearer token. Unknown modes, malformed
-tenant IDs, unsafe URLs or identifiers, and non-positive timeouts stop startup.
+Development permits the documented loopback HTTP issuer. Production must be
+selected explicitly with `TFLIVE_ENVIRONMENT=production`; it requires HTTPS for
+external dependencies. Unknown modes, malformed tenant IDs, and unsafe URLs or
+identifiers stop startup.
 
-The OpenFGA store and model IDs are never discovered at API startup. Copy the
-exact assignments printed by the serialized bootstrap command into runtime
-configuration before starting the API. Keycloak bootstrap passwords and
-provisioner administrator tokens are not API runtime credentials.
+There is nothing to record for OpenFGA. It runs inside the API process, creates
+its tables in the application database, and resolves the store and the
+authorization model from the model in this repository at startup — adopting an
+existing store and model when they match, and refusing to start when more than
+one matches, because picking one would silently decide which tuples count.
+Keycloak bootstrap passwords and provisioner administrator tokens are not API
+runtime credentials.
 
 `OIDC_AUDIENCE` is retired: it named a resource identifier that used to be
 forced into an access token's `aud`, and that concept does not exist for the
@@ -621,32 +619,38 @@ The derived relations are exactly:
 person or pipeline that configures and deploys the services is the deployment
 administrator.
 
-The model is authored in OpenFGA's DSL at `openfga/authorization-model.fga`,
-which is what changes to permissions are written and reviewed in and the only
-form of the model in the repository. `cmd/openfga-provisioner` embeds that file
-and transforms it to the API wire format in process; see
+The model is authored in OpenFGA's DSL at
+`internal/authorization/authorization-model.fga`, which is what changes to
+permissions are written and reviewed in and the only form of the model in the
+repository. The API embeds that file and transforms it to the wire format in
+process at startup; see
 [local development](development.md#the-authorization-model).
 
 ### Runtime Authorization Behavior
 
-- Stack creation requires the authenticated user to have the Keycloak
-  `stack-creator` or `platform-admin` realm role. After Postgres persists the
-  stack, the API writes and higher-consistency-confirms an OpenFGA `owner`
-  relationship for that user's immutable subject. An ownership-write failure
-  returns `503 authorization_unavailable` after persistence. The initial owner
-  intent is recorded atomically with the stack in `authorization_outbox`; the
-  worker retries confirmed OpenFGA delivery until it succeeds. Operators can
-  inspect pending rows using `attempts`, `available_at`, and the sanitized
-  `last_error`. The outbox never stores tokens or OpenFGA request bodies.
-- The API always sends the explicit configured OpenFGA store and immutable
-  model IDs; it never discovers a latest model at runtime.
-- Direct role writes and deletes can request higher-consistency confirmation. A
-  completed negative higher-consistency confirmation returns
-  `authorization_write_unconfirmed` and is retryable safely.
-- A confirmation timeout, unavailable service, malformed response, or other
-  confirmation dependency failure fails closed as `authorization_unavailable`.
-  Explicit OpenFGA denial remains distinct; when an authorization decision is
-  required, dependency failures map to `503 authorization_unavailable`.
+- Stack creation requires `can_create_stack` on the platform singleton. The
+  stack row, the audit event, the `owner` relationship for the creator's
+  immutable subject, and the `parent` edge that lets platform administrators
+  reach the stack are all written in **one Postgres transaction**. A stack that
+  exists is therefore always one its creator can reach, and a failed grant
+  leaves no stack behind. Creation is synchronous: the response describes a
+  usable stack, and there is nothing to poll.
+- Role changes are the same shape. The current grants are read, the last-owner
+  guard is applied, and the converging writes are made — all inside the
+  transaction that records the audit event. Reading inside it is what closes
+  the window in which two concurrent demotions could each see two owners, each
+  pass the guard, and leave the stack with none.
+- The authorization queue kinds are retired. `grant_stack_owner`,
+  `mark_stack_ready` and `reconcile_stack_grant` existed only because a tuple
+  write could not commit with the domain write that caused it.
+- Higher-consistency confirmation is gone with them. It existed because a
+  rejected remote write might still have landed; inside a transaction the write
+  lands or the caller rolls back, and there is no third outcome.
+- A denial is an answer and reaches the caller as `403` (or `404` where a route
+  refuses to disclose existence). Anything else — a database failure, a timeout,
+  a malformed request this code built — is an error, never a decision, and
+  reaches the caller as `500`. A failure can never be rendered as a refusal:
+  callers reach `ErrForbidden` only when the check returned `(false, nil)`.
 
 ### Endpoint Permission Matrix
 
@@ -677,63 +681,40 @@ Stack templates, runs, logs, log artifacts, and credential identifiers returned
 with a stack inherit the owning stack decision. Non-administrator stack lists
 read tenant stacks from Postgres in stable `(created_at, id)` keyset pages of at
 most 50 candidates and authorize each page through `BatchCheck(can_view)`. The
-API returns only after every page succeeds. A timeout, malformed result, result
-count mismatch, or later-page failure discards all earlier results and returns
-`503 authorization_unavailable`; partial lists are never returned.
+API returns only after every page succeeds. A timeout, a result count mismatch,
+or a later-page failure discards all earlier results and returns `500`; a
+partial list is never returned, because it would tell the caller they have
+access to less than they do.
 
 Missing and inaccessible inherited reads both return `404 not_found`. Missing
 and inaccessible inherited mutation targets both return `403 forbidden`, so
 stack-template and run identifiers cannot be enumerated by comparing statuses.
-OpenFGA timeouts, unavailable or malformed responses, and a missing runtime
-authorizer fail closed as `503 authorization_unavailable` and never produce an
-allowed operation or an unfiltered list.
+An authorization failure -- a database error, a timeout, or a missing runtime
+authorization -- fails closed as `500` and never produces an allowed operation
+or an unfiltered list. A denial stays distinct: it is `(false, nil)` at the
+boundary and becomes `403` or `404`, so a failure can never be rendered as a
+refusal.
 
-### Provisioning and Verification
+### Store and Model Resolution
 
-`docker compose up` provisions OpenFGA as part of the infrastructure phase. The
-`openfga-provision` one-shot runs `bootstrap`, which reuses a store whose name
-already matches and reuses a semantically equal authorization model, creating
-either only when absent, so repeated runs converge rather than duplicating.
+There is no provisioning step and no verification command. The API resolves both
+identifiers itself at startup, by the same rules the retired provisioner used:
 
-Bootstrap prints the resolved identifiers to stdout. Copy both into `.env` before
-starting the application phase, which refuses to start without them. The
-identifiers are therefore always exact and pinned: nothing discovers a store by
-name at runtime, and nothing resolves "the latest model".
+- a store whose name matches `OPENFGA_STORE_NAME` (default `tflive`) is adopted;
+  one is created only when absent
+- a stored model semantically equal to the repository model is adopted; a new
+  immutable version is written only when none matches
+- **more than one matching store, or more than one matching model, fails
+  startup.** Picking one would silently decide which tuples count, so it refuses
+  rather than choosing
 
-```bash
-docker compose up -d
-docker compose logs openfga-provision
-# Copy OPENFGA_STORE_ID and OPENFGA_MODEL_ID into .env.
-docker compose run --rm openfga-provision verify
-```
+Repeated starts converge rather than duplicating, and a restart adopts the same
+store and model rather than minting a model id that existing tuples were never
+written against. A model definition change writes a new immutable version on the
+next start, with no configuration to update.
 
-`verify` reads the exact pair from `.env` and checks it against the live store
-and model without mutating either.
-
-The provisioner's standard output contains only these two assignments:
-
-```text
-OPENFGA_STORE_ID=<store ID>
-OPENFGA_MODEL_ID=<authorization model ID>
-```
-
-The deployment administrator copies both assignment lines into environment
-configuration as text; the bootstrap output must not be executed or evaluated
-directly.
-Bootstrap discovers only the uniquely named `tflive` store and reuses exactly
-one semantic match for the repository model. Duplicate `tflive` store names or
-duplicate semantic model matches fail closed rather than selecting an arbitrary
-resource.
-
-Bootstrap must be serialized because OpenFGA store names are not unique. If a
-run fails after creating only the store, or after creating the model but before
-the IDs are recorded, rerun the same bootstrap command: it safely reuses the
-unique completed resource and finishes the missing work. A model definition
-change creates a new immutable model ID; the deployment administrator must
-explicitly update `OPENFGA_MODEL_ID` in environment configuration.
-
-Verify fetches the exact `OPENFGA_STORE_ID` and `OPENFGA_MODEL_ID`, compares the
-exact stored model with the repository model, and never writes or otherwise
-mutates OpenFGA. It never discovers or substitutes a latest model. The API will
-later use the same explicit IDs, so verification and runtime authorization
-remain pinned to the environment configuration.
+Because resolution is content-addressed by the model in this repository, nothing
+has to be recorded between phases and nothing has to be pasted into an
+environment file. OpenFGA's own tables live in the application database, created
+at startup — which is also what lets a tuple write join the same transaction as
+the domain write that caused it.
