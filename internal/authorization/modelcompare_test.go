@@ -1,0 +1,237 @@
+package authorization
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+
+	)
+
+func TestParseAuthorizationModelRejectsInvalidModels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{name: "malformed JSON", data: "{", want: "decode authorization model"},
+		{name: "wrong schema", data: `{"schema_version":"1.0","type_definitions":[{"type":"user"}]}`, want: "schema_version must be 1.1"},
+		{name: "no types", data: `{"schema_version":"1.1","type_definitions":[]}`, want: "type_definitions must not be empty"},
+		{name: "duplicate type", data: `{"schema_version":"1.1","type_definitions":[{"type":"user"},{"type":"user"}]}`, want: `duplicate type "user"`},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseAuthorizationModel([]byte(test.data))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("ParseAuthorizationModel() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestModelsEqualIgnoresNonSemanticOrderingAndIDs(t *testing.T) {
+	t.Parallel()
+
+	first, err := ParseAuthorizationModel(canonicalModelJSON(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := ParseAuthorizationModel(canonicalModelJSON(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.ID = "server-generated"
+	second.TypeDefinitions[0], second.TypeDefinitions[1] = second.TypeDefinitions[1], second.TypeDefinitions[0]
+
+	equal, err := ModelsEqual(first, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equal {
+		t.Fatal("semantically identical models compared unequal")
+	}
+}
+
+func TestModelsEqualDetectsPermissionRewriteChanges(t *testing.T) {
+	t.Parallel()
+
+	first, err := ParseAuthorizationModel(canonicalModelJSON(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := ParseAuthorizationModel(canonicalModelJSON(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range second.TypeDefinitions {
+		if second.TypeDefinitions[index].Type == "stack" {
+			second.TypeDefinitions[index].Relations["can_manage_access"] = json.RawMessage(`{"computedUserset":{"relation":"viewer"}}`)
+		}
+	}
+
+	equal, err := ModelsEqual(first, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if equal {
+		t.Fatal("security-relevant rewrite change compared equal")
+	}
+}
+
+func TestModelsEqualNormalizesComputedUsersetObject(t *testing.T) {
+	desired, err := ParseAuthorizationModel([]byte(`{
+		"schema_version":"1.1",
+		"type_definitions":[{
+			"type":"stack",
+			"relations":{"can_view":{"union":{"child":[{"computedUserset":{"relation":"viewer"}}]}}}
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		object    string
+		wantEqual bool
+	}{
+		{name: "empty OpenFGA default", object: "", wantEqual: true},
+		{name: "nonempty object", object: "stack:other", wantEqual: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual, err := ParseAuthorizationModel([]byte(`{
+				"schema_version": "1.1",
+				"type_definitions": [{
+					"type": "stack",
+					"relations": {
+						"can_view": {
+							"union": {
+								"child": [{
+									"computedUserset": {
+										"object": ` + fmt.Sprintf("%q", test.object) + `,
+										"relation": "viewer"
+									}
+								}]
+							}
+						}
+					}
+				}]
+			}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			equal, err := ModelsEqual(desired, actual)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if equal != test.wantEqual {
+				t.Fatalf("ModelsEqual() = %t, want %t", equal, test.wantEqual)
+			}
+		})
+	}
+}
+
+func TestCanonicalModelAllowsDirectWritesOnlyToRoles(t *testing.T) {
+	t.Parallel()
+
+	model, err := ParseAuthorizationModel(canonicalModelJSON(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack, ok := model.TypeDefinition("stack")
+	if !ok {
+		t.Fatal("canonical model is missing stack type")
+	}
+
+	// parent is the one structural exception: directly assignable like a role,
+	// but its direct type is the platform singleton rather than a user. It is
+	// what carries administrator inheritance onto a stack, so it has to be
+	// writable -- which is exactly why authz.grantableRelations excludes it.
+	assertDirectTypes(t, "stack", stack, map[string]string{
+		"owner": "user", "operator": "user", "approver": "user", "viewer": "user",
+		"parent": "platform",
+	})
+
+	platform, ok := model.TypeDefinition("platform")
+	if !ok {
+		t.Fatal("canonical model is missing platform type")
+	}
+	// Every platform tier is a direct user grant; every capability derives.
+	assertDirectTypes(t, "platform", platform, map[string]string{
+		"root": "user", "admin": "user", "editor": "user", "viewer": "user",
+	})
+}
+
+// assertDirectTypes pins which relations of a type are directly writable and
+// what may occupy the user slot of each. A relation absent from want must
+// derive, which is what stops a client writing a permission straight in.
+func assertDirectTypes(t *testing.T, typeName string, definition TypeDefinition, want map[string]string) {
+	t.Helper()
+
+	for relation := range definition.Relations {
+		metadata := definition.Metadata.Relations[relation]
+		wantType, direct := want[relation]
+		if hasDirectType := len(metadata.DirectlyRelatedUserTypes) != 0; hasDirectType != direct {
+			t.Fatalf("%s relation %s direct assignment = %v, want %v", typeName, relation, hasDirectType, direct)
+		}
+		for _, related := range metadata.DirectlyRelatedUserTypes {
+			if related.Type != wantType || related.Relation != "" || related.Wildcard != nil {
+				t.Fatalf("%s relation %s has unsafe direct type %#v", typeName, relation, related)
+			}
+		}
+	}
+}
+
+func TestModelsEqualIgnoresEmptyRelationMetadata(t *testing.T) {
+	t.Parallel()
+
+	// The DSL transform emits an empty metadata entry for every computed
+	// relation; a hand-written model and some server responses omit them.
+	// The entry carries no information either way.
+	withEntries, err := ParseAuthorizationModel(canonicalModelJSON(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutEntries, err := ParseAuthorizationModel(canonicalModelJSON(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stripped := 0
+	for index := range withoutEntries.TypeDefinitions {
+		metadata := withoutEntries.TypeDefinitions[index].Metadata.Relations
+		for relation, entry := range metadata {
+			if len(entry.DirectlyRelatedUserTypes) == 0 {
+				delete(metadata, relation)
+				stripped++
+			}
+		}
+	}
+	if stripped == 0 {
+		t.Fatal("canonical model has no empty relation metadata to strip")
+	}
+
+	equal, err := ModelsEqual(withEntries, withoutEntries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equal {
+		t.Fatal("models differing only in empty relation metadata compared unequal")
+	}
+}
+
+// canonicalModelJSON is the embedded model in wire format, or a fatal test error
+// when the embedded DSL does not transform.
+func canonicalModelJSON(t *testing.T) []byte {
+	t.Helper()
+	data, err := AuthorizationModelJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}

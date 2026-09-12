@@ -58,6 +58,18 @@ func (store *Datastore) Write(
 	return writeOnTx(ctx, tx, storeID, deletes, writes, storage.NewTupleWriteOptions(opts...), time.Now().UTC())
 }
 
+// Close releases the datastore without closing the pool.
+//
+// Upstream's Close calls primaryDB.Close() unconditionally, which would shut
+// down the application's shared pool -- the one serving every repository, the
+// queue and the session store. The pool is borrowed here, not owned, so closing
+// it is the caller's business and never ours.
+//
+// Nothing else is leaked by skipping it: the only other thing upstream's Close
+// does is unregister a Prometheus collector, and that collector is created only
+// when Config.ExportMetrics is set, which newDatastore does not set.
+func (store *Datastore) Close() {}
+
 // Datastore must remain a complete OpenFGA datastore, or it cannot be handed to
 // server.WithDatastore.
 var _ storage.OpenFGADatastore = (*Datastore)(nil)
