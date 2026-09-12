@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/authorization"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
 )
@@ -89,8 +89,8 @@ func TestCreateStackDerivesSlugAndPersistsStack(t *testing.T) {
 	service := NewService(Service{
 		Stacks:     stacks,
 		Work:       newRecordingWork(stacks),
-		Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_123")},
+		Authorization: testPlatformAuthorizer(t),
+		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
 		Clock:      fixedClock{now: now},
 	})
 
@@ -106,8 +106,8 @@ func TestCreateStackDerivesSlugAndPersistsStack(t *testing.T) {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
 
-	if stack.ID != domain.StackID("stack_123") {
-		t.Fatalf("stack ID = %q, want stack_123", stack.ID)
+	if stack.ID != domain.StackID("stack_new") {
+		t.Fatalf("stack ID = %q, want stack_new", stack.ID)
 	}
 	if stack.Slug != "acme-prod" {
 		t.Fatalf("slug = %q, want acme-prod", stack.Slug)
@@ -133,12 +133,12 @@ func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
 	t.Parallel()
 
 	stacks := &recordingStackRepository{createErr: ErrDuplicateStackSlug}
-	authorizer := &recordingAuthorizer{tiers: testPlatformAuthorizer()}
+	authorizer := testPlatformAuthorizer(t)
 	service := NewService(Service{
 		Stacks:     stacks,
 		Work:       newRecordingWork(stacks),
-		Authorizer: authorizer,
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_123")},
+		Authorization: authorizer,
+		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
 		Clock:      fixedClock{now: time.Now()},
 	})
 
@@ -150,8 +150,15 @@ func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
 	if !errors.Is(err, ErrDuplicateStackSlug) {
 		t.Fatalf("error = %v, want ErrDuplicateStackSlug", err)
 	}
-	if authorizer.calls != 0 {
-		t.Fatalf("owner writes = %d, want 0", authorizer.calls)
+	// A rejected creation leaves no owner behind. Under a real transaction the
+	// rollback guarantees it; here the in-memory engine shows the same outcome
+	// because the grant is written after the row that failed.
+	grants, err := authorizer.ListGrants(context.Background(), mustStackObject(t, "stack_new"))
+	if err != nil {
+		t.Fatalf("ListGrants() error = %v", err)
+	}
+	if len(grants) != 0 {
+		t.Fatalf("grants = %#v, want none after a rejected creation", grants)
 	}
 }
 
@@ -159,10 +166,10 @@ func TestCreateStackRejectsInvalidTagKey(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Authorizer: testPlatformAuthorizer(),
+		Authorization: testPlatformAuthorizer(t),
 		Stacks:     &recordingStackRepository{},
 		Work:       newRecordingWork(&recordingStackRepository{}),
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_123")},
+		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
 	})
 
 	_, err := service.CreateStack(authenticatedContext(), CreateStackCommand{
@@ -181,10 +188,10 @@ func TestCreateStackRejectsEmptyDefaultCredentialID(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Authorizer: testPlatformAuthorizer(),
+		Authorization: testPlatformAuthorizer(t),
 		Stacks:     &recordingStackRepository{},
 		Work:       newRecordingWork(&recordingStackRepository{}),
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_123")},
+		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
 	})
 
 	_, err := service.CreateStack(authenticatedContext(), CreateStackCommand{
@@ -213,7 +220,7 @@ func TestGetStackPassesTenantAndIDAndNormalizesNilTemplates(t *testing.T) {
 			Templates: nil,
 		},
 	}
-	service := NewService(Service{Stacks: stacks, Authorizer: &permissionAuthorizer{allowed: true}})
+	service := NewService(Service{Stacks: stacks, Authorization: testPlatformAuthorizer(t)})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject})
 
 	view, err := service.GetStack(ctx, GetStackCommand{
@@ -298,7 +305,7 @@ func TestGetStackResolvesTemplateDisplayName(t *testing.T) {
 			{ID: domain.TemplateRevisionID("rev_2"), RepoName: "my-repo", RootPath: ".", SourceRef: "main"},
 		},
 	}
-	service := NewService(Service{Stacks: stacks, TemplateRevisions: revisions, Authorizer: &permissionAuthorizer{allowed: true}})
+	service := NewService(Service{Stacks: stacks, TemplateRevisions: revisions, Authorization: testPlatformAuthorizer(t)})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject})
 
 	view, err := service.GetStack(ctx, GetStackCommand{
@@ -339,7 +346,7 @@ func TestListStacksPassesTenantAndNormalizesNilStacks(t *testing.T) {
 	t.Parallel()
 
 	stacks := &recordingStackRepository{list: nil}
-	service := NewService(Service{Stacks: stacks, Authorizer: &permissionAuthorizer{}})
+	service := NewService(Service{Stacks: stacks, Authorization: newTestAuthorization(t)})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: keycloakSubject})
 
 	got, err := service.ListStacks(ctx, ListStacksCommand{
@@ -364,7 +371,7 @@ func TestListTemplateRevisionsPassesTenantAndNormalizesNilTemplateRevisions(t *t
 	t.Parallel()
 
 	templates := &recordingTemplateRepository{templates: nil}
-	service := NewService(Service{TemplateRevisions: templates, Authorizer: testPlatformAuthorizer()})
+	service := NewService(Service{TemplateRevisions: templates, Authorization: testPlatformAuthorizer(t)})
 
 	got, err := service.ListTemplateRevisions(authenticatedContext(), ListTemplateRevisionsCommand{
 		TenantID: domain.TenantID("tenant_123"),
@@ -410,7 +417,7 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	}
 	installer := &recordingStackTemplateInstaller{}
 	service := NewService(Service{
-		Authorizer:               &permissionAuthorizer{allowed: true},
+		Authorization:               testPlatformAuthorizer(t),
 		Stacks:                   stacks,
 		Work:                     newRecordingWork(stacks),
 		TemplateRevisionMetadata: templates,
@@ -478,7 +485,7 @@ func TestAddTemplateToStackRejectsMissingRequiredVariable(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Authorizer: &permissionAuthorizer{allowed: true},
+		Authorization: testPlatformAuthorizer(t),
 		Stacks: &recordingStackRepository{
 			stack: domain.Stack{ID: domain.StackID("stack_123"), TenantID: domain.TenantID("tenant_123"), Slug: "acme-prod"},
 		},
@@ -507,7 +514,7 @@ func TestAddTemplateToStackRejectsUnknownVariable(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Authorizer: &permissionAuthorizer{allowed: true},
+		Authorization: testPlatformAuthorizer(t),
 		Stacks: &recordingStackRepository{
 			stack: domain.Stack{ID: domain.StackID("stack_123"), TenantID: domain.TenantID("tenant_123"), Slug: "acme-prod"},
 		},
@@ -536,7 +543,7 @@ func TestAddTemplateToStackRejectsInactiveTemplate(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Authorizer: &permissionAuthorizer{allowed: true},
+		Authorization: testPlatformAuthorizer(t),
 		Stacks: &recordingStackRepository{
 			stack: domain.Stack{ID: domain.StackID("stack_123"), TenantID: domain.TenantID("tenant_123"), Slug: "acme-prod"},
 		},
@@ -598,7 +605,7 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
-		Authorizer:               &permissionAuthorizer{allowed: true},
+		Authorization:               testPlatformAuthorizer(t),
 		Work:                     work,
 		StackTemplates:           stackTemplates,
 		TemplateRuns:             runs,
@@ -695,7 +702,7 @@ func TestUpdateStackTemplateConfigValidatesDesiredRevisionVariables(t *testing.T
 		},
 	}
 	service := NewService(Service{
-		Authorizer:        &permissionAuthorizer{allowed: true},
+		Authorization:        testPlatformAuthorizer(t),
 		StackTemplates:    stackTemplates,
 		TemplateRevisions: templates,
 	})
@@ -731,7 +738,7 @@ func TestUpdateStackTemplateConfigRejectsMissingDesiredRevision(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		Authorizer:        &permissionAuthorizer{allowed: true},
+		Authorization:        testPlatformAuthorizer(t),
 		StackTemplates:    stackTemplates,
 		TemplateRevisions: &recordingTemplateRepository{},
 	})
@@ -775,7 +782,7 @@ func TestUpgradeStackTemplateCarriesForwardCompatibleConfig(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		Authorizer:               &permissionAuthorizer{allowed: true},
+		Authorization:               testPlatformAuthorizer(t),
 		StackTemplates:           stackTemplates,
 		TemplateRevisionMetadata: templates,
 		TemplateRevisions:        templates,
@@ -821,7 +828,7 @@ func TestUpgradeStackTemplateRejectsDifferentSourceTemplate(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		Authorizer:               &permissionAuthorizer{allowed: true},
+		Authorization:               testPlatformAuthorizer(t),
 		StackTemplates:           stackTemplates,
 		TemplateRevisionMetadata: templates,
 		TemplateRevisions:        templates,
@@ -869,7 +876,7 @@ func TestStartTemplateRunRejectsInactiveStackTemplate(t *testing.T) {
 	}
 	runs := &recordingTemplateRunRepository{}
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
 		RunIDs:         fixedTemplateRunIDGenerator{runID: domain.TemplateRunID("run_123")},
@@ -936,7 +943,7 @@ func TestStartTemplateRunRejectsApplyWhosePlanNoLongerMatchesDesired(t *testing.
 
 			runs := &recordingTemplateRunRepository{}
 			service := NewService(Service{
-				Authorizer:     &permissionAuthorizer{allowed: true},
+				Authorization:     testPlatformAuthorizer(t),
 				StackTemplates: &recordingStackTemplateRepository{stackTemplate: stackTemplate},
 				TemplateRuns:   runs,
 				TemplateRevisionMetadata: &recordingTemplateRepository{
@@ -973,7 +980,7 @@ func TestStartTemplateRunSurfacesTheStoresInFlightRejection(t *testing.T) {
 	work := &recordingUnitOfWork{templateRuns: runs}
 	service := NewService(Service{
 		Work:         work,
-		Authorizer:   &permissionAuthorizer{allowed: true},
+		Authorization:   testPlatformAuthorizer(t),
 		TemplateRuns: runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{
 			ID:                        domain.StackTemplateID("stack_template_123"),
@@ -1018,7 +1025,7 @@ func TestStartTemplateRunStampsTheRefOfTheRevisionBeingRun(t *testing.T) {
 	work := &recordingUnitOfWork{templateRuns: runs}
 	service := NewService(Service{
 		Work:         work,
-		Authorizer:   &permissionAuthorizer{allowed: true},
+		Authorization:   testPlatformAuthorizer(t),
 		TemplateRuns: runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{
 			ID:                        domain.StackTemplateID("stack_template_123"),
@@ -1065,7 +1072,7 @@ func TestStartTemplateRunAllowsPlanWhenThePlanIsStale(t *testing.T) {
 	work := &recordingUnitOfWork{templateRuns: runs}
 	service := NewService(Service{
 		Work:         work,
-		Authorizer:   &permissionAuthorizer{allowed: true},
+		Authorization:   testPlatformAuthorizer(t),
 		TemplateRuns: runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{
 			ID:                            domain.StackTemplateID("stack_template_123"),
@@ -1109,7 +1116,7 @@ func TestStartTemplateRunRejectsMissingDesiredRevision(t *testing.T) {
 	}
 	runs := &recordingTemplateRunRepository{}
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
 		TemplateRevisionMetadata: &recordingTemplateRepository{
@@ -1148,7 +1155,7 @@ func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
 	}
 	runs := &recordingTemplateRunRepository{}
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		Work:           &recordingUnitOfWork{templateRuns: runs},
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
@@ -1191,7 +1198,7 @@ func TestRegisterTemplateCreatesPendingRegistrationAndDispatchesWorkflow(t *test
 	work := &recordingUnitOfWork{templateRegistrations: registrations}
 
 	service := NewService(Service{
-		Authorizer:            testPlatformAuthorizer(),
+		Authorization:            testPlatformAuthorizer(t),
 		Work:                  work,
 		TemplateRegistrations: registrations,
 		RegistrationIDs:       fixedTemplateRegistrationIDGenerator{id: domain.TemplateRegistrationID("template_registration_123")},
@@ -1233,7 +1240,7 @@ func TestRegisterTemplateRejectsMissingSourceRef(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Authorizer:            testPlatformAuthorizer(),
+		Authorization:            testPlatformAuthorizer(t),
 		TemplateRegistrations: &recordingTemplateRegistrationRepository{},
 	})
 
@@ -1255,7 +1262,7 @@ func TestRegisterTemplateDoesNotDispatchWhenPersistenceFails(t *testing.T) {
 	registrations := &recordingTemplateRegistrationRepository{createErr: persistErr}
 	work := &recordingUnitOfWork{templateRegistrations: registrations}
 	service := NewService(Service{
-		Authorizer:            testPlatformAuthorizer(),
+		Authorization:            testPlatformAuthorizer(t),
 		Work:                  work,
 		TemplateRegistrations: registrations,
 		RegistrationIDs:       fixedTemplateRegistrationIDGenerator{id: domain.TemplateRegistrationID("template_registration_123")},
@@ -1290,7 +1297,7 @@ func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
@@ -1333,7 +1340,7 @@ func TestApproveRunDoesNotSignalWhenRunIsNotApprovable(t *testing.T) {
 	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
@@ -1367,7 +1374,7 @@ func TestApproveRunAllowsSelfApproval(t *testing.T) {
 	audit := &recordingAuditRepository{}
 
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
@@ -1405,7 +1412,7 @@ func TestApproveRunSelfApprovalWorksForPlatformAdmins(t *testing.T) {
 	audit := &recordingAuditRepository{}
 
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
@@ -1440,7 +1447,7 @@ func TestApproveRunAuditsSuccessfulApproval(t *testing.T) {
 	audit := &recordingAuditRepository{}
 
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
@@ -1476,7 +1483,7 @@ func TestCancelRunRecordsCancellationAndQueuesSignal(t *testing.T) {
 	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", StackID: "stack_123"}},
@@ -1519,7 +1526,7 @@ func TestCancelRunDoesNotReconcileWorkflowInline(t *testing.T) {
 	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
 	work := &recordingUnitOfWork{templateRuns: runs}
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
@@ -1541,7 +1548,7 @@ func TestCancelRunDoesNotSignalWhenRunIsNotCancelable(t *testing.T) {
 	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
@@ -1574,7 +1581,7 @@ func TestGetTemplateRunReturnsTenantScopedRun(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 	})
@@ -1609,7 +1616,7 @@ func TestListTemplateRunsReturnsRunsScopedToStackTemplate(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 	})
@@ -1638,7 +1645,7 @@ func TestListTemplateRunsNormalizesNilAndRequiresStackTemplateID(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		TemplateRuns:   &recordingTemplateRunRepository{},
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 	})
@@ -1687,7 +1694,7 @@ func TestGetTemplateRegistrationReturnsTenantScopedRegistration(t *testing.T) {
 			Status:   domain.TemplateRegistrationCompleted,
 		},
 	}
-	service := NewService(Service{TemplateRegistrations: registrations, Authorizer: testPlatformAuthorizer()})
+	service := NewService(Service{TemplateRegistrations: registrations, Authorization: testPlatformAuthorizer(t)})
 
 	registration, err := service.GetTemplateRegistration(authenticatedContext(), GetTemplateRegistrationCommand{
 		TenantID:       domain.TenantID("tenant_123"),
@@ -1718,7 +1725,7 @@ func TestGetTemplateRevisionVariablesReturnsTenantScopedVariables(t *testing.T) 
 			},
 		},
 	}
-	service := NewService(Service{TemplateRevisions: templates, Authorizer: testPlatformAuthorizer()})
+	service := NewService(Service{TemplateRevisions: templates, Authorization: testPlatformAuthorizer(t)})
 
 	variables, err := service.GetTemplateRevisionVariables(authenticatedContext(), GetTemplateRevisionVariablesCommand{
 		TenantID:           domain.TenantID("tenant_123"),
@@ -1759,7 +1766,7 @@ func TestGetTemplateRunLogChecksRunOwnershipBeforeReadingLog(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		Authorizer:             &permissionAuthorizer{allowed: true},
+		Authorization:             testPlatformAuthorizer(t),
 		TemplateRuns:           runs,
 		StackTemplates:         &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", StackID: "stack_123"}},
 		TemplateRunLogs:        logs,
@@ -1804,7 +1811,7 @@ func TestGetTemplateRunLogDoesNotReadLogWhenRunIsMissing(t *testing.T) {
 	runs := &recordingTemplateRunRepository{getErr: ErrNotFound}
 	logs := &recordingTemplateRunLogReader{content: []byte("plan output\n")}
 	service := NewService(Service{
-		Authorizer:             &permissionAuthorizer{allowed: true},
+		Authorization:             testPlatformAuthorizer(t),
 		TemplateRuns:           runs,
 		TemplateRunLogs:        logs,
 		TemplateRunLogMetadata: &recordingTemplateRunLogRepository{},
@@ -1836,7 +1843,7 @@ func TestGetTemplateRunLogDoesNotReadObjectWhenMetadataIsMissing(t *testing.T) {
 	logs := &recordingTemplateRunLogReader{content: []byte("plan output\n")}
 	metadata := &recordingTemplateRunLogRepository{getErr: ErrNotFound}
 	service := NewService(Service{
-		Authorizer:             &permissionAuthorizer{allowed: true},
+		Authorization:             testPlatformAuthorizer(t),
 		TemplateRuns:           runs,
 		StackTemplates:         &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 		TemplateRunLogs:        logs,
@@ -1877,7 +1884,7 @@ func TestGetTemplateRunLogMapsMissingLogToNotFound(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		Authorizer:             &permissionAuthorizer{allowed: true},
+		Authorization:             testPlatformAuthorizer(t),
 		TemplateRuns:           runs,
 		StackTemplates:         &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", StackID: "stack_123"}},
 		TemplateRunLogs:        logs,
@@ -1936,7 +1943,7 @@ func TestListTemplateRunLogsChecksRunOwnershipBeforeListingMetadata(t *testing.T
 		},
 	}
 	service := NewService(Service{
-		Authorizer:             &permissionAuthorizer{allowed: true},
+		Authorization:             testPlatformAuthorizer(t),
 		TemplateRuns:           runs,
 		StackTemplates:         &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 		TemplateRunLogMetadata: metadata,
@@ -1982,8 +1989,8 @@ func TestCreateStackAuditsOwnerGrant(t *testing.T) {
 	service := NewService(Service{
 		Stacks:     &recordingStackRepository{},
 		Work:       work,
-		Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_123")},
+		Authorization: testPlatformAuthorizer(t),
+		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
 		Clock:      fixedClock{now: now},
 	})
 
@@ -2012,8 +2019,8 @@ func TestCreateStackAuditsOwnerGrant(t *testing.T) {
 	if event.TenantID != domain.TenantID("tenant_123") {
 		t.Fatalf("tenant_id = %q, want tenant_123", event.TenantID)
 	}
-	if event.StackID != domain.StackID("stack_123") {
-		t.Fatalf("stack_id = %q, want stack_123", event.StackID)
+	if event.StackID != domain.StackID("stack_new") {
+		t.Fatalf("stack_id = %q, want stack_new", event.StackID)
 	}
 	if event.NewRole != "owner" {
 		t.Fatalf("new_role = %q, want owner", event.NewRole)
@@ -2030,8 +2037,8 @@ func TestCreateStackAuditWriteFailureDoesNotBlockMutation(t *testing.T) {
 	service := NewService(Service{
 		Stacks:     &recordingStackRepository{},
 		Work:       newRecordingWork(&recordingStackRepository{}),
-		Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_123")},
+		Authorization: testPlatformAuthorizer(t),
+		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
 		Clock:      fixedClock{now: time.Now()},
 		Audit:      failingAuditRepository{},
 	})
@@ -2044,8 +2051,8 @@ func TestCreateStackAuditWriteFailureDoesNotBlockMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
-	if stack.ID != domain.StackID("stack_123") {
-		t.Fatalf("stack ID = %q, want stack_123", stack.ID)
+	if stack.ID != domain.StackID("stack_new") {
+		t.Fatalf("stack ID = %q, want stack_new", stack.ID)
 	}
 }
 
@@ -2056,8 +2063,8 @@ func TestCreateStackWithNilAuditRepositoryDoesNotPanic(t *testing.T) {
 	service := NewService(Service{
 		Stacks:     &recordingStackRepository{},
 		Work:       newRecordingWork(&recordingStackRepository{}),
-		Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_123")},
+		Authorization: testPlatformAuthorizer(t),
+		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
 		Clock:      fixedClock{now: time.Now()},
 		Audit:      nil,
 	})
@@ -2072,30 +2079,14 @@ func TestCreateStackWithNilAuditRepositoryDoesNotPanic(t *testing.T) {
 	}
 }
 
-type denyingAuthorizer struct{}
 
-func (denyingAuthorizer) Check(_ context.Context, _ authz.CheckRequest) (authz.CheckResult, error) {
-	return authz.CheckResult{Allowed: false}, nil
-}
-func (denyingAuthorizer) BatchCheck(_ context.Context, _ authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
-	return authz.BatchCheckResult{}, nil
-}
-func (denyingAuthorizer) ListGrants(_ context.Context, _ authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
-	return authz.ListGrantsResult{}, nil
-}
-func (denyingAuthorizer) WriteRelationships(_ context.Context, _ authz.Mutation) error {
-	return nil
-}
-func (denyingAuthorizer) DeleteRelationships(_ context.Context, _ authz.Mutation) error {
-	return nil
-}
 
 func TestAddTemplateToStackAuditsAuthorizationDenial(t *testing.T) {
 	t.Parallel()
 
 	audit := &recordingAuditRepository{}
 	service := NewService(Service{
-		Authorizer: &denyingAuthorizer{},
+		Authorization: newTestAuthorization(t),
 		Stacks: &recordingStackRepository{
 			stack: domain.Stack{ID: "stack_123", TenantID: "tenant_123", Slug: "acme-prod"},
 		},
@@ -2557,12 +2548,16 @@ func newRecordingWork(stacks StackRepository) *recordingUnitOfWork {
 	return &recordingUnitOfWork{stacks: stacks}
 }
 
-func (unit *recordingUnitOfWork) InTx(ctx context.Context, fn func(TxRepo, queue.Enqueuer) error) error {
+func (unit *recordingUnitOfWork) InTx(ctx context.Context, fn func(context.Context, TxRepo, queue.Enqueuer) error) error {
 	unit.inTxCalls++
 	if unit.err != nil {
 		return unit.err
 	}
-	return fn(unit, unit)
+	// No transaction is installed on the context: these tests run against an
+	// in-memory engine, where an authorization write takes the datastore's
+	// non-transactional path. What is atomic here is asserted against Postgres
+	// in internal/authorization's own suite.
+	return fn(ctx, unit, unit)
 }
 
 func (unit *recordingUnitOfWork) CreateStack(ctx context.Context, stack domain.Stack) error {
@@ -2616,7 +2611,7 @@ func TestRegisterTemplatePairsRegistrationWithSyncIntentInTransaction(t *testing
 	registrations := &recordingTemplateRegistrationRepository{}
 	work := &recordingUnitOfWork{templateRegistrations: registrations}
 	service := NewService(Service{
-		Authorizer:            testPlatformAuthorizer(),
+		Authorization:            testPlatformAuthorizer(t),
 		Work:                  work,
 		TemplateRegistrations: registrations,
 		RegistrationIDs:       fixedTemplateRegistrationIDGenerator{id: "registration_123"},
@@ -2651,7 +2646,7 @@ func TestStartTemplateRunPairsRunWithStartIntentInTransaction(t *testing.T) {
 	work := &recordingUnitOfWork{templateRuns: runs}
 	service := NewService(Service{
 		Work:         work,
-		Authorizer:   &permissionAuthorizer{allowed: true},
+		Authorization:   testPlatformAuthorizer(t),
 		TemplateRuns: runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{
 			ID: "stack_template_123", TenantID: "tenant_123", SourceTemplateID: "source_123", DesiredTemplateRevisionID: "revision_123", DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`), WorkspaceName: "workspace", Lifecycle: domain.StackTemplateActive,
@@ -2695,7 +2690,7 @@ func TestApproveRunPairsApprovalAuditAndSignalIntentInTransaction(t *testing.T) 
 	workflows := &recordingWorkflowDispatcher{}
 	service := NewService(Service{
 		Work:           work,
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 		Workflows:      workflows,
@@ -2728,7 +2723,7 @@ func TestCancelRunPairsCancellationWithSignalIntentInTransaction(t *testing.T) {
 	workflows := &recordingWorkflowDispatcher{}
 	service := NewService(Service{
 		Work:           work,
-		Authorizer:     &permissionAuthorizer{allowed: true},
+		Authorization:     testPlatformAuthorizer(t),
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 		Workflows:      workflows,
@@ -2757,13 +2752,16 @@ func adminContext() context.Context {
 	return authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "admin_123"})
 }
 
-func TestAssignStackRoleEnqueuesDesiredRoleWithoutCallingOpenFGA(t *testing.T) {
+// The inverse of what this asserted before: the role change was queued because
+// a tuple write could not commit with the audit event. It can now, so the write
+// happens in the request and the queue is not involved.
+func TestAssignStackRoleWritesTheGrantInTheSameTransaction(t *testing.T) {
 	t.Parallel()
 
-	authorizer := &recordingAuthorizer{tiers: testPlatformAuthorizer()}
+	authorizer := testPlatformAuthorizer(t)
 	work := newRecordingWork(nil)
 	users := &fakeUserRepository{users: []UserProfile{{Sub: "user_456", DisplayName: "Casey Jones", Email: "casey@example.com"}}}
-	service := NewService(Service{Work: work, Authorizer: authorizer, Users: users, Clock: fixedClock{now: time.Now()}})
+	service := NewService(Service{Work: work, Authorization: authorizer, Users: users, Clock: fixedClock{now: time.Now()}})
 
 	view, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
 		TenantID: domain.TenantID("tenant_123"),
@@ -2777,47 +2775,30 @@ func TestAssignStackRoleEnqueuesDesiredRoleWithoutCallingOpenFGA(t *testing.T) {
 	if view.Role != "operator" || view.UserSub != "user_456" {
 		t.Fatalf("view = %#v", view)
 	}
-
-	// The delete-then-write pair is gone: no OpenFGA mutation at request time.
-	if authorizer.calls != 0 {
-		t.Fatalf("authorization write calls = %d, want 0", authorizer.calls)
-	}
-	if len(work.requests) != 1 {
-		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
+	if len(work.requests) != 0 {
+		t.Fatalf("enqueued %d requests, want 0 -- the grant is part of the commit", len(work.requests))
 	}
 
-	var payload authz.GrantPayload
-	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
-		t.Fatalf("decode payload: %v", err)
+	// The role is in effect when the call returns, not eventually.
+	allowed, err := authorizer.Can(context.Background(), "user_456", authorization.RelationCanOperate, mustStackObject(t, "stack_abc"))
+	if err != nil {
+		t.Fatalf("Can() error = %v", err)
 	}
-	if payload.StackID != "stack_abc" || payload.Subject != "user_456" || payload.Role != "operator" {
-		t.Fatalf("payload = %#v", payload)
-	}
-	if len(work.audits) != 1 || work.audits[0].NewRole != "operator" {
-		t.Fatalf("audits = %#v, want one grant event written in the same transaction", work.audits)
+	if !allowed {
+		t.Fatal("the assigned role is not in effect when AssignStackRole returns")
 	}
 }
 
-func TestAssignStackRoleEnqueuesMatchingRole(t *testing.T) {
+// Re-assigning a role the subject already holds converges rather than failing.
+// OpenFGA rejects a write of an existing tuple, so a naive implementation would
+// error on a repeated request; the reconcile skips what is already held.
+func TestAssignStackRoleIsIdempotentForAHeldRole(t *testing.T) {
 	t.Parallel()
 
-	stack, err := authz.ObjectFromID(authz.TypeStack, "stack_abc")
-	if err != nil {
-		t.Fatalf("ObjectFromID: %v", err)
-	}
-	subject, err := authz.SubjectFromOIDCSub("user_456")
-	if err != nil {
-		t.Fatalf("SubjectFromOIDCSub: %v", err)
-	}
-	existing, err := authz.NewGrant(subject, stack, authz.RelationOperator)
-	if err != nil {
-		t.Fatalf("NewGrant: %v", err)
-	}
-
-	authorizer := &recordingAuthorizer{grants: []authz.Grant{existing}, tiers: testPlatformAuthorizer()}
+	authorizer := seedGrants(t, testPlatformAuthorizer(t), mustGrant(t, "user_456", "stack_abc", authorization.RelationOperator))
 	work := newRecordingWork(nil)
 	users := &fakeUserRepository{users: []UserProfile{{Sub: "user_456", DisplayName: "Casey Jones", Email: "casey@example.com"}}}
-	service := NewService(Service{Work: work, Authorizer: authorizer, Users: users, Clock: fixedClock{now: time.Now()}})
+	service := NewService(Service{Work: work, Authorization: authorizer, Users: users, Clock: fixedClock{now: time.Now()}})
 
 	if _, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
 		TenantID: domain.TenantID("tenant_123"),
@@ -2828,96 +2809,99 @@ func TestAssignStackRoleEnqueuesMatchingRole(t *testing.T) {
 		t.Fatalf("AssignStackRole returned error: %v", err)
 	}
 
-	if len(work.requests) != 1 {
-		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
+	grants, err := authorizer.ListGrants(context.Background(), mustStackObject(t, "stack_abc"))
+	if err != nil {
+		t.Fatalf("ListGrants() error = %v", err)
 	}
-	var payload authz.GrantPayload
-	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	if payload.Role != "operator" {
-		t.Fatalf("payload role = %q, want operator", payload.Role)
+	if len(grants) != 1 || grants[0].Relation() != authorization.RelationOperator {
+		t.Fatalf("grants = %#v, want exactly one operator grant", grants)
 	}
 }
 
-func TestRevokeStackRoleEnqueuesEmptyRole(t *testing.T) {
+// Changing a role replaces it rather than adding to it, in one transaction, so
+// there is no window in which the subject holds both or neither.
+func TestAssignStackRoleReplacesAStaleRole(t *testing.T) {
 	t.Parallel()
 
-	stack, err := authz.ObjectFromID(authz.TypeStack, "stack_abc")
-	if err != nil {
-		t.Fatalf("ObjectFromID: %v", err)
+	authorizer := seedGrants(t, testPlatformAuthorizer(t), mustGrant(t, "user_456", "stack_abc", authorization.RelationOperator))
+	users := &fakeUserRepository{users: []UserProfile{{Sub: "user_456", DisplayName: "Casey Jones", Email: "casey@example.com"}}}
+	service := NewService(Service{Work: newRecordingWork(nil), Authorization: authorizer, Users: users, Clock: fixedClock{now: time.Now()}})
+
+	if _, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
+		TenantID: domain.TenantID("tenant_123"),
+		StackID:  domain.StackID("stack_abc"),
+		UserSub:  "user_456",
+		Role:     "viewer",
+	}); err != nil {
+		t.Fatalf("AssignStackRole returned error: %v", err)
 	}
-	subject, err := authz.SubjectFromOIDCSub("user_456")
+
+	grants, err := authorizer.ListGrants(context.Background(), mustStackObject(t, "stack_abc"))
+	if err != nil {
+		t.Fatalf("ListGrants() error = %v", err)
+	}
+	if len(grants) != 1 || grants[0].Relation() != authorization.RelationViewer {
+		t.Fatalf("grants = %#v, want exactly one viewer grant", grants)
+	}
+}
+
+func TestRevokeStackRoleRemovesTheHeldRole(t *testing.T) {
+	t.Parallel()
+
+	authorizer := seedGrants(t, testPlatformAuthorizer(t), mustGrant(t, "user_456", "stack_abc", authorization.RelationOperator))
+	service := NewService(Service{Work: newRecordingWork(nil), Authorization: authorizer, Clock: fixedClock{now: time.Now()}})
+
+	if err := service.RevokeStackRole(adminContext(), RevokeStackRoleCommand{
+		TenantID: domain.TenantID("tenant_123"),
+		StackID:  domain.StackID("stack_abc"),
+		UserSub:  "user_456",
+	}); err != nil {
+		t.Fatalf("RevokeStackRole returned error: %v", err)
+	}
+
+	grants, err := authorizer.ListGrants(context.Background(), mustStackObject(t, "stack_abc"))
+	if err != nil {
+		t.Fatalf("ListGrants() error = %v", err)
+	}
+	if len(grants) != 0 {
+		t.Fatalf("grants = %#v, want none after a revoke", grants)
+	}
+}
+
+// Revoking access the subject does not hold is not an error: they asked for the
+// subject to have none, and the subject already has none.
+func TestRevokeStackRoleIsANoOpWhenNothingIsHeld(t *testing.T) {
+	t.Parallel()
+
+	authorizer := testPlatformAuthorizer(t)
+	service := NewService(Service{Work: newRecordingWork(nil), Authorization: authorizer, Clock: fixedClock{now: time.Now()}})
+
+	if err := service.RevokeStackRole(adminContext(), RevokeStackRoleCommand{
+		TenantID: domain.TenantID("tenant_123"),
+		StackID:  domain.StackID("stack_abc"),
+		UserSub:  "user_456",
+	}); err != nil {
+		t.Fatalf("RevokeStackRole returned error: %v", err)
+	}
+}
+
+func mustGrant(t *testing.T, sub, stackID string, relation authorization.Relation) authorization.Grant {
+	t.Helper()
+	subject, err := authorization.SubjectFromOIDCSub(sub)
 	if err != nil {
 		t.Fatalf("SubjectFromOIDCSub: %v", err)
 	}
-	existing, err := authz.NewGrant(subject, stack, authz.RelationOperator)
+	grant, err := authorization.NewGrant(subject, mustStackObject(t, stackID), relation)
 	if err != nil {
 		t.Fatalf("NewGrant: %v", err)
 	}
-
-	authorizer := &recordingAuthorizer{grants: []authz.Grant{existing}, tiers: testPlatformAuthorizer()}
-	work := newRecordingWork(nil)
-	users := &fakeUserRepository{users: []UserProfile{{Sub: "user_456", DisplayName: "Casey Jones", Email: "casey@example.com"}}}
-	service := NewService(Service{Work: work, Authorizer: authorizer, Users: users, Clock: fixedClock{now: time.Now()}})
-
-	if err := service.RevokeStackRole(adminContext(), RevokeStackRoleCommand{
-		TenantID: domain.TenantID("tenant_123"),
-		StackID:  domain.StackID("stack_abc"),
-		UserSub:  "user_456",
-	}); err != nil {
-		t.Fatalf("RevokeStackRole returned error: %v", err)
-	}
-
-	if len(work.requests) != 1 {
-		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
-	}
-	var payload authz.GrantPayload
-	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	if payload.Role != "" {
-		t.Fatalf("payload role = %q, want empty — an empty role means no access", payload.Role)
-	}
-	if len(work.audits) != 1 || work.audits[0].OldRole != "operator" {
-		t.Fatalf("audits = %#v, want one revoke event recording the old role", work.audits)
-	}
-}
-
-func TestRevokeStackRoleEnqueuesEmptyRoleWhenGrantIsAbsent(t *testing.T) {
-	t.Parallel()
-
-	work := newRecordingWork(nil)
-	service := NewService(Service{
-		Work:       work,
-		Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
-		Clock:      fixedClock{now: time.Now()},
-	})
-
-	if err := service.RevokeStackRole(adminContext(), RevokeStackRoleCommand{
-		TenantID: domain.TenantID("tenant_123"),
-		StackID:  domain.StackID("stack_abc"),
-		UserSub:  "user_456",
-	}); err != nil {
-		t.Fatalf("RevokeStackRole returned error: %v", err)
-	}
-
-	if len(work.requests) != 1 {
-		t.Fatalf("enqueued %d requests, want 1", len(work.requests))
-	}
-	var payload authz.GrantPayload
-	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	if payload.Role != "" {
-		t.Fatalf("payload role = %q, want empty", payload.Role)
-	}
+	return grant
 }
 
 func TestAssignStackRoleWithoutUnitOfWorkFails(t *testing.T) {
 	t.Parallel()
 
-	service := NewService(Service{Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()}, Clock: fixedClock{now: time.Now()}})
+	service := NewService(Service{Authorization: testPlatformAuthorizer(t), Clock: fixedClock{now: time.Now()}})
 
 	_, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
 		TenantID: domain.TenantID("tenant_123"),
@@ -2925,7 +2909,7 @@ func TestAssignStackRoleWithoutUnitOfWorkFails(t *testing.T) {
 		UserSub:  "user_456",
 		Role:     "operator",
 	})
-	if !errors.Is(err, authz.ErrUnavailable) {
+	if err == nil {
 		t.Fatalf("error = %v, want ErrUnavailable", err)
 	}
 }
@@ -3009,7 +2993,7 @@ func TestOperableStackTemplateCommandsAuditRefusals(t *testing.T) {
 
 			audit := &recordingAuditRepository{}
 			service := NewService(Service{
-				Authorizer: &denyingAuthorizer{},
+				Authorization: newTestAuthorization(t),
 				StackTemplates: &recordingStackTemplateRepository{
 					stackTemplate: domain.StackTemplate{
 						ID:        domain.StackTemplateID("stack_template_123"),

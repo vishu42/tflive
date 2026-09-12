@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/authorization"
 )
 
 const (
@@ -50,7 +50,7 @@ type Accounts interface {
 // Root is not a bypass and not a special code path. It is an ordinary local
 // account plus an ordinary tuple, so every authorization question about it is
 // still answered by OpenFGA. What makes it root is the relation, and `root`
-// sits outside the grantable set (internal/authz/relations.go), so the grant
+// sits outside the grantable set (internal/authorization/relations.go), so the grant
 // API cannot revoke it — stated honestly rather than offered as a delete the
 // next boot would silently undo.
 //
@@ -65,7 +65,7 @@ type Accounts interface {
 func SeedRoot(
 	ctx context.Context,
 	accounts Accounts,
-	authorizer authz.Authorizer,
+	auth *authorization.Authorization,
 	config RootConfig,
 	now func() time.Time,
 ) error {
@@ -81,7 +81,7 @@ func SeedRoot(
 	// Built before anything is written. This is the constraint that would
 	// otherwise be discovered at the tuple write, after the account row was
 	// already committed.
-	rootSubject, err := authz.SubjectFromOIDCSub(subject)
+	rootSubject, err := authorization.SubjectFromOIDCSub(subject)
 	if err != nil {
 		return fmt.Errorf("seed root: %w", err)
 	}
@@ -89,7 +89,7 @@ func SeedRoot(
 	if err := ensureRootAccount(ctx, accounts, config, username, subject, now); err != nil {
 		return err
 	}
-	return ensureRootTuple(ctx, authorizer, rootSubject)
+	return ensureRootTuple(ctx, auth, rootSubject)
 }
 
 // ensureRootAccount creates the account when it is absent and leaves it alone
@@ -171,29 +171,23 @@ func ensureRootAccount(
 // that refusal is the only thing standing between the grant API and this
 // tuple, so seeding goes through the separate door instead of the refusal
 // being relaxed.
-func ensureRootTuple(ctx context.Context, authorizer authz.Authorizer, rootSubject authz.Subject) error {
-	request := authz.CheckRequest{
-		Subject:  rootSubject,
-		Relation: authz.RelationRoot,
-		Object:   authz.Platform,
-	}
-	result, err := authorizer.Check(ctx, request)
+func ensureRootTuple(ctx context.Context, auth *authorization.Authorization, rootSubject authorization.Subject) error {
+	// Seeding runs at startup, outside any unit of work, so this write takes
+	// the datastore's non-transactional path. That path exists for exactly
+	// this.
+	held, err := auth.Can(ctx, rootSubject.ID(), authorization.RelationRoot, authorization.Platform)
 	if err != nil {
 		return fmt.Errorf("seed root: check root relationship: %w", err)
 	}
-	if result.Allowed {
+	if held {
 		return nil
 	}
 
-	relationship, err := authz.NewStructuralRelationship(rootSubject, authz.Platform, authz.RelationRoot)
+	relationship, err := authorization.NewStructuralRelationship(rootSubject, authorization.Platform, authorization.RelationRoot)
 	if err != nil {
 		return fmt.Errorf("seed root: build root relationship: %w", err)
 	}
-	mutation, err := authz.NewMutation([]authz.Grant{relationship}, false)
-	if err != nil {
-		return fmt.Errorf("seed root: build root mutation: %w", err)
-	}
-	if err := authorizer.WriteRelationships(ctx, mutation); err != nil {
+	if err := auth.Grant(ctx, relationship); err != nil {
 		return fmt.Errorf("seed root: write root relationship: %w", err)
 	}
 	return nil

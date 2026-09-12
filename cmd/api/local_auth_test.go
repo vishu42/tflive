@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/authorization"
 	"github.com/vishu42/tflive/internal/bootstrap"
 )
 
@@ -173,11 +173,15 @@ func TestRunSeedsTheRootAccountAndTuple(t *testing.T) {
 		t.Fatal("the seeded hash does not verify against the configured root password")
 	}
 
-	if len(deps.authorizer.written) != 1 {
-		t.Fatalf("wrote %d tuples, want the root tuple", len(deps.authorizer.written))
+	// Asserted through the engine rather than a record of the call, so what is
+	// checked is the state the model evaluates.
+	held, err := deps.authorizer.Can(context.Background(), bootstrap.DefaultRootSubject,
+		authorization.RelationRoot, authorization.Platform)
+	if err != nil {
+		t.Fatalf("Can() error = %v", err)
 	}
-	if deps.authorizer.written[0].Relation() != authz.RelationRoot {
-		t.Fatalf("relation = %q, want root", deps.authorizer.written[0].Relation())
+	if !held {
+		t.Fatal("the root relationship was not seeded")
 	}
 }
 

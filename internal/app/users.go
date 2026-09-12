@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/vishu42/tflive/internal/authz"
 )
 
 // ErrUserNotProvisioned means the target subject has never signed in, so there
@@ -54,7 +53,7 @@ type UserRepository interface {
 // than ErrInvalidCommand, because nothing about the request is wrong.
 func (service *Service) requireUserRepository() error {
 	if service.Users == nil {
-		return fmt.Errorf("%w: user repository not configured", authz.ErrUnavailable)
+		return fmt.Errorf("user repository not configured")
 	}
 	return nil
 }

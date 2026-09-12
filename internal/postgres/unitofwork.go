@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/authorization"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
 )
@@ -53,16 +54,25 @@ func (enqueuer *txEnqueuer) Enqueue(ctx context.Context, requests ...queue.Reque
 }
 
 // InTx runs fn inside one transaction, giving it a transaction-scoped
-// repository and a transaction-bound enqueuer. Returning an error rolls back
-// both the domain write and the queued intent.
-func (store *Store) InTx(ctx context.Context, fn func(app.TxRepo, queue.Enqueuer) error) error {
+// repository, a transaction-bound enqueuer, and a context carrying the
+// transaction itself. Returning an error rolls back everything written under
+// any of the three.
+//
+// The context is what extends the unit of work beyond this package. An
+// authorization write made under it lands in this same transaction, so a stack
+// row and the grant that makes it reachable commit together or not at all.
+//
+// fn takes a context rather than closing over the caller's on purpose: closing
+// over it would compile, pass, and silently leave the tuple committing
+// separately, which is the bug this signature exists to prevent.
+func (store *Store) InTx(ctx context.Context, fn func(context.Context, app.TxRepo, queue.Enqueuer) error) error {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin unit of work: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	if err := fn(&txRepo{tx: tx}, &txEnqueuer{tx: tx, specs: store.queueSpecs}); err != nil {
+	if err := fn(authorization.WithTx(ctx, tx), &txRepo{tx: tx}, &txEnqueuer{tx: tx, specs: store.queueSpecs}); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {

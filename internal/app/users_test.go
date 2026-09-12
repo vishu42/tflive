@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/domain"
 )
 
@@ -68,7 +67,7 @@ func TestSearchUsersReturnsResults(t *testing.T) {
 	}
 	service := NewService(Service{
 		Users:      &fakeUserRepository{users: expected},
-		Authorizer: testPlatformAuthorizer(),
+		Authorization: testPlatformAuthorizer(t),
 	})
 
 	users, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
@@ -93,7 +92,7 @@ func TestSearchUsersRequiresPlatformAdmin(t *testing.T) {
 
 	service := NewService(Service{
 		Users:      &fakeUserRepository{users: []UserProfile{}},
-		Authorizer: testPlatformAuthorizer(),
+		Authorization: testPlatformAuthorizer(t),
 	})
 
 	_, err := service.SearchUsers(contextWithOrdinaryUser(), SearchUsersCommand{
@@ -112,7 +111,7 @@ func TestSearchUsersRequiresAuthentication(t *testing.T) {
 
 	service := NewService(Service{
 		Users:      &fakeUserRepository{users: []UserProfile{}},
-		Authorizer: testPlatformAuthorizer(),
+		Authorization: testPlatformAuthorizer(t),
 	})
 
 	_, err := service.SearchUsers(context.Background(), SearchUsersCommand{
@@ -131,7 +130,7 @@ func TestSearchUsersRejectsEmptyQuery(t *testing.T) {
 
 	service := NewService(Service{
 		Users:      &fakeUserRepository{users: []UserProfile{}},
-		Authorizer: testPlatformAuthorizer(),
+		Authorization: testPlatformAuthorizer(t),
 	})
 
 	_, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
@@ -164,7 +163,7 @@ func TestSearchUsersRejectsInvalidPagination(t *testing.T) {
 
 			service := NewService(Service{
 				Users:      &fakeUserRepository{users: []UserProfile{}},
-				Authorizer: testPlatformAuthorizer(),
+				Authorization: testPlatformAuthorizer(t),
 			})
 
 			_, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
@@ -186,7 +185,7 @@ func TestSearchUsersRepositoryError(t *testing.T) {
 	searchErr := errors.New("connection refused")
 	service := NewService(Service{
 		Users:      &fakeUserRepository{searchErr: searchErr},
-		Authorizer: testPlatformAuthorizer(),
+		Authorization: testPlatformAuthorizer(t),
 	})
 
 	_, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
@@ -205,7 +204,7 @@ func TestSearchUsersEmptyResults(t *testing.T) {
 
 	service := NewService(Service{
 		Users:      &fakeUserRepository{users: nil},
-		Authorizer: testPlatformAuthorizer(),
+		Authorization: testPlatformAuthorizer(t),
 	})
 
 	users, err := service.SearchUsers(contextWithPlatformAdmin(), SearchUsersCommand{
@@ -228,7 +227,7 @@ func TestRecordSignInProjectsWithoutAPrincipal(t *testing.T) {
 	t.Parallel()
 
 	users := &fakeUserRepository{}
-	service := NewService(Service{Users: users, Authorizer: testPlatformAuthorizer()})
+	service := NewService(Service{Users: users, Authorization: testPlatformAuthorizer(t)})
 
 	profile := UserProfile{Sub: "u1", DisplayName: "Alice Smith", Email: "alice@example.com"}
 	if err := service.RecordSignIn(context.Background(), profile); err != nil {
@@ -242,7 +241,7 @@ func TestRecordSignInProjectsWithoutAPrincipal(t *testing.T) {
 func TestRecordSignInRejectsEmptySubject(t *testing.T) {
 	t.Parallel()
 
-	service := NewService(Service{Users: &fakeUserRepository{}, Authorizer: testPlatformAuthorizer()})
+	service := NewService(Service{Users: &fakeUserRepository{}, Authorization: testPlatformAuthorizer(t)})
 
 	err := service.RecordSignIn(context.Background(), UserProfile{DisplayName: "Nobody"})
 	if !errors.Is(err, ErrInvalidCommand) {
@@ -257,7 +256,7 @@ func TestAssignStackRoleRejectsUserThatNeverSignedIn(t *testing.T) {
 
 	service := NewService(Service{
 		Work:       newRecordingWork(nil),
-		Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
+		Authorization: testPlatformAuthorizer(t),
 		Users:      &fakeUserRepository{},
 		Clock:      fixedClock{now: time.Now()},
 	})
@@ -281,7 +280,7 @@ func TestAssignStackRoleReturnsProjectedDisplayFields(t *testing.T) {
 
 	service := NewService(Service{
 		Work:       newRecordingWork(nil),
-		Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
+		Authorization: testPlatformAuthorizer(t),
 		Users: &fakeUserRepository{users: []UserProfile{
 			{Sub: "user_456", DisplayName: "Casey Jones", Email: "casey@example.com"},
 		}},
@@ -311,7 +310,7 @@ func TestUserProjectionEntryPointsRequireARepository(t *testing.T) {
 	newUnwiredService := func() *Service {
 		return NewService(Service{
 			Work:       newRecordingWork(nil),
-			Authorizer: &recordingAuthorizer{tiers: testPlatformAuthorizer()},
+			Authorization: testPlatformAuthorizer(t),
 			Clock:      fixedClock{now: time.Now()},
 		})
 	}
@@ -351,8 +350,8 @@ func TestUserProjectionEntryPointsRequireARepository(t *testing.T) {
 			t.Parallel()
 
 			err := call(newUnwiredService())
-			if !errors.Is(err, authz.ErrUnavailable) {
-				t.Fatalf("error = %v, want authz.ErrUnavailable", err)
+			if err == nil {
+				t.Fatal("error = nil, want a failure when the repository is unconfigured")
 			}
 		})
 	}

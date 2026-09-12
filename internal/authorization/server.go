@@ -50,13 +50,20 @@ func New(ctx context.Context, pool *pgxpool.Pool, storeName string) (*Authorizat
 	if err != nil {
 		return nil, err
 	}
-	return newWithDatastore(ctx, datastore, storeName)
+	return NewWithDatastore(ctx, datastore, storeName)
 }
 
-// newWithDatastore is the half of New that does not care where storage came
-// from. Tests reach it through NewWithDatastore to run a real engine over an
-// in-memory datastore.
-func newWithDatastore(ctx context.Context, datastore storage.OpenFGADatastore, storeName string) (*Authorization, error) {
+// NewWithDatastore builds an Authorization over any OpenFGA datastore.
+//
+// It exists so tests -- in this package and in every package that depends on
+// authorization -- can run a real engine over memory.New() instead of a fake.
+// That is what makes the missing interface a non-issue: there is nothing to
+// stub, because the real thing costs a few microseconds to construct and
+// answers from the actual model rather than from a test's idea of it.
+//
+// Production code calls New, which supplies the transaction-aware Postgres
+// datastore.
+func NewWithDatastore(ctx context.Context, datastore storage.OpenFGADatastore, storeName string) (*Authorization, error) {
 	if storeName == "" {
 		storeName = defaultStoreName
 	}

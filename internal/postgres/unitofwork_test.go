@@ -29,7 +29,7 @@ func TestInTxCommitsDomainWriteAndIntentTogether(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 	}
 
-	err := store.InTx(ctx, func(repo app.TxRepo, enqueuer queue.Enqueuer) error {
+	err := store.InTx(ctx, func(ctx context.Context, repo app.TxRepo, enqueuer queue.Enqueuer) error {
 		if err := repo.CreateStack(ctx, stack); err != nil {
 			return err
 		}
@@ -72,7 +72,7 @@ func TestInTxRollsBackBothOnError(t *testing.T) {
 	}
 	sentinel := errors.New("caller failed after enqueue")
 
-	err := store.InTx(ctx, func(repo app.TxRepo, enqueuer queue.Enqueuer) error {
+	err := store.InTx(ctx, func(ctx context.Context, repo app.TxRepo, enqueuer queue.Enqueuer) error {
 		if err := repo.CreateStack(ctx, stack); err != nil {
 			return err
 		}
@@ -107,7 +107,7 @@ func TestInTxWritesAuditEventTransactionally(t *testing.T) {
 	ctx := context.Background()
 	store, pool := newQueueStore(t, ctx)
 
-	err := store.InTx(ctx, func(repo app.TxRepo, enqueuer queue.Enqueuer) error {
+	err := store.InTx(ctx, func(ctx context.Context, repo app.TxRepo, enqueuer queue.Enqueuer) error {
 		if err := repo.AppendAuditEvent(ctx, domain.SecurityAuditEvent{
 			ActorSubject: "user:me",
 			Action:       domain.AuditActionGrant,

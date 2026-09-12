@@ -13,7 +13,10 @@ import (
 	"github.com/vishu42/tflive/internal/strval"
 )
 
-const DefaultOpenFGAHTTPTimeout = 10 * time.Second
+// DefaultOpenFGAStoreName is the store the embedded server adopts when
+// OPENFGA_STORE_NAME names none. Bootstrap reconciles against this name, so it
+// is configuration rather than an identifier anyone has to record.
+const DefaultOpenFGAStoreName = "tflive"
 
 type RuntimeMode string
 
@@ -64,12 +67,10 @@ type OIDCConfig struct {
 	ClientSecret Secret
 }
 
+// OpenFGAConfig is what is left once OpenFGA runs in process: the name of the
+// store to adopt, and nothing else.
 type OpenFGAConfig struct {
-	APIURL         *url.URL
-	StoreID        string
-	ModelID        string
-	APIToken       Secret
-	RequestTimeout time.Duration
+	StoreName string
 }
 
 type Secret struct {
@@ -97,14 +98,7 @@ func (Secret) GoString() string {
 }
 
 func (cfg OpenFGAConfig) String() string {
-	return fmt.Sprintf(
-		"OpenFGAConfig{APIURL:%v StoreID:%q ModelID:%q APIToken:%s RequestTimeout:%s}",
-		cfg.APIURL,
-		cfg.StoreID,
-		cfg.ModelID,
-		cfg.APIToken,
-		cfg.RequestTimeout,
-	)
+	return fmt.Sprintf("OpenFGAConfig{StoreName:%q}", cfg.StoreName)
 }
 
 func (cfg OpenFGAConfig) GoString() string {
@@ -200,9 +194,6 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 	if err != nil {
 		return SecurityConfig{}, err
 	}
-	if mode == RuntimeProduction && openFGA.APIURL.Scheme != "https" {
-		return SecurityConfig{}, authConfigError("OPENFGA_API_URL must use HTTPS in production")
-	}
 	if mode == RuntimeProduction {
 		// Only when one is configured: a local-only production deployment has
 		// no issuer, and dereferencing the nil here would panic at boot.
@@ -211,9 +202,6 @@ func loadSecurityConfig(getenv func(string) string) (SecurityConfig, error) {
 		}
 		if publicURL.Scheme != "https" {
 			return SecurityConfig{}, authConfigError("TFLIVE_PUBLIC_URL must use HTTPS in production")
-		}
-		if openFGA.APIToken.Empty() {
-			return SecurityConfig{}, authConfigError("OPENFGA_API_TOKEN is required in production")
 		}
 	}
 
@@ -303,37 +291,25 @@ func loadOIDCConfig(getenv func(string) string) (OIDCConfig, error) {
 	return OIDCConfig{IssuerURL: issuerURL, ClientID: clientID, ClientSecret: clientSecret}, nil
 }
 
+// loadOpenFGAConfig reads the one setting an embedded OpenFGA still has.
+//
+// OPENFGA_API_URL, OPENFGA_STORE_ID, OPENFGA_MODEL_ID, OPENFGA_API_TOKEN and
+// OPENFGA_HTTP_TIMEOUT are all gone. There is no service to address, no token
+// to present, and no timeout to tune; the store and model are resolved in
+// process from the model in this repository, so there is nothing for an
+// operator to record between two startup phases and paste into an environment.
+//
+//	""        → StoreName "tflive"
+//	"  acme " → StoreName "acme"
 func loadOpenFGAConfig(getenv func(string) string) (OpenFGAConfig, error) {
-	apiURL, err := parseConfigURL("OPENFGA_API_URL", getenv("OPENFGA_API_URL"))
-	if err != nil {
-		return OpenFGAConfig{}, err
+	storeName := strings.TrimSpace(getenv("OPENFGA_STORE_NAME"))
+	if storeName == "" {
+		storeName = DefaultOpenFGAStoreName
 	}
-	storeID := strings.TrimSpace(getenv("OPENFGA_STORE_ID"))
-	if storeID == "" {
-		return OpenFGAConfig{}, authConfigError("OPENFGA_STORE_ID is required")
+	if !strval.SafeOpaque(storeName) {
+		return OpenFGAConfig{}, authConfigError("OPENFGA_STORE_NAME must not contain whitespace or control characters")
 	}
-	if !strval.SafeOpaque(storeID) {
-		return OpenFGAConfig{}, authConfigError("OPENFGA_STORE_ID must not contain whitespace or control characters")
-	}
-	modelID := strings.TrimSpace(getenv("OPENFGA_MODEL_ID"))
-	if modelID == "" {
-		return OpenFGAConfig{}, authConfigError("OPENFGA_MODEL_ID is required")
-	}
-	if !strval.SafeOpaque(modelID) {
-		return OpenFGAConfig{}, authConfigError("OPENFGA_MODEL_ID must not contain whitespace or control characters")
-	}
-	token := newSecret(getenv("OPENFGA_API_TOKEN"))
-	if !token.Empty() && !strval.SafeOpaque(token.Value()) {
-		return OpenFGAConfig{}, authConfigError("OPENFGA_API_TOKEN must not contain whitespace or control characters")
-	}
-	timeout := DefaultOpenFGAHTTPTimeout
-	if raw := strings.TrimSpace(getenv("OPENFGA_HTTP_TIMEOUT")); raw != "" {
-		timeout, err = time.ParseDuration(raw)
-		if err != nil || timeout <= 0 {
-			return OpenFGAConfig{}, authConfigError("OPENFGA_HTTP_TIMEOUT must be a positive duration")
-		}
-	}
-	return OpenFGAConfig{APIURL: apiURL, StoreID: storeID, ModelID: modelID, APIToken: token, RequestTimeout: timeout}, nil
+	return OpenFGAConfig{StoreName: storeName}, nil
 }
 
 func parseRuntimeMode(raw string) (RuntimeMode, error) {

@@ -14,7 +14,11 @@ import (
 
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/vishu42/tflive/internal/authz"
+	openfgav1 "github.com/openfga/api/proto/openfga/v1"
+	"github.com/openfga/openfga/pkg/storage"
+	"github.com/openfga/openfga/pkg/storage/memory"
+
+	"github.com/vishu42/tflive/internal/authorization"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
 )
@@ -38,23 +42,19 @@ func ordinaryAuthenticatedRequest(method, target string, body io.Reader) *http.R
 // test grants through its authorizer rather than through a token claim. There
 // is no request-level variant any more: identity comes from the principal and
 // the tier comes from OpenFGA, which is the whole point of #141.
-func platformTier(tier string) []authz.Relation {
+// platformRole maps a tier name onto the role tuple that grants it. The
+// capabilities each implies are the model's business, which is why they are no
+// longer listed here.
+func platformRole(tier string) (authorization.Relation, bool) {
 	switch tier {
 	case "admin":
-		return []authz.Relation{
-			authz.RelationCanAdminister,
-			authz.RelationCanCreateStack,
-			authz.RelationCanPublishTemplate,
-			authz.RelationCanReadTemplate,
-		}
+		return authorization.RelationAdmin, true
 	case "editor":
-		return []authz.Relation{
-			authz.RelationCanCreateStack,
-			authz.RelationCanPublishTemplate,
-			authz.RelationCanReadTemplate,
-		}
+		return authorization.RelationEditor, true
+	case "viewer":
+		return authorization.RelationViewer, true
 	default:
-		return nil
+		return authorization.Relation{}, false
 	}
 }
 
@@ -184,7 +184,7 @@ func TestAuthenticatedServerEvaluatesTenantAfterAuthentication(t *testing.T) {
 func TestAuthenticatedServerAllowsConfiguredTenantToReachService(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stacks.list = []domain.Stack{{
 		ID:       domain.StackID("stack_123"),
 		TenantID: configuredTenantID,
@@ -287,7 +287,7 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 	t.Parallel()
 
 	startedAt := time.Date(2026, 7, 3, 11, 30, 0, 0, time.UTC)
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stackTemplates.stackTemplate = domain.StackTemplate{
 		ID:                        domain.StackTemplateID("stack_template_123"),
 		StackID:                   domain.StackID("stack_123"),
@@ -341,7 +341,7 @@ func TestStartTemplateRunCallsService(t *testing.T) {
 func TestStartTemplateRunMapsStalePlanToConflictWithItsOwnCode(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stackTemplates.stackTemplate = domain.StackTemplate{
 		ID:                        domain.StackTemplateID("stack_template_123"),
 		StackID:                   domain.StackID("stack_123"),
@@ -384,7 +384,7 @@ func TestStartTemplateRunMapsStalePlanToConflictWithItsOwnCode(t *testing.T) {
 func TestStartTemplateRunMapsAnInFlightRunToConflictWithItsOwnCode(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stackTemplates.stackTemplate = domain.StackTemplate{
 		ID:                        domain.StackTemplateID("stack_template_123"),
 		StackID:                   domain.StackID("stack_123"),
@@ -422,7 +422,7 @@ func TestStartTemplateRunMapsAnInFlightRunToConflictWithItsOwnCode(t *testing.T)
 func TestStackTemplateResponseCarriesDerivedStatesNotRawConfigs(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stackTemplates.stackTemplate = domain.StackTemplate{
 		ID:                            domain.StackTemplateID("stack_template_123"),
 		TenantID:                      domain.TenantID("tenant_123"),
@@ -474,7 +474,7 @@ func TestStackTemplateResponseCarriesDerivedStatesNotRawConfigs(t *testing.T) {
 func TestStartTemplateRunRejectsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
+	server := NewServer(newAPITestDependencies(t).service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -492,7 +492,7 @@ func TestStartTemplateRunRejectsInvalidJSON(t *testing.T) {
 func TestStartTemplateRunMapsInvalidCommandToBadRequest(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
+	server := NewServer(newAPITestDependencies(t).service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -510,7 +510,7 @@ func TestStartTemplateRunMapsInvalidCommandToBadRequest(t *testing.T) {
 func TestStartTemplateRunHidesMissingStackTemplateAsForbidden(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stackTemplates.getErr = app.ErrNotFound
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -531,7 +531,7 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 	t.Parallel()
 
 	requestedAt := time.Date(2026, 7, 6, 11, 30, 0, 0, time.UTC)
-	deps := newAPITestDependencies().withPlatformTier("admin")
+	deps := newAPITestDependencies(t).withPlatformTier("admin")
 	deps.registrationID = domain.TemplateRegistrationID("template_registration_123")
 	deps.now = requestedAt
 	server := NewServer(deps.service(), configuredTenantID)
@@ -581,7 +581,7 @@ func TestRegisterTemplateCallsService(t *testing.T) {
 func TestRegisterTemplateRejectsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
+	server := NewServer(newAPITestDependencies(t).service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -599,7 +599,7 @@ func TestRegisterTemplateRejectsInvalidJSON(t *testing.T) {
 func TestRegisterTemplateMapsInvalidCommandToBadRequest(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().withPlatformTier("admin").service(), configuredTenantID)
+	server := NewServer(newAPITestDependencies(t).withPlatformTier("admin").service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
@@ -618,7 +618,7 @@ func TestCreateStackCallsService(t *testing.T) {
 	t.Parallel()
 
 	createdAt := time.Date(2026, 7, 6, 13, 30, 0, 0, time.UTC)
-	deps := newAPITestDependencies().withPlatformTier("admin")
+	deps := newAPITestDependencies(t).withPlatformTier("admin")
 	deps.stackID = domain.StackID("stack_123")
 	deps.now = createdAt
 	server := NewServer(deps.service(), configuredTenantID)
@@ -648,8 +648,8 @@ func TestCreateStackCallsService(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.ID != "stack_123" {
-		t.Fatalf("response id = %q, want stack_123", body.ID)
+	if body.ID != string(deps.createdStackID) {
+		t.Fatalf("response id = %q, want %q", body.ID, deps.createdStackID)
 	}
 	if body.Tags["env"] != "prod" {
 		t.Fatalf("response tags = %#v", body.Tags)
@@ -660,24 +660,24 @@ func TestWriteAppErrorMapsAuthorizationDependencyFailure(t *testing.T) {
 	t.Parallel()
 
 	response := httptest.NewRecorder()
-	writeAppError(response, authz.ErrUnavailable)
+	writeAppError(response, errors.New("authorization unavailable"))
 
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)
 	}
 	var body errorResponse
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.Error != "authorization_unavailable" {
-		t.Fatalf("error = %q, want authorization_unavailable", body.Error)
+	if body.Error != "internal_error" {
+		t.Fatalf("error = %q, want internal_error", body.Error)
 	}
 }
 
 func TestCreateStackRejectsPrincipalWithoutCreatorRole(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newBareAPITestDependencies(t)
 	server := NewServer(deps.service(), configuredTenantID)
 	request := httptest.NewRequest(http.MethodPost, "/v1/tenants/tenant_123/stacks", strings.NewReader(`{"name":"Acme"}`))
 	request = request.WithContext(authn.ContextWithPrincipal(request.Context(), authn.Principal{Subject: apiKeycloakSubject}))
@@ -699,12 +699,12 @@ func TestCreateStackRejectsPrincipalWithoutCreatorRole(t *testing.T) {
 func TestCreateStackMapsUnitOfWorkFailure(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies().withPlatformTier("admin")
+	deps := newAPITestDependencies(t).withPlatformTier("admin")
 	service := app.NewService(app.Service{
-		Authorizer: deps.authorizer,
+		Authorization: deps.authorizer,
 		Stacks:     &deps.stacks,
-		Work:       &apiUnitOfWork{stacks: &deps.stacks, err: authz.ErrUnavailable},
-		StackIDs:   fixedStackIDGenerator{id: deps.stackID},
+		Work:       &apiUnitOfWork{stacks: &deps.stacks, err: errors.New("authorization unavailable")},
+		StackIDs:   fixedStackIDGenerator{id: deps.createdStackID},
 		Clock:      fixedClock{now: deps.now},
 	})
 	server := NewServer(service, configuredTenantID)
@@ -712,24 +712,24 @@ func TestCreateStackMapsUnitOfWorkFailure(t *testing.T) {
 
 	server.ServeHTTP(response, authenticatedRequest(http.MethodPost, "/v1/tenants/tenant_123/stacks", strings.NewReader(`{"name":"Acme"}`)))
 
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)
 	}
 	if deps.stacks.created.ID != "" {
 		t.Fatal("a failed unit of work must not persist the stack")
 	}
 }
 
-func TestCreateStackEnqueuesProvisioningIntent(t *testing.T) {
+func TestCreateStackWritesTheOwnerGrantWithoutQueueing(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies().withPlatformTier("admin")
+	deps := newAPITestDependencies(t).withPlatformTier("admin")
 	work := &apiUnitOfWork{stacks: &deps.stacks}
 	service := app.NewService(app.Service{
-		Authorizer: deps.authorizer,
+		Authorization: deps.authorizer,
 		Stacks:     &deps.stacks,
 		Work:       work,
-		StackIDs:   fixedStackIDGenerator{id: deps.stackID},
+		StackIDs:   fixedStackIDGenerator{id: deps.createdStackID},
 		Clock:      fixedClock{now: deps.now},
 	})
 	server := NewServer(service, configuredTenantID)
@@ -740,24 +740,21 @@ func TestCreateStackEnqueuesProvisioningIntent(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusCreated, response.Body.String())
 	}
-	if len(work.requests) != 1 {
-		t.Fatalf("enqueued %d intents, want 1", len(work.requests))
-	}
-	if work.requests[0].Kind != app.KindGrantStackOwner {
-		t.Fatalf("kind = %q, want %q", work.requests[0].Kind, app.KindGrantStackOwner)
+	if len(work.requests) != 0 {
+		t.Fatalf("enqueued %d intents, want 0 -- the owner grant is part of the commit", len(work.requests))
 	}
 	if deps.stacks.created.ID == "" {
 		t.Fatal("stack was not persisted")
 	}
 
-	// The caller is told the stack is not usable yet rather than being left to
-	// discover it through a failing follow-up request.
+	// The caller gets a usable stack rather than one to poll. Nothing is
+	// deferred, so there is no state between created and ready to report.
 	var body stackResponse
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.Status != string(domain.StackStatusProvisioning) {
-		t.Fatalf("status = %q, want %q", body.Status, domain.StackStatusProvisioning)
+	if body.Status != string(domain.StackStatusReady) {
+		t.Fatalf("status = %q, want %q", body.Status, domain.StackStatusReady)
 	}
 }
 
@@ -765,7 +762,7 @@ func TestListStacksReturnsTenantStacks(t *testing.T) {
 	t.Parallel()
 
 	createdAt := time.Date(2026, 7, 6, 13, 30, 0, 0, time.UTC)
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stacks.list = []domain.Stack{
 		{
 			ID:        domain.StackID("stack_123"),
@@ -805,7 +802,7 @@ func TestListStacksReturnsTenantStacks(t *testing.T) {
 func TestGetStackReturnsStackView(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stacks.view = app.StackView{
 		Stack: domain.Stack{
 			ID:       domain.StackID("stack_123"),
@@ -862,7 +859,7 @@ func TestGetStackReturnsStackView(t *testing.T) {
 func TestAddTemplateToStackCallsService(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stacks.stack = domain.Stack{ID: domain.StackID("stack_123"), TenantID: domain.TenantID("tenant_123"), Slug: "acme-prod"}
 	deps.templates.template = domain.TemplateRevision{ID: domain.TemplateRevisionID("template_123"), TenantID: domain.TenantID("tenant_123"), Status: domain.TemplateRevisionActive}
 	deps.templates.variables = []domain.TemplateVariable{{Name: "region", Required: true}}
@@ -909,7 +906,7 @@ func TestAddTemplateToStackCallsService(t *testing.T) {
 func TestUpdateStackTemplateConfigCallsService(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stackTemplates.stackTemplate = domain.StackTemplate{
 		ID:                        domain.StackTemplateID("stack_template_123"),
 		TenantID:                  domain.TenantID("tenant_123"),
@@ -946,7 +943,7 @@ func TestUpdateStackTemplateConfigCallsService(t *testing.T) {
 func TestUpgradeStackTemplateCallsService(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stackTemplates.stackTemplate = domain.StackTemplate{
 		ID:                        domain.StackTemplateID("stack_template_123"),
 		TenantID:                  domain.TenantID("tenant_123"),
@@ -994,7 +991,7 @@ func TestUpgradeStackTemplateCallsService(t *testing.T) {
 func TestUpgradeStackTemplateMapsMissingRequiredVariableToConflict(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stackTemplates.stackTemplate = domain.StackTemplate{
 		ID:                        domain.StackTemplateID("stack_template_123"),
 		TenantID:                  domain.TenantID("tenant_123"),
@@ -1031,7 +1028,7 @@ func TestUpgradeStackTemplateMapsMissingRequiredVariableToConflict(t *testing.T)
 func TestUpgradeStackTemplateMapsSourceMismatchToConflict(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stackTemplates.stackTemplate = domain.StackTemplate{
 		ID:               domain.StackTemplateID("stack_template_123"),
 		TenantID:         domain.TenantID("tenant_123"),
@@ -1086,7 +1083,7 @@ func TestStackTemplateEditRoutesHideMissingStackTemplateAsForbidden(t *testing.T
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			deps := newAPITestDependencies()
+			deps := newAPITestDependencies(t)
 			deps.stackTemplates.getErr = app.ErrNotFound
 			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
@@ -1104,7 +1101,7 @@ func TestStackTemplateEditRoutesHideMissingStackTemplateAsForbidden(t *testing.T
 func TestGetTemplateRegistrationReturnsRegistration(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies().withPlatformTier("admin")
+	deps := newAPITestDependencies(t).withPlatformTier("admin")
 	deps.registrations.registration = domain.TemplateRegistration{
 		ID:       domain.TemplateRegistrationID("template_registration_123"),
 		TenantID: domain.TenantID("tenant_123"),
@@ -1136,7 +1133,7 @@ func TestListTemplateRevisionsReturnsTenantTemplateRevisions(t *testing.T) {
 	t.Parallel()
 
 	createdAt := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
-	deps := newAPITestDependencies().withPlatformTier("admin")
+	deps := newAPITestDependencies(t).withPlatformTier("admin")
 	deps.templates.templates = []domain.TemplateRevision{
 		{
 			ID:                domain.TemplateRevisionID("template_123"),
@@ -1181,7 +1178,7 @@ func TestListTemplateRunsReturnsRunsForStackTemplate(t *testing.T) {
 	t.Parallel()
 
 	startedAt := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.templateRuns.list = []domain.TemplateRun{
 		{
 			ID:              domain.TemplateRunID("run_apply_1"),
@@ -1223,7 +1220,7 @@ func TestListTemplateRunsReturnsRunsForStackTemplate(t *testing.T) {
 func TestGetTemplateRevisionVariablesReturnsVariables(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies().withPlatformTier("admin")
+	deps := newAPITestDependencies(t).withPlatformTier("admin")
 	deps.templates.variables = []domain.TemplateVariable{
 		{
 			TemplateRevisionID: domain.TemplateRevisionID("template_123"),
@@ -1260,7 +1257,7 @@ func TestGetTemplateRevisionVariablesReturnsVariables(t *testing.T) {
 func TestGetTemplateRunReturnsRun(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.templateRuns.run = domain.TemplateRun{
 		ID:              domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
@@ -1299,7 +1296,7 @@ func TestGetTemplateRunReturnsRun(t *testing.T) {
 func TestGetTemplateRunLogReturnsPlainText(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.templateRuns.run = domain.TemplateRun{
 		ID:       domain.TemplateRunID("run_123"),
 		TenantID: domain.TenantID("tenant_123"),
@@ -1335,7 +1332,7 @@ func TestListTemplateRunLogsReturnsMetadata(t *testing.T) {
 	t.Parallel()
 
 	uploadedAt := time.Date(2026, 7, 6, 10, 15, 0, 0, time.UTC)
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.templateRuns.run = domain.TemplateRun{
 		ID:       domain.TemplateRunID("run_123"),
 		TenantID: domain.TenantID("tenant_123"),
@@ -1382,7 +1379,7 @@ func TestListTemplateRunLogsReturnsMetadata(t *testing.T) {
 func TestListTemplateRunLogsReturnsEmptyArray(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.templateRuns.run = domain.TemplateRun{
 		ID:       domain.TemplateRunID("run_123"),
 		TenantID: domain.TenantID("tenant_123"),
@@ -1404,7 +1401,7 @@ func TestListTemplateRunLogsReturnsEmptyArray(t *testing.T) {
 func TestGetTemplateRunLogMapsInvalidPhaseToBadRequest(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
+	server := NewServer(newAPITestDependencies(t).service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -1422,7 +1419,7 @@ func TestGetTemplateRunLogMapsInvalidPhaseToBadRequest(t *testing.T) {
 func TestGetTemplateRunMapsMissingRunToNotFound(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.templateRuns.getErr = app.ErrNotFound
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -1438,7 +1435,7 @@ func TestGetTemplateRunMapsMissingRunToNotFound(t *testing.T) {
 func TestGetTemplateRunLogMapsMissingLogToNotFound(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.templateRuns.run = domain.TemplateRun{
 		ID:       domain.TemplateRunID("run_123"),
 		TenantID: domain.TenantID("tenant_123"),
@@ -1464,7 +1461,7 @@ func TestGetTemplateRunLogMapsMissingLogToNotFound(t *testing.T) {
 func TestApproveRunCallsService(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
@@ -1495,7 +1492,7 @@ func TestApproveRunCallsService(t *testing.T) {
 func TestApproveRunAllowsSelfApproval(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.templateRuns.run = domain.TemplateRun{
 		ID:              "run_123",
 		TenantID:        "tenant_123",
@@ -1526,7 +1523,7 @@ func TestApproveRunAllowsSelfApproval(t *testing.T) {
 func TestCancelRunCallsService(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
@@ -1597,7 +1594,7 @@ func TestRunDecisionRequestsRejectTopLevelNull(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			deps := newAPITestDependencies()
+			deps := newAPITestDependencies(t)
 			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := authenticatedRequest(http.MethodPost, test.path, strings.NewReader(`null`))
@@ -1646,7 +1643,7 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			deps := newAPITestDependencies()
+			deps := newAPITestDependencies(t)
 			tt.configure(deps)
 			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
@@ -1711,7 +1708,7 @@ func TestMutationRequestsRejectIdentityOverrides(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			deps := newAPITestDependencies()
+			deps := newAPITestDependencies(t)
 			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := authenticatedRequest(http.MethodPost, test.path, strings.NewReader(test.body))
@@ -1763,7 +1760,7 @@ func TestDecodeRequestBodyRejectsNonObjectAndMultipleValues(t *testing.T) {
 func TestMutationRequestsRejectMissingPrincipal(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
@@ -1792,7 +1789,7 @@ func TestMutationRequestsRejectMissingPrincipal(t *testing.T) {
 func TestUnknownRouteReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
+	server := NewServer(newAPITestDependencies(t).service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/nope", nil)
 
@@ -1821,7 +1818,7 @@ func TestTemplateCatalogRoutesRejectOrdinaryUser(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			deps := newAPITestDependencies()
+			deps := newBareAPITestDependencies(t)
 			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := ordinaryAuthenticatedRequest(test.method, test.path, strings.NewReader(test.body))
@@ -1858,7 +1855,7 @@ func TestTemplateCatalogRoutesAllowGlobalRoles(t *testing.T) {
 		for _, route := range routes {
 			t.Run(tier+" "+route.name, func(t *testing.T) {
 				t.Parallel()
-				deps := newAPITestDependencies().withPlatformTier(tier)
+				deps := newAPITestDependencies(t).withPlatformTier(tier)
 				server := NewServer(deps.service(), configuredTenantID)
 				response := httptest.NewRecorder()
 				request := authenticatedRequest(route.method, route.path, strings.NewReader(route.body))
@@ -1879,7 +1876,7 @@ func TestCreateStackAllowsGlobalRoles(t *testing.T) {
 	for _, tier := range []string{"admin", "editor"} {
 		t.Run(tier, func(t *testing.T) {
 			t.Parallel()
-			deps := newAPITestDependencies().withPlatformTier(tier)
+			deps := newAPITestDependencies(t).withPlatformTier(tier)
 			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := authenticatedRequest(http.MethodPost, "/v1/tenants/tenant_123/stacks", strings.NewReader(`{"name":"Acme"}`))
@@ -1898,33 +1895,31 @@ func TestStackRoleRoutesUseInheritedPermissions(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		role       authz.Relation
+		role       authorization.Relation
 		method     string
 		path       string
 		body       string
 		status     int
-		permission authz.Relation
+		permission authorization.Relation
 	}{
-		{name: "viewer lists stacks", role: authz.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks", status: http.StatusOK, permission: authz.RelationCanView},
-		{name: "viewer reads stack", role: authz.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123", status: http.StatusOK, permission: authz.RelationCanView},
-		{name: "operator installs template", role: authz.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","config":{}}`, status: http.StatusCreated, permission: authz.RelationCanOperate},
-		{name: "owner operates config", role: authz.RelationOwner, method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusOK, permission: authz.RelationCanOperate},
-		{name: "operator upgrades template", role: authz.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusOK, permission: authz.RelationCanOperate},
-		{name: "operator starts run", role: authz.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusCreated, permission: authz.RelationCanOperate},
-		{name: "approver approves run", role: authz.RelationApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusNoContent, permission: authz.RelationCanApprove},
-		{name: "owner cancels run", role: authz.RelationOwner, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusNoContent, permission: authz.RelationCanOperate},
-		{name: "viewer reads run", role: authz.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusOK, permission: authz.RelationCanView},
-		{name: "approver lists run logs", role: authz.RelationApprover, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusOK, permission: authz.RelationCanView},
-		{name: "viewer reads run log", role: authz.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusOK, permission: authz.RelationCanView},
-		{name: "viewer lists run history", role: authz.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", status: http.StatusOK, permission: authz.RelationCanView},
+		{name: "viewer lists stacks", role: authorization.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks", status: http.StatusOK, permission: authorization.RelationCanView},
+		{name: "viewer reads stack", role: authorization.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123", status: http.StatusOK, permission: authorization.RelationCanView},
+		{name: "operator installs template", role: authorization.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","config":{}}`, status: http.StatusCreated, permission: authorization.RelationCanOperate},
+		{name: "owner operates config", role: authorization.RelationOwner, method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusOK, permission: authorization.RelationCanOperate},
+		{name: "operator upgrades template", role: authorization.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusOK, permission: authorization.RelationCanOperate},
+		{name: "operator starts run", role: authorization.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusCreated, permission: authorization.RelationCanOperate},
+		{name: "approver approves run", role: authorization.RelationApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusNoContent, permission: authorization.RelationCanApprove},
+		{name: "owner cancels run", role: authorization.RelationOwner, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusNoContent, permission: authorization.RelationCanOperate},
+		{name: "viewer reads run", role: authorization.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusOK, permission: authorization.RelationCanView},
+		{name: "approver lists run logs", role: authorization.RelationApprover, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusOK, permission: authorization.RelationCanView},
+		{name: "viewer reads run log", role: authorization.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusOK, permission: authorization.RelationCanView},
+		{name: "viewer lists run history", role: authorization.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", status: http.StatusOK, permission: authorization.RelationCanView},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			deps := newPermissionMatrixDependencies()
-			deps.authorizer.enforceRole = true
-			deps.authorizer.role = test.role
+			deps := newPermissionMatrixDependencies(t).withStackRole(test.role)
 			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := ordinaryAuthenticatedRequest(test.method, test.path, strings.NewReader(test.body))
@@ -1934,18 +1929,13 @@ func TestStackRoleRoutesUseInheritedPermissions(t *testing.T) {
 			if response.Code != test.status {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.status, response.Body.String())
 			}
-			matched := deps.authorizer.check.Relation == test.permission
-			if !matched {
-				for _, check := range deps.authorizer.batchChecks {
-					if check.Relation == test.permission {
-						matched = true
-						break
-					}
-				}
-			}
-			if !matched {
-				t.Fatalf("permission %q not found in authorization checks", test.permission)
-			}
+			// The status is the assertion. The role is a real tuple and the
+			// answer comes from the real model, so a route that asked for the
+			// wrong permission would allow or refuse the wrong roles here --
+			// which is what the allowed and refused rows together pin. Recording
+			// which relation was asked for added nothing the outcome does not
+			// already prove, and it could only ever confirm the test's own
+			// expectation back to itself.
 		})
 	}
 }
@@ -1955,33 +1945,31 @@ func TestStackRoleRoutesDenyInsufficientRoles(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		role       authz.Relation
+		role       authorization.Relation
 		method     string
 		path       string
 		body       string
 		status     int
-		permission authz.Relation
+		permission authorization.Relation
 	}{
-		{name: "unassigned list is empty", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks", status: http.StatusOK, permission: authz.RelationCanView},
-		{name: "unassigned cannot read stack", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123", status: http.StatusNotFound, permission: authz.RelationCanView},
-		{name: "viewer cannot install template", role: authz.RelationViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","config":{}}`, status: http.StatusForbidden, permission: authz.RelationCanOperate},
-		{name: "approver cannot update config", role: authz.RelationApprover, method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusForbidden, permission: authz.RelationCanOperate},
-		{name: "viewer cannot upgrade template", role: authz.RelationViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusForbidden, permission: authz.RelationCanOperate},
-		{name: "approver cannot start run", role: authz.RelationApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusForbidden, permission: authz.RelationCanOperate},
-		{name: "operator cannot approve run", role: authz.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusForbidden, permission: authz.RelationCanApprove},
-		{name: "approver cannot cancel run", role: authz.RelationApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusForbidden, permission: authz.RelationCanOperate},
-		{name: "unassigned cannot read run", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusNotFound, permission: authz.RelationCanView},
-		{name: "unassigned cannot list logs", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusNotFound, permission: authz.RelationCanView},
-		{name: "unassigned cannot read log", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusNotFound, permission: authz.RelationCanView},
-		{name: "unassigned cannot list run history", method: http.MethodGet, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", status: http.StatusNotFound, permission: authz.RelationCanView},
+		{name: "unassigned list is empty", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks", status: http.StatusOK, permission: authorization.RelationCanView},
+		{name: "unassigned cannot read stack", method: http.MethodGet, path: "/v1/tenants/tenant_123/stacks/stack_123", status: http.StatusNotFound, permission: authorization.RelationCanView},
+		{name: "viewer cannot install template", role: authorization.RelationViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stacks/stack_123/templates", body: `{"template_revision_id":"revision_123","config":{}}`, status: http.StatusForbidden, permission: authorization.RelationCanOperate},
+		{name: "approver cannot update config", role: authorization.RelationApprover, method: http.MethodPatch, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/config", body: `{"config":{}}`, status: http.StatusForbidden, permission: authorization.RelationCanOperate},
+		{name: "viewer cannot upgrade template", role: authorization.RelationViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusForbidden, permission: authorization.RelationCanOperate},
+		{name: "approver cannot start run", role: authorization.RelationApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusForbidden, permission: authorization.RelationCanOperate},
+		{name: "operator cannot approve run", role: authorization.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusForbidden, permission: authorization.RelationCanApprove},
+		{name: "approver cannot cancel run", role: authorization.RelationApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusForbidden, permission: authorization.RelationCanOperate},
+		{name: "unassigned cannot read run", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusNotFound, permission: authorization.RelationCanView},
+		{name: "unassigned cannot list logs", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusNotFound, permission: authorization.RelationCanView},
+		{name: "unassigned cannot read log", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusNotFound, permission: authorization.RelationCanView},
+		{name: "unassigned cannot list run history", method: http.MethodGet, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", status: http.StatusNotFound, permission: authorization.RelationCanView},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			deps := newPermissionMatrixDependencies()
-			deps.authorizer.enforceRole = true
-			deps.authorizer.role = test.role
+			deps := newPermissionMatrixDependencies(t).withStackRole(test.role)
 			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := ordinaryAuthenticatedRequest(test.method, test.path, strings.NewReader(test.body))
@@ -1991,18 +1979,13 @@ func TestStackRoleRoutesDenyInsufficientRoles(t *testing.T) {
 			if response.Code != test.status {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.status, response.Body.String())
 			}
-			matched := deps.authorizer.check.Relation == test.permission
-			if !matched {
-				for _, check := range deps.authorizer.batchChecks {
-					if check.Relation == test.permission {
-						matched = true
-						break
-					}
-				}
-			}
-			if !matched {
-				t.Fatalf("permission %q not found in authorization checks", test.permission)
-			}
+			// The status is the assertion. The role is a real tuple and the
+			// answer comes from the real model, so a route that asked for the
+			// wrong permission would allow or refuse the wrong roles here --
+			// which is what the allowed and refused rows together pin. Recording
+			// which relation was asked for added nothing the outcome does not
+			// already prove, and it could only ever confirm the test's own
+			// expectation back to itself.
 			if deps.stackTemplateInstaller.created.ID != "" || deps.templateRuns.created.ID != "" || deps.templateRuns.approval.RunID != "" || deps.templateRuns.cancellation.RunID != "" {
 				t.Fatal("denied mutation had side effects")
 			}
@@ -2025,12 +2008,12 @@ func TestStackRoleRoutesDenyInsufficientRoles(t *testing.T) {
 func TestStackListFiltersMixedDecisions(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newBareAPITestDependencies(t)
 	deps.stacks.list = []domain.Stack{
 		{ID: "stack_allowed", TenantID: "tenant_123", CreatedAt: time.Unix(2, 0)},
 		{ID: "stack_denied", TenantID: "tenant_123", CreatedAt: time.Unix(1, 0)},
 	}
-	deps.authorizer.batchDecisions = []bool{true, false}
+	deps.withGrants(mustAPIGrant(t, apiKeycloakSubject, "stack_allowed", authorization.RelationViewer))
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := ordinaryAuthenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
@@ -2052,28 +2035,27 @@ func TestStackListFiltersMixedDecisions(t *testing.T) {
 func TestStackListLaterBatchFailureReturnsNoPartialResponse(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.stacks.list = make([]domain.Stack, 51)
 	for i := range deps.stacks.list {
 		deps.stacks.list[i] = domain.Stack{ID: domain.StackID(fmt.Sprintf("stack_%02d", 51-i)), TenantID: "tenant_123", CreatedAt: time.Unix(int64(100-i), 0)}
 	}
-	deps.authorizer.batchErr = authz.ErrUnavailable
-	deps.authorizer.failBatch = 2
+	deps.authorizer = newFailingAPIAuthorization(t)
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := ordinaryAuthenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks", nil)
 
 	server.ServeHTTP(response, request)
 
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	// 500, not 503: with OpenFGA embedded there is no separate authorization
+	// service to report as unavailable. What matters is that the failure does
+	// not render as an empty list, which would tell the caller they have access
+	// to nothing rather than that the answer is unknown.
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusInternalServerError, response.Body.String())
 	}
-	var body errorResponse
-	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
-		t.Fatalf("decode error response: %v", err)
-	}
-	if body.Error != "authorization_unavailable" {
-		t.Fatalf("error = %q, want authorization_unavailable", body.Error)
+	if strings.Contains(response.Body.String(), `"stacks"`) {
+		t.Fatalf("failed listing returned a partial body: %s", response.Body.String())
 	}
 }
 
@@ -2104,16 +2086,17 @@ func TestInheritedRouteMissingAndDeniedStatusesMatch(t *testing.T) {
 			t.Parallel()
 			statuses := make([]int, 0, 2)
 			for _, condition := range []string{"missing", "denied"} {
-				deps := newPermissionMatrixDependencies()
+				deps := newPermissionMatrixDependencies(t)
 				if condition == "missing" {
 					if test.resource == "stack-template" {
 						deps.stackTemplates.getErr = app.ErrNotFound
 					} else {
 						deps.templateRuns.getErr = app.ErrNotFound
 					}
-				} else {
-					deps.authorizer.denied = true
 				}
+				// "denied" needs no setup: the matrix subject holds no grants
+				// unless a test gives it one, which is what an unassigned user
+				// actually looks like.
 				server := NewServer(deps.service(), configuredTenantID)
 				response := httptest.NewRecorder()
 				request := ordinaryAuthenticatedRequest(test.method, test.path, strings.NewReader(test.body))
@@ -2130,8 +2113,10 @@ func TestInheritedRouteMissingAndDeniedStatusesMatch(t *testing.T) {
 	}
 }
 
-func newPermissionMatrixDependencies() *apiTestDependencies {
-	deps := newAPITestDependencies()
+func newPermissionMatrixDependencies(t *testing.T) *apiTestDependencies {
+	// Bare on purpose: the matrix is about what one stack role reaches, so the
+	// subject must hold nothing except what each case grants.
+	deps := newBareAPITestDependencies(t)
 	stack := domain.Stack{ID: "stack_123", TenantID: "tenant_123", Name: "Acme", Slug: "acme", CreatedAt: time.Unix(1, 0)}
 	deps.stacks.stack = stack
 	deps.stacks.list = []domain.Stack{stack}
@@ -2156,8 +2141,8 @@ func newPermissionMatrixDependencies() *apiTestDependencies {
 func TestDeniedStackMutationReturnsForbiddenWithoutSideEffects(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
-	deps.authorizer.denied = true
+	deps := newBareAPITestDependencies(t)
+	// The subject holds no grants, which is what denial looks like.
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := ordinaryAuthenticatedRequest(http.MethodPost, "/v1/tenants/tenant_123/stacks/stack_123/templates", strings.NewReader(`{"template_revision_id":"revision_123","config":{}}`))
@@ -2175,27 +2160,29 @@ func TestDeniedStackMutationReturnsForbiddenWithoutSideEffects(t *testing.T) {
 func TestAuthorizationDependencyFailureReturnsServiceUnavailable(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
-	deps.authorizer.checkErr = authz.ErrUnavailable
+	deps := newAPITestDependencies(t)
+	deps.authorizer = newFailingAPIAuthorization(t)
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := ordinaryAuthenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack_123", nil)
 
 	server.ServeHTTP(response, request)
 
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	// The load-bearing part is that this is not 403 and not 404: a caller must
+	// never be told they lack access when the truth is that we could not tell.
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusInternalServerError, response.Body.String())
 	}
 	var body errorResponse
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.Error != "authorization_unavailable" {
-		t.Fatalf("error = %q, want authorization_unavailable", body.Error)
+	if body.Error != "internal_error" {
+		t.Fatalf("error = %q, want internal_error", body.Error)
 	}
 }
 
-func TestMissingAuthorizerReturnsServiceUnavailable(t *testing.T) {
+func TestMissingAuthorizerFailsRatherThanRefusing(t *testing.T) {
 	t.Parallel()
 
 	service := app.NewService(app.Service{Stacks: &recordingStackRepository{}})
@@ -2205,8 +2192,8 @@ func TestMissingAuthorizerReturnsServiceUnavailable(t *testing.T) {
 
 	server.ServeHTTP(response, request)
 
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusInternalServerError, response.Body.String())
 	}
 }
 
@@ -2221,8 +2208,8 @@ func TestCreateStackWithMissingAuthorizerReturnsServiceUnavailable(t *testing.T)
 
 	server.ServeHTTP(response, request)
 
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusInternalServerError, response.Body.String())
 	}
 	if stacks.created.ID != "" {
 		t.Fatalf("created stack = %#v, want no persistence", stacks.created)
@@ -2265,8 +2252,8 @@ func TestPlatformAdminCannotBypassMissingAuthorizer(t *testing.T) {
 
 			server.ServeHTTP(response, request)
 
-			if response.Code != http.StatusServiceUnavailable {
-				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+			if response.Code != http.StatusInternalServerError {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusInternalServerError, response.Body.String())
 			}
 			if stacks.gotStackID != "" || stacks.gotListTenantID != "" || stacks.created.ID != "" || runs.gotGetRunID != "" || runs.created.ID != "" || runs.approval.RunID != "" || runs.cancellation.RunID != "" || installer.created.ID != "" {
 				t.Fatal("missing authorizer allowed repository access or mutation")
@@ -2278,7 +2265,7 @@ func TestPlatformAdminCannotBypassMissingAuthorizer(t *testing.T) {
 func TestMalformedStackIDReturnsProtectedNotFound(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := ordinaryAuthenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack:bad", nil)
@@ -2293,7 +2280,7 @@ func TestMalformedStackIDReturnsProtectedNotFound(t *testing.T) {
 func TestPlatformAdminMalformedStackIDReturnsProtectedNotFound(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies().withPlatformTier("admin")
+	deps := newAPITestDependencies(t).withPlatformTier("admin")
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack:bad", nil)
@@ -2311,7 +2298,7 @@ func TestMalformedPersistedOwningStackIDReturnsServiceUnavailable(t *testing.T) 
 	for _, tier := range []string{"", "admin"} {
 		t.Run(tier, func(t *testing.T) {
 			t.Parallel()
-			deps := newPermissionMatrixDependencies()
+			deps := newPermissionMatrixDependencies(t)
 			deps.stackTemplates.stackTemplate.StackID = "bad:id"
 			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
@@ -2322,8 +2309,8 @@ func TestMalformedPersistedOwningStackIDReturnsServiceUnavailable(t *testing.T) 
 
 			server.ServeHTTP(response, request)
 
-			if response.Code != http.StatusServiceUnavailable {
-				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+			if response.Code != http.StatusInternalServerError {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusInternalServerError, response.Body.String())
 			}
 		})
 	}
@@ -2332,8 +2319,8 @@ func TestMalformedPersistedOwningStackIDReturnsServiceUnavailable(t *testing.T) 
 func TestMalformedGeneratedStackIDReturnsServiceUnavailable(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
-	deps.stackID = "bad:id"
+	deps := newAPITestDependencies(t)
+	deps.createdStackID = "bad:id"
 	deps.withPlatformTier("editor")
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -2341,8 +2328,8 @@ func TestMalformedGeneratedStackIDReturnsServiceUnavailable(t *testing.T) {
 
 	server.ServeHTTP(response, request)
 
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusInternalServerError, response.Body.String())
 	}
 	if deps.stacks.created.ID != "" {
 		t.Fatalf("created stack = %#v, want no persistence", deps.stacks.created)
@@ -2356,7 +2343,7 @@ func TestSearchUsersPlatformAdminAllowed(t *testing.T) {
 		{Sub: "u1", DisplayName: "Alice Smith", Email: "alice@example.com"},
 		{Sub: "u2", DisplayName: "Bob Jones", Email: "bob@example.com"},
 	}
-	deps := newAPITestDependencies().withPlatformTier("admin")
+	deps := newAPITestDependencies(t).withPlatformTier("admin")
 	deps.users = apiFakeUserRepository{users: expected}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -2388,7 +2375,7 @@ func TestSearchUsersPlatformAdminAllowed(t *testing.T) {
 func TestSearchUsersNonAdminForbidden(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newBareAPITestDependencies(t)
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := ordinaryAuthenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/users/search?q=ali", nil)
@@ -2416,7 +2403,7 @@ func TestSearchUsersMissingQuery(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			deps := newAPITestDependencies()
+			deps := newAPITestDependencies(t)
 			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := authenticatedRequest(http.MethodGet, test.url, nil)
@@ -2448,7 +2435,7 @@ func TestSearchUsersInvalidPagination(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			deps := newAPITestDependencies()
+			deps := newAPITestDependencies(t)
 			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := authenticatedRequest(http.MethodGet, test.url, nil)
@@ -2468,7 +2455,7 @@ func TestSearchUsersInvalidPagination(t *testing.T) {
 func TestSearchUsersRepositoryFailureIsInternalError(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies().withPlatformTier("admin")
+	deps := newAPITestDependencies(t).withPlatformTier("admin")
 	deps.users = apiFakeUserRepository{searchErr: errors.New("connection refused")}
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -2491,7 +2478,7 @@ func TestSearchUsersRepositoryFailureIsInternalError(t *testing.T) {
 func TestSearchUsersUnauthenticated(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(newAPITestDependencies().service(), configuredTenantID)
+	server := NewServer(newAPITestDependencies(t).service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/tenants/tenant_123/users/search?q=test", nil)
 
@@ -2503,7 +2490,8 @@ func TestSearchUsersUnauthenticated(t *testing.T) {
 }
 
 type apiTestDependencies struct {
-	authorizer             *apiAuthorizer
+	authorizer             *authorization.Authorization
+	t                      *testing.T
 	stacks                 recordingStackRepository
 	stackTemplates         recordingStackTemplateRepository
 	stackTemplateInstaller recordingStackTemplateInstaller
@@ -2515,6 +2503,10 @@ type apiTestDependencies struct {
 	workflows              recordingWorkflowDispatcher
 	users                  apiFakeUserRepository
 	stackID                domain.StackID
+	// createdStackID is what the generator mints, kept distinct from stackID so
+	// a creation test does not collide with the tuples seeded for the fixture
+	// stack.
+	createdStackID         domain.StackID
 	stackTemplateID        domain.StackTemplateID
 	runID                  domain.TemplateRunID
 	registrationID         domain.TemplateRegistrationID
@@ -2522,10 +2514,40 @@ type apiTestDependencies struct {
 	work                   *apiUnitOfWork
 }
 
-func newAPITestDependencies() *apiTestDependencies {
+// newAPITestDependencies builds a harness whose subject is a platform
+// administrator, which is what most of these tests want: they are about routing,
+// serialisation and status codes, and authorization is incidental. The tests
+// that are about authorization start from newBareAPITestDependencies and grant
+// exactly what they mean to.
+// sessionCookieSubject is who sessionCookieServer authenticates as.
+const sessionCookieSubject = "user-123"
+
+func newAPITestDependencies(t *testing.T) *apiTestDependencies {
+	t.Helper()
+	deps := newBareAPITestDependencies(t).withPlatformTier("admin")
+	// The session-cookie tests authenticate as a different subject than the
+	// bearer-token ones, and they are no more about authorization than the
+	// rest, so both are administrators here.
+	return deps.withPlatformTierFor(sessionCookieSubject, "admin")
+}
+
+func newBareAPITestDependencies(t *testing.T) *apiTestDependencies {
+	t.Helper()
+	auth, err := authorization.NewWithDatastore(context.Background(), memory.New(), "tflive-test")
+	if err != nil {
+		t.Fatalf("build authorization: %v", err)
+	}
+	t.Cleanup(auth.Close)
+	// Every stack these tests reach is served by a fake repository rather than
+	// created through the API, so nothing has written its parent edge. Without
+	// it a platform administrator cannot reach the stack, because the model
+	// routes that access through "can_administer from parent".
+	seedAPIParentEdge(t, auth, "stack_123")
 	return &apiTestDependencies{
-		authorizer:      &apiAuthorizer{},
+		t:               t,
+		authorizer:      auth,
 		stackID:         domain.StackID("stack_123"),
+		createdStackID:  domain.StackID("stack_new"),
 		stackTemplateID: domain.StackTemplateID("stack_template_123"),
 		runID:           domain.TemplateRunID("run_123"),
 		registrationID:  domain.TemplateRegistrationID("template_registration_123"),
@@ -2533,17 +2555,94 @@ func newAPITestDependencies() *apiTestDependencies {
 	}
 }
 
+// withPlatformTier sets the subject's platform role, replacing any it already
+// holds. Replacing rather than adding is what lets the default administrator
+// harness be narrowed by a test that wants a weaker tier.
 func (deps *apiTestDependencies) withPlatformTier(tier string) *apiTestDependencies {
-	deps.authorizer.platform = map[string]bool{}
-	for _, relation := range platformTier(tier) {
-		deps.authorizer.platform[relation.String()] = true
+	return deps.withPlatformTierFor(apiKeycloakSubject, tier)
+}
+
+func (deps *apiTestDependencies) withPlatformTierFor(sub, tier string) *apiTestDependencies {
+	deps.t.Helper()
+	subject, err := authorization.SubjectFromOIDCSub(sub)
+	if err != nil {
+		deps.t.Fatalf("SubjectFromOIDCSub: %v", err)
+	}
+
+	held, err := deps.authorizer.ListGrants(context.Background(), authorization.Platform)
+	if err != nil {
+		deps.t.Fatalf("ListGrants: %v", err)
+	}
+	var stale []authorization.Grant
+	for _, grant := range held {
+		if grant.Subject().String() == subject.String() {
+			stale = append(stale, grant)
+		}
+	}
+	if len(stale) > 0 {
+		if err := deps.authorizer.Revoke(context.Background(), stale...); err != nil {
+			deps.t.Fatalf("revoke platform grants: %v", err)
+		}
+	}
+
+	role, ok := platformRole(tier)
+	if !ok {
+		return deps
+	}
+	grant, err := authorization.NewGrant(subject, authorization.Platform, role)
+	if err != nil {
+		deps.t.Fatalf("NewGrant: %v", err)
+	}
+	return deps.withGrants(grant)
+}
+
+// withStackRole grants the request subject one role on the fixture stack. What
+// that role can reach is the model's answer, not a table in this file.
+func (deps *apiTestDependencies) withStackRole(role authorization.Relation) *apiTestDependencies {
+	deps.t.Helper()
+	if role == (authorization.Relation{}) {
+		return deps
+	}
+	subject, err := authorization.SubjectFromOIDCSub(apiKeycloakSubject)
+	if err != nil {
+		deps.t.Fatalf("SubjectFromOIDCSub: %v", err)
+	}
+	object, err := authorization.ObjectFromID(authorization.TypeStack, string(deps.stackID))
+	if err != nil {
+		deps.t.Fatalf("ObjectFromID: %v", err)
+	}
+	grant, err := authorization.NewGrant(subject, object, role)
+	if err != nil {
+		deps.t.Fatalf("NewGrant: %v", err)
+	}
+	return deps.withGrants(grant)
+}
+
+func (deps *apiTestDependencies) withGrants(grants ...authorization.Grant) *apiTestDependencies {
+	deps.t.Helper()
+	if len(grants) == 0 {
+		return deps
+	}
+	if err := deps.authorizer.Grant(context.Background(), grants...); err != nil {
+		deps.t.Fatalf("seed grants: %v", err)
 	}
 	return deps
 }
 
-func (deps *apiTestDependencies) withGrants(grants ...authz.Grant) *apiTestDependencies {
-	deps.authorizer.grants = grants
-	return deps
+// seedAPIParentEdge stores the structural edge linking a stack to the platform.
+func seedAPIParentEdge(t *testing.T, auth *authorization.Authorization, stackID string) {
+	t.Helper()
+	object, err := authorization.ObjectFromID(authorization.TypeStack, stackID)
+	if err != nil {
+		t.Fatalf("ObjectFromID: %v", err)
+	}
+	edge, err := authorization.NewStructuralRelationship(authorization.PlatformSubject, object, authorization.RelationParent)
+	if err != nil {
+		t.Fatalf("NewStructuralRelationship: %v", err)
+	}
+	if err := auth.Grant(context.Background(), edge); err != nil {
+		t.Fatalf("seed parent edge: %v", err)
+	}
 }
 
 func (deps *apiTestDependencies) service() *app.Service {
@@ -2554,7 +2653,7 @@ func (deps *apiTestDependencies) service() *app.Service {
 	}
 	deps.work = work
 	return app.NewService(app.Service{
-		Authorizer:               deps.authorizer,
+		Authorization:               deps.authorizer,
 		Work:                     work,
 		Stacks:                   &deps.stacks,
 		StackTemplates:           &deps.stackTemplates,
@@ -2567,7 +2666,7 @@ func (deps *apiTestDependencies) service() *app.Service {
 		TemplateRunLogMetadata:   &deps.logMetadata,
 		Workflows:                &deps.workflows,
 		Users:                    &deps.users,
-		StackIDs:                 fixedStackIDGenerator{id: deps.stackID},
+		StackIDs:                 fixedStackIDGenerator{id: deps.createdStackID},
 		StackTemplateIDs:         fixedStackTemplateIDGenerator{id: deps.stackTemplateID},
 		RunIDs:                   fixedTemplateRunIDGenerator{runID: deps.runID},
 		RegistrationIDs:          fixedTemplateRegistrationIDGenerator{id: deps.registrationID},
@@ -2586,11 +2685,11 @@ type apiUnitOfWork struct {
 	err                   error
 }
 
-func (unit *apiUnitOfWork) InTx(ctx context.Context, fn func(app.TxRepo, queue.Enqueuer) error) error {
+func (unit *apiUnitOfWork) InTx(ctx context.Context, fn func(context.Context, app.TxRepo, queue.Enqueuer) error) error {
 	if unit.err != nil {
 		return unit.err
 	}
-	return fn(unit, unit)
+	return fn(ctx, unit, unit)
 }
 
 func (unit *apiUnitOfWork) CreateStack(ctx context.Context, stack domain.Stack) error {
@@ -2644,95 +2743,6 @@ func (unit *apiUnitOfWork) RequestTemplateRunCancellation(ctx context.Context, c
 func (unit *apiUnitOfWork) Enqueue(_ context.Context, requests ...queue.Request) error {
 	unit.requests = append(unit.requests, requests...)
 	return nil
-}
-
-type apiAuthorizer struct {
-	// platform holds the capabilities the test subject was granted on the
-	// singleton. Empty is the honest default: a subject holds nothing until a
-	// tuple says otherwise.
-	platform            map[string]bool
-	writeErr            error
-	checkErr            error
-	denied              bool
-	enforceRole         bool
-	role                authz.Relation
-	check               authz.CheckRequest
-	batchErr            error
-	failBatch           int
-	batchCalls          int
-	batchDecisions      []bool
-	batchChecks         []authz.CheckRequest
-	truncateBatchResult bool
-	grants              []authz.Grant
-	listGrantsErr       error
-	deleteErr           error
-}
-
-func (authorizer *apiAuthorizer) roleAllows(request authz.CheckRequest) bool {
-	switch authorizer.role {
-	case authz.RelationOwner:
-		return true
-	case authz.RelationOperator:
-		return request.Relation == authz.RelationCanView || request.Relation == authz.RelationCanOperate
-	case authz.RelationApprover:
-		return request.Relation == authz.RelationCanView || request.Relation == authz.RelationCanApprove
-	case authz.RelationViewer:
-		return request.Relation == authz.RelationCanView
-	default:
-		return false
-	}
-}
-
-func (authorizer *apiAuthorizer) Check(_ context.Context, request authz.CheckRequest) (authz.CheckResult, error) {
-	authorizer.check = request
-	if authorizer.checkErr != nil {
-		return authz.CheckResult{}, authorizer.checkErr
-	}
-	if request.Object == authz.Platform {
-		return authz.CheckResult{Allowed: authorizer.platform[request.Relation.String()]}, nil
-	}
-	if authorizer.enforceRole {
-		return authz.CheckResult{Allowed: authorizer.roleAllows(request)}, nil
-	}
-	return authz.CheckResult{Allowed: !authorizer.denied}, nil
-}
-func (authorizer *apiAuthorizer) BatchCheck(ctx context.Context, request authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
-	authorizer.batchCalls++
-	authorizer.batchChecks = request.Checks
-	if authorizer.batchErr != nil && (authorizer.failBatch == 0 || authorizer.failBatch == authorizer.batchCalls) {
-		return authz.BatchCheckResult{}, authorizer.batchErr
-	}
-	result := authz.BatchCheckResult{Results: make([]authz.CheckResult, len(request.Checks))}
-	for i, check := range request.Checks {
-		if check.Object == authz.Platform {
-			result.Results[i] = authz.CheckResult{Allowed: authorizer.platform[check.Relation.String()]}
-		} else if authorizer.batchDecisions != nil && i < len(authorizer.batchDecisions) {
-			result.Results[i] = authz.CheckResult{Allowed: authorizer.batchDecisions[i]}
-		} else if authorizer.enforceRole {
-			result.Results[i] = authz.CheckResult{Allowed: authorizer.roleAllows(check)}
-		} else {
-			result.Results[i] = authz.CheckResult{Allowed: !authorizer.denied}
-		}
-	}
-	if authorizer.truncateBatchResult && len(result.Results) > 0 {
-		result.Results = result.Results[:len(result.Results)-1]
-	}
-	return result, nil
-}
-func (authorizer *apiAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
-	if authorizer.listGrantsErr != nil {
-		return authz.ListGrantsResult{}, authorizer.listGrantsErr
-	}
-	if authorizer.grants == nil {
-		return authz.ListGrantsResult{Grants: []authz.Grant{}}, nil
-	}
-	return authz.ListGrantsResult{Grants: authorizer.grants}, nil
-}
-func (authorizer *apiAuthorizer) WriteRelationships(context.Context, authz.Mutation) error {
-	return authorizer.writeErr
-}
-func (authorizer *apiAuthorizer) DeleteRelationships(context.Context, authz.Mutation) error {
-	return authorizer.deleteErr
 }
 
 type recordingStackRepository struct {
@@ -3182,7 +3192,7 @@ func TestMeReturnsIdentityWithGlobalCapabilities(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			deps := newAPITestDependencies().withPlatformTier(test.tier)
+			deps := newAPITestDependencies(t).withPlatformTier(test.tier)
 			server := NewServer(deps.service(), configuredTenantID)
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
@@ -3252,21 +3262,21 @@ func TestMeReturnsUnauthorizedWithoutPrincipal(t *testing.T) {
 	}
 }
 
-func testGrant(t *testing.T, sub, stackID, role string) authz.Grant {
+func testGrant(t *testing.T, sub, stackID, role string) authorization.Grant {
 	t.Helper()
-	subject, err := authz.SubjectFromOIDCSub(sub)
+	subject, err := authorization.SubjectFromOIDCSub(sub)
 	if err != nil {
 		t.Fatalf("subject from sub: %v", err)
 	}
-	stack, err := authz.ObjectFromID(authz.TypeStack, stackID)
+	stack, err := authorization.ObjectFromID(authorization.TypeStack, stackID)
 	if err != nil {
 		t.Fatalf("stack from id: %v", err)
 	}
-	r, err := authz.GrantRelation(role)
+	r, err := authorization.GrantRelation(role)
 	if err != nil {
 		t.Fatalf("role from relation: %v", err)
 	}
-	grant, err := authz.NewGrant(subject, stack, r)
+	grant, err := authorization.NewGrant(subject, stack, r)
 	if err != nil {
 		t.Fatalf("new grant: %v", err)
 	}
@@ -3276,7 +3286,7 @@ func testGrant(t *testing.T, sub, stackID, role string) authz.Grant {
 func TestListStackGrantsListsGrants(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.users = apiFakeUserRepository{
 		users: []app.UserProfile{{Sub: "user-1", DisplayName: "Alice", Email: "alice@example.com"}},
 	}
@@ -3308,7 +3318,7 @@ func TestListStackGrantsListsGrants(t *testing.T) {
 func TestListStackGrantsReturnsEmptyOnNoGrants(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/stacks/stack_123/grants", nil)
@@ -3330,7 +3340,7 @@ func TestListStackGrantsReturnsEmptyOnNoGrants(t *testing.T) {
 func TestAssignStackRoleAssignsRoleAndReturnsGrantView(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.users = apiFakeUserRepository{
 		users: []app.UserProfile{{Sub: "user-2", DisplayName: "bob", Email: "bob@example.com"}},
 	}
@@ -3359,7 +3369,7 @@ func TestAssignStackRoleAssignsRoleAndReturnsGrantView(t *testing.T) {
 func TestAssignStackRoleRejectsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
@@ -3378,8 +3388,8 @@ func TestAssignStackRoleRejectsInvalidJSON(t *testing.T) {
 func TestAssignStackRoleRequiresManageAccess(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
-	deps.authorizer.denied = true
+	deps := newBareAPITestDependencies(t)
+	// The subject holds no grants, which is what denial looks like.
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 	request := ordinaryAuthenticatedRequest(
@@ -3398,7 +3408,7 @@ func TestAssignStackRoleRequiresManageAccess(t *testing.T) {
 func TestRevokeStackRoleRemovesGrant(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.withGrants(testGrant(t, "user-3", "stack_123", "viewer"))
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -3414,7 +3424,7 @@ func TestRevokeStackRoleRemovesGrant(t *testing.T) {
 func TestRevokeStackRoleLastOwnerReturnsConflict(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.withGrants(testGrant(t, apiKeycloakSubject, "stack_123", "owner"))
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
@@ -3430,7 +3440,7 @@ func TestRevokeStackRoleLastOwnerReturnsConflict(t *testing.T) {
 func TestAssignStackRoleLastOwnerDemotionReturnsConflict(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	deps.users = apiFakeUserRepository{
 		users: []app.UserProfile{{Sub: apiKeycloakSubject, DisplayName: "admin", Email: "admin@example.com"}},
 	}
@@ -3486,7 +3496,7 @@ func TestListQueueReturnsOnlyCallerItems(t *testing.T) {
 		LastError: "openfga unavailable",
 		CreatedAt: time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC),
 	}}}
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	server := NewServer(deps.service(), configuredTenantID, WithQueueReader(reader))
 	response := httptest.NewRecorder()
 
@@ -3524,24 +3534,26 @@ func TestListQueueReturnsOnlyCallerItems(t *testing.T) {
 	}
 }
 
+// Still 503: an unconfigured queue reader is a genuinely unavailable
+// dependency, unlike authorization, which is now in-process.
 func TestListQueueWithoutReaderReturnsServiceUnavailable(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	server := NewServer(deps.service(), configuredTenantID)
 	response := httptest.NewRecorder()
 
 	server.ServeHTTP(response, authenticatedRequest(http.MethodGet, "/v1/tenants/tenant_123/queue", nil))
 
 	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503", response.Code)
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
 }
 
 func TestListQueueRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 
-	deps := newAPITestDependencies()
+	deps := newAPITestDependencies(t)
 	server := NewServer(deps.service(), configuredTenantID, WithQueueReader(&stubQueueReader{}))
 	response := httptest.NewRecorder()
 
@@ -3550,4 +3562,68 @@ func TestListQueueRequiresAuthentication(t *testing.T) {
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", response.Code)
 	}
+}
+
+// mustAPIGrant builds one stack grant for the API test harness.
+func mustAPIGrant(t *testing.T, sub, stackID string, relation authorization.Relation) authorization.Grant {
+	t.Helper()
+	subject, err := authorization.SubjectFromOIDCSub(sub)
+	if err != nil {
+		t.Fatalf("SubjectFromOIDCSub: %v", err)
+	}
+	object, err := authorization.ObjectFromID(authorization.TypeStack, stackID)
+	if err != nil {
+		t.Fatalf("ObjectFromID: %v", err)
+	}
+	grant, err := authorization.NewGrant(subject, object, relation)
+	if err != nil {
+		t.Fatalf("NewGrant: %v", err)
+	}
+	return grant
+}
+
+// failAfterBootstrap wraps a working datastore and starts failing every tuple
+// read and write once bootstrap has finished. The store and the model have to
+// be resolvable for the Authorization to exist at all, so the failure cannot be
+// present from the start.
+type failAfterBootstrap struct {
+	storage.OpenFGADatastore
+	failing bool
+}
+
+var errAuthorizationOutage = errors.New("authorization datastore is unreachable")
+
+func (d *failAfterBootstrap) ReadUserTuple(ctx context.Context, store string, filter storage.ReadUserTupleFilter, options storage.ReadUserTupleOptions) (*openfgav1.Tuple, error) {
+	if d.failing {
+		return nil, errAuthorizationOutage
+	}
+	return d.OpenFGADatastore.ReadUserTuple(ctx, store, filter, options)
+}
+
+func (d *failAfterBootstrap) ReadUsersetTuples(ctx context.Context, store string, filter storage.ReadUsersetTuplesFilter, options storage.ReadUsersetTuplesOptions) (storage.TupleIterator, error) {
+	if d.failing {
+		return nil, errAuthorizationOutage
+	}
+	return d.OpenFGADatastore.ReadUsersetTuples(ctx, store, filter, options)
+}
+
+func (d *failAfterBootstrap) ReadStartingWithUser(ctx context.Context, store string, filter storage.ReadStartingWithUserFilter, options storage.ReadStartingWithUserOptions) (storage.TupleIterator, error) {
+	if d.failing {
+		return nil, errAuthorizationOutage
+	}
+	return d.OpenFGADatastore.ReadStartingWithUser(ctx, store, filter, options)
+}
+
+// newFailingAPIAuthorization boots normally and then fails every tuple read, so
+// a route's behaviour under an authorization outage can be asserted.
+func newFailingAPIAuthorization(t *testing.T) *authorization.Authorization {
+	t.Helper()
+	datastore := &failAfterBootstrap{OpenFGADatastore: memory.New()}
+	auth, err := authorization.NewWithDatastore(context.Background(), datastore, "tflive-test")
+	if err != nil {
+		t.Fatalf("build authorization: %v", err)
+	}
+	t.Cleanup(auth.Close)
+	datastore.failing = true
+	return auth
 }

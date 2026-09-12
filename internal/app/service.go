@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/authorization"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/strval"
@@ -73,7 +73,7 @@ type TxRepo interface {
 // UnitOfWork commits a domain write and a queued intent atomically. This is
 // what makes the queue an outbox rather than a second system to dual-write to.
 type UnitOfWork interface {
-	InTx(ctx context.Context, fn func(TxRepo, queue.Enqueuer) error) error
+	InTx(ctx context.Context, fn func(context.Context, TxRepo, queue.Enqueuer) error) error
 }
 
 type StackRepository interface {
@@ -223,10 +223,9 @@ type RevokeStackRoleCommand struct {
 
 // Service owns app use cases and the dependencies wired by cmd packages.
 type Service struct {
-	Authorizer               authz.Authorizer
+	Authorization            *authorization.Authorization
 	Work                     UnitOfWork
 	Stacks                   StackRepository
-	StackStatuses            StackStatusRepository
 	StackTemplates           StackTemplateRepository
 	Credentials              CredentialRepository
 	CredentialEncryptor      CredentialEncryptor
@@ -491,7 +490,7 @@ type GetTemplateRevisionVariablesCommand struct {
 
 // RegisterTemplate creates a pending registration attempt and dispatches its sync workflow.
 func (service *Service) RegisterTemplate(ctx context.Context, command RegisterTemplateCommand) (domain.TemplateRegistration, error) {
-	if err := authorizePlatform(ctx, service.Authorizer, authz.RelationCanPublishTemplate); err != nil {
+	if err := authorizePlatform(ctx, service.Authorization, authorization.RelationCanPublishTemplate); err != nil {
 		return domain.TemplateRegistration{}, err
 	}
 	actor, err := authenticatedActor(ctx)
@@ -526,7 +525,7 @@ func (service *Service) RegisterTemplate(ctx context.Context, command RegisterTe
 	if err != nil {
 		return domain.TemplateRegistration{}, fmt.Errorf("encode start template sync payload: %w", err)
 	}
-	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
+	if err := service.Work.InTx(ctx, func(ctx context.Context, repository TxRepo, enqueuer queue.Enqueuer) error {
 		if err := repository.CreateTemplateRegistration(ctx, registration); err != nil {
 			return err
 		}
@@ -549,22 +548,22 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 	if !ok || principal.Subject == "" {
 		return domain.Stack{}, ErrUnauthenticated
 	}
-	if err := authorizePlatform(ctx, service.Authorizer, authz.RelationCanCreateStack); err != nil {
+	if err := authorizePlatform(ctx, service.Authorization, authorization.RelationCanCreateStack); err != nil {
 		return domain.Stack{}, err
 	}
 	actor := domain.UserID(principal.Subject)
 	if err := validateCreateStackCommand(command); err != nil {
 		return domain.Stack{}, err
 	}
-	if service.Authorizer == nil {
-		return domain.Stack{}, fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
+	if service.Authorization == nil {
+		return domain.Stack{}, fmt.Errorf("authorization not configured")
 	}
 	if service.Work == nil {
-		return domain.Stack{}, fmt.Errorf("%w: unit of work not configured", authz.ErrUnavailable)
+		return domain.Stack{}, fmt.Errorf("unit of work not configured")
 	}
 	// Validate the identity now so a malformed subject fails the request rather
 	// than the handler, where it would retry forever.
-	if _, err := authz.SubjectFromOIDCSub(principal.Subject); err != nil {
+	if _, err := authorization.SubjectFromOIDCSub(principal.Subject); err != nil {
 		return domain.Stack{}, fmt.Errorf("create owner subject: %w", err)
 	}
 
@@ -578,31 +577,36 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		TenantID: command.TenantID,
 		Name:     strings.TrimSpace(command.Name),
 		Slug:     slug,
-		// The owner tuple lands from the queue, not from this request, so the
-		// stack is recorded as not yet usable rather than silently returned as
-		// if it were.
-		Status:               domain.StackStatusProvisioning,
+		// The owner tuple is written in the same transaction as this row, so a
+		// stack that exists is always one its creator can reach.
+		Status:               domain.StackStatusReady,
 		Tags:                 cloneStringMap(command.Tags),
 		DefaultCredentialIDs: append([]domain.CredentialSetID(nil), command.DefaultCredentialIDs...),
 		CreatedBy:            actor,
 		CreatedAt:            service.Clock.Now(),
 	}
-	if _, err := authz.ObjectFromID(authz.TypeStack, string(stack.ID)); errors.Is(err, authz.ErrInvalidInput) {
-		return domain.Stack{}, fmt.Errorf("%w: generated stack ID is invalid", authz.ErrMalformedResponse)
+	object, err := authorization.ObjectFromID(authorization.TypeStack, string(stack.ID))
+	if errors.Is(err, authorization.ErrInvalidInput) {
+		return domain.Stack{}, fmt.Errorf("generated stack ID is invalid")
 	} else if err != nil {
 		return domain.Stack{}, fmt.Errorf("create owner stack: %w", err)
 	}
 
-	// grant_stack_owner, not reconcile_stack_grant: creation is an event, and its
-	// ModeJob "do nothing" on a duplicate key keeps the founding owner from
-	// being overwritten by any later enqueue on the same stack.
-	payload, err := json.Marshal(GrantStackOwnerPayload{
-		StackID:  string(stack.ID),
-		TenantID: string(command.TenantID),
-		Subject:  principal.Subject,
-	})
+	subject, err := authorization.SubjectFromOIDCSub(principal.Subject)
 	if err != nil {
-		return domain.Stack{}, fmt.Errorf("encode grant stack owner payload: %w", err)
+		return domain.Stack{}, fmt.Errorf("create owner subject: %w", err)
+	}
+	owner, err := authorization.NewGrant(subject, object, authorization.RelationOwner)
+	if err != nil {
+		return domain.Stack{}, fmt.Errorf("build owner grant: %w", err)
+	}
+	// The parent edge rides in the same mutation as the owner grant, because a
+	// stack with one and not the other is broken either way: without owner its
+	// creator cannot reach it, and without parent no platform administrator can.
+	parent, err := authorization.NewStructuralRelationship(
+		authorization.PlatformSubject, object, authorization.RelationParent)
+	if err != nil {
+		return domain.Stack{}, fmt.Errorf("build stack parent edge: %w", err)
 	}
 
 	auditEvent := domain.SecurityAuditEvent{
@@ -616,22 +620,18 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		CorrelationID: "",
 	}
 
-	// The stack row and the provisioning intent commit together, so a crash can
-	// never leave a stack whose creator has no access and no record of the
-	// intent.
-	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
+	// One transaction: the stack row, the audit event, and the grants that make
+	// the stack reachable. A failure in any of them leaves no trace of the
+	// others, which is why the stack can be returned ready rather than
+	// provisioning.
+	if err := service.Work.InTx(ctx, func(ctx context.Context, repository TxRepo, _ queue.Enqueuer) error {
 		if err := repository.CreateStack(ctx, stack); err != nil {
 			return err
 		}
 		if err := repository.AppendAuditEvent(ctx, auditEvent); err != nil {
 			return err
 		}
-		return enqueuer.Enqueue(ctx, queue.Request{
-			Kind:         KindGrantStackOwner,
-			Payload:      payload,
-			ActorSubject: principal.Subject,
-			TenantID:     string(command.TenantID),
-		})
+		return service.Authorization.Grant(ctx, owner, parent)
 	}); err != nil {
 		return domain.Stack{}, fmt.Errorf("create stack: %w", err)
 	}
@@ -649,7 +649,7 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 		return domain.StackTemplate{}, err
 	}
 
-	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanOperate, ErrForbidden); err != nil {
+	if err := authorizeStack(ctx, service.Authorization, command.StackID, authorization.RelationCanOperate, ErrForbidden); err != nil {
 		service.auditFailedAccess(ctx, actor, command.TenantID, command.StackID)
 		return domain.StackTemplate{}, err
 	}
@@ -780,7 +780,7 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	if err != nil {
 		return domain.TemplateRun{}, fmt.Errorf("encode start template run payload: %w", err)
 	}
-	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
+	if err := service.Work.InTx(ctx, func(ctx context.Context, repository TxRepo, enqueuer queue.Enqueuer) error {
 		if err := repository.CreateTemplateRun(ctx, run); err != nil {
 			return err
 		}
@@ -814,7 +814,7 @@ func (service *Service) CreateCredential(ctx context.Context, command CreateCred
 	switch command.Scope {
 	case domain.CredentialScopeStack:
 		stackID = command.StackID
-		if err := authorizeStack(ctx, service.Authorizer, stackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
+		if err := authorizeStack(ctx, service.Authorization, stackID, authorization.RelationCanManageAccess, ErrForbidden); err != nil {
 			return CredentialMetadata{}, err
 		}
 	case domain.CredentialScopeStackTemplate:
@@ -824,7 +824,7 @@ func (service *Service) CreateCredential(ctx context.Context, command CreateCred
 			return CredentialMetadata{}, err
 		}
 		stackID = stackTemplate.StackID
-		if err := authorizeStack(ctx, service.Authorizer, stackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
+		if err := authorizeStack(ctx, service.Authorization, stackID, authorization.RelationCanManageAccess, ErrForbidden); err != nil {
 			return CredentialMetadata{}, err
 		}
 	default:
@@ -867,10 +867,10 @@ func (service *Service) ListCredentials(ctx context.Context, command ListCredent
 		if err != nil {
 			return nil, err
 		}
-		if err := authorizeStack(ctx, service.Authorizer, stackTemplate.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
+		if err := authorizeStack(ctx, service.Authorization, stackTemplate.StackID, authorization.RelationCanManageAccess, ErrForbidden); err != nil {
 			return nil, err
 		}
-	} else if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
+	} else if err := authorizeStack(ctx, service.Authorization, command.StackID, authorization.RelationCanManageAccess, ErrForbidden); err != nil {
 		return nil, err
 	}
 	credentials, err := service.Credentials.ListCredentials(ctx, command.TenantID, command.Scope, ownerID)
@@ -907,7 +907,7 @@ func (service *Service) DeleteCredential(ctx context.Context, command DeleteCred
 	} else {
 		return fmt.Errorf("%w: credential scope is required", ErrInvalidCommand)
 	}
-	if err := authorizeStack(ctx, service.Authorizer, stackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
+	if err := authorizeStack(ctx, service.Authorization, stackID, authorization.RelationCanManageAccess, ErrForbidden); err != nil {
 		return err
 	}
 	scope := domain.CredentialScopeStack
@@ -1071,7 +1071,7 @@ func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (
 	if err := validateGetStackCommand(command); err != nil {
 		return StackView{}, err
 	}
-	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanView, ErrNotFound); err != nil {
+	if err := authorizeStack(ctx, service.Authorization, command.StackID, authorization.RelationCanView, ErrNotFound); err != nil {
 		if !service.creatorMayViewProvisioningStack(ctx, command, err) {
 			return StackView{}, err
 		}
@@ -1104,7 +1104,7 @@ func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (
 		}
 	}
 
-	caps, err := ResolveStackCapabilities(ctx, service.Authorizer, command.StackID)
+	caps, err := ResolveStackCapabilities(ctx, service.Authorization, command.StackID)
 	if err != nil {
 		return StackView{}, fmt.Errorf("resolve stack capabilities: %w", err)
 	}
@@ -1118,7 +1118,7 @@ func (service *Service) ListStacks(ctx context.Context, command ListStacksComman
 		return nil, err
 	}
 
-	stacks, err := listAccessibleStacks(ctx, service.Authorizer, service.Stacks, command.TenantID)
+	stacks, err := listAccessibleStacks(ctx, service.Authorization, service.Stacks, command.TenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list stacks: %w", err)
 	}
@@ -1133,7 +1133,7 @@ func (service *Service) ListTemplateRevisions(ctx context.Context, command ListT
 	if err := validateListTemplateRevisionsCommand(command); err != nil {
 		return nil, err
 	}
-	if err := authorizePlatform(ctx, service.Authorizer, authz.RelationCanReadTemplate); err != nil {
+	if err := authorizePlatform(ctx, service.Authorization, authorization.RelationCanReadTemplate); err != nil {
 		return nil, err
 	}
 
@@ -1152,7 +1152,7 @@ func (service *Service) GetTemplateRegistration(ctx context.Context, command Get
 	if err := validateGetTemplateRegistrationCommand(command); err != nil {
 		return domain.TemplateRegistration{}, err
 	}
-	if err := authorizePlatform(ctx, service.Authorizer, authz.RelationCanReadTemplate); err != nil {
+	if err := authorizePlatform(ctx, service.Authorization, authorization.RelationCanReadTemplate); err != nil {
 		return domain.TemplateRegistration{}, err
 	}
 
@@ -1166,7 +1166,7 @@ func (service *Service) GetTemplateRegistration(ctx context.Context, command Get
 
 // PlatformCapabilities answers the global half of GET /v1/me from OpenFGA.
 func (service *Service) PlatformCapabilities(ctx context.Context) (PlatformCapabilities, error) {
-	return ResolvePlatformCapabilities(ctx, service.Authorizer)
+	return ResolvePlatformCapabilities(ctx, service.Authorization)
 }
 
 // RecordSignIn projects the identity a just-verified token asserted.
@@ -1192,7 +1192,7 @@ func (service *Service) SearchUsers(ctx context.Context, command SearchUsersComm
 	if !ok || principal.Subject == "" {
 		return nil, ErrUnauthenticated
 	}
-	if err := authorizePlatform(ctx, service.Authorizer, authz.RelationCanAdminister); err != nil {
+	if err := authorizePlatform(ctx, service.Authorization, authorization.RelationCanAdminister); err != nil {
 		return nil, err
 	}
 	if err := validateSearchUsersCommand(command); err != nil {
@@ -1231,7 +1231,7 @@ func (service *Service) GetTemplateRevisionVariables(ctx context.Context, comman
 	if err := validateGetTemplateRevisionVariablesCommand(command); err != nil {
 		return nil, err
 	}
-	if err := authorizePlatform(ctx, service.Authorizer, authz.RelationCanReadTemplate); err != nil {
+	if err := authorizePlatform(ctx, service.Authorization, authorization.RelationCanReadTemplate); err != nil {
 		return nil, err
 	}
 
@@ -1247,20 +1247,20 @@ func (service *Service) GetTemplateRevisionVariables(ctx context.Context, comman
 }
 
 func (service *Service) ListStackGrants(ctx context.Context, command ListStackGrantsCommand) (ListStackGrantsResult, error) {
-	if _, err := requirePrincipalAndAuthorizer(ctx, service.Authorizer); err != nil {
+	if _, err := requirePrincipalAndAuthorizer(ctx, service.Authorization); err != nil {
 		return ListStackGrantsResult{}, err
 	}
-	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
+	if err := authorizeStack(ctx, service.Authorization, command.StackID, authorization.RelationCanManageAccess, ErrForbidden); err != nil {
 		return ListStackGrantsResult{}, err
 	}
 	if err := service.requireUserRepository(); err != nil {
 		return ListStackGrantsResult{}, err
 	}
-	object, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
+	object, err := authorization.ObjectFromID(authorization.TypeStack, string(command.StackID))
 	if err != nil {
 		return ListStackGrantsResult{}, fmt.Errorf("list grants stack: %w", err)
 	}
-	result, err := service.Authorizer.ListGrants(ctx, authz.ListGrantsRequest{Object: object})
+	grants, err := service.Authorization.ListGrants(ctx, object)
 	if err != nil {
 		return ListStackGrantsResult{}, err
 	}
@@ -1268,8 +1268,8 @@ func (service *Service) ListStackGrants(ctx context.Context, command ListStackGr
 	// One lookup for every grant on the stack, rather than one per grant. This
 	// read used to be an N+1 of Keycloak admin API calls, which put the
 	// customer's IdP on the critical path for rendering a list.
-	subs := make([]string, 0, len(result.Grants))
-	for _, grant := range result.Grants {
+	subs := make([]string, 0, len(grants))
+	for _, grant := range grants {
 		subs = append(subs, grant.Subject().ID())
 	}
 	profiles, err := service.Users.UsersBySubs(ctx, subs)
@@ -1277,8 +1277,8 @@ func (service *Service) ListStackGrants(ctx context.Context, command ListStackGr
 		return ListStackGrantsResult{}, err
 	}
 
-	grants := make([]GrantView, 0, len(result.Grants))
-	for _, grant := range result.Grants {
+	views := make([]GrantView, 0, len(grants))
+	for _, grant := range grants {
 		userSub := grant.Subject().ID()
 		gv := GrantView{UserSub: userSub, Role: grant.Relation().String()}
 
@@ -1292,10 +1292,10 @@ func (service *Service) ListStackGrants(ctx context.Context, command ListStackGr
 		if gv.DisplayName == "" {
 			gv.DisplayName = userSub
 		}
-		grants = append(grants, gv)
+		views = append(views, gv)
 	}
 
-	return ListStackGrantsResult{Grants: grants}, nil
+	return ListStackGrantsResult{Grants: views}, nil
 }
 
 // listGrantsForStack reads every direct role assignment on one stack. The
@@ -1304,10 +1304,10 @@ func (service *Service) ListStackGrants(ctx context.Context, command ListStackGr
 // since those are not grants.
 //
 //	stack:abc with alice=owner, bob=viewer
-//	  → ListGrantsResult{Grants: [{user:alice, owner}, {user:bob, viewer}]}, nil
-//	stack:abc with no grants  → ListGrantsResult{}, nil
-func (service *Service) listGrantsForStack(ctx context.Context, object authz.Object) (authz.ListGrantsResult, error) {
-	return service.Authorizer.ListGrants(ctx, authz.ListGrantsRequest{Object: object})
+//	  → [{user:alice, owner}, {user:bob, viewer}], nil
+//	stack:abc with no grants  → nil, nil
+func (service *Service) listGrantsForStack(ctx context.Context, object authorization.Object) ([]authorization.Grant, error) {
+	return service.Authorization.ListGrants(ctx, object)
 }
 
 func (service *Service) AssignStackRole(ctx context.Context, command AssignStackRoleCommand) (GrantView, error) {
@@ -1315,18 +1315,18 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 	if err != nil {
 		return GrantView{}, err
 	}
-	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
+	if err := authorizeStack(ctx, service.Authorization, command.StackID, authorization.RelationCanManageAccess, ErrForbidden); err != nil {
 		return GrantView{}, err
 	}
 
 	// Reject an unknown role here rather than letting the handler retry it
 	// forever against a payload it can never parse.
-	if _, err := authz.GrantRelation(command.Role); err != nil {
+	if _, err := authorization.GrantRelation(command.Role); err != nil {
 		return GrantView{}, fmt.Errorf("%w: %v", ErrInvalidCommand, err)
 	}
 
 	if service.Work == nil {
-		return GrantView{}, fmt.Errorf("%w: unit of work not configured", authz.ErrUnavailable)
+		return GrantView{}, fmt.Errorf("unit of work not configured")
 	}
 	if err := service.requireUserRepository(); err != nil {
 		return GrantView{}, err
@@ -1346,54 +1346,79 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 		return GrantView{}, ErrUserNotProvisioned
 	}
 
-	object, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
+	object, err := authorization.ObjectFromID(authorization.TypeStack, string(command.StackID))
 	if err != nil {
 		return GrantView{}, fmt.Errorf("assign role stack: %w", err)
 	}
-	subject, err := authz.SubjectFromOIDCSub(command.UserSub)
+	subject, err := authorization.SubjectFromOIDCSub(command.UserSub)
 	if err != nil {
 		return GrantView{}, fmt.Errorf("%w: invalid user sub", ErrInvalidCommand)
 	}
 
-	currentGrants, err := service.listGrantsForStack(ctx, object)
+	desired, err := authorization.GrantRelation(command.Role)
 	if err != nil {
-		return GrantView{}, err
+		return GrantView{}, fmt.Errorf("%w: invalid role", ErrInvalidCommand)
 	}
 
+	// Everything below runs inside the transaction, including the read the
+	// last-owner guard depends on. Reading outside it would reopen the window
+	// this change exists to close: two concurrent demotions could each observe
+	// two owners, each pass the guard, and leave the stack with none. Inside,
+	// the SELECT … FOR UPDATE the tuple write takes holds until commit, so the
+	// second demotion serializes behind the first and is correctly refused.
 	var currentRole string
-	for _, g := range currentGrants.Grants {
-		if g.Subject().String() == subject.String() {
-			currentRole = g.Relation().String()
-			break
+	if err := service.Work.InTx(ctx, func(ctx context.Context, repository TxRepo, _ queue.Enqueuer) error {
+		currentGrants, err := service.listGrantsForStack(ctx, object)
+		if err != nil {
+			return err
 		}
-	}
 
-	if currentRole == "owner" && command.Role != "owner" {
+		var held []authorization.Grant
 		ownerCount := 0
-		for _, g := range currentGrants.Grants {
-			if g.Relation() == authz.RelationOwner {
+		for _, grant := range currentGrants {
+			if grant.Relation() == authorization.RelationOwner {
 				ownerCount++
 			}
+			if grant.Subject().String() == subject.String() {
+				held = append(held, grant)
+				if currentRole == "" {
+					currentRole = grant.Relation().String()
+				}
+			}
 		}
-		if ownerCount == 1 {
-			return GrantView{}, fmt.Errorf("%w: assign another owner before changing this role", ErrLastOwner)
+
+		if currentRole == "owner" && command.Role != "owner" && ownerCount == 1 {
+			return fmt.Errorf("%w: assign another owner before changing this role", ErrLastOwner)
 		}
-	}
 
-	// The old delete-then-write pair is gone. The handler converges to the
-	// desired role, so there is no intermediate window in which a crash leaves
-	// the user holding no role at all.
-	payload, err := json.Marshal(authz.GrantPayload{
-		StackID: string(command.StackID),
-		Subject: command.UserSub,
-		Role:    command.Role,
-	})
-	if err != nil {
-		return GrantView{}, fmt.Errorf("encode grant payload: %w", err)
-	}
+		// Converge rather than delete-then-write: stale roles go, the desired
+		// one is written only when it is not already held, and the whole thing
+		// is one transaction, so there is no window where the user holds none.
+		var stale []authorization.Grant
+		alreadyHeld := false
+		for _, grant := range held {
+			if grant.Relation() == desired {
+				alreadyHeld = true
+				continue
+			}
+			stale = append(stale, grant)
+		}
+		if len(stale) > 0 {
+			if err := service.Authorization.Revoke(ctx, stale...); err != nil {
+				return err
+			}
+		}
+		if !alreadyHeld {
+			grant, err := authorization.NewGrant(subject, object, desired)
+			if err != nil {
+				return err
+			}
+			if err := service.Authorization.Grant(ctx, grant); err != nil {
+				return err
+			}
+		}
 
-	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
-		if err := repository.AppendAuditEvent(ctx, domain.SecurityAuditEvent{
+		return repository.AppendAuditEvent(ctx, domain.SecurityAuditEvent{
 			ActorSubject: principal.Subject,
 			Action:       domain.AuditActionGrant,
 			TargetUser:   command.UserSub,
@@ -1402,16 +1427,11 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 			OldRole:      currentRole,
 			NewRole:      command.Role,
 			Outcome:      domain.AuditOutcomeSuccess,
-		}); err != nil {
-			return err
-		}
-		return enqueuer.Enqueue(ctx, queue.Request{
-			Kind:         authz.KindReconcileStackGrant,
-			Payload:      payload,
-			ActorSubject: principal.Subject,
-			TenantID:     string(command.TenantID),
 		})
 	}); err != nil {
+		if errors.Is(err, ErrLastOwner) {
+			return GrantView{}, err
+		}
 		return GrantView{}, fmt.Errorf("assign stack role: %w", err)
 	}
 
@@ -1430,55 +1450,57 @@ func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStack
 	if err != nil {
 		return err
 	}
-	if err := authorizeStack(ctx, service.Authorizer, command.StackID, authz.RelationCanManageAccess, ErrForbidden); err != nil {
+	if err := authorizeStack(ctx, service.Authorization, command.StackID, authorization.RelationCanManageAccess, ErrForbidden); err != nil {
 		return err
 	}
 
-	object, err := authz.ObjectFromID(authz.TypeStack, string(command.StackID))
+	object, err := authorization.ObjectFromID(authorization.TypeStack, string(command.StackID))
 	if err != nil {
 		return fmt.Errorf("revoke role stack: %w", err)
 	}
 	if service.Work == nil {
-		return fmt.Errorf("%w: unit of work not configured", authz.ErrUnavailable)
+		return fmt.Errorf("unit of work not configured")
 	}
-	subject, err := authz.SubjectFromOIDCSub(command.UserSub)
+	subject, err := authorization.SubjectFromOIDCSub(command.UserSub)
 	if err != nil {
 		return fmt.Errorf("%w: invalid user sub", ErrInvalidCommand)
 	}
 
-	currentGrants, err := service.listGrantsForStack(ctx, object)
-	if err != nil {
-		return err
-	}
-
-	var targetRole string
-	ownerCount := 0
-	for _, g := range currentGrants.Grants {
-		if g.Relation() == authz.RelationOwner {
-			ownerCount++
+	// The read, the last-owner guard and the revoke all run inside one
+	// transaction. Outside it, two concurrent revokes could each see two owners,
+	// each pass the guard, and leave the stack with none.
+	if err := service.Work.InTx(ctx, func(ctx context.Context, repository TxRepo, _ queue.Enqueuer) error {
+		currentGrants, err := service.listGrantsForStack(ctx, object)
+		if err != nil {
+			return err
 		}
-		if g.Subject().String() == subject.String() {
-			targetRole = g.Relation().String()
+
+		var held []authorization.Grant
+		var targetRole string
+		ownerCount := 0
+		for _, grant := range currentGrants {
+			if grant.Relation() == authorization.RelationOwner {
+				ownerCount++
+			}
+			if grant.Subject().String() == subject.String() {
+				held = append(held, grant)
+				targetRole = grant.Relation().String()
+			}
 		}
-	}
 
-	if targetRole == "owner" && ownerCount == 1 {
-		return fmt.Errorf("%w: cannot remove the last owner; assign another owner first", ErrLastOwner)
-	}
+		if targetRole == "owner" && ownerCount == 1 {
+			return fmt.Errorf("%w: cannot remove the last owner; assign another owner first", ErrLastOwner)
+		}
 
-	// An empty desired role means "no access"; the handler removes whatever the
-	// subject currently holds on this stack.
-	payload, err := json.Marshal(authz.GrantPayload{
-		StackID: string(command.StackID),
-		Subject: command.UserSub,
-		Role:    "",
-	})
-	if err != nil {
-		return fmt.Errorf("encode revoke payload: %w", err)
-	}
+		// Revoking what is not held is not an error: the caller asked for the
+		// subject to have no access, and they already have none.
+		if len(held) > 0 {
+			if err := service.Authorization.Revoke(ctx, held...); err != nil {
+				return err
+			}
+		}
 
-	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
-		if err := repository.AppendAuditEvent(ctx, domain.SecurityAuditEvent{
+		return repository.AppendAuditEvent(ctx, domain.SecurityAuditEvent{
 			ActorSubject: principal.Subject,
 			Action:       domain.AuditActionRevoke,
 			TargetUser:   command.UserSub,
@@ -1486,16 +1508,11 @@ func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStack
 			StackID:      command.StackID,
 			OldRole:      targetRole,
 			Outcome:      domain.AuditOutcomeSuccess,
-		}); err != nil {
-			return err
-		}
-		return enqueuer.Enqueue(ctx, queue.Request{
-			Kind:         authz.KindReconcileStackGrant,
-			Payload:      payload,
-			ActorSubject: principal.Subject,
-			TenantID:     string(command.TenantID),
 		})
 	}); err != nil {
+		if errors.Is(err, ErrLastOwner) {
+			return err
+		}
 		return fmt.Errorf("revoke stack role: %w", err)
 	}
 
@@ -1512,7 +1529,7 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 		return err
 	}
 
-	_, err = service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.RelationCanApprove, ErrForbidden)
+	_, err = service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authorization.RelationCanApprove, ErrForbidden)
 	if err != nil {
 		return err
 	}
@@ -1540,7 +1557,7 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 		Outcome:       domain.AuditOutcomeSuccess,
 		CorrelationID: "",
 	}
-	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
+	if err := service.Work.InTx(ctx, func(ctx context.Context, repository TxRepo, enqueuer queue.Enqueuer) error {
 		if err := repository.ApproveTemplateRun(ctx, approval); err != nil {
 			return err
 		}
@@ -1570,7 +1587,7 @@ func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand)
 		return err
 	}
 
-	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.RelationCanOperate, ErrForbidden); err != nil {
+	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authorization.RelationCanOperate, ErrForbidden); err != nil {
 		return err
 	}
 	cancellation := domain.TemplateRunCancellation{
@@ -1593,7 +1610,7 @@ func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand)
 	if err != nil {
 		return fmt.Errorf("encode run cancellation payload: %w", err)
 	}
-	if err := service.Work.InTx(ctx, func(repository TxRepo, enqueuer queue.Enqueuer) error {
+	if err := service.Work.InTx(ctx, func(ctx context.Context, repository TxRepo, enqueuer queue.Enqueuer) error {
 		if err := repository.RequestTemplateRunCancellation(ctx, cancellation); err != nil {
 			return err
 		}
@@ -1616,7 +1633,7 @@ func (service *Service) GetTemplateRun(ctx context.Context, command GetTemplateR
 		return domain.TemplateRun{}, err
 	}
 
-	run, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.RelationCanView, ErrNotFound)
+	run, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authorization.RelationCanView, ErrNotFound)
 	if err != nil {
 		return domain.TemplateRun{}, fmt.Errorf("get template run: %w", err)
 	}
@@ -1631,7 +1648,7 @@ func (service *Service) ListTemplateRuns(ctx context.Context, command ListTempla
 		return nil, err
 	}
 
-	if _, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authz.RelationCanView, ErrNotFound); err != nil {
+	if _, err := service.authorizedStackTemplate(ctx, command.TenantID, command.StackTemplateID, authorization.RelationCanView, ErrNotFound); err != nil {
 		return nil, fmt.Errorf("list template runs: %w", err)
 	}
 
@@ -1652,7 +1669,7 @@ func (service *Service) GetTemplateRunLog(ctx context.Context, command GetTempla
 		return nil, err
 	}
 
-	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.RelationCanView, ErrNotFound); err != nil {
+	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authorization.RelationCanView, ErrNotFound); err != nil {
 		return nil, err
 	}
 	log, err := service.TemplateRunLogMetadata.GetTemplateRunLog(ctx, command.TenantID, command.RunID, command.Phase)
@@ -1680,7 +1697,7 @@ func (service *Service) ListTemplateRunLogs(ctx context.Context, command ListTem
 		return nil, err
 	}
 
-	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authz.RelationCanView, ErrNotFound); err != nil {
+	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authorization.RelationCanView, ErrNotFound); err != nil {
 		return nil, err
 	}
 

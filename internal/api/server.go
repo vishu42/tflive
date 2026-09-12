@@ -15,7 +15,6 @@ import (
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/auth"
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/queue"
@@ -472,7 +471,7 @@ func (server *Server) handleCreateStack(response http.ResponseWriter, request *h
 		return
 	}
 
-	caps, err := app.ResolveStackCapabilities(request.Context(), server.service.Authorizer, domain.StackID(stack.ID))
+	caps, err := app.ResolveStackCapabilities(request.Context(), server.service.Authorization, domain.StackID(stack.ID))
 	if err != nil {
 		writeAppError(response, err)
 		return
@@ -490,7 +489,7 @@ func (server *Server) handleListStacks(response http.ResponseWriter, request *ht
 		return
 	}
 
-	capsByID, err := app.ResolveStacksCapabilities(request.Context(), server.service.Authorizer, stacks)
+	capsByID, err := app.ResolveStacksCapabilities(request.Context(), server.service.Authorization, stacks)
 	if err != nil {
 		writeAppError(response, err)
 		return
@@ -1108,10 +1107,10 @@ func writeAppError(response http.ResponseWriter, err error) {
 		errors.Is(err, app.ErrDuplicateCredentialName):
 		writeError(response, http.StatusConflict, "conflict", err.Error())
 	default:
-		if status, code, ok := authz.HTTPStatus(err); ok {
-			writeError(response, status, code, "authorization service unavailable")
-			return
-		}
+		// Authorization failures land here, as 500. There is no separate
+		// authorization service to report as unavailable any more, and a denial
+		// never reaches this point: it is (false, nil) at the boundary and
+		// becomes ErrForbidden above, so a failure can never render as 403.
 		writeError(response, http.StatusInternalServerError, "internal_error", "internal server error")
 	}
 }

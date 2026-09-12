@@ -13,7 +13,6 @@ import (
 	"github.com/vishu42/tflive/internal/activities"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/artifacts"
-	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
@@ -196,19 +195,20 @@ func TestRunUsesDefaultTemporalTaskQueue(t *testing.T) {
 }
 
 func TestNewQueueRegistryRegistersAllHandlers(t *testing.T) {
-	registry, err := newQueueRegistry(&recordingWorkerStore{}, &recordingWorkerAuthorizer{}, recordingWorkflowDispatcher{})
+	registry, err := newQueueRegistry(&recordingWorkerStore{}, recordingWorkflowDispatcher{})
 	if err != nil {
 		t.Fatalf("newQueueRegistry returned error: %v", err)
 	}
 
+	// Four, not seven. The worker has no authorization work left: granting the
+	// founding owner, reconciling a role change and flipping a stack to ready
+	// were queued only because a tuple write could not commit with the domain
+	// write that caused it, and now it can.
 	want := map[queue.Kind]bool{
 		app.KindStartTemplateRun:      true,
 		app.KindStartTemplateSync:     true,
 		app.KindSignalRunApproval:     true,
 		app.KindSignalRunCancellation: true,
-		app.KindGrantStackOwner:       true,
-		app.KindMarkStackReady:        true,
-		authz.StackGrantSpec.Kind:     true,
 	}
 	got := registry.Kinds()
 	if len(got) != len(want) {
@@ -409,8 +409,7 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			}
 			return deps.dispatcher
 		},
-		newAuthorizationAdapter: func(config.OpenFGAConfig) (workerAuthorizer, error) { return &recordingWorkerAuthorizer{}, nil },
-		newQueueController: func(store workerStore, _ workerAuthorizer, dispatcher app.WorkflowDispatcher) (queueController, error) {
+		newQueueController: func(store workerStore, dispatcher app.WorkflowDispatcher) (queueController, error) {
 			if store != workerStore(deps.store) {
 				t.Fatalf("newQueueController store = %p, want %p", store, deps.store)
 			}
@@ -531,21 +530,6 @@ func (store *recordingWorkerStore) MarkStackReady(context.Context, domain.Tenant
 
 type recordingWorkerAuthorizer struct{}
 
-func (*recordingWorkerAuthorizer) Check(context.Context, authz.CheckRequest) (authz.CheckResult, error) {
-	return authz.CheckResult{}, nil
-}
-func (*recordingWorkerAuthorizer) BatchCheck(context.Context, authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
-	return authz.BatchCheckResult{}, nil
-}
-func (*recordingWorkerAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
-	return authz.ListGrantsResult{}, nil
-}
-func (*recordingWorkerAuthorizer) WriteRelationships(context.Context, authz.Mutation) error {
-	return nil
-}
-func (*recordingWorkerAuthorizer) DeleteRelationships(context.Context, authz.Mutation) error {
-	return nil
-}
 
 type recordingWorkflowDispatcher struct{}
 
@@ -643,6 +627,3 @@ func (store *recordingWorkerStore) Prune(context.Context, time.Duration) (int64,
 	return 0, nil
 }
 
-func (authorizer *recordingWorkerAuthorizer) ListSubjectGrants(context.Context, authz.ListSubjectGrantsRequest) (authz.ListGrantsResult, error) {
-	return authz.ListGrantsResult{}, nil
-}
