@@ -1,0 +1,1998 @@
+openapi: 3.1.0
+
+info:
+  title: tflive API
+  version: 0.1.0
+  summary: HTTP API for the tflive Terraform platform.
+  description: |
+    tflive turns Terraform and OpenTofu modules into infrastructure a team can
+    self-serve. This document describes the HTTP surface the web client uses;
+    it is the same surface a script or a CI job can drive.
+
+    ## Status
+
+    tflive is pre-1.0 and not production ready. Paths are versioned under
+    `/v1`, but nothing here is a frozen contract yet — fields may be added,
+    renamed, or removed between releases.
+
+    ## Authentication
+
+    Every `/v1` route except the sign-in routes requires an opaque session
+    cookie named `tflive_session`. There is no bearer-token path: a token is
+    verified in exactly one place, the OIDC callback, and what the browser
+    carries afterwards is a session tflive owns.
+
+    Get a session one of two ways:
+
+    - **Local accounts** — `POST /v1/auth/login` with a username and password.
+      Sets the cookie and returns `204`.
+    - **OIDC / SSO** — send the browser to `GET /v1/auth/login`, which
+      redirects to the identity provider and comes back through
+      `GET /v1/auth/callback`.
+
+    `GET /v1/auth/methods` reports which of the two a deployment has enabled.
+
+    A session ends at the earlier of its idle and absolute bounds, both of
+    which tflive owns independently of the provider's token lifetimes.
+    `GET /v1/me` returns `sessionExpiresAt` so a client can re-authenticate at
+    a quiet moment instead of being interrupted by a `401`.
+
+    ## Tenancy
+
+    Every tenant-scoped path takes a `{tenant_id}`. A deployment serves exactly
+    one configured tenant; any other value returns `404`, not `403`. Read the
+    one you are allowed to use from `GET /v1/me` (`tenantID`).
+
+    ## Request bodies
+
+    JSON request bodies must be exactly one JSON object, and unknown fields are
+    rejected with `400 invalid_json`. Endpoints that take no fields — such as
+    run approval — still require a body of `{}`.
+
+    ## Errors
+
+    Every JSON error shares one envelope: an `error` code meant for code to
+    branch on, and a `message` meant for a person to read. See the `Error`
+    schema for the full set of codes.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+  contact:
+    name: tflive
+    url: https://github.com/vishu42/tflive
+
+servers:
+  - url: http://localhost:5173
+    description: Local development. The Vite dev server proxies /v1 and /healthz to the API.
+  - url: http://localhost:8081
+    description: The API process directly.
+
+security:
+  - sessionCookie: []
+
+tags:
+  - name: Health
+    description: Liveness, for probes and smoke checks.
+  - name: Authentication
+    description: Signing in and out. The only routes reachable without a session.
+  - name: Identity
+    description: Who the caller is and what they may do platform-wide.
+  - name: Templates
+    description: Registering Terraform sources as immutable, reusable revisions.
+  - name: Stacks
+    description: Grouping installed templates into one environment or service.
+  - name: Credentials
+    description: Write-only cloud credentials, injected only while Terraform runs.
+  - name: Runs
+    description: Starting, watching, approving and cancelling Terraform operations.
+  - name: Access
+    description: Per-stack role grants.
+  - name: Users
+    description: Searching people who have signed in at least once.
+  - name: Queue
+    description: The caller's own asynchronous work items.
+
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      summary: Report process liveness
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: The process is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    const: ok
+                required: [status]
+
+  /v1/auth/methods:
+    get:
+      tags: [Authentication]
+      summary: List enabled sign-in methods
+      description: |
+        Read before rendering a sign-in screen, so the client shows the methods
+        that exist instead of discovering them by failing. A method that is off
+        has no route at all — this endpoint is what lets the client tell "local
+        auth is disabled" from "wrong password".
+
+        Registered only when at least one sign-in method is configured.
+      operationId: listAuthMethods
+      security: []
+      responses:
+        "200":
+          description: The methods this deployment accepts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  local:
+                    type: boolean
+                    description: Username and password against tflive's own account table.
+                  oidc:
+                    type: boolean
+                    description: Redirect-based sign-in against a configured identity provider.
+                required: [local, oidc]
+
+  /v1/auth/login:
+    get:
+      tags: [Authentication]
+      summary: Start an OIDC sign-in
+      description: |
+        Redirects the browser to the identity provider's authorization
+        endpoint. Makes no network call of its own: the endpoint comes from
+        discovery the verifier already cached. Sets a short-lived sealed
+        transaction cookie (`tflive_auth_tx`) carrying state, nonce and PKCE
+        verifier.
+
+        Registered only when an OIDC provider is configured.
+      operationId: startOIDCLogin
+      security: []
+      parameters:
+        - name: return_to
+          in: query
+          required: false
+          description: |
+            Where to send the browser after a successful sign-in. Validated as
+            a same-site path; anything else falls back to the site root.
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to the identity provider.
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+            Set-Cookie:
+              description: The sealed `tflive_auth_tx` transaction cookie.
+              schema: { type: string }
+        "401":
+          $ref: "#/components/responses/SignInFailedHTML"
+    post:
+      tags: [Authentication]
+      summary: Sign in with a local account
+      description: |
+        Authenticates against tflive's own account table and ends in exactly
+        the tail the OIDC callback ends in — project the user, mint a session
+        row, set the cookie. Nothing downstream can tell which method was used.
+
+        Issues no token, and returns no identity: refetch `GET /v1/me`, which
+        is the one place identity is rendered from.
+
+        Two checks stand between this route and cross-site request forgery, and
+        both can reject before the password is ever read: the request must look
+        same-site (`Sec-Fetch-Site`, falling back to `Origin`), and it must
+        declare `Content-Type: application/json`, which an HTML form cannot do.
+
+        Registered only when local accounts are configured.
+      operationId: localLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  description: |
+                    Passed through untouched. Folding and trimming belong to
+                    the authenticator, which defines what makes two spellings
+                    the same account.
+                password:
+                  type: string
+                  format: password
+              required: [username, password]
+            example:
+              username: root
+              password: "change-me"
+      responses:
+        "204":
+          description: Signed in. The session cookie is set.
+          headers:
+            Set-Cookie:
+              description: The `tflive_session` cookie.
+              schema: { type: string }
+        "400":
+          description: |
+            Malformed, empty, or oversized body (the limit is 4 KiB). The three
+            are deliberately not distinguished — none of them is a sign-in
+            request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: invalid_request, message: malformed request body }
+        "401":
+          description: |
+            Authentication failed. One answer for a wrong password and an
+            unknown username: the authenticator equalises the cost of the two,
+            and saying which it was would undo that.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: unauthorized, message: authentication failed }
+        "403":
+          description: The request did not look same-site.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example:
+                error: forbidden
+                message: cross-site sign-in requests are not accepted
+        "415":
+          description: "`Content-Type` was not `application/json`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example:
+                error: unsupported_media_type
+                message: content-type must be application/json
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/auth/callback:
+    get:
+      tags: [Authentication]
+      summary: Complete an OIDC sign-in
+      description: |
+        Redeems the authorization code on the back channel, verifies the ID
+        token and its nonce, and hands the browser a session cookie. Redirects
+        rather than rendering, so the authorization code leaves the address bar
+        and the browser history.
+
+        Every failure renders one identical page. Distinguishing "bad state"
+        from "expired code" from "nonce mismatch" would tell an attacker which
+        check they tripped.
+
+        Registered only when an OIDC provider is configured.
+      operationId: completeOIDCLogin
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: false
+          description: Authorization code from the provider.
+          schema: { type: string }
+        - name: state
+          in: query
+          required: false
+          description: Compared in constant time against the sealed transaction cookie.
+          schema: { type: string }
+        - name: error
+          in: query
+          required: false
+          description: Set when the provider refused the request.
+          schema: { type: string }
+        - name: error_description
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "302":
+          description: Signed in. Redirects to `return_to`, or to the site root.
+          headers:
+            Location:
+              schema: { type: string }
+            Set-Cookie:
+              description: The `tflive_session` cookie.
+              schema: { type: string }
+        "401":
+          $ref: "#/components/responses/SignInFailedHTML"
+
+  /v1/auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Sign out
+      description: |
+        Revokes the session row and clears the cookie, then sends the browser
+        on to end the provider's session. Revoking the row rather than only
+        clearing the cookie is what makes logout real: a copy of the cookie
+        taken beforehand stops working too.
+
+        The redirect carries the raw ID token as `id_token_hint`, which is how
+        RP-initiated logout is specified and what stops the provider
+        interrupting with a confirmation page. A session with no ID token — a
+        local sign-in — redirects to the site root instead.
+
+        Works for both sign-in methods, and is registered whenever either one
+        is configured.
+      operationId: logout
+      security: []
+      responses:
+        "303":
+          description: Signed out. Redirects to the provider's end-session URL, or to the site root.
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+            Set-Cookie:
+              description: The cleared `tflive_session` cookie.
+              schema: { type: string }
+
+  /v1/auth/backchannel-logout:
+    post:
+      tags: [Authentication]
+      summary: Accept an OIDC back-channel logout token
+      description: |
+        A server-to-server POST from the identity provider, not a redirect the
+        browser follows. Point the provider at an address **it** can reach:
+        `TFLIVE_BACKCHANNEL_LOGOUT_URL`, which is deliberately separate from
+        `TFLIVE_PUBLIC_URL` because the two differ whenever the provider runs
+        on an internal network or behind split-horizon DNS.
+
+        Without this endpoint, disabling a user at the provider would not reach
+        tflive until their session hit its own expiry — tflive stops consulting
+        the provider once a session exists. Enable session-required logout so
+        the token carries `sid`.
+
+        The body is capped at 64 KiB. Registered only when an OIDC provider is
+        configured.
+      operationId: backchannelLogout
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                logout_token:
+                  type: string
+                  description: A signed JWT logout token, per OIDC Back-Channel Logout.
+              required: [logout_token]
+      responses:
+        "200":
+          description: Accepted. Matching sessions are revoked.
+        "400":
+          description: Unparseable body, missing `logout_token`, or a token that failed verification.
+          content:
+            text/plain:
+              schema: { type: string }
+        "500":
+          description: Revocation failed.
+          content:
+            text/plain:
+              schema: { type: string }
+        "503":
+          description: No logout token verifier is configured.
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /v1/me:
+    get:
+      tags: [Identity]
+      summary: Read the caller's identity and platform capabilities
+      operationId: getMe
+      responses:
+        "200":
+          description: The authenticated principal.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/tenants/{tenant_id}/template-revisions:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+    post:
+      tags: [Templates]
+      summary: Register a template revision
+      description: |
+        Points tflive at a GitHub repository and a revision, and starts an
+        asynchronous registration: resolve the ref to a commit, fetch the
+        source, and infer the root module's input variables.
+
+        Returns `202` with a registration record, not a revision. Poll
+        `GET /v1/tenants/{tenant_id}/template-registrations/{registration_id}`
+        until its `status` is terminal; on `completed` it carries the
+        `template_revision_id` the rest of the API takes.
+      operationId: registerTemplateRevision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterTemplateRevisionRequest" }
+            example:
+              repo_owner: vishu42
+              repo_name: terraform-modules
+              source_ref: v1.4.0
+              root_path: modules/vpc
+      responses:
+        "202":
+          description: Registration accepted and queued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplateRegistration" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+    get:
+      tags: [Templates]
+      summary: List registered template revisions
+      operationId: listTemplateRevisions
+      responses:
+        "200":
+          description: Every registered revision in the tenant.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TemplateRevision" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/template-registrations/{registration_id}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - name: registration_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Templates]
+      summary: Read a template registration
+      description: Poll this after `POST /v1/tenants/{tenant_id}/template-revisions`.
+      operationId: getTemplateRegistration
+      responses:
+        "200":
+          description: The registration's current state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplateRegistration" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/template-revisions/{template_revision_id}/variables:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - name: template_revision_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Templates]
+      summary: List a revision's input variables
+      description: |
+        The variables inferred from the revision's Terraform root module. A
+        revision is immutable, so this answer never changes for a given id.
+
+        This is the schema a stack template's `config` is validated against.
+      operationId: listTemplateRevisionVariables
+      responses:
+        "200":
+          description: The revision's variables.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TemplateVariable" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/stacks:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+    post:
+      tags: [Stacks]
+      summary: Create a stack
+      description: |
+        Creation is queue-driven: the response may carry `status:
+        "provisioning"` while the authorization edges are written. Watch
+        `GET /v1/tenants/{tenant_id}/queue`, or re-read the stack, until it is
+        `ready`.
+      operationId: createStack
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateStackRequest" }
+            example:
+              name: Payments production
+              slug: payments-prod
+              tags: { env: prod, team: payments }
+              default_credential_ids: []
+      responses:
+        "201":
+          description: The stack was created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Stack" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The slug is already taken in this tenant (`conflict`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+    get:
+      tags: [Stacks]
+      summary: List stacks
+      description: |
+        Only the stacks the caller may view. Each carries its
+        `effectiveCapabilities`, so a client renders the controls a person
+        actually has rather than probing for them.
+      operationId: listStacks
+      responses:
+        "200":
+          description: The caller's visible stacks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Stack" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/stacks/{stack_id}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/StackID"
+    get:
+      tags: [Stacks]
+      summary: Read a stack with its installed templates
+      operationId: getStack
+      responses:
+        "200":
+          description: The stack and its components.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StackView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/stacks/{stack_id}/templates:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/StackID"
+    post:
+      tags: [Stacks]
+      summary: Install a template revision into a stack
+      description: |
+        `config` is validated against the revision's variables, so register the
+        revision and read its variables first.
+      operationId: addTemplateToStack
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddTemplateToStackRequest" }
+            example:
+              template_revision_id: 01J9K2M4P7QW8X0YZ1A2B3C4D5
+              component_key: vpc
+              config: { cidr_block: 10.0.0.0/16, region: us-east-1 }
+      responses:
+        "201":
+          description: The template was installed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StackTemplate" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            The revision is not installable, or the config does not satisfy its
+            variables (`conflict`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/stacks/{stack_id}/credentials:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/StackID"
+    post:
+      tags: [Credentials]
+      summary: Add a stack-scoped credential
+      description: |
+        Credentials are write-only. The value is encrypted on the way in and is
+        never readable back through the API — it is injected into the process
+        environment only while Terraform runs. To change one, delete it and
+        create it again.
+
+        `name` is the provider environment variable name, such as
+        `AWS_SECRET_ACCESS_KEY`.
+      operationId: createStackCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCredentialRequest" }
+      responses:
+        "201":
+          description: Created. Only metadata comes back.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Credential" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            The name is not a valid environment variable name, or is already
+            used in this scope (`conflict`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+    get:
+      tags: [Credentials]
+      summary: List stack-scoped credentials
+      description: Metadata only. Values are never returned.
+      operationId: listStackCredentials
+      responses:
+        "200":
+          description: The stack's credentials.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Credential" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/stacks/{stack_id}/credentials/{credential_id}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/StackID"
+      - $ref: "#/components/parameters/CredentialID"
+    delete:
+      tags: [Credentials]
+      summary: Delete a stack-scoped credential
+      operationId: deleteStackCredential
+      responses:
+        "204":
+          description: Deleted.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/stacks/{stack_id}/grants:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/StackID"
+    get:
+      tags: [Access]
+      summary: List role grants on a stack
+      operationId: listStackGrants
+      responses:
+        "200":
+          description: Who has a role on this stack.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  grants:
+                    type: array
+                    items: { $ref: "#/components/schemas/Grant" }
+                required: [grants]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+    post:
+      tags: [Access]
+      summary: Assign a role on a stack
+      description: |
+        Assigning replaces whatever role the subject already held — one person
+        has at most one role on a stack.
+
+        The subject must have signed in to tflive at least once. tflive is not
+        a directory: a person exists here only once a verified token has
+        projected them. Granting to a subject it has never seen returns `400
+        unknown_user`. Use `GET /v1/tenants/{tenant_id}/users/search` to find
+        one.
+
+        The response is the intended grant, rendered from the identity
+        lookup the request already performed. The authorization write
+        itself is queued and reconciled asynchronously, so a permission
+        check made immediately afterwards may still answer from the old
+        state.
+      operationId: assignStackRole
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AssignStackRoleRequest" }
+            example:
+              user_sub: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
+              role: operator
+      responses:
+        "200":
+          description: The resulting grant.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Grant" }
+        "400":
+          description: |
+            An unknown role, a malformed subject, or — as `unknown_user` — a
+            person who has never signed in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The change would remove the stack's last owner (`conflict`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/stacks/{stack_id}/grants/{user_sub}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/StackID"
+      - name: user_sub
+        in: path
+        required: true
+        description: The subject identifier whose grant is being revoked.
+        schema: { type: string }
+    delete:
+      tags: [Access]
+      summary: Revoke a role on a stack
+      operationId: revokeStackRole
+      responses:
+        "204":
+          description: Revoked.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: This is the stack's last owner (`conflict`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/config:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/StackTemplateID"
+    patch:
+      tags: [Stacks]
+      summary: Edit an installed template's desired config
+      description: |
+        Replaces the desired config wholesale — this is not a field-level
+        merge. The new config is validated against the desired revision's
+        variables.
+
+        Editing config makes any existing plan stale: the component's
+        `plan_state` becomes `stale`, and applying requires a fresh plan.
+      operationId: updateStackTemplateConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateStackTemplateConfigRequest" }
+      responses:
+        "200":
+          description: The updated component.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StackTemplate" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The config does not satisfy the revision's variables (`conflict`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/upgrade:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/StackTemplateID"
+    post:
+      tags: [Stacks]
+      summary: Stage an installed template on a newer revision
+      description: |
+        Moves the component's *desired* revision. Nothing is applied here —
+        upgrading is a deliberate, reviewable step, so the new revision takes
+        effect only when a subsequent apply succeeds. Until then
+        `desired_template_revision_id` and `last_applied_template_revision_id`
+        differ and `live_state` reads `differs`.
+
+        Omit `config` to carry the current one forward; supply it when the new
+        revision's variables changed.
+      operationId: upgradeStackTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpgradeStackTemplateRequest" }
+      responses:
+        "200":
+          description: The component, now staged on the target revision.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StackTemplate" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            The target revision is not a valid upgrade, or the config does not
+            satisfy its variables (`conflict`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/credentials:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/StackTemplateID"
+    post:
+      tags: [Credentials]
+      summary: Add a component-scoped credential
+      description: |
+        Same write-only contract as a stack credential, scoped to one installed
+        component. Use this to override a stack-wide credential for a single
+        component.
+      operationId: createStackTemplateCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCredentialRequest" }
+      responses:
+        "201":
+          description: Created. Only metadata comes back.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Credential" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Invalid or duplicate credential name (`conflict`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+    get:
+      tags: [Credentials]
+      summary: List component-scoped credentials
+      description: Metadata only. Values are never returned.
+      operationId: listStackTemplateCredentials
+      responses:
+        "200":
+          description: The component's credentials.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Credential" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/credentials/{credential_id}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/StackTemplateID"
+      - $ref: "#/components/parameters/CredentialID"
+    delete:
+      tags: [Credentials]
+      summary: Delete a component-scoped credential
+      operationId: deleteStackTemplateCredential
+      responses:
+        "204":
+          description: Deleted.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/stack-templates/{stack_template_id}/runs:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/StackTemplateID"
+    post:
+      tags: [Runs]
+      summary: Start a Terraform operation
+      description: |
+        Runs are durably orchestrated: a plan or apply survives a process
+        restart rather than being lost halfway.
+
+        One component runs one operation at a time. Starting a second while one
+        is in flight returns `409 run_in_flight` — the competing run is visible
+        through the list endpoint, so a client can wait for it or cancel it.
+
+        An `apply` requires a current plan. If config or the desired revision
+        changed since the last plan, it returns `409 plan_stale`: re-plan, then
+        apply.
+      operationId: startTemplateRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartTemplateRunRequest" }
+            example: { operation: plan }
+      responses:
+        "201":
+          description: The run was created and queued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplateRun" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            `run_in_flight` — another run is already active for this component.
+            `plan_stale` — an apply was requested against a stale plan.
+            `conflict` — the component is not in a runnable state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                runInFlight:
+                  value: { error: run_in_flight, message: a run is already in flight for this component }
+                planStale:
+                  value: { error: plan_stale, message: the plan is stale; re-plan before applying }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+    get:
+      tags: [Runs]
+      summary: List a component's runs
+      description: Most recent first.
+      operationId: listTemplateRuns
+      responses:
+        "200":
+          description: The component's run history.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TemplateRun" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/template-runs/{run_id}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/RunID"
+    get:
+      tags: [Runs]
+      summary: Read a run
+      description: Poll this to follow a run. `status` moves through the `TemplateRunStatus` values.
+      operationId: getTemplateRun
+      responses:
+        "200":
+          description: The run's current state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplateRun" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/template-runs/{run_id}/logs:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/RunID"
+    get:
+      tags: [Runs]
+      summary: List a run's persisted logs
+      description: |
+        Metadata for each phase that produced output — not the output itself.
+        Fetch a body from the per-phase endpoint.
+      operationId: listTemplateRunLogs
+      responses:
+        "200":
+          description: One entry per persisted phase.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TemplateRunLog" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/template-runs/{run_id}/logs/{phase}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/RunID"
+      - name: phase
+        in: path
+        required: true
+        description: Which phase's output to read.
+        schema: { $ref: "#/components/schemas/LogPhase" }
+    get:
+      tags: [Runs]
+      summary: Read one phase's log body
+      description: |
+        Returns the raw Terraform output as `text/plain`, not JSON. A phase
+        that has not produced output yet returns `404`.
+      operationId: getTemplateRunLog
+      responses:
+        "200":
+          description: The phase's output.
+          content:
+            text/plain:
+              schema: { type: string }
+        "400":
+          description: The phase is not one of the supported values (`invalid_request`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/template-runs/{run_id}/approval:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/RunID"
+    post:
+      tags: [Runs]
+      summary: Approve a waiting run
+      description: |
+        Valid only while the run's `status` is `waiting_approval`.
+
+        The person who started a run cannot approve it: that returns `403
+        self_approval_forbidden`, which is its own code precisely so a client
+        can say why rather than showing a generic denial.
+
+        Takes no fields, but a body of `{}` is required.
+      operationId: approveRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+            example: {}
+      responses:
+        "204":
+          description: Approved. The run proceeds.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: |
+            `forbidden` — the caller lacks approve permission on the stack.
+            `self_approval_forbidden` — the caller started this run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The run is not waiting for approval (`conflict`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/template-runs/{run_id}/cancellation:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - $ref: "#/components/parameters/RunID"
+    post:
+      tags: [Runs]
+      summary: Request cancellation of a run
+      description: |
+        A request, not an instruction: the run moves to `cancel_requested`,
+        then `canceling`, then `canceled` once the orchestrator has unwound it.
+        Poll the run to see it land.
+      operationId: cancelRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CancelRunRequest" }
+            example: { reason: superseded by a newer plan }
+      responses:
+        "204":
+          description: Cancellation requested.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The run is already finished, or otherwise not cancelable (`conflict`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/users/search:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+    get:
+      tags: [Users]
+      summary: Search people who have signed in
+      description: |
+        Matches display name or email, case-insensitively.
+
+        This is not a directory lookup. It searches tflive's projection of
+        identities it has actually verified, so a person who has never signed
+        in will not appear — and cannot be granted a role. That is the same
+        limitation `POST .../grants` enforces as `unknown_user`.
+
+        The response echoes the `first` and `max` actually applied, so a client
+        paginates from what the server used rather than from what it sent.
+      operationId: searchUsers
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: The search term.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+        - name: first
+          in: query
+          required: false
+          description: Zero-based offset.
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: max
+          in: query
+          required: false
+          description: Page size.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        "200":
+          description: Matching people, with the paging actually applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items: { $ref: "#/components/schemas/UserProfile" }
+                  first: { type: integer }
+                  max: { type: integer }
+                required: [users, first, max]
+        "400":
+          description: |
+            `q` missing or over 200 characters, or `first`/`max` out of range
+            (`invalid_request`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
+
+  /v1/tenants/{tenant_id}/queue:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+    get:
+      tags: [Queue]
+      summary: List the caller's queued work items
+      description: |
+        The asynchronous work the caller queued — stack provisioning, template
+        registration. Scoped by actor alone, so no new permission concept is
+        involved: a caller only ever sees their own items. Capped at the 50
+        most recent.
+      operationId: listQueue
+      responses:
+        "200":
+          description: The caller's work items.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/QueueItem" }
+                required: [items]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503":
+          description: No queue is configured for this deployment (`queue_unavailable`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: tflive_session
+      description: |
+        An opaque session identifier set by either sign-in route. It is not a
+        JWT and carries no claims: the middleware authenticates it against the
+        session store on every request, so revoking a session takes effect
+        immediately.
+
+  parameters:
+    TenantID:
+      name: tenant_id
+      in: path
+      required: true
+      description: |
+        The tenant. A deployment serves one configured tenant; any other value
+        returns `404`. Read yours from `GET /v1/me`.
+      schema: { type: string }
+    StackID:
+      name: stack_id
+      in: path
+      required: true
+      schema: { type: string }
+    StackTemplateID:
+      name: stack_template_id
+      in: path
+      required: true
+      description: An installed component — a template revision inside a stack.
+      schema: { type: string }
+    CredentialID:
+      name: credential_id
+      in: path
+      required: true
+      schema: { type: string }
+    RunID:
+      name: run_id
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: No valid session (`unauthorized`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: unauthorized, message: authentication required }
+    Forbidden:
+      description: The session is valid but lacks permission (`forbidden`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: forbidden, message: forbidden }
+    NotFound:
+      description: |
+        No such resource (`not_found`). Also returned when `tenant_id` is not
+        the configured tenant.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: not_found, message: resource not found }
+    BadRequest:
+      description: |
+        A malformed body (`invalid_json` — not one JSON object, or carrying
+        unknown fields) or an invalid field value (`invalid_request`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error: invalid_json
+            message: request body must match the expected JSON schema
+    Conflict:
+      description: The request cannot be applied to the resource's current state (`conflict`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalError:
+      description: |
+        An unexpected failure (`internal_error`). The message is deliberately
+        generic; details are in the server log.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: internal_error, message: internal server error }
+    AuthorizationUnavailable:
+      description: |
+        The authorization service could not answer. `authorization_unavailable`
+        for a timeout or outage; `authorization_write_unconfirmed` when a grant
+        write may or may not have landed — re-read before retrying.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error: authorization_unavailable
+            message: authorization service unavailable
+    SignInFailedHTML:
+      description: |
+        Sign-in could not be completed. One identical page for every cause:
+        distinguishing bad state from an expired code from a nonce mismatch
+        would tell an attacker which check they tripped.
+      content:
+        text/html:
+          schema: { type: string }
+
+  schemas:
+    Error:
+      type: object
+      description: The envelope every JSON error uses.
+      properties:
+        error:
+          type: string
+          description: A stable code to branch on.
+          enum:
+            - unauthorized
+            - forbidden
+            - self_approval_forbidden
+            - not_found
+            - invalid_request
+            - invalid_json
+            - unknown_user
+            - unsupported_media_type
+            - plan_stale
+            - run_in_flight
+            - conflict
+            - queue_unavailable
+            - authorization_unavailable
+            - authorization_write_unconfirmed
+            - internal_error
+        message:
+          type: string
+          description: A human-readable explanation. Not a stable contract.
+      required: [error, message]
+
+    Me:
+      type: object
+      description: |
+        Note the camelCase field names. They predate the move off Keycloak
+        realm roles and are kept because they are the web client's contract;
+        only the source of the answers changed.
+      properties:
+        sub:
+          type: string
+          description: The subject identifier, stable across sign-ins.
+        displayName: { type: string }
+        email: { type: string, format: email }
+        globalCapabilities:
+          type: object
+          properties:
+            isPlatformAdmin: { type: boolean }
+            canCreateStack: { type: boolean }
+          required: [isPlatformAdmin, canCreateStack]
+        tenantID:
+          type: string
+          description: The tenant this deployment serves. Use it in every tenant-scoped path.
+        sessionExpiresAt:
+          type: string
+          format: date-time
+          description: |
+            When this session ends: the earlier of its idle and absolute
+            bounds, both of which tflive owns. It lets a client
+            re-authenticate at a quiet moment instead of being interrupted by
+            a `401`. It is not a control — the API rejects an expired session
+            regardless of what the browser believes.
+      required: [sub, displayName, globalCapabilities, tenantID]
+
+    UserProfile:
+      type: object
+      properties:
+        sub: { type: string }
+        displayName: { type: string }
+        email: { type: string, format: email }
+      required: [sub, displayName, email]
+
+    RegisterTemplateRevisionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        repo_owner:
+          type: string
+          description: The GitHub owner or organization.
+        repo_name:
+          type: string
+          description: The repository name.
+        source_ref:
+          type: string
+          description: |
+            A branch, tag, or commit SHA. It is resolved to an immutable commit
+            at registration time and recorded as `resolved_commit_sha`.
+        root_path:
+          type: string
+          description: |
+            Path to the Terraform root module within the repository. Empty for
+            the repository root.
+      required: [repo_owner, repo_name, source_ref]
+
+    TemplateRegistration:
+      type: object
+      description: One asynchronous registration attempt.
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        repo_owner: { type: string }
+        repo_name: { type: string }
+        source_ref: { type: string }
+        root_path: { type: string }
+        status: { $ref: "#/components/schemas/TemplateRegistrationStatus" }
+        template_revision_id:
+          type: string
+          description: Populated once `status` is `completed`. Empty before that.
+        resolved_commit_sha:
+          type: string
+          description: The commit `source_ref` resolved to.
+        requested_by: { type: string }
+        requested_at: { type: string, format: date-time }
+        completed_at:
+          type: string
+          format: date-time
+          description: |
+            Always present. Reads as the zero time
+            (`0001-01-01T00:00:00Z`) while the registration is unfinished.
+        error_summary:
+          type: string
+          description: Why registration failed. Empty otherwise.
+      required:
+        [id, tenant_id, repo_owner, repo_name, source_ref, root_path, status,
+         template_revision_id, resolved_commit_sha, requested_by, requested_at,
+         error_summary]
+
+    TemplateRegistrationStatus:
+      type: string
+      enum: [pending, running, completed, invalid, failed]
+      description: |
+        `pending` and `running` are in flight. `completed` carries a
+        `template_revision_id`. `invalid` means the source was rejected;
+        `failed` means registration itself broke.
+
+    TemplateRevision:
+      type: object
+      description: |
+        An immutable snapshot of a Terraform source at one commit. Stacks
+        install revisions, never branches, which is why upgrading is an
+        explicit step rather than something that drifts.
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        source_template_id:
+          type: string
+          description: |
+            Groups the revisions of one source together. Two revisions of the
+            same repository and root path share this id.
+        repo_owner: { type: string }
+        repo_name: { type: string }
+        source_ref:
+          type: string
+          description: The ref as requested. A label — the commit is what is used.
+        resolved_commit_sha: { type: string }
+        root_path: { type: string }
+        name: { type: string }
+        description: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        status: { $ref: "#/components/schemas/TemplateRevisionStatus" }
+        created_at: { type: string, format: date-time }
+      required:
+        [id, tenant_id, source_template_id, repo_owner, repo_name, source_ref,
+         resolved_commit_sha, root_path, name, description, status, created_at]
+
+    TemplateRevisionStatus:
+      type: string
+      enum: [pending_validation, validating, active, invalid]
+      description: Only an `active` revision can be installed into a stack.
+
+    TemplateVariable:
+      type: object
+      description: One input variable inferred from the revision's Terraform root module.
+      properties:
+        template_revision_id: { type: string }
+        name: { type: string }
+        type_expression:
+          type: string
+          description: The Terraform type expression verbatim, such as `string` or `list(object({...}))`.
+        description: { type: string }
+        required:
+          type: boolean
+          description: True when the variable has no default and must be supplied in `config`.
+        has_default: { type: boolean }
+        sensitive:
+          type: boolean
+          description: |
+            Marked sensitive in Terraform. A client should mask it — but note
+            that `config` is stored in the clear. Secrets belong in
+            credentials, not in variables.
+        has_validation: { type: boolean }
+      required:
+        [template_revision_id, name, type_expression, description, required,
+         has_default, sensitive, has_validation]
+
+    CreateStackRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Human-readable label.
+        slug:
+          type: string
+          description: URL-safe identifier, unique within the tenant.
+        tags:
+          type: object
+          additionalProperties: { type: string }
+        default_credential_ids:
+          type: array
+          items: { type: string }
+          description: Credentials every component in the stack inherits.
+      required: [name, slug]
+
+    Stack:
+      type: object
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        status: { $ref: "#/components/schemas/StackStatus" }
+        tags:
+          type: object
+          additionalProperties: { type: string }
+        default_credential_ids:
+          type: array
+          items: { type: string }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        effectiveCapabilities:
+          $ref: "#/components/schemas/StackCapabilities"
+      required:
+        [id, tenant_id, name, slug, status, tags, default_credential_ids,
+         created_by, created_at, effectiveCapabilities]
+
+    StackStatus:
+      type: string
+      enum: [provisioning, ready]
+      description: |
+        `provisioning` means the queue is still writing the stack's
+        authorization edges; only the creation path can leave a stack there.
+
+    StackCapabilities:
+      type: object
+      description: |
+        What this caller may do on this stack, resolved per request. Render
+        controls from these rather than inferring them from a role — the
+        mapping from roles to capabilities is the server's to own.
+      properties:
+        canView: { type: boolean }
+        canOperate:
+          type: boolean
+          description: May start plans, applies and destroys.
+        canApprove:
+          type: boolean
+          description: May approve a run — though never one they started themselves.
+        canManageAccess:
+          type: boolean
+          description: May grant and revoke roles on this stack.
+      required: [canView, canOperate, canApprove, canManageAccess]
+
+    StackView:
+      type: object
+      properties:
+        stack: { $ref: "#/components/schemas/Stack" }
+        templates:
+          type: array
+          items: { $ref: "#/components/schemas/StackTemplate" }
+      required: [stack, templates]
+
+    AddTemplateToStackRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        template_revision_id: { type: string }
+        component_key:
+          type: string
+          description: |
+            Names this component within the stack. It is what lets one stack
+            install the same template twice.
+        config:
+          type: object
+          additionalProperties: true
+          description: |
+            Terraform input variables, keyed by variable name. Validated
+            against the revision's variables. Omit or send `{}` for none.
+      required: [template_revision_id, component_key]
+
+    UpdateStackTemplateConfigRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        config:
+          type: object
+          additionalProperties: true
+          description: The complete desired config. Replaces the current one wholesale.
+      required: [config]
+
+    UpgradeStackTemplateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        target_template_revision_id:
+          type: string
+          description: The revision to stage. Must share the component's `source_template_id`.
+        config:
+          type: object
+          additionalProperties: true
+          description: |
+            Optional. Omit to carry the current config forward; supply it when
+            the target revision's variables changed.
+      required: [target_template_revision_id]
+
+    StackTemplate:
+      type: object
+      description: One template revision installed into one stack.
+      properties:
+        id: { type: string }
+        stack_id: { type: string }
+        component_key: { type: string }
+        source_template_id: { type: string }
+        desired_template_revision_id:
+          type: string
+          description: The revision this component should be running.
+        last_applied_template_revision_id:
+          type: string
+          description: |
+            The revision actually applied. Differs from the desired one after
+            an upgrade is staged and before it is applied.
+        source_ref:
+          type: string
+          description: |
+            The desired revision's ref, resolved per request. A label, not
+            component state — a component does not own a ref.
+        workspace_name: { type: string }
+        display_name:
+          type: string
+          description: Resolved per read from the desired revision's metadata.
+        config:
+          type: object
+          additionalProperties: true
+          description: The desired Terraform input variables.
+        last_applied_run_id: { type: string }
+        last_applied_at: { type: string, format: date-time }
+        last_planned_run_id: { type: string }
+        last_planned_at: { type: string, format: date-time }
+        plan_state: { $ref: "#/components/schemas/PlanState" }
+        live_state: { $ref: "#/components/schemas/LiveState" }
+        created_by: { type: string }
+        lifecycle: { $ref: "#/components/schemas/StackTemplateLifecycle" }
+      required:
+        [id, stack_id, component_key, source_template_id,
+         desired_template_revision_id, last_applied_template_revision_id,
+         source_ref, workspace_name, display_name, config,
+         last_applied_run_id, last_planned_run_id, plan_state, live_state,
+         created_by, lifecycle]
+
+    PlanState:
+      type: string
+      enum: [none, stale, matches]
+      description: |
+        Whether the last plan still describes the desired config. `none` — no
+        plan yet. `stale` — config or the desired revision changed since;
+        applying returns `409 plan_stale`. `matches` — the plan is current.
+
+        Derived server-side on purpose. The snapshots it is computed from are
+        deliberately not returned: a client re-deriving this comparison is the
+        mistake this field replaced.
+
+    LiveState:
+      type: string
+      enum: [never, differs, matches]
+      description: |
+        Whether what is applied matches what is desired. `never` — nothing
+        applied yet. `differs` — desired config or revision has moved ahead of
+        what is live. `matches` — live infrastructure reflects the desired
+        state.
+
+    StackTemplateLifecycle:
+      type: string
+      enum: [active, destroying, destroyed, failed, orphaned]
+
+    CreateCredentialRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: |
+            The provider environment variable name, such as
+            `AWS_SECRET_ACCESS_KEY`. Must be a valid environment variable name
+            and unique within its scope.
+        value:
+          type: string
+          format: password
+          description: |
+            The secret. Accepted only on create, encrypted at rest, and never
+            returned by any endpoint. To rotate one, delete it and create it
+            again.
+      required: [name, value]
+
+    Credential:
+      type: object
+      description: Credential metadata. The value is never part of any response.
+      properties:
+        id: { type: string }
+        name: { type: string }
+        scope: { $ref: "#/components/schemas/CredentialScope" }
+        stack_id:
+          type: string
+          description: Present when `scope` is `stack`.
+        stack_template_id:
+          type: string
+          description: Present when `scope` is `stack_template`.
+        created_at: { type: string, format: date-time }
+      required: [id, name, scope, created_at]
+
+    CredentialScope:
+      type: string
+      enum: [stack, stack_template]
+      description: |
+        `stack` credentials are inherited by every component in the stack;
+        `stack_template` credentials apply to one component and override the
+        stack's.
+
+    StartTemplateRunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        operation: { $ref: "#/components/schemas/OperationType" }
+      required: [operation]
+
+    OperationType:
+      type: string
+      enum: [plan, apply, destroy]
+
+    CancelRunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          description: Recorded with the cancellation. Optional.
+
+    TemplateRun:
+      type: object
+      description: One Terraform operation against one installed component.
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        stack_template_id: { type: string }
+        template_revision_id:
+          type: string
+          description: |
+            The revision this run executed. Pinned when the run started, so
+            history stays accurate after an upgrade.
+        source_template_id: { type: string }
+        operation: { $ref: "#/components/schemas/OperationType" }
+        selected_ref: { type: string }
+        resolved_commit_sha: { type: string }
+        workspace_name: { type: string }
+        config_json:
+          type: object
+          additionalProperties: true
+          description: The config this run executed with, captured at start.
+        backend_type: { type: string }
+        backend_config_hash: { type: string }
+        status: { $ref: "#/components/schemas/TemplateRunStatus" }
+        trigger_actor:
+          type: string
+          description: |
+            Who started the run. This is the subject that may not approve it.
+        started_at: { type: string, format: date-time }
+        completed_at:
+          type: string
+          format: date-time
+          description: |
+            Always present. Reads as the zero time
+            (`0001-01-01T00:00:00Z`) while the run is unfinished.
+        error_summary:
+          type: string
+          description: Why the run failed. Empty otherwise.
+      required:
+        [id, tenant_id, stack_template_id, template_revision_id,
+         source_template_id, operation, selected_ref, resolved_commit_sha,
+         workspace_name, backend_type, backend_config_hash, status,
+         trigger_actor, started_at, error_summary]
+
+    TemplateRunStatus:
+      type: string
+      description: |
+        A run's progress. Terminal states are `completed`, `failed` and
+        `canceled`; everything else means the run is still in flight.
+
+        `waiting_approval` is the one that needs a person — post to the run's
+        approval endpoint to release it.
+      enum:
+        - queued
+        - locked
+        - workspace_prepared
+        - source_fetched
+        - workspace_selected
+        - init_started
+        - init_finished
+        - plan_started
+        - plan_finished
+        - waiting_approval
+        - approved
+        - apply_started
+        - apply_finished
+        - destroy_started
+        - destroy_finished
+        - cancel_requested
+        - canceling
+        - canceled
+        - lock_released
+        - completed
+        - failed
+
+    LogPhase:
+      type: string
+      enum: [clone, init, workspace, plan, apply, destroy]
+
+    TemplateRunLog:
+      type: object
+      description: |
+        Where one phase's output is stored. Read the body from
+        `GET /v1/tenants/{tenant_id}/template-runs/{run_id}/logs/{phase}`.
+      properties:
+        tenant_id: { type: string }
+        run_id: { type: string }
+        phase: { $ref: "#/components/schemas/LogPhase" }
+        object_key:
+          type: string
+          description: The object-store key. Internal — not a URL a client can fetch.
+        content_type: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        uploaded_at: { type: string, format: date-time }
+      required:
+        [tenant_id, run_id, phase, object_key, content_type, size_bytes, uploaded_at]
+
+    AssignStackRoleRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        user_sub:
+          type: string
+          description: |
+            The subject identifier, as returned by
+            `GET /v1/tenants/{tenant_id}/users/search`.
+        role: { $ref: "#/components/schemas/StackRole" }
+      required: [user_sub, role]
+
+    StackRole:
+      type: string
+      enum: [viewer, operator, approver, owner]
+      description: |
+        A stack role. `viewer` reads; `operator` starts runs; `approver`
+        releases runs waiting on approval; `owner` also manages access.
+
+        A stack must keep at least one owner — the request that would remove
+        the last one is refused.
+
+    Grant:
+      type: object
+      description: One person's role on a stack, with the identity resolved for display.
+      properties:
+        userSub: { type: string }
+        role: { $ref: "#/components/schemas/StackRole" }
+        displayName: { type: string }
+        email: { type: string, format: email }
+      required: [userSub, role, displayName, email]
+
+    QueueItem:
+      type: object
+      properties:
+        kind:
+          type: string
+          description: What kind of work this is, such as stack provisioning.
+        state: { type: string }
+        summary:
+          type: string
+          description: A human-readable label. Falls back to `kind` when empty.
+        attempts:
+          type: integer
+          description: How many times delivery has been tried.
+        last_error:
+          type: string
+          description: The most recent failure. Empty when there has been none.
+        created_at: { type: string, format: date-time }
+        delivered_at:
+          type: string
+          format: date-time
+          description: Absent until the item has been delivered.
+      required: [kind, state, summary, attempts, last_error, created_at]

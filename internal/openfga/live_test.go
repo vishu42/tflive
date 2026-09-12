@@ -14,7 +14,7 @@ import (
 	"time"
 
 	openfga "github.com/vishu42/tflive/internal/openfga"
-	openfgamodel "github.com/vishu42/tflive/openfga"
+	openfgamodel "github.com/vishu42/tflive/internal/authorization"
 )
 
 func TestLiveBootstrapVerifyAndDerivedWriteRejection(t *testing.T) {

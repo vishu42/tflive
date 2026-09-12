@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	openfga "github.com/vishu42/tflive/internal/openfga"
-	openfgamodel "github.com/vishu42/tflive/openfga"
+	openfgamodel "github.com/vishu42/tflive/internal/authorization"
 )
 
 func TestRunDefaultsToVerifyAndPrintsOnlyEnvironmentAssignments(t *testing.T) {

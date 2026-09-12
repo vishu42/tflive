@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	openfgamodel "github.com/vishu42/tflive/openfga"
+	openfgamodel "github.com/vishu42/tflive/internal/authorization"
 )
 
 func TestParseAuthorizationModelRejectsInvalidModels(t *testing.T) {

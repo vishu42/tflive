@@ -1,10 +1,11 @@
-// Package openfgamodel embeds the OpenFGA authorization model that
-// cmd/openfga-provisioner writes.
+// This file embeds the authorization model the server is bootstrapped with.
 //
 // authorization-model.fga is the source of truth and the only form of the model
 // in this repository. It is transformed to OpenFGA's API wire format in process,
 // so there is no generated JSON artifact to regenerate or keep in step.
-package openfgamodel
+// authorization-model-tests.fga.yaml beside it is the model's own test matrix,
+// run by the `fga model test` CLI rather than by `go test`.
+package authorization
 
 import (
 	_ "embed"

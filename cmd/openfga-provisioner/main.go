@@ -12,7 +12,7 @@ import (
 
 	openfga "github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/strval"
-	openfgamodel "github.com/vishu42/tflive/openfga"
+	openfgamodel "github.com/vishu42/tflive/internal/authorization"
 )
 
 type executeFunc func(context.Context, string, openfga.Config, openfga.AuthorizationModel) (openfga.Result, error)
