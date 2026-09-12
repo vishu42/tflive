@@ -80,6 +80,10 @@ func TestWriteRollsBackWithTheCallersTransaction(t *testing.T) {
 
 	tx, err := pool.Begin(ctx)
 	require.NoError(t, err)
+	// Rolling back after a successful commit is a no-op. Without this, a failing
+	// assertion leaves the transaction open on a pooled connection, and the
+	// deferred pool.Close blocks forever instead of reporting the failure.
+	defer tx.Rollback(ctx)
 	require.NoError(t, store.Write(authorization.WithTx(ctx, tx), storeID, nil,
 		storage.Writes{tuple.NewTupleKey("stack:rollback", "owner", "user:alice")}))
 	require.NoError(t, tx.Rollback(ctx))
@@ -98,6 +102,10 @@ func TestWriteCommitsWithTheCallersTransaction(t *testing.T) {
 
 	tx, err := pool.Begin(ctx)
 	require.NoError(t, err)
+	// Rolling back after a successful commit is a no-op. Without this, a failing
+	// assertion leaves the transaction open on a pooled connection, and the
+	// deferred pool.Close blocks forever instead of reporting the failure.
+	defer tx.Rollback(ctx)
 	require.NoError(t, store.Write(authorization.WithTx(ctx, tx), storeID, nil,
 		storage.Writes{tuple.NewTupleKey("stack:commit", "owner", "user:alice")}))
 	require.NoError(t, tx.Commit(ctx))
