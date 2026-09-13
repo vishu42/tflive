@@ -41,7 +41,7 @@ func TestCloseLeavesTheBorrowedPoolUsable(t *testing.T) {
 	ctx := context.Background()
 	pool := testPool(t)
 
-	auth, err := authorization.New(ctx, pool, "tflive-close-test")
+	auth, err := authorization.New(ctx, pool, newTestStoreName(t))
 	require.NoError(t, err)
 	auth.Close()
 
@@ -55,13 +55,14 @@ func TestCloseLeavesTheBorrowedPoolUsable(t *testing.T) {
 func TestBootstrapIsIdempotentAcrossRestarts(t *testing.T) {
 	ctx := context.Background()
 	pool := testPool(t)
+	storeName := newTestStoreName(t)
 
-	first, err := authorization.New(ctx, pool, "tflive-restart-test")
+	first, err := authorization.New(ctx, pool, storeName)
 	require.NoError(t, err)
 	firstStore, firstModel := first.StoreID(), first.ModelID()
 	first.Close()
 
-	second, err := authorization.New(ctx, pool, "tflive-restart-test")
+	second, err := authorization.New(ctx, pool, storeName)
 	require.NoError(t, err)
 	t.Cleanup(second.Close)
 

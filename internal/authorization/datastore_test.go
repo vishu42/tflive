@@ -48,6 +48,19 @@ func newTestStoreID(t *testing.T) string {
 	return "test-" + hex.EncodeToString(raw)
 }
 
+// newTestStoreName is newTestStoreID's counterpart for tests that go through
+// bootstrap, which resolves a store by name rather than by id.
+//
+// A fixed name persists across runs, so any change to how models compare
+// leaves that store holding two versions of the same model -- which bootstrap
+// then correctly refuses as ambiguous, failing every later run until the rows
+// are deleted by hand. One name per test keeps two New calls within a test on
+// the same store, which is what the restart test needs.
+func newTestStoreName(t *testing.T) string {
+	t.Helper()
+	return "test-" + hex.EncodeToString(randomBytes(t, 8))
+}
+
 func newTestDatastore(t *testing.T, pool *pgxpool.Pool) *authorization.Datastore {
 	t.Helper()
 	store, err := authorization.NewDatastoreForTest(pool)
