@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/vishu42/tflive/internal/strval"
@@ -32,15 +31,17 @@ func safeOpaqueIdentifier(value string) bool {
 //
 //   - two stores with the configured name is ambiguous, and picking one decides
 //     which tuples count;
+//
 //   - two stored models matching the repository's is ambiguous the same way;
+//
 //   - a matching model is adopted rather than rewritten, so a restart does not
 //     mint a new model id that existing tuples were never written against.
 //
-//	no store        → create one, write the model
-//	store, no match → adopt the store, write a new model version
-//	store + match   → adopt both, write nothing
-//	two stores      → error
-//	two matches     → error
+//     no store        → create one, write the model
+//     store, no match → adopt the store, write a new model version
+//     store + match   → adopt both, write nothing
+//     two stores      → error
+//     two matches     → error
 func (auth *Authorization) bootstrap(ctx context.Context, storeName string) error {
 	desired, err := desiredModel()
 	if err != nil {
@@ -59,20 +60,6 @@ func (auth *Authorization) bootstrap(ctx context.Context, storeName string) erro
 
 	auth.storeID, auth.modelID = storeID, modelID
 	return nil
-}
-
-// desiredModel is the repository's model in the comparable form ModelsEqual
-// wants. The DSL is the source of truth; this is only its parsed shape.
-func desiredModel() (AuthorizationModel, error) {
-	encoded, err := AuthorizationModelJSON()
-	if err != nil {
-		return AuthorizationModel{}, fmt.Errorf("authorization: load model: %w", err)
-	}
-	model, err := ParseAuthorizationModel(encoded)
-	if err != nil {
-		return AuthorizationModel{}, fmt.Errorf("authorization: parse model: %w", err)
-	}
-	return model, nil
 }
 
 // resolveStore finds the single store with this name, or creates it.
@@ -128,7 +115,7 @@ func (auth *Authorization) resolveStore(ctx context.Context, storeName string) (
 
 // resolveModel adopts the stored model matching the repository's, or writes a
 // new version when none does.
-func (auth *Authorization) resolveModel(ctx context.Context, storeID string, desired AuthorizationModel) (string, error) {
+func (auth *Authorization) resolveModel(ctx context.Context, storeID string, desired *openfgav1.AuthorizationModel) (string, error) {
 	var matches []string
 	token := ""
 	seen := map[string]bool{}
@@ -142,15 +129,7 @@ func (auth *Authorization) resolveModel(ctx context.Context, storeID string, des
 			return "", fmt.Errorf("authorization: list models: %w", err)
 		}
 		for _, message := range response.GetAuthorizationModels() {
-			stored, err := modelFromProto(message)
-			if err != nil {
-				return "", err
-			}
-			equal, err := ModelsEqual(desired, stored)
-			if err != nil {
-				return "", fmt.Errorf("authorization: compare model %q: %w", message.GetId(), err)
-			}
-			if equal {
+			if modelsEqual(desired, message) {
 				matches = append(matches, message.GetId())
 			}
 		}
@@ -171,11 +150,7 @@ func (auth *Authorization) resolveModel(ctx context.Context, storeID string, des
 		return matches[0], nil
 	}
 
-	request, err := writeModelRequest(storeID, desired)
-	if err != nil {
-		return "", err
-	}
-	written, err := auth.server.WriteAuthorizationModel(ctx, request)
+	written, err := auth.server.WriteAuthorizationModel(ctx, writeModelRequest(storeID, desired))
 	if err != nil {
 		return "", fmt.Errorf("authorization: write model in store %q: %w", storeID, err)
 	}
@@ -190,30 +165,14 @@ func (auth *Authorization) resolveModel(ctx context.Context, storeID string, des
 // Both directions go through protojson because AuthorizationModel is defined by
 // the same JSON wire format the protobuf marshals to, so there is one encoding
 // to agree on rather than a hand-written field mapping to drift.
-func modelFromProto(message *openfgav1.AuthorizationModel) (AuthorizationModel, error) {
-	encoded, err := protojson.Marshal(message)
-	if err != nil {
-		return AuthorizationModel{}, fmt.Errorf("authorization: encode stored model: %w", err)
-	}
-	model, err := ParseAuthorizationModel(encoded)
-	if err != nil {
-		return AuthorizationModel{}, fmt.Errorf("authorization: parse stored model: %w", err)
-	}
-	return model, nil
-}
-
 // writeModelRequest renders the repository model as a write request. The id is
-// cleared first: ids are the server's to mint, and sending one is meaningless.
-func writeModelRequest(storeID string, model AuthorizationModel) (*openfgav1.WriteAuthorizationModelRequest, error) {
-	model.ID = ""
-	encoded, err := CanonicalJSON(model)
-	if err != nil {
-		return nil, fmt.Errorf("authorization: encode model: %w", err)
+// not carried over: ids are the server's to mint, and sending one is
+// meaningless.
+func writeModelRequest(storeID string, model *openfgav1.AuthorizationModel) *openfgav1.WriteAuthorizationModelRequest {
+	return &openfgav1.WriteAuthorizationModelRequest{
+		StoreId:         storeID,
+		SchemaVersion:   model.GetSchemaVersion(),
+		TypeDefinitions: model.GetTypeDefinitions(),
+		Conditions:      model.GetConditions(),
 	}
-	var message openfgav1.WriteAuthorizationModelRequest
-	if err := protojson.Unmarshal(encoded, &message); err != nil {
-		return nil, fmt.Errorf("authorization: decode model: %w", err)
-	}
-	message.StoreId = storeID
-	return &message, nil
 }

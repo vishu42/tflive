@@ -1,173 +1,100 @@
 package authorization
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
 	"sort"
+	"strings"
+
+	openfgav1 "github.com/openfga/api/proto/openfga/v1"
+	"google.golang.org/protobuf/proto"
 )
 
-type AuthorizationModel struct {
-	ID              string                     `json:"id,omitempty"`
-	SchemaVersion   string                     `json:"schema_version"`
-	TypeDefinitions []TypeDefinition           `json:"type_definitions"`
-	Conditions      map[string]json.RawMessage `json:"conditions,omitempty"`
+// modelsEqual reports whether two models say the same thing.
+//
+// Both sides are already protobuf -- ours from the DSL transform, the stored
+// one straight off the wire -- so proto.Equal answers this directly. It is the
+// canonicalization below that earns its place, because a false negative does
+// not fail loudly: resolveModel would write a new model version and re-pin the
+// process on every restart, moving the id out from under tuples written
+// against the old one.
+//
+//	the same model, one carrying a server-minted id → true
+//	type definitions in a different order           → true
+//	a changed permission rewrite                    → false
+func modelsEqual(left, right *openfgav1.AuthorizationModel) bool {
+	return proto.Equal(canonicalModel(left), canonicalModel(right))
 }
 
-type TypeDefinition struct {
-	Type      string                     `json:"type"`
-	Relations map[string]json.RawMessage `json:"relations,omitempty"`
-	Metadata  TypeDefinitionMetadata     `json:"metadata,omitempty"`
-}
+// canonicalModel returns a copy holding only what the model means.
+//
+// proto.Equal compares map fields order-independently but repeated fields in
+// order, so the two repeated fields are sorted. Ordering has not differed in
+// practice on any round trip we have measured; sorting is insurance against a
+// version that changes it, not a bug being worked around.
+func canonicalModel(model *openfgav1.AuthorizationModel) *openfgav1.AuthorizationModel {
+	canonical := proto.Clone(model).(*openfgav1.AuthorizationModel)
 
-type TypeDefinitionMetadata struct {
-	Relations map[string]RelationMetadata `json:"relations,omitempty"`
-}
+	// Ids are the server's to mint, so one side having it is not a difference.
+	canonical.Id = ""
 
-type RelationMetadata struct {
-	DirectlyRelatedUserTypes []RelationReference `json:"directly_related_user_types,omitempty"`
-}
-
-type RelationReference struct {
-	Type      string          `json:"type"`
-	Relation  string          `json:"relation,omitempty"`
-	Wildcard  json.RawMessage `json:"wildcard,omitempty"`
-	Condition string          `json:"condition,omitempty"`
-}
-
-func ParseAuthorizationModel(data []byte) (AuthorizationModel, error) {
-	var model AuthorizationModel
-	if err := json.Unmarshal(data, &model); err != nil {
-		return AuthorizationModel{}, fmt.Errorf("decode authorization model: %w", err)
-	}
-	if model.SchemaVersion != "1.1" {
-		return AuthorizationModel{}, fmt.Errorf("authorization model schema_version must be 1.1")
-	}
-	if len(model.TypeDefinitions) == 0 {
-		return AuthorizationModel{}, fmt.Errorf("authorization model type_definitions must not be empty")
-	}
-	seen := make(map[string]struct{}, len(model.TypeDefinitions))
-	for _, definition := range model.TypeDefinitions {
-		if definition.Type == "" {
-			return AuthorizationModel{}, fmt.Errorf("authorization model type must not be empty")
-		}
-		if _, exists := seen[definition.Type]; exists {
-			return AuthorizationModel{}, fmt.Errorf("authorization model has duplicate type %q", definition.Type)
-		}
-		seen[definition.Type] = struct{}{}
-		for relation, rewrite := range definition.Relations {
-			if relation == "" || !json.Valid(rewrite) {
-				return AuthorizationModel{}, fmt.Errorf("authorization model type %q has invalid relation %q", definition.Type, relation)
-			}
-		}
-	}
-	return model, nil
-}
-
-func (model AuthorizationModel) TypeDefinition(name string) (TypeDefinition, bool) {
-	for _, definition := range model.TypeDefinitions {
-		if definition.Type == name {
-			return definition, true
-		}
-	}
-	return TypeDefinition{}, false
-}
-
-func CanonicalJSON(model AuthorizationModel) ([]byte, error) {
-	encoded, err := json.Marshal(model)
-	if err != nil {
-		return nil, fmt.Errorf("copy authorization model: %w", err)
-	}
-	normalized, err := ParseAuthorizationModel(encoded)
-	if err != nil {
-		return nil, fmt.Errorf("validate authorization model: %w", err)
-	}
-	normalized.ID = ""
-	sort.Slice(normalized.TypeDefinitions, func(i, j int) bool {
-		return normalized.TypeDefinitions[i].Type < normalized.TypeDefinitions[j].Type
+	definitions := canonical.GetTypeDefinitions()
+	sort.Slice(definitions, func(i, j int) bool {
+		return definitions[i].GetType() < definitions[j].GetType()
 	})
-	for index := range normalized.TypeDefinitions {
-		definition := &normalized.TypeDefinitions[index]
-		for name, rewrite := range definition.Relations {
-			canonical, err := canonicalRelationRewriteJSON(rewrite)
-			if err != nil {
-				return nil, fmt.Errorf("canonicalize %s#%s: %w", definition.Type, name, err)
-			}
-			definition.Relations[name] = canonical
-		}
-		for name, metadata := range definition.Metadata.Relations {
-			// The DSL transform emits an empty entry for every computed
-			// relation while hand-written models omit them. The entry says
-			// nothing about who may be assigned, so drop it rather than let
-			// it decide equality.
-			if len(metadata.DirectlyRelatedUserTypes) == 0 {
-				delete(definition.Metadata.Relations, name)
-				continue
-			}
-			sort.Slice(metadata.DirectlyRelatedUserTypes, func(i, j int) bool {
-				left, _ := json.Marshal(metadata.DirectlyRelatedUserTypes[i])
-				right, _ := json.Marshal(metadata.DirectlyRelatedUserTypes[j])
-				return bytes.Compare(left, right) < 0
-			})
-			definition.Metadata.Relations[name] = metadata
-		}
-		if len(definition.Metadata.Relations) == 0 {
-			definition.Metadata.Relations = nil
+	for _, definition := range definitions {
+		canonicalizeMetadata(definition.GetMetadata())
+		if isEmptyMetadata(definition.GetMetadata()) {
+			definition.Metadata = nil
 		}
 	}
-	for name, condition := range normalized.Conditions {
-		canonical, err := canonicalRawJSON(condition)
-		if err != nil {
-			return nil, fmt.Errorf("canonicalize condition %s: %w", name, err)
-		}
-		normalized.Conditions[name] = canonical
-	}
-	return json.Marshal(normalized)
+	return canonical
 }
 
-func ModelsEqual(left, right AuthorizationModel) (bool, error) {
-	leftJSON, err := CanonicalJSON(left)
-	if err != nil {
-		return false, err
-	}
-	rightJSON, err := CanonicalJSON(right)
-	if err != nil {
-		return false, err
-	}
-	return bytes.Equal(leftJSON, rightJSON), nil
+// isEmptyMetadata reports whether a metadata message carries nothing.
+//
+// A present-but-empty message and an absent one are different to proto.Equal
+// but identical in meaning, and both forms occur: a model stored by an encoder
+// that materializes the field comes back with "metadata":{} on a type that has
+// no relations, where the DSL transform leaves it unset.
+func isEmptyMetadata(metadata *openfgav1.Metadata) bool {
+	return len(metadata.GetRelations()) == 0 &&
+		metadata.GetModule() == "" &&
+		metadata.GetSourceInfo() == nil
 }
 
-func canonicalRelationRewriteJSON(raw json.RawMessage) (json.RawMessage, error) {
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return nil, err
-	}
-	normalizeComputedUsersetDefaults(value)
-	return json.Marshal(value)
-}
-
-func normalizeComputedUsersetDefaults(value any) {
-	switch current := value.(type) {
-	case map[string]any:
-		if computedUserset, ok := current["computedUserset"].(map[string]any); ok {
-			if object, ok := computedUserset["object"].(string); ok && object == "" {
-				delete(computedUserset, "object")
-			}
+// canonicalizeMetadata drops metadata entries that say nothing and orders those
+// that do.
+//
+// An entry with no directly related user types carries no information about who
+// may be assigned, but it is still a present map key, which proto.Equal would
+// read as a difference from a model that omits it.
+func canonicalizeMetadata(metadata *openfgav1.Metadata) {
+	for relation, entry := range metadata.GetRelations() {
+		related := entry.GetDirectlyRelatedUserTypes()
+		if len(related) == 0 {
+			delete(metadata.GetRelations(), relation)
+			continue
 		}
-		for _, child := range current {
-			normalizeComputedUsersetDefaults(child)
-		}
-	case []any:
-		for _, child := range current {
-			normalizeComputedUsersetDefaults(child)
-		}
+		sort.Slice(related, func(i, j int) bool {
+			return relationReferenceKey(related[i]) < relationReferenceKey(related[j])
+		})
 	}
 }
 
-func canonicalRawJSON(raw json.RawMessage) (json.RawMessage, error) {
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return nil, err
+// relationReferenceKey builds a total order over relation references from their
+// fields.
+//
+// Spelled out rather than derived from an encoding: prototext deliberately
+// varies its whitespace, and a key that is not stable for a given message
+// could order the two sides differently and make equal models compare unequal.
+func relationReferenceKey(reference *openfgav1.RelationReference) string {
+	wildcard := ""
+	if reference.GetWildcard() != nil {
+		wildcard = "*"
 	}
-	return json.Marshal(value)
+	return strings.Join([]string{
+		reference.GetType(),
+		reference.GetRelation(),
+		wildcard,
+		reference.GetCondition(),
+	}, "\x00")
 }
