@@ -48,6 +48,9 @@ func New(ctx context.Context, pool *pgxpool.Pool, storeName string) (*Authorizat
 	if pool == nil {
 		return nil, fmt.Errorf("authorization: pool is required")
 	}
+	if err := requireMigratedSchema(ctx, pool); err != nil {
+		return nil, err
+	}
 	datastore, err := newDatastore(pool)
 	if err != nil {
 		return nil, err

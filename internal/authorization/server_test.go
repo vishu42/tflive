@@ -68,3 +68,16 @@ func TestBootstrapIsIdempotentAcrossRestarts(t *testing.T) {
 	require.Equal(t, firstStore, second.StoreID(), "a restart must adopt the same store")
 	require.Equal(t, firstModel, second.ModelID(), "a restart must adopt the same model")
 }
+
+// TestNewRefusesAnUnmigratedDatabase pins the error a caller gets when they
+// build an authorizer without migrating first. Without the guard this is
+// OpenFGA's generic "Code(4000) Internal Server Error", which names neither
+// the missing table nor the call that would create it.
+func TestNewRefusesAnUnmigratedDatabase(t *testing.T) {
+	ctx := context.Background()
+	pool := unmigratedTestPool(t)
+
+	_, err := authorization.New(ctx, pool, "tflive-unmigrated-test")
+	require.ErrorContains(t, err, "schema is not migrated")
+	require.ErrorContains(t, err, "Migrate")
+}

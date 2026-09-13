@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"net/url"
 	"os"
 	"testing"
 
@@ -156,4 +157,52 @@ func TestWriteIsVisibleInsideItsOwnTransaction(t *testing.T) {
 	// And invisible to anyone outside it, until the commit that never comes.
 	require.Empty(t, readTuples(t, ctx, store, storeID, "stack:visible"),
 		"an uncommitted row must not be visible outside its transaction")
+}
+
+// unmigratedTestPool is testPool's counterpart: a database with no schema at
+// all, which is the state the New guard exists to report.
+func unmigratedTestPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	dsn := os.Getenv("tflive_POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set tflive_POSTGRES_TEST_DSN (or run `make differential-test`)")
+	}
+	admin, err := pgxpool.New(context.Background(), dsn)
+	require.NoError(t, err)
+	defer admin.Close()
+
+	name := "unmigrated_" + hex.EncodeToString(randomBytes(t, 8))
+	_, err = admin.Exec(context.Background(), "create database "+name)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		cleanup, err := pgxpool.New(context.Background(), dsn)
+		if err != nil {
+			return
+		}
+		defer cleanup.Close()
+		_, _ = cleanup.Exec(context.Background(), "drop database if exists "+name+" with (force)")
+	})
+
+	pool, err := pgxpool.New(context.Background(), replaceDatabase(t, dsn, name))
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+func randomBytes(t *testing.T, size int) []byte {
+	t.Helper()
+	raw := make([]byte, size)
+	_, err := rand.Read(raw)
+	require.NoError(t, err)
+	return raw
+}
+
+// replaceDatabase swaps the database name in a DSN, leaving everything else --
+// credentials, host, sslmode -- exactly as the caller configured it.
+func replaceDatabase(t *testing.T, dsn, name string) string {
+	t.Helper()
+	parsed, err := url.Parse(dsn)
+	require.NoError(t, err)
+	parsed.Path = "/" + name
+	return parsed.String()
 }
