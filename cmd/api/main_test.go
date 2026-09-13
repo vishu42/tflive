@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openfga/openfga/pkg/storage/memory"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/openfga/openfga/pkg/storage/memory"
 
 	"github.com/vishu42/tflive/internal/authorization"
 	"github.com/vishu42/tflive/internal/config"
@@ -464,21 +464,22 @@ func apiTestGetenv(values map[string]string) func(string) string {
 
 type recordingAPIDependencies struct {
 	apiDependencies
-	pool                *recordingPostgresPool
-	store               *recordingStore
-	queueSpecs          *queue.SpecRegistry
-	credentialCipher    *encryption.Cipher
-	sessionCipher       *encryption.Cipher
-	artifactStoreConfig config.ArtifactStoreConfig
-	logReader           recordingTemplateRunLogReader
-	service             app.Service
-	serverAddress       string
-	serverHandler       http.Handler
-	migrated            bool
-	serviceErr          error
-	serverErr           error
-	openFGAStoreName    string
-	authorizer          *authorization.Authorization
+	pool                     *recordingPostgresPool
+	store                    *recordingStore
+	queueSpecs               *queue.SpecRegistry
+	credentialCipher         *encryption.Cipher
+	sessionCipher            *encryption.Cipher
+	artifactStoreConfig      config.ArtifactStoreConfig
+	logReader                recordingTemplateRunLogReader
+	service                  app.Service
+	serverAddress            string
+	serverHandler            http.Handler
+	migrated                 bool
+	authorizationMigratedDSN string
+	serviceErr               error
+	serverErr                error
+	openFGAStoreName         string
+	authorizer               *authorization.Authorization
 }
 
 func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
@@ -498,6 +499,10 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 				t.Fatalf("migratePostgres pool = %p, want %p", pool, deps.pool)
 			}
 			deps.migrated = true
+			return nil
+		},
+		migrateAuthorization: func(databaseURL string) error {
+			deps.authorizationMigratedDSN = databaseURL
 			return nil
 		},
 		newStore: func(pool postgresPool, specs *queue.SpecRegistry, credentialCipher *encryption.Cipher, sessionCipher *encryption.Cipher) (appRepositories, error) {

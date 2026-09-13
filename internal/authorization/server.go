@@ -32,6 +32,11 @@ type Authorization struct {
 // New starts an embedded OpenFGA over the application's pool and resolves the
 // store and authorization model this process will use.
 //
+// The schema must already be migrated: Migrate is the caller's to run, beside
+// the application's own migrations, because it needs a DSN rather than a pool
+// and because a constructor that silently migrates hides the one step an
+// operator most needs to see.
+//
 // The pool is borrowed, not owned: Close shuts down the server and datastore
 // and leaves the pool to whoever created it, because the application is still
 // using it for everything else.
@@ -42,9 +47,6 @@ type Authorization struct {
 func New(ctx context.Context, pool *pgxpool.Pool, storeName string) (*Authorization, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("authorization: pool is required")
-	}
-	if err := Migrate(ctx, pool); err != nil {
-		return nil, fmt.Errorf("authorization: migrate: %w", err)
 	}
 	datastore, err := newDatastore(pool)
 	if err != nil {

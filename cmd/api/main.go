@@ -53,14 +53,15 @@ type tokenVerifier interface {
 }
 
 type apiDependencies struct {
-	newPostgresPool func(context.Context, string) (postgresPool, error)
-	migratePostgres func(context.Context, postgresPool) error
-	newStore        func(postgresPool, *queue.SpecRegistry, *encryption.Cipher, *encryption.Cipher) (appRepositories, error)
-	newLogReader    func(config.ArtifactStoreConfig) (app.TemplateRunLogReader, error)
-	newService      func(app.Service) (*app.Service, error)
-	newVerifier     func(context.Context, authn.OIDCVerifierConfig) (tokenVerifier, error)
-	newAuthorization func(context.Context, postgresPool, string) (*authorization.Authorization, error)
-	listenAndServe  func(context.Context, string, http.Handler) error
+	newPostgresPool      func(context.Context, string) (postgresPool, error)
+	migratePostgres      func(context.Context, postgresPool) error
+	migrateAuthorization func(string) error
+	newStore             func(postgresPool, *queue.SpecRegistry, *encryption.Cipher, *encryption.Cipher) (appRepositories, error)
+	newLogReader         func(config.ArtifactStoreConfig) (app.TemplateRunLogReader, error)
+	newService           func(app.Service) (*app.Service, error)
+	newVerifier          func(context.Context, authn.OIDCVerifierConfig) (tokenVerifier, error)
+	newAuthorization     func(context.Context, postgresPool, string) (*authorization.Authorization, error)
+	listenAndServe       func(context.Context, string, http.Handler) error
 }
 
 func credentialRepository(store appRepositories) app.CredentialRepository {
@@ -129,6 +130,7 @@ func defaultAPIDependencies() apiDependencies {
 			}
 			return postgres.Migrate(ctx, pgxPool)
 		},
+		migrateAuthorization: authorization.Migrate,
 		newStore: func(pool postgresPool, specs *queue.SpecRegistry, credentialCipher *encryption.Cipher, sessionCipher *encryption.Cipher) (appRepositories, error) {
 			pgxPool, ok := pool.(*pgxpool.Pool)
 			if !ok {
@@ -229,10 +231,16 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		return fmt.Errorf("migrate postgres: %w", err)
 	}
 
-	// After the pool and its migrations, because the embedded server runs its
-	// own migrations on that same pool and then resolves its store and model.
-	// Before the service, because every authorization answer comes from it, and
-	// before SeedRoot, which writes root's tuple.
+	// OpenFGA's schema is versioned by OpenFGA, so it is migrated separately
+	// from the application's and from its own DSN rather than the pool.
+	if err := deps.migrateAuthorization(cfg.DatabaseURL); err != nil {
+		return fmt.Errorf("migrate authorization: %w", err)
+	}
+
+	// After both migrations, because the embedded server resolves its store and
+	// model against the schema they create. Before the service, because every
+	// authorization answer comes from it, and before SeedRoot, which writes
+	// root's tuple.
 	auth, err := deps.newAuthorization(ctx, pool, cfg.Security.OpenFGA.StoreName)
 	if err != nil {
 		return fmt.Errorf("start authorization: %w", err)

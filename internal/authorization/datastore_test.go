@@ -20,12 +20,16 @@ import (
 // testPool gates every test in this file: without a database there is nothing
 // worth asserting here, because the deliverable is what Postgres does at
 // commit time.
+//
+// Migrating here rather than in newTestDatastore is where the DSN is: Migrate
+// takes a URL, not a pool, because OpenFGA's runner opens its own connection.
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("tflive_POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set tflive_POSTGRES_TEST_DSN (or run `make differential-test`)")
 	}
+	require.NoError(t, authorization.Migrate(dsn))
 	pool, err := pgxpool.New(context.Background(), dsn)
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
@@ -45,7 +49,6 @@ func newTestStoreID(t *testing.T) string {
 
 func newTestDatastore(t *testing.T, pool *pgxpool.Pool) *authorization.Datastore {
 	t.Helper()
-	require.NoError(t, authorization.Migrate(context.Background(), pool))
 	store, err := authorization.NewDatastoreForTest(pool)
 	require.NoError(t, err)
 	t.Cleanup(store.Close)
