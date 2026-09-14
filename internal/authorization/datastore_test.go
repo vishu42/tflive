@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -170,6 +171,91 @@ func TestWriteIsVisibleInsideItsOwnTransaction(t *testing.T) {
 	// And invisible to anyone outside it, until the commit that never comes.
 	require.Empty(t, readTuples(t, ctx, store, storeID, "stack:visible"),
 		"an uncommitted row must not be visible outside its transaction")
+}
+
+// singleConnectionPool is testPool capped at one connection. An open
+// transaction then holds the only connection there is, so anything in the unit
+// of work that reaches for the pool instead of the transaction waits on itself
+// -- the hang that, in production, takes max(4, NumCPU) concurrent requests to
+// reach instead of one.
+func singleConnectionPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	testPool(t) // skips without a database, and migrates
+	config, err := pgxpool.ParseConfig(os.Getenv("tflive_POSTGRES_TEST_DSN"))
+	require.NoError(t, err)
+	config.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// withoutHanging fails the test if fn has not returned within a few seconds.
+//
+// A context deadline cannot do this job: OpenFGA hands its datastore
+// context.WithoutCancel(ctx) (storagewrappers.ContextTracerWrapper), so a read
+// stuck waiting for a pooled connection never sees the deadline. The failure
+// releases the stuck call too -- the test's deferred rollback returns the
+// transaction's connection, which is the one the call was waiting for.
+func withoutHanging(t *testing.T, what string, fn func() error) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s hung: it is waiting for a second connection instead of using the transaction", what)
+		return nil
+	}
+}
+
+// TestGrantInsideATransactionNeedsNoSecondConnection guards the pool deadlock:
+// OpenFGA validates a write by reading the authorization model, and that read
+// must run on the caller's transaction rather than wait for a second connection.
+func TestGrantInsideATransactionNeedsNoSecondConnection(t *testing.T) {
+	ctx := context.Background()
+	pool := singleConnectionPool(t)
+	auth, err := authorization.New(ctx, pool, newTestStoreName(t))
+	require.NoError(t, err)
+	t.Cleanup(auth.Close)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx)
+
+	require.NoError(t, withoutHanging(t, "Grant", func() error {
+		return auth.Grant(authorization.WithTx(ctx, tx), stackGrant(t, "alice", "one", authorization.RelationOwner))
+	}))
+}
+
+// TestListGrantsInsideATransactionSeesItsOwnWrites is the read side: the role
+// change reads grants, then revokes and grants, all in one transaction. The
+// read must use that transaction -- to avoid the same deadlock, and to see
+// what the transaction has already written but not yet committed.
+func TestListGrantsInsideATransactionSeesItsOwnWrites(t *testing.T) {
+	ctx := context.Background()
+	pool := singleConnectionPool(t)
+	auth, err := authorization.New(ctx, pool, newTestStoreName(t))
+	require.NoError(t, err)
+	t.Cleanup(auth.Close)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx)
+	txCtx := authorization.WithTx(ctx, tx)
+
+	require.NoError(t, withoutHanging(t, "Grant", func() error {
+		return auth.Grant(txCtx, stackGrant(t, "alice", "one", authorization.RelationOwner))
+	}))
+
+	var grants []authorization.Grant
+	require.NoError(t, withoutHanging(t, "ListGrants", func() error {
+		grants, err = auth.ListGrants(txCtx, stackObject(t, "one"))
+		return err
+	}))
+	require.Len(t, grants, 1, "an uncommitted grant must be visible on the transaction that wrote it")
+	require.Equal(t, "user:alice", grants[0].Subject().String())
 }
 
 // unmigratedTestPool is testPool's counterpart: a database with no schema at

@@ -6,18 +6,27 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 
 	"github.com/openfga/openfga/pkg/storage"
 	"github.com/openfga/openfga/pkg/storage/postgres"
 	"github.com/openfga/openfga/pkg/storage/sqlcommon"
 )
 
-// Datastore is OpenFGA's Postgres datastore with one behaviour added: a write
+// Datastore is OpenFGA's Postgres datastore with one behaviour added: a call
 // made under a context carrying a pgx.Tx runs on that transaction.
 //
-// Everything else -- reads, models, stores, assertions, the changelog -- is
-// upstream's, inherited by embedding. Only Write is overridden, because only
-// Write needs to be atomic with a domain change.
+// Everything else -- stores, assertions, the changelog, the reads Check uses --
+// is upstream's, inherited by embedding. Three methods are overridden:
+//
+//	Write                  → must be atomic with a domain change
+//	ReadAuthorizationModel → OpenFGA reads the model to validate every Write
+//	ReadPage               → ListGrants reads inside the role-change transaction
+//
+// The two reads are there because a transaction already holds a connection. A
+// read that went to the pool would need a second, and with every connection
+// held by a transaction waiting for one, the API deadlocks -- permanently,
+// because OpenFGA strips cancellation from the contexts it hands a datastore.
 type Datastore struct {
 	*postgres.Datastore
 }
@@ -56,6 +65,33 @@ func (store *Datastore) Write(
 		return store.Datastore.Write(ctx, storeID, deletes, writes, opts...)
 	}
 	return writeOnTx(ctx, tx, storeID, deletes, writes, storage.NewTupleWriteOptions(opts...), time.Now().UTC())
+}
+
+// ReadAuthorizationModel loads a model, on the caller's transaction when there
+// is one. OpenFGA reads the model to validate every write, so this is on the
+// path of every Grant.
+//
+//	WithTx(ctx, tx) → query on tx, no second connection taken
+//	bare ctx        → upstream's, on the pool
+func (store *Datastore) ReadAuthorizationModel(ctx context.Context, storeID, modelID string) (*openfgav1.AuthorizationModel, error) {
+	tx, ok := TxFrom(ctx)
+	if !ok {
+		return store.Datastore.ReadAuthorizationModel(ctx, storeID, modelID)
+	}
+	return readAuthorizationModelOnTx(ctx, tx, storeID, modelID)
+}
+
+// ReadPage reads one page of tuples, on the caller's transaction when there is
+// one. The server's Read -- and so ListGrants -- is built on it.
+//
+//	WithTx(ctx, tx) → query on tx, sees the transaction's uncommitted tuples
+//	bare ctx        → upstream's, on the pool
+func (store *Datastore) ReadPage(ctx context.Context, storeID string, filter storage.ReadFilter, options storage.ReadPageOptions) ([]*openfgav1.Tuple, string, error) {
+	tx, ok := TxFrom(ctx)
+	if !ok {
+		return store.Datastore.ReadPage(ctx, storeID, filter, options)
+	}
+	return readPageOnTx(ctx, tx, storeID, filter, options)
 }
 
 // Close releases the datastore without closing the pool.

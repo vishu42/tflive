@@ -10,6 +10,7 @@ import (
 	"github.com/openfga/openfga/pkg/storage"
 	"github.com/openfga/openfga/pkg/tuple"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/vishu42/tflive/internal/authorization"
 )
@@ -102,6 +103,86 @@ func TestTransactionalDeleteMatchesUpstream(t *testing.T) {
 		readRows(t, ctx, pool, "changelog", upstreamStore),
 		readRows(t, ctx, pool, "changelog", ourStore),
 		"changelog must record the delete the same way")
+}
+
+// TestTransactionalReadPageMatchesUpstream guards read.go the way the tests
+// above guard write.go: the same committed tuples, read once through upstream's
+// ReadPage and once through our transaction, must come back identical -- for
+// every filter shape upstream's query builder branches on, and across a page
+// boundary, so the continuation token is compared too.
+func TestTransactionalReadPageMatchesUpstream(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	store := newTestDatastore(t, pool)
+	storeID := newTestStoreID(t)
+
+	require.NoError(t, store.Write(ctx, storeID, nil, storage.Writes{
+		tuple.NewTupleKey("stack:read", "owner", "user:alice"),
+		tuple.NewTupleKey("stack:read", "viewer", "user:bob"),
+		tuple.NewTupleKey("stack:read", "parent", "platform:tflive"),
+		tuple.NewTupleKey("stack:other", "owner", "user:alice"),
+	}))
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx)
+	txCtx := authorization.WithTx(ctx, tx)
+
+	filters := map[string]storage.ReadFilter{
+		"object type only":    {Object: "stack:"},
+		"object":              {Object: "stack:read"},
+		"object and relation": {Object: "stack:read", Relation: "owner"},
+		"exact user":          {Object: "stack:", User: "user:alice"},
+		"user type":           {Object: "stack:read", User: "user:"},
+		"no condition":        {Object: "stack:read", Conditions: []string{""}},
+	}
+	for name, filter := range filters {
+		// Not 0: a zero page size returns no tuples and a token pointing back at
+		// the first row, so paging never advances. The server always sets one.
+		for _, pageSize := range []int{1, 100} {
+			options := storage.ReadPageOptions{Pagination: storage.PaginationOptions{PageSize: pageSize}}
+			for page := 0; ; page++ {
+				require.Less(t, page, 10, "%s: paging did not terminate", name)
+				wantTuples, wantToken, err := store.ReadPage(ctx, storeID, filter, options)
+				require.NoError(t, err)
+				gotTuples, gotToken, err := store.ReadPage(txCtx, storeID, filter, options)
+				require.NoError(t, err)
+
+				label := fmt.Sprintf("%s, page size %d, page %d", name, pageSize, page)
+				require.Equal(t, wantToken, gotToken, "%s: continuation token", label)
+				require.Len(t, gotTuples, len(wantTuples), "%s: tuple count", label)
+				for i := range wantTuples {
+					require.True(t, proto.Equal(wantTuples[i], gotTuples[i]), "%s: tuple %d", label, i)
+				}
+				if wantToken == "" {
+					break
+				}
+				options.Pagination.From = wantToken
+			}
+		}
+	}
+}
+
+// TestTransactionalReadAuthorizationModelMatchesUpstream is the model-side
+// mirror, over the model bootstrap actually writes.
+func TestTransactionalReadAuthorizationModelMatchesUpstream(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	auth, err := authorization.New(ctx, pool, newTestStoreName(t))
+	require.NoError(t, err)
+	t.Cleanup(auth.Close)
+	store := newTestDatastore(t, pool)
+
+	want, err := store.ReadAuthorizationModel(ctx, auth.StoreID(), auth.ModelID())
+	require.NoError(t, err)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx)
+	got, err := store.ReadAuthorizationModel(authorization.WithTx(ctx, tx), auth.StoreID(), auth.ModelID())
+	require.NoError(t, err)
+
+	require.True(t, proto.Equal(want, got), "the model read on a transaction must match upstream's")
 }
 
 // readRows returns every column of a table except those expected to differ
