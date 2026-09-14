@@ -944,9 +944,8 @@ func newStackResponse(stack domain.Stack, capabilities app.StackCapabilities) st
 		tags = map[string]string{}
 	}
 
-	// Stacks created before the status column, and any stack a repository
-	// hands back without one, are ready: only the queue-driven creation path
-	// can leave a stack provisioning.
+	// A stack a repository hands back without a status is ready, the only
+	// status there is.
 	status := string(stack.Status)
 	if status == "" {
 		status = string(domain.StackStatusReady)

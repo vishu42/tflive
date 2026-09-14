@@ -622,8 +622,7 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 
 	// One transaction: the stack row, the audit event, and the grants that make
 	// the stack reachable. A failure in any of them leaves no trace of the
-	// others, which is why the stack can be returned ready rather than
-	// provisioning.
+	// others, which is why the stack is usable the moment it is returned.
 	if err := service.Work.InTx(ctx, func(ctx context.Context, repository TxRepo, _ queue.Enqueuer) error {
 		if err := repository.CreateStack(ctx, stack); err != nil {
 			return err
@@ -1036,45 +1035,13 @@ func (service *Service) UpgradeStackTemplate(ctx context.Context, command Upgrad
 	return updated, nil
 }
 
-// creatorMayViewProvisioningStack covers the window between CreateStack
-// returning 201 and the owner tuple landing, during which the creator has no
-// grant in OpenFGA and would get a 404 on the stack they just made. Because
-// there is no inline delivery, this is the only thing covering that window, so
-// it is load-bearing rather than cosmetic.
-//
-// It is deliberately narrow: view only, the creator only, and only while the
-// stack is still provisioning. Operating on the stack, adding templates and
-// starting runs keep going through OpenFGA, because the stack really is not
-// ready. Once the status flips to ready the exception stops applying, so it is
-// not a second authorization source in steady state.
-// It never turns a denial into a failure: any error reading the stack leaves
-// the original denial in place.
-func (service *Service) creatorMayViewProvisioningStack(ctx context.Context, command GetStackCommand, denied error) bool {
-	if !errors.Is(denied, ErrNotFound) {
-		// The check itself failed rather than denying; that is not this
-		// exception's business.
-		return false
-	}
-	principal, ok := authn.PrincipalFromContext(ctx)
-	if !ok || principal.Subject == "" {
-		return false
-	}
-	stack, err := service.Stacks.GetStack(ctx, command.TenantID, command.StackID)
-	if err != nil || stack.Status != domain.StackStatusProvisioning {
-		return false
-	}
-	return string(stack.CreatedBy) == principal.Subject
-}
-
 // GetStack returns one tenant-owned stack with installed templates.
 func (service *Service) GetStack(ctx context.Context, command GetStackCommand) (StackView, error) {
 	if err := validateGetStackCommand(command); err != nil {
 		return StackView{}, err
 	}
 	if err := authorizeStack(ctx, service.Authorization, command.StackID, authorization.RelationCanView, ErrNotFound); err != nil {
-		if !service.creatorMayViewProvisioningStack(ctx, command, err) {
-			return StackView{}, err
-		}
+		return StackView{}, err
 	}
 
 	view, err := service.Stacks.GetStackWithTemplates(ctx, command.TenantID, command.StackID)

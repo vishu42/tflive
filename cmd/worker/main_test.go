@@ -524,13 +524,6 @@ func (store *recordingWorkerStore) ReconcileTemplateRunCancellation(context.Cont
 	return nil
 }
 
-func (store *recordingWorkerStore) MarkStackReady(context.Context, domain.TenantID, domain.StackID) error {
-	return nil
-}
-
-type recordingWorkerAuthorizer struct{}
-
-
 type recordingWorkflowDispatcher struct{}
 
 func (recordingWorkflowDispatcher) StartTemplateRun(context.Context, domain.TemplateRunWorkflowInput) error {
@@ -626,4 +619,3 @@ func (store *recordingWorkerStore) Reschedule(context.Context, int64, time.Durat
 func (store *recordingWorkerStore) Prune(context.Context, time.Duration) (int64, error) {
 	return 0, nil
 }
-

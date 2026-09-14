@@ -98,6 +98,14 @@ gofmt -l cmd internal
 node scripts/verify-auth-compose.mjs
 ```
 
+The tests that need Postgres skip without one, including the differential test
+that guards `internal/authorization/write.go` against upstream drift. With the
+Compose stack up, run them for real:
+
+```bash
+make differential-test
+```
+
 ```bash
 cd web
 npm test
@@ -117,8 +125,7 @@ internal/workflows/   deterministic workflows
 internal/activities/  side-effecting Temporal activities
 internal/runner/      OpenTofu execution
 internal/authn/       token verification
-internal/authz/       authorization decisions
-internal/openfga/     OpenFGA model and adapter
+internal/authorization/  embedded OpenFGA: model, bootstrap, checks, transactional tuple writes
 internal/keycloak/    realm provisioning (local demo IdP only)
 web/                  Vite UI
 ```
