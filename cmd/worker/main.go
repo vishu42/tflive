@@ -10,13 +10,10 @@ import (
 	"github.com/vishu42/tflive/internal/activities"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/artifacts"
-	"github.com/vishu42/tflive/internal/authorizer"
-	"github.com/vishu42/tflive/internal/authz"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/githubapp"
-	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/temporal"
@@ -44,17 +41,9 @@ type workerStore interface {
 	artifacts.LogMetadataRecorder
 	queue.Backend
 	queue.Enqueuer
-	app.StackStatusRepository
 	interface {
 		ReconcileTemplateRunCancellation(context.Context, domain.TenantID, domain.TemplateRunID, string) error
 	}
-}
-
-// workerAuthorizer is the authorization surface the worker needs: decisions
-// plus the per-subject read the reconciling grant handler converges against.
-type workerAuthorizer interface {
-	authz.Authorizer
-	authz.SubjectGrantLister
 }
 
 type queueController interface {
@@ -73,9 +62,8 @@ type workerDependencies struct {
 	// newWorker creates the Temporal worker bound to the configured task queue.
 	newWorker func(client.Client, string, temporalworker.Options) temporalWorker
 	// newDispatcher creates the Temporal workflow and signal dispatcher used by queue handlers.
-	newDispatcher           func(client.Client, string) app.WorkflowDispatcher
-	newAuthorizationAdapter func(config.OpenFGAConfig) (workerAuthorizer, error)
-	newQueueController      func(workerStore, workerAuthorizer, app.WorkflowDispatcher) (queueController, error)
+	newDispatcher      func(client.Client, string) app.WorkflowDispatcher
+	newQueueController func(workerStore, app.WorkflowDispatcher) (queueController, error)
 	// registerWorkflow attaches the workflow implementations this process can execute.
 	registerWorkflow func(temporalWorker)
 	// registerActivities attaches activity handlers and their shared dependencies to the worker.
@@ -86,16 +74,19 @@ type workerDependencies struct {
 	interruptCh func() <-chan interface{}
 }
 
-func newQueueRegistry(store workerStore, authorizer workerAuthorizer, dispatcher app.WorkflowDispatcher) (*queue.Registry, error) {
-	service := app.NewService(app.Service{Authorizer: authorizer, StackStatuses: store})
+// newQueueRegistry builds the worker's handlers.
+//
+// None of them touch authorization. Granting the founding owner, reconciling a
+// role change and flipping a stack to ready used to live here, because a tuple
+// write could not commit with the domain write that caused it; it can now, so
+// all three happen in the API's transaction and the worker is Temporal
+// dispatch alone.
+func newQueueRegistry(store workerStore, dispatcher app.WorkflowDispatcher) (*queue.Registry, error) {
 	return queue.NewRegistry(
 		app.NewStartTemplateRunHandler(dispatcher),
 		app.NewStartTemplateSyncHandler(dispatcher),
 		app.NewSignalRunApprovalHandler(dispatcher),
 		app.NewSignalRunCancellationHandler(dispatcher, store),
-		app.NewGrantStackOwnerHandler(service),
-		app.NewMarkStackReadyHandler(service),
-		authz.NewStackGrantHandler(authorizer),
 	)
 }
 
@@ -137,11 +128,8 @@ func defaultWorkerDependencies() workerDependencies {
 		newDispatcher: func(temporalClient client.Client, taskQueue string) app.WorkflowDispatcher {
 			return temporal.NewDispatcher(temporalClient, taskQueue)
 		},
-		newAuthorizationAdapter: func(cfg config.OpenFGAConfig) (workerAuthorizer, error) {
-			return authorizer.New(openfga.Config{APIURL: cfg.APIURL, StoreID: cfg.StoreID, ModelID: cfg.ModelID, APIToken: cfg.APIToken.Value(), HTTPTimeout: cfg.RequestTimeout})
-		},
-		newQueueController: func(store workerStore, authorizer workerAuthorizer, dispatcher app.WorkflowDispatcher) (queueController, error) {
-			registry, err := newQueueRegistry(store, authorizer, dispatcher)
+		newQueueController: func(store workerStore, dispatcher app.WorkflowDispatcher) (queueController, error) {
+			registry, err := newQueueRegistry(store, dispatcher)
 			if err != nil {
 				return nil, err
 			}
@@ -268,10 +256,6 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 	if err != nil {
 		return fmt.Errorf("wire activities: %w", err)
 	}
-	authorizer, err := deps.newAuthorizationAdapter(cfg.OpenFGA)
-	if err != nil {
-		return fmt.Errorf("create authorization adapter: %w", err)
-	}
 	logStore, err := deps.newLogStore(cfg.ArtifactStore, store)
 	if err != nil {
 		return fmt.Errorf("wire log store: %w", err)
@@ -290,7 +274,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 	deps.registerWorkflow(worker)
 	deps.registerActivities(worker, store, cfg.WorkerRunRoot, logStore, gitHubTokens)
 	dispatcher := deps.newDispatcher(temporalClient, cfg.TemporalTaskQueue)
-	controller, err := deps.newQueueController(store, authorizer, dispatcher)
+	controller, err := deps.newQueueController(store, dispatcher)
 	if err != nil {
 		return fmt.Errorf("build queue controller: %w", err)
 	}

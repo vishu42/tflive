@@ -1,10 +1,10 @@
-package openfgamodel_test
+package authorization_test
 
 import (
 	"encoding/json"
 	"testing"
 
-	openfgamodel "github.com/vishu42/tflive/openfga"
+	"github.com/vishu42/tflive/internal/authorization"
 )
 
 // The DSL is transformed at runtime, so a malformed model would otherwise first
@@ -12,7 +12,7 @@ import (
 func TestEmbeddedDSLTransformsToExpectedModel(t *testing.T) {
 	t.Parallel()
 
-	data, err := openfgamodel.AuthorizationModelJSON()
+	data, err := authorization.AuthorizationModelJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,12 +79,12 @@ func TestEmbeddedDSLTransformsToExpectedModel(t *testing.T) {
 func TestAuthorizationModelJSONReturnsIndependentCopies(t *testing.T) {
 	t.Parallel()
 
-	first, err := openfgamodel.AuthorizationModelJSON()
+	first, err := authorization.AuthorizationModelJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
 	first[0] = 'x'
-	second, err := openfgamodel.AuthorizationModelJSON()
+	second, err := authorization.AuthorizationModelJSON()
 	if err != nil {
 		t.Fatal(err)
 	}

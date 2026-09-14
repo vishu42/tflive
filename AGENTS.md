@@ -45,9 +45,19 @@ TypeScript/React conventions: components and types use PascalCase, hooks use
 ## Testing Guidelines
 
 Go tests use the standard `testing` package with Testify helpers; frontend
-tests use Vitest and Testing Library. Name Go tests `Test...` and frontend
+tests use Vitest and Testing Library.
+
+Name Go tests `Test...` and frontend
 tests `*.test.ts`/`*.test.tsx`. Add focused unit tests for behavior changes and
 run the relevant package test before the full suite.
+
+`make differential-test` runs the authorization tests that need a real Postgres
+(`docker compose up -d postgres` first). They skip silently without one, and one
+of them -- `TestTransactionalWriteMatchesUpstream` -- is the only guard on
+`internal/authorization/write.go`, which transcribes OpenFGA's own write path so
+a tuple write can join our transaction. **Run it after every
+`go get github.com/openfga/openfga@...`**: a transcription diverges silently, and
+nothing else will tell you.
 
 ## Commit & Pull Request Guidelines
 

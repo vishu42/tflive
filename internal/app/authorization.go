@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/vishu42/tflive/internal/authz"
+	"github.com/vishu42/tflive/internal/authorization"
 	"github.com/vishu42/tflive/internal/domain"
 )
 
@@ -29,14 +29,14 @@ func requirePrincipal(ctx context.Context) (authn.Principal, error) {
 //
 //	authenticated, authorizer wired  → principal, nil
 //	no principal, or empty Subject   → ErrUnauthenticated       (even if unwired)
-//	authenticated, authorizer nil    → authz.ErrUnavailable
-func requirePrincipalAndAuthorizer(ctx context.Context, authorizer authz.Authorizer) (authn.Principal, error) {
+//	authenticated, authorizer nil    → error (never a decision)
+func requirePrincipalAndAuthorizer(ctx context.Context, auth *authorization.Authorization) (authn.Principal, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
 		return authn.Principal{}, err
 	}
-	if authorizer == nil {
-		return authn.Principal{}, fmt.Errorf("%w: authorization not configured", authz.ErrUnavailable)
+	if auth == nil {
+		return authn.Principal{}, fmt.Errorf("authorization not configured")
 	}
 	return principal, nil
 }
@@ -52,9 +52,9 @@ func requirePrincipalAndAuthorizer(ctx context.Context, authorizer authz.Authori
 //	principal holds platform editor, RelationCanCreateStack   → nil
 //	principal holds platform viewer, RelationCanCreateStack   → ErrForbidden
 //	principal holds platform viewer, RelationCanReadTemplate  → nil
-//	OpenFGA unreachable                                       → authz.ErrUnavailable
-func authorizePlatform(ctx context.Context, authorizer authz.Authorizer, relation authz.Relation) error {
-	allowed, err := checkPlatform(ctx, authorizer, relation)
+//	OpenFGA unreachable                                       → error (never a decision)
+func authorizePlatform(ctx context.Context, auth *authorization.Authorization, relation authorization.Relation) error {
+	allowed, err := checkPlatform(ctx, auth, relation)
 	if err != nil {
 		return err
 	}
@@ -66,24 +66,12 @@ func authorizePlatform(ctx context.Context, authorizer authz.Authorizer, relatio
 
 // checkPlatform is authorizePlatform for callers that branch on the answer
 // rather than refusing, which is the administrator list bypass below.
-func checkPlatform(ctx context.Context, authorizer authz.Authorizer, relation authz.Relation) (bool, error) {
-	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
+func checkPlatform(ctx context.Context, auth *authorization.Authorization, relation authorization.Relation) (bool, error) {
+	principal, err := requirePrincipalAndAuthorizer(ctx, auth)
 	if err != nil {
 		return false, err
 	}
-	subject, err := authz.SubjectFromOIDCSub(principal.Subject)
-	if err != nil {
-		return false, err
-	}
-	result, err := authorizer.Check(ctx, authz.CheckRequest{
-		Subject:  subject,
-		Relation: relation,
-		Object:   authz.Platform,
-	})
-	if err != nil {
-		return false, err
-	}
-	return result.Allowed, nil
+	return auth.Can(ctx, principal.Subject, relation, authorization.Platform)
 }
 
 // authorizeStack answers "may the request's principal do relation to this
@@ -98,51 +86,43 @@ func checkPlatform(ctx context.Context, authorizer authz.Authorizer, relation au
 //	stack owned by alice, principal bob, RelationCanOperate    → denied
 //	principal holds platform admin, any stack                  → nil (from the model)
 //	stackID = "bad:id"                                         → denied
-//	OpenFGA unreachable                                        → authz.ErrUnavailable
-func authorizeStack(ctx context.Context, authorizer authz.Authorizer, stackID domain.StackID, relation authz.Relation, denied error) error {
-	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
+//	OpenFGA unreachable                                        → error (never a decision)
+func authorizeStack(ctx context.Context, auth *authorization.Authorization, stackID domain.StackID, relation authorization.Relation, denied error) error {
+	principal, err := requirePrincipalAndAuthorizer(ctx, auth)
 	if err != nil {
 		return err
 	}
-	object, err := authz.ObjectFromID(authz.TypeStack, string(stackID))
-	if errors.Is(err, authz.ErrInvalidInput) {
+	object, err := authorization.ObjectFromID(authorization.TypeStack, string(stackID))
+	if errors.Is(err, authorization.ErrInvalidInput) {
 		return denied
 	}
 	if err != nil {
 		return err
 	}
-	subject, err := authz.SubjectFromOIDCSub(principal.Subject)
+	allowed, err := auth.Can(ctx, principal.Subject, relation, object)
 	if err != nil {
 		return err
 	}
-	result, err := authorizer.Check(ctx, authz.CheckRequest{Subject: subject, Relation: relation, Object: object})
-	if err != nil {
-		return err
-	}
-	if !result.Allowed {
+	if !allowed {
 		return denied
 	}
 	return nil
 }
 
-func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repository StackRepository, tenantID domain.TenantID) ([]domain.Stack, error) {
-	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
+func listAccessibleStacks(ctx context.Context, auth *authorization.Authorization, repository StackRepository, tenantID domain.TenantID) ([]domain.Stack, error) {
+	principal, err := requirePrincipalAndAuthorizer(ctx, auth)
 	if err != nil {
 		return nil, err
 	}
 	// Unlike authorizeStack, the bypass is kept here rather than left to the
 	// model: one Check replaces a BatchCheck fan-out over every stack in the
 	// tenant, all of which the model would answer true anyway.
-	administrator, err := checkPlatform(ctx, authorizer, authz.RelationCanAdminister)
+	administrator, err := checkPlatform(ctx, auth, authorization.RelationCanAdminister)
 	if err != nil {
 		return nil, err
 	}
 	if administrator {
 		return repository.ListStacks(ctx, tenantID)
-	}
-	subject, err := authz.SubjectFromOIDCSub(principal.Subject)
-	if err != nil {
-		return nil, err
 	}
 	const pageSize = 50
 	var cursor *StackPageCursor
@@ -156,37 +136,37 @@ func listAccessibleStacks(ctx context.Context, authorizer authz.Authorizer, repo
 			return accessible, nil
 		}
 		if len(candidates) > pageSize {
-			return nil, fmt.Errorf("%w: stack candidate page exceeds limit", authz.ErrMalformedResponse)
+			return nil, fmt.Errorf("stack candidate page exceeds limit")
 		}
 		if cursor != nil && !stackPageOrderBefore(domain.Stack{ID: cursor.ID, CreatedAt: cursor.CreatedAt}, candidates[0]) {
-			return nil, fmt.Errorf("%w: stack candidate page did not advance", authz.ErrMalformedResponse)
+			return nil, fmt.Errorf("stack candidate page did not advance")
 		}
 		for i := 1; i < len(candidates); i++ {
 			if !stackPageOrderBefore(candidates[i-1], candidates[i]) {
-				return nil, fmt.Errorf("%w: stack candidate page is not strictly ordered", authz.ErrMalformedResponse)
+				return nil, fmt.Errorf("stack candidate page is not strictly ordered")
 			}
 		}
 
-		checks := make([]authz.CheckRequest, len(candidates))
+		checks := make([]authorization.Check, len(candidates))
 		for i, candidate := range candidates {
-			object, err := authz.ObjectFromID(authz.TypeStack, string(candidate.ID))
-			if errors.Is(err, authz.ErrInvalidInput) {
-				return nil, fmt.Errorf("%w: stack candidate has invalid ID", authz.ErrMalformedResponse)
+			object, err := authorization.ObjectFromID(authorization.TypeStack, string(candidate.ID))
+			if errors.Is(err, authorization.ErrInvalidInput) {
+				return nil, fmt.Errorf("stack candidate has invalid ID")
 			}
 			if err != nil {
 				return nil, err
 			}
-			checks[i] = authz.CheckRequest{Subject: subject, Relation: authz.RelationCanView, Object: object}
+			checks[i] = authorization.Check{Relation: authorization.RelationCanView, Object: object}
 		}
-		result, err := authorizer.BatchCheck(ctx, authz.BatchCheckRequest{Checks: checks})
+		allowed, err := auth.CanAll(ctx, principal.Subject, checks)
 		if err != nil {
 			return nil, err
 		}
-		if len(result.Results) != len(candidates) {
-			return nil, fmt.Errorf("%w: batch result count does not match stack candidates", authz.ErrMalformedResponse)
+		if len(allowed) != len(candidates) {
+			return nil, fmt.Errorf("batch result count does not match stack candidates")
 		}
-		for i, decision := range result.Results {
-			if decision.Allowed {
+		for i, visible := range allowed {
+			if visible {
 				accessible = append(accessible, candidates[i])
 			}
 		}
@@ -205,10 +185,10 @@ func stackPageOrderBefore(left, right domain.Stack) bool {
 	return left.ID > right.ID
 }
 
-func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID, relation authz.Relation, denied error) (domain.StackTemplate, error) {
+func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID, relation authorization.Relation, denied error) (domain.StackTemplate, error) {
 	// Fails an unauthenticated or unconfigured request before the repository
 	// read; authorizeStack below re-derives the principal for the Check.
-	if _, err := requirePrincipalAndAuthorizer(ctx, service.Authorizer); err != nil {
+	if _, err := requirePrincipalAndAuthorizer(ctx, service.Authorization); err != nil {
 		return domain.StackTemplate{}, err
 	}
 	stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, tenantID, stackTemplateID)
@@ -218,12 +198,12 @@ func (service *Service) authorizedStackTemplate(ctx context.Context, tenantID do
 	if err != nil {
 		return domain.StackTemplate{}, err
 	}
-	if _, err := authz.ObjectFromID(authz.TypeStack, string(stackTemplate.StackID)); errors.Is(err, authz.ErrInvalidInput) {
-		return domain.StackTemplate{}, fmt.Errorf("%w: stack template has invalid owning stack ID", authz.ErrMalformedResponse)
+	if _, err := authorization.ObjectFromID(authorization.TypeStack, string(stackTemplate.StackID)); errors.Is(err, authorization.ErrInvalidInput) {
+		return domain.StackTemplate{}, fmt.Errorf("stack template has invalid owning stack ID")
 	} else if err != nil {
 		return domain.StackTemplate{}, err
 	}
-	if err := authorizeStack(ctx, service.Authorizer, stackTemplate.StackID, relation, denied); err != nil {
+	if err := authorizeStack(ctx, service.Authorization, stackTemplate.StackID, relation, denied); err != nil {
 		return domain.StackTemplate{}, err
 	}
 	return stackTemplate, nil
@@ -239,7 +219,7 @@ func (service *Service) operableStackTemplate(
 	tenantID domain.TenantID,
 	stackTemplateID domain.StackTemplateID,
 ) (domain.StackTemplate, error) {
-	stackTemplate, err := service.authorizedStackTemplate(ctx, tenantID, stackTemplateID, authz.RelationCanOperate, ErrForbidden)
+	stackTemplate, err := service.authorizedStackTemplate(ctx, tenantID, stackTemplateID, authorization.RelationCanOperate, ErrForbidden)
 	if err != nil {
 		// No StackID: the refusal can precede resolving which stack owns the
 		// template, so naming one here would sometimes be a guess.
@@ -261,15 +241,15 @@ type PlatformCapabilities struct {
 // and platformCapabilitiesFrom is the decoding of its results. The two are
 // positional and must agree, so they are kept adjacent rather than written out
 // separately at the point of use.
-var platformCapabilityRelations = []authz.Relation{
-	authz.RelationCanAdminister,
-	authz.RelationCanCreateStack,
+var platformCapabilityRelations = []authorization.Relation{
+	authorization.RelationCanAdminister,
+	authorization.RelationCanCreateStack,
 }
 
-func platformCapabilitiesFrom(results []authz.CheckResult) PlatformCapabilities {
+func platformCapabilitiesFrom(results []bool) PlatformCapabilities {
 	return PlatformCapabilities{
-		IsPlatformAdmin: results[0].Allowed,
-		CanCreateStack:  results[1].Allowed,
+		IsPlatformAdmin: results[0],
+		CanCreateStack:  results[1],
 	}
 }
 
@@ -277,8 +257,8 @@ func platformCapabilitiesFrom(results []authz.CheckResult) PlatformCapabilities 
 // An unauthenticated or unconfigured caller is not an error here: /v1/me is
 // reachable before any tuple exists, and a principal that holds nothing is a
 // legitimate answer rather than a failure.
-func ResolvePlatformCapabilities(ctx context.Context, authorizer authz.Authorizer) (PlatformCapabilities, error) {
-	results, err := batchCheckObject(ctx, authorizer, authz.Platform, platformCapabilityRelations)
+func ResolvePlatformCapabilities(ctx context.Context, auth *authorization.Authorization) (PlatformCapabilities, error) {
+	results, err := batchCheckObject(ctx, auth, authorization.Platform, platformCapabilityRelations)
 	if err != nil {
 		return PlatformCapabilities{}, err
 	}
@@ -297,82 +277,77 @@ type StackCapabilities struct {
 // so a reordering cannot reach one caller and miss the other -- which, while
 // each resolver spelled the order out for itself, would have silently returned
 // the wrong permissions rather than failing.
-var stackCapabilityRelations = []authz.Relation{
-	authz.RelationCanView,
-	authz.RelationCanOperate,
-	authz.RelationCanApprove,
-	authz.RelationCanManageAccess,
+var stackCapabilityRelations = []authorization.Relation{
+	authorization.RelationCanView,
+	authorization.RelationCanOperate,
+	authorization.RelationCanApprove,
+	authorization.RelationCanManageAccess,
 }
 
-func stackCapabilitiesFrom(results []authz.CheckResult) StackCapabilities {
+func stackCapabilitiesFrom(results []bool) StackCapabilities {
 	return StackCapabilities{
-		CanView:         results[0].Allowed,
-		CanOperate:      results[1].Allowed,
-		CanApprove:      results[2].Allowed,
-		CanManageAccess: results[3].Allowed,
+		CanView:         results[0],
+		CanOperate:      results[1],
+		CanApprove:      results[2],
+		CanManageAccess: results[3],
 	}
 }
 
-// batchCheckObject asks every relation about one object in a single BatchCheck
-// and returns the results in request order. A response of the wrong length is
-// ErrMalformedResponse: the callers decode it positionally, so a short or long
-// result would otherwise be read as the wrong permission rather than as a
-// failure.
+// batchCheckObject asks every relation about one object in one round trip and
+// returns the answers in request order. A response of the wrong length fails
+// the call: the callers decode it positionally, so a short or long result would
+// otherwise be read as the wrong permission rather than as a failure.
 func batchCheckObject(
 	ctx context.Context,
-	authorizer authz.Authorizer,
-	object authz.Object,
-	relations []authz.Relation,
-) ([]authz.CheckResult, error) {
-	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
+	auth *authorization.Authorization,
+	object authorization.Object,
+	relations []authorization.Relation,
+) ([]bool, error) {
+	principal, err := requirePrincipalAndAuthorizer(ctx, auth)
 	if err != nil {
 		return nil, err
 	}
-	subject, err := authz.SubjectFromOIDCSub(principal.Subject)
-	if err != nil {
-		return nil, err
-	}
-	checks := make([]authz.CheckRequest, len(relations))
+	checks := make([]authorization.Check, len(relations))
 	for i, relation := range relations {
-		checks[i] = authz.CheckRequest{Subject: subject, Relation: relation, Object: object}
+		checks[i] = authorization.Check{Relation: relation, Object: object}
 	}
-	result, err := authorizer.BatchCheck(ctx, authz.BatchCheckRequest{Checks: checks})
+	results, err := auth.CanAll(ctx, principal.Subject, checks)
 	if err != nil {
 		return nil, err
 	}
-	if len(result.Results) != len(checks) {
-		return nil, fmt.Errorf("%w: batch result count does not match checks", authz.ErrMalformedResponse)
+	if len(results) != len(checks) {
+		return nil, fmt.Errorf("batch result count does not match checks")
 	}
-	return result.Results, nil
+	return results, nil
 }
 
-func ResolveStackCapabilities(ctx context.Context, authorizer authz.Authorizer, stackID domain.StackID) (StackCapabilities, error) {
+func ResolveStackCapabilities(ctx context.Context, auth *authorization.Authorization, stackID domain.StackID) (StackCapabilities, error) {
 	// Checked before the stack ID is parsed, so an anonymous caller still gets
 	// ErrUnauthenticated rather than a complaint about the ID. batchCheckObject
 	// repeats this; it is a pure read of the context.
-	if _, err := requirePrincipalAndAuthorizer(ctx, authorizer); err != nil {
+	if _, err := requirePrincipalAndAuthorizer(ctx, auth); err != nil {
 		return StackCapabilities{}, err
 	}
-	object, err := authz.ObjectFromID(authz.TypeStack, string(stackID))
+	object, err := authorization.ObjectFromID(authorization.TypeStack, string(stackID))
 	if err != nil {
 		return StackCapabilities{}, err
 	}
-	results, err := batchCheckObject(ctx, authorizer, object, stackCapabilityRelations)
+	results, err := batchCheckObject(ctx, auth, object, stackCapabilityRelations)
 	if err != nil {
 		return StackCapabilities{}, err
 	}
 	return stackCapabilitiesFrom(results), nil
 }
 
-func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer, stacks []domain.Stack) (map[domain.StackID]StackCapabilities, error) {
+func ResolveStacksCapabilities(ctx context.Context, auth *authorization.Authorization, stacks []domain.Stack) (map[domain.StackID]StackCapabilities, error) {
 	if len(stacks) == 0 {
 		return map[domain.StackID]StackCapabilities{}, nil
 	}
-	principal, err := requirePrincipalAndAuthorizer(ctx, authorizer)
+	principal, err := requirePrincipalAndAuthorizer(ctx, auth)
 	if err != nil {
 		return nil, err
 	}
-	administrator, err := checkPlatform(ctx, authorizer, authz.RelationCanAdminister)
+	administrator, err := checkPlatform(ctx, auth, authorization.RelationCanAdminister)
 	if err != nil {
 		return nil, err
 	}
@@ -387,26 +362,22 @@ func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer,
 		}
 		return result, nil
 	}
-	subject, err := authz.SubjectFromOIDCSub(principal.Subject)
-	if err != nil {
-		return nil, err
-	}
-	checks := make([]authz.CheckRequest, 0, len(stacks)*len(stackCapabilityRelations))
+	checks := make([]authorization.Check, 0, len(stacks)*len(stackCapabilityRelations))
 	for _, s := range stacks {
-		object, err := authz.ObjectFromID(authz.TypeStack, string(s.ID))
+		object, err := authorization.ObjectFromID(authorization.TypeStack, string(s.ID))
 		if err != nil {
 			return nil, err
 		}
 		for _, relation := range stackCapabilityRelations {
-			checks = append(checks, authz.CheckRequest{Subject: subject, Relation: relation, Object: object})
+			checks = append(checks, authorization.Check{Relation: relation, Object: object})
 		}
 	}
-	result, err := authorizer.BatchCheck(ctx, authz.BatchCheckRequest{Checks: checks})
+	results, err := auth.CanAll(ctx, principal.Subject, checks)
 	if err != nil {
 		return nil, err
 	}
-	if len(result.Results) != len(checks) {
-		return nil, fmt.Errorf("%w: batch result count does not match checks", authz.ErrMalformedResponse)
+	if len(results) != len(checks) {
+		return nil, fmt.Errorf("batch result count does not match checks")
 	}
 	// One stack's relations occupy one contiguous run, in the order they were
 	// appended above, so each run decodes with the same function the
@@ -414,13 +385,13 @@ func ResolveStacksCapabilities(ctx context.Context, authorizer authz.Authorizer,
 	caps := make(map[domain.StackID]StackCapabilities, len(stacks))
 	for i, s := range stacks {
 		base := i * len(stackCapabilityRelations)
-		caps[s.ID] = stackCapabilitiesFrom(result.Results[base : base+len(stackCapabilityRelations)])
+		caps[s.ID] = stackCapabilitiesFrom(results[base : base+len(stackCapabilityRelations)])
 	}
 	return caps, nil
 }
 
-func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, relation authz.Relation, denied error) (domain.TemplateRun, error) {
-	if _, err := requirePrincipalAndAuthorizer(ctx, service.Authorizer); err != nil {
+func (service *Service) authorizedTemplateRun(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, relation authorization.Relation, denied error) (domain.TemplateRun, error) {
+	if _, err := requirePrincipalAndAuthorizer(ctx, service.Authorization); err != nil {
 		return domain.TemplateRun{}, err
 	}
 	run, err := service.TemplateRuns.GetTemplateRun(ctx, tenantID, runID)

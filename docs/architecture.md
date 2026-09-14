@@ -253,6 +253,7 @@ Package ownership:
 - `internal/app`: application use cases such as creating stacks, registering templates, adding templates to stacks, starting runs, approving runs, canceling runs, listing runs, and fetching log metadata. This package owns use-case interfaces for persistence, workflow dispatch, events, locks, artifacts, and secrets; concrete adapters implement those interfaces outside `app`.
 - `internal/api`: HTTP handlers, request and response DTOs, routing, SSE endpoints, API validation, and mapping API input into app commands.
 - `internal/auth`: mock identity for MVP, tenant/user context extraction, and the future authentication boundary.
+- `internal/authorization`: embedded OpenFGA and the only authorization package. It owns the model, in-process store and model bootstrap, `Can`/`CanAll`/`ListGrants` checks, and `Grant`/`Revoke` tuple writes that join the caller's Postgres transaction. `app` calls it directly; there is no provider port. See [Authorization](#authorization).
 - `internal/postgres`: Postgres repositories, transactions, SQL queries, persistence models, workflow-outbox operations, and migration helper code.
 - `internal/dispatch`: broker-free Postgres-to-Temporal dispatch loop. It leases pending workflow-start intents, invokes the narrow workflow starter interface, marks successful entries complete, and schedules failed entries for retry.
 - `internal/temporal`: Temporal client adapter that implements `app` workflow-dispatch interfaces and is wired in `cmd`. API and app code should depend on interfaces, not on this adapter package directly.
@@ -899,15 +900,33 @@ Future options:
 
 ### Authorization
 
-MVP uses mock identity and dummy approval.
+Authorization is OpenFGA, embedded in the API process. There is no OpenFGA
+service to run and nothing to provision: the API applies OpenFGA's migrations to
+the application database, then adopts or creates its store and model from
+`internal/authorization/authorization-model.fga` at startup. The worker does no
+authorization work and embeds nothing.
 
-Future versions should add:
+`internal/authorization` is the whole boundary. It exposes `Can`, `CanAll`,
+`ListGrants`, `Grant` and `Revoke` directly, with no provider-neutral port in
+front of it, because no other provider is planned. A check returns
+`(bool, error)`: denial is `false, nil`, and any error means the answer could not
+be determined. Only a denial becomes `ErrForbidden`; a failure surfaces as a
+500, never as a 403.
 
-- real authentication
-- tenant membership enforcement
-- RBAC
-- approval policies
-- separate permissions for plan, apply, destroy, and template registration
+Tuple writes are transactional with domain writes. OpenFGA's datastore opens and
+commits its own transaction, so `internal/authorization/write.go` replaces its
+`Write` with a transcription that runs on the caller's `pgx.Tx`. Creating a
+stack writes the stack row, its audit event, and its owner and parent tuples in
+one commit, and role changes do the same, so there is no queue between a domain
+change and the grant it implies.
+
+That transcription mirrors upstream deliberately and will drift silently if
+upstream changes its schema. `differential_test.go` compares its rows with
+upstream's, column for column; it needs a real database, so run
+`make differential-test` after every OpenFGA upgrade.
+
+Still deferred: approval policies, and separate permissions for plan, apply,
+destroy, and template registration.
 
 ### Managed Backends
 

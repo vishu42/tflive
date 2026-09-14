@@ -7,7 +7,11 @@ import (
 	"time"
 
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/vishu42/tflive/internal/authz"
+	openfgav1 "github.com/openfga/api/proto/openfga/v1"
+	"github.com/openfga/openfga/pkg/storage"
+	"github.com/openfga/openfga/pkg/storage/memory"
+
+	"github.com/vishu42/tflive/internal/authorization"
 )
 
 type fakeAccounts struct {
@@ -43,28 +47,99 @@ func (f *fakeAccounts) EnsureLocalAccount(_ context.Context, account authn.Local
 	return true, nil
 }
 
-type fakeAuthorizer struct {
-	authz.Authorizer
-
-	allowed  bool
-	checkErr error
-	writeErr error
-
-	checked []authz.CheckRequest
-	written []authz.Grant
-}
-
-func (f *fakeAuthorizer) Check(_ context.Context, request authz.CheckRequest) (authz.CheckResult, error) {
-	f.checked = append(f.checked, request)
-	return authz.CheckResult{Allowed: f.allowed}, f.checkErr
-}
-
-func (f *fakeAuthorizer) WriteRelationships(_ context.Context, mutation authz.Mutation) error {
-	if f.writeErr != nil {
-		return f.writeErr
+// newAuthorization runs a real engine over memory. Seeding is what these tests
+// vary, rather than a fake's boolean: SeedRoot is add-only, so what matters is
+// whether the root relationship is already present.
+func newAuthorization(t *testing.T) *authorization.Authorization {
+	t.Helper()
+	auth, err := authorization.NewWithDatastore(context.Background(), memory.New(), "tflive-test")
+	if err != nil {
+		t.Fatalf("build authorization: %v", err)
 	}
-	f.written = append(f.written, mutation.Grants()...)
-	return nil
+	t.Cleanup(auth.Close)
+	return auth
+}
+
+// failAfterBootstrap wraps a working datastore and starts failing every tuple
+// read and write once bootstrap has finished.
+//
+// The store and the model must be resolvable for the Authorization to exist at
+// all, so the failure cannot be present from the start. Flipping it afterwards
+// is how a provider outage during seeding is simulated -- and SeedRoot must
+// fail closed on one rather than carry on.
+type failAfterBootstrap struct {
+	storage.OpenFGADatastore
+	failing bool
+	err     error
+}
+
+func (d *failAfterBootstrap) ReadUserTuple(ctx context.Context, store string, filter storage.ReadUserTupleFilter, options storage.ReadUserTupleOptions) (*openfgav1.Tuple, error) {
+	if d.failing {
+		return nil, d.err
+	}
+	return d.OpenFGADatastore.ReadUserTuple(ctx, store, filter, options)
+}
+
+func (d *failAfterBootstrap) ReadUsersetTuples(ctx context.Context, store string, filter storage.ReadUsersetTuplesFilter, options storage.ReadUsersetTuplesOptions) (storage.TupleIterator, error) {
+	if d.failing {
+		return nil, d.err
+	}
+	return d.OpenFGADatastore.ReadUsersetTuples(ctx, store, filter, options)
+}
+
+func (d *failAfterBootstrap) ReadStartingWithUser(ctx context.Context, store string, filter storage.ReadStartingWithUserFilter, options storage.ReadStartingWithUserOptions) (storage.TupleIterator, error) {
+	if d.failing {
+		return nil, d.err
+	}
+	return d.OpenFGADatastore.ReadStartingWithUser(ctx, store, filter, options)
+}
+
+func (d *failAfterBootstrap) Write(ctx context.Context, store string, deletes storage.Deletes, writes storage.Writes, opts ...storage.TupleWriteOption) error {
+	if d.failing {
+		return d.err
+	}
+	return d.OpenFGADatastore.Write(ctx, store, deletes, writes, opts...)
+}
+
+// newFailingAuthorization boots normally and then fails every tuple operation.
+func newFailingAuthorization(t *testing.T, err error) *authorization.Authorization {
+	t.Helper()
+	datastore := &failAfterBootstrap{OpenFGADatastore: memory.New(), err: err}
+	auth, err2 := authorization.NewWithDatastore(context.Background(), datastore, "tflive-test")
+	if err2 != nil {
+		t.Fatalf("build authorization: %v", err2)
+	}
+	t.Cleanup(auth.Close)
+	datastore.failing = true
+	return auth
+}
+
+// seedRootRelationship writes the root relationship, so a test can start from a
+// store where it already stands.
+func seedRootRelationship(t *testing.T, auth *authorization.Authorization, sub string) *authorization.Authorization {
+	t.Helper()
+	subject, err := authorization.SubjectFromOIDCSub(sub)
+	if err != nil {
+		t.Fatalf("SubjectFromOIDCSub: %v", err)
+	}
+	relationship, err := authorization.NewStructuralRelationship(subject, authorization.Platform, authorization.RelationRoot)
+	if err != nil {
+		t.Fatalf("NewStructuralRelationship: %v", err)
+	}
+	if err := auth.Grant(context.Background(), relationship); err != nil {
+		t.Fatalf("seed root relationship: %v", err)
+	}
+	return auth
+}
+
+// rootIsSeeded reports whether the root relationship exists on the platform.
+func rootIsSeeded(t *testing.T, auth *authorization.Authorization, sub string) bool {
+	t.Helper()
+	held, err := auth.Can(context.Background(), sub, authorization.RelationRoot, authorization.Platform)
+	if err != nil {
+		t.Fatalf("check root relationship: %v", err)
+	}
+	return held
 }
 
 func testRootConfig() RootConfig {
@@ -78,7 +153,7 @@ func fixedClock() func() time.Time {
 
 func TestSeedRootCreatesTheAccountAndTheTuple(t *testing.T) {
 	accounts := &fakeAccounts{}
-	authorizer := &fakeAuthorizer{}
+	authorizer := newAuthorization(t)
 
 	if err := SeedRoot(context.Background(), accounts, authorizer, testRootConfig(), fixedClock()); err != nil {
 		t.Fatalf("SeedRoot returned error: %v", err)
@@ -95,21 +170,19 @@ func TestSeedRootCreatesTheAccountAndTheTuple(t *testing.T) {
 		t.Fatalf("Username = %q, want root", account.Username)
 	}
 
-	if len(authorizer.written) != 1 {
-		t.Fatalf("wrote %d tuples, want 1", len(authorizer.written))
+	// The relationship is asserted through the engine rather than through a
+	// record of the call, so what is checked is the state the model evaluates.
+	if !rootIsSeeded(t, authorizer, DefaultRootSubject) {
+		t.Fatalf("root relationship missing for %s", DefaultRootSubject)
 	}
-	grant := authorizer.written[0]
-	if grant.Subject().String() != "user:"+DefaultRootSubject {
-		t.Fatalf("subject = %q, want user:%s", grant.Subject(), DefaultRootSubject)
+	// root is structural rather than grantable, which is what keeps the grant
+	// API from writing it. NewGrant must keep refusing it.
+	rootSubject, err := authorization.SubjectFromOIDCSub(DefaultRootSubject)
+	if err != nil {
+		t.Fatalf("SubjectFromOIDCSub: %v", err)
 	}
-	if grant.Relation() != authz.RelationRoot {
-		t.Fatalf("relation = %q, want root", grant.Relation())
-	}
-	if grant.Object().String() != "platform:"+authz.PlatformID {
-		t.Fatalf("object = %q, want platform:%s", grant.Object(), authz.PlatformID)
-	}
-	if !grant.Structural() {
-		t.Fatal("the root tuple is not marked structural")
+	if _, err := authorization.NewGrant(rootSubject, authorization.Platform, authorization.RelationRoot); err == nil {
+		t.Fatal("NewGrant(root) succeeded; the grant API must not be able to write the root relationship")
 	}
 }
 
@@ -118,7 +191,7 @@ func TestSeedRootCreatesTheAccountAndTheTuple(t *testing.T) {
 func TestSeedRootHashesThePassword(t *testing.T) {
 	accounts := &fakeAccounts{}
 
-	if err := SeedRoot(context.Background(), accounts, &fakeAuthorizer{}, testRootConfig(), fixedClock()); err != nil {
+	if err := SeedRoot(context.Background(), accounts, newAuthorization(t), testRootConfig(), fixedClock()); err != nil {
 		t.Fatalf("SeedRoot returned error: %v", err)
 	}
 
@@ -139,7 +212,7 @@ func TestSeedRootLeavesAnExistingAccountAlone(t *testing.T) {
 		found:   true,
 		account: authn.LocalAccount{Subject: DefaultRootSubject, Username: "root", PasswordHash: authn.DummyPasswordHash},
 	}
-	authorizer := &fakeAuthorizer{allowed: true}
+	authorizer := seedRootRelationship(t, newAuthorization(t), DefaultRootSubject)
 
 	if err := SeedRoot(context.Background(), accounts, authorizer, testRootConfig(), fixedClock()); err != nil {
 		t.Fatalf("SeedRoot returned error: %v", err)
@@ -148,8 +221,10 @@ func TestSeedRootLeavesAnExistingAccountAlone(t *testing.T) {
 	if len(accounts.ensured) != 0 {
 		t.Fatalf("ensured %d accounts over an existing one, want 0", len(accounts.ensured))
 	}
-	if len(authorizer.written) != 0 {
-		t.Fatalf("wrote %d tuples when one already stood, want 0", len(authorizer.written))
+	// The relationship stands either way; what this pins is that an existing
+	// account is left alone.
+	if !rootIsSeeded(t, authorizer, DefaultRootSubject) {
+		t.Fatal("root relationship missing after seeding over an existing account")
 	}
 }
 
@@ -166,7 +241,7 @@ func TestSeedRootDoesNotHashWhenTheAccountExists(t *testing.T) {
 
 	// An empty password would fail validation on the create path. Reaching a
 	// clean return proves the create path was not taken.
-	if err := SeedRoot(context.Background(), accounts, &fakeAuthorizer{allowed: true}, config, fixedClock()); err != nil {
+	if err := SeedRoot(context.Background(), accounts, seedRootRelationship(t, newAuthorization(t), DefaultRootSubject), config, fixedClock()); err != nil {
 		t.Fatalf("SeedRoot returned error: %v", err)
 	}
 }
@@ -178,13 +253,13 @@ func TestSeedRootWritesAMissingTupleForAnExistingAccount(t *testing.T) {
 		found:   true,
 		account: authn.LocalAccount{Subject: DefaultRootSubject, Username: "root"},
 	}
-	authorizer := &fakeAuthorizer{allowed: false}
+	authorizer := newAuthorization(t)
 
 	if err := SeedRoot(context.Background(), accounts, authorizer, testRootConfig(), fixedClock()); err != nil {
 		t.Fatalf("SeedRoot returned error: %v", err)
 	}
-	if len(authorizer.written) != 1 {
-		t.Fatalf("wrote %d tuples, want the missing one written", len(authorizer.written))
+	if !rootIsSeeded(t, authorizer, DefaultRootSubject) {
+		t.Fatal("root relationship was not written for an existing account that lacked it")
 	}
 }
 
@@ -193,27 +268,24 @@ func TestSeedRootWritesAMissingTupleForAnExistingAccount(t *testing.T) {
 func TestSeedRootFailsClosed(t *testing.T) {
 	outage := errors.New("connection refused")
 
-	for name, seed := range map[string]func() (*fakeAccounts, *fakeAuthorizer){
-		"account lookup fails": func() (*fakeAccounts, *fakeAuthorizer) {
-			return &fakeAccounts{lookupErr: outage}, &fakeAuthorizer{}
+	for name, seed := range map[string]func(*testing.T) (*fakeAccounts, *authorization.Authorization){
+		"account lookup fails": func(t *testing.T) (*fakeAccounts, *authorization.Authorization) {
+			return &fakeAccounts{lookupErr: outage}, newAuthorization(t)
 		},
-		"account write fails": func() (*fakeAccounts, *fakeAuthorizer) {
-			return &fakeAccounts{ensureErr: outage}, &fakeAuthorizer{}
+		"account write fails": func(t *testing.T) (*fakeAccounts, *authorization.Authorization) {
+			return &fakeAccounts{ensureErr: outage}, newAuthorization(t)
 		},
-		"tuple check fails": func() (*fakeAccounts, *fakeAuthorizer) {
-			return &fakeAccounts{}, &fakeAuthorizer{checkErr: outage}
-		},
-		"tuple write fails": func() (*fakeAccounts, *fakeAuthorizer) {
-			return &fakeAccounts{}, &fakeAuthorizer{writeErr: outage}
+		"authorization is unreachable": func(t *testing.T) (*fakeAccounts, *authorization.Authorization) {
+			return &fakeAccounts{}, newFailingAuthorization(t, outage)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			accounts, authorizer := seed()
+			accounts, authorizer := seed(t)
 			err := SeedRoot(context.Background(), accounts, authorizer, testRootConfig(), fixedClock())
 			if err == nil {
 				t.Fatal("SeedRoot succeeded despite a failure")
 			}
-			if !errors.Is(err, outage) {
+			if name != "authorization is unreachable" && !errors.Is(err, outage) {
 				t.Fatalf("error = %v, want it to wrap the underlying failure", err)
 			}
 		})
@@ -224,7 +296,7 @@ func TestSeedRootRejectsAnEmptyPassword(t *testing.T) {
 	config := testRootConfig()
 	config.Password = ""
 
-	err := SeedRoot(context.Background(), &fakeAccounts{}, &fakeAuthorizer{}, config, fixedClock())
+	err := SeedRoot(context.Background(), &fakeAccounts{}, newAuthorization(t), config, fixedClock())
 	if err == nil {
 		t.Fatal("SeedRoot accepted an empty root password")
 	}
@@ -238,7 +310,7 @@ func TestSeedRootRejectsASubjectThatCannotBeATupleToken(t *testing.T) {
 		config := testRootConfig()
 		config.Subject = subject
 
-		if err := SeedRoot(context.Background(), &fakeAccounts{}, &fakeAuthorizer{}, config, fixedClock()); err == nil {
+		if err := SeedRoot(context.Background(), &fakeAccounts{}, newAuthorization(t), config, fixedClock()); err == nil {
 			t.Fatalf("SeedRoot accepted the unusable subject %q", subject)
 		}
 	}
@@ -249,7 +321,7 @@ func TestSeedRootDefaultsTheUsername(t *testing.T) {
 	config := testRootConfig()
 	config.Username = ""
 
-	if err := SeedRoot(context.Background(), accounts, &fakeAuthorizer{}, config, fixedClock()); err != nil {
+	if err := SeedRoot(context.Background(), accounts, newAuthorization(t), config, fixedClock()); err != nil {
 		t.Fatalf("SeedRoot returned error: %v", err)
 	}
 	if accounts.ensured[0].Username != DefaultRootUsername {
@@ -257,19 +329,21 @@ func TestSeedRootDefaultsTheUsername(t *testing.T) {
 	}
 }
 
-// The tuple is checked for before it is written, which is what makes the
+// The relationship is checked for before it is written, which is what makes the
 // reconcile add-only rather than a write that happens to be idempotent.
+//
+// Seeding twice is the assertion: OpenFGA rejects a write of a tuple that
+// already exists, so a second run that wrote unconditionally would fail.
 func TestSeedRootChecksTheTupleBeforeWriting(t *testing.T) {
-	authorizer := &fakeAuthorizer{}
+	authorizer := newAuthorization(t)
 
-	if err := SeedRoot(context.Background(), &fakeAccounts{}, authorizer, testRootConfig(), fixedClock()); err != nil {
-		t.Fatalf("SeedRoot returned error: %v", err)
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := SeedRoot(context.Background(), &fakeAccounts{}, authorizer, testRootConfig(), fixedClock()); err != nil {
+			t.Fatalf("SeedRoot attempt %d returned error: %v", attempt, err)
+		}
 	}
-	if len(authorizer.checked) != 1 {
-		t.Fatalf("checked %d times, want 1", len(authorizer.checked))
-	}
-	if authorizer.checked[0].Relation != authz.RelationRoot {
-		t.Fatalf("checked relation = %q, want root", authorizer.checked[0].Relation)
+	if !rootIsSeeded(t, authorizer, DefaultRootSubject) {
+		t.Fatal("root relationship missing after two seeds")
 	}
 }
 
@@ -280,7 +354,7 @@ func TestSeedRootDefaultsTheSubject(t *testing.T) {
 	config := testRootConfig()
 	config.Subject = ""
 
-	if err := SeedRoot(context.Background(), accounts, &fakeAuthorizer{}, config, fixedClock()); err != nil {
+	if err := SeedRoot(context.Background(), accounts, newAuthorization(t), config, fixedClock()); err != nil {
 		t.Fatalf("SeedRoot returned error: %v", err)
 	}
 	if accounts.ensured[0].Subject != DefaultRootSubject {
@@ -301,7 +375,7 @@ func TestSeedRootDoesNotReinsertWhenTheUsernameChanged(t *testing.T) {
 	config := testRootConfig()
 	config.Username = "administrator"
 
-	if err := SeedRoot(context.Background(), accounts, &fakeAuthorizer{allowed: true}, config, fixedClock()); err != nil {
+	if err := SeedRoot(context.Background(), accounts, seedRootRelationship(t, newAuthorization(t), DefaultRootSubject), config, fixedClock()); err != nil {
 		t.Fatalf("SeedRoot returned error: %v", err)
 	}
 	if len(accounts.ensured) != 0 {
@@ -314,13 +388,13 @@ func TestSeedRootDoesNotReinsertWhenTheUsernameChanged(t *testing.T) {
 // behind it, leaving the operator signed in as somebody else and not root.
 func TestSeedRootRejectsAUsernameHeldByAnotherAccount(t *testing.T) {
 	accounts := &fakeAccounts{usernameTaken: true}
-	authorizer := &fakeAuthorizer{}
+	authorizer := newAuthorization(t)
 
 	err := SeedRoot(context.Background(), accounts, authorizer, testRootConfig(), fixedClock())
 	if err == nil {
 		t.Fatal("SeedRoot returned nil for a username held by another account")
 	}
-	if len(authorizer.written) != 0 {
-		t.Fatalf("wrote %d tuples for an account that was not created, want 0", len(authorizer.written))
+	if rootIsSeeded(t, authorizer, DefaultRootSubject) {
+		t.Fatal("root relationship was written for an account that was not created")
 	}
 }

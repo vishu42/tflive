@@ -15,27 +15,14 @@ const rendered = execFileSync(
     ".env.example",
     "-f",
     "docker-compose.yaml",
-    "-f",
-    "docker-compose.app.yaml",
     "config",
     "--format",
     "json",
   ],
-  {
-    cwd: root,
-    encoding: "utf8",
-    // The application phase requires these, and .env.example deliberately ships
-    // them empty because they are recorded from the provisioning phase.
-    env: {
-      ...process.env,
-      OPENFGA_STORE_ID: "verify-store-id",
-      OPENFGA_MODEL_ID: "verify-model-id",
-    },
-  },
+  { cwd: root, encoding: "utf8" },
 );
 const config = JSON.parse(rendered);
-const appSource = readFileSync(resolve(root, "docker-compose.app.yaml"), "utf8");
-const source = readFileSync(resolve(root, "docker-compose.yaml"), "utf8") + appSource;
+const source = readFileSync(resolve(root, "docker-compose.yaml"), "utf8");
 const envExample = readFileSync(resolve(root, ".env.example"), "utf8");
 
 function envValue(name) {
@@ -53,11 +40,6 @@ for (const [name, value] of Object.entries({
   OIDC_ISSUER_URL: "http://keycloak.localhost:8082/realms/tflive",
   TFLIVE_PUBLIC_URL: "http://localhost:5173",
   OIDC_CLIENT_ID: "tflive-api",
-  OPENFGA_API_URL: "http://localhost:8083",
-  OPENFGA_STORE_ID: "",
-  OPENFGA_MODEL_ID: "",
-  OPENFGA_API_TOKEN: "",
-  OPENFGA_HTTP_TIMEOUT: "10s",
 })) {
   assert.equal(envValue(name), value, `${name} has the wrong local example value`);
 }
@@ -77,14 +59,10 @@ function hasVolume(value, sourceName) {
 const postgres = service("postgres");
 const keycloak = service("keycloak");
 const keycloakProvision = service("keycloak-provision");
-const openfgaMigrate = service("openfga-migrate");
-const openfga = service("openfga");
-const openfgaProvision = service("openfga-provision");
+const api = service("api");
 
 assert.equal(postgres.image, "postgres:16-alpine");
 assert.equal(keycloak.image, "quay.io/keycloak/keycloak:26.6.3");
-assert.equal(openfgaMigrate.image, "openfga/openfga:v1.15.1");
-assert.equal(openfga.image, "openfga/openfga:v1.15.1");
 
 assert.ok(postgres.healthcheck, "the shared Postgres needs a health check");
 assert.ok(keycloak.healthcheck?.test?.join(" ").includes("/health/ready"));
@@ -110,13 +88,18 @@ assert.equal(
   envValue("OIDC_CLIENT_SECRET"),
   "keycloak-provision must register the same client secret the API authenticates with",
 );
+assert.equal(
+  api.depends_on?.["keycloak-provision"]?.condition,
+  "service_completed_successfully",
+  "the API must not start before the realm and client it authenticates against exist",
+);
 
 // TFLIVE_PUBLIC_URL is the one value all three parties to the OIDC handshake
 // must agree on: the API derives its redirect and post-logout URIs from it,
 // and the Keycloak provisioner registers those same URIs on the client. A
 // stale default in any one of these three spots would only surface at login
 // time as invalid_redirect_uri, so pin every "${TFLIVE_PUBLIC_URL:-...}"
-// default in both Compose files to the .env.example value.
+// default in Compose to the .env.example value.
 const publicURLDefaults = [
   ...source.matchAll(/\$\{TFLIVE_PUBLIC_URL:-([^}]*)\}/g),
 ].map((match) => match[1]);
@@ -133,33 +116,19 @@ for (const value of publicURLDefaults) {
   );
 }
 
-assert.equal(openfgaMigrate.depends_on?.postgres?.condition, "service_healthy");
-assert.equal(openfga.depends_on?.["openfga-migrate"]?.condition, "service_completed_successfully");
-assert.ok(openfga.healthcheck?.test?.join(" ").includes("grpc_health_probe"));
-assert.equal(openfgaProvision.depends_on?.openfga?.condition, "service_healthy");
-assert.equal(openfgaProvision.restart, "no");
-assert.equal(openfgaProvision.build?.dockerfile, "Dockerfile.openfga-provisioner");
-assert.equal(resolve(root, openfgaProvision.build?.context ?? "__missing__"), root);
-assert.deepEqual(openfgaProvision.ports ?? [], []);
-assert.deepEqual(openfgaProvision.command, ["bootstrap"]);
-for (const name of ["OPENFGA_STORE_ID", "OPENFGA_MODEL_ID"]) {
-  assert.match(
-    appSource,
-    new RegExp(`\\$\\{${name}:\\?`),
-    `${name} must be required in the application phase, not silently defaulted`,
-  );
-}
-assert.equal(openfgaProvision.environment?.OPENFGA_API_URL, "http://openfga:8080");
-assert.equal(openfgaProvision.environment?.OPENFGA_STORE_NAME, "tflive");
-assert.equal(openfgaProvision.environment?.OPENFGA_API_TOKEN, "");
-assert.equal(openfgaProvision.environment?.OPENFGA_HTTP_TIMEOUT, "10s");
-
-for (const token of [
-  "${OPENFGA_API_TOKEN:-}",
-  "${OPENFGA_HTTP_TIMEOUT:-10s}",
-]) {
-  assert.ok(source.includes(token), `${token} must remain explicit`);
-}
+// OpenFGA is embedded in the API. A service, a provisioner, or a required
+// store or model identifier coming back would reintroduce the two-phase
+// startup the single Compose file exists to remove.
+assert.deepEqual(
+  Object.keys(config.services).filter((name) => name.includes("openfga")),
+  [],
+  "OpenFGA runs inside the API; Compose must not start it as a service",
+);
+assert.doesNotMatch(
+  source,
+  /OPENFGA_(STORE_ID|MODEL_ID|API_URL|API_TOKEN)/,
+  "the API resolves its OpenFGA store and model in process; Compose must not pass identifiers or a URL",
+);
 
 assert.ok(hasVolume(postgres, "postgres-data"));
 assert.ok(config.volumes?.["postgres-data"]);
@@ -177,9 +146,6 @@ for (const name of [
   "KEYCLOAK_PLATFORM_ADMIN_EMAIL",
   "KEYCLOAK_PLATFORM_ADMIN_FIRST_NAME",
   "KEYCLOAK_PLATFORM_ADMIN_LAST_NAME",
-  "OPENFGA_DB_NAME",
-  "OPENFGA_DB_USER",
-  "OPENFGA_DB_PASSWORD",
 ]) {
   assert.match(
     source,
@@ -194,41 +160,5 @@ const provisionerImage = readFileSync(provisionerDockerfile, "utf8");
 assert.match(provisionerImage, /^FROM golang:1\.25\.14-alpine3\.23 AS build/m);
 assert.match(provisionerImage, /^FROM alpine:3\.21$/m);
 assert.match(provisionerImage, /^USER keycloak-provisioner$/m);
-
-const openfgaProvisionerDockerfile = resolve(root, "Dockerfile.openfga-provisioner");
-assert.ok(existsSync(openfgaProvisionerDockerfile), "missing OpenFGA provisioner Dockerfile");
-const openfgaProvisionerImage = readFileSync(openfgaProvisionerDockerfile, "utf8");
-assert.match(openfgaProvisionerImage, /^FROM golang:1\.25\.14-alpine3\.23 AS build/m);
-const runtimeStageMarker = /^FROM alpine:3\.21$/m;
-assert.match(openfgaProvisionerImage, runtimeStageMarker);
-const [openfgaProvisionerBuildStage] = openfgaProvisionerImage.split(runtimeStageMarker);
-const openfgaProvisionerBuildCopies =
-  openfgaProvisionerBuildStage.match(/^COPY[ \t]+.*$/gm) ?? [];
-assert.deepEqual(openfgaProvisionerBuildCopies, [
-  "COPY go.mod go.sum ./",
-  "COPY . .",
-]);
-assert.match(openfgaProvisionerImage, /^RUN CGO_ENABLED=0 go build /m);
-assert.match(openfgaProvisionerImage, /^RUN [^\n]* -trimpath(?: |$)/m);
-assert.match(openfgaProvisionerImage, /^RUN [^\n]* -ldflags="-s -w"(?: |$)/m);
-assert.match(
-  openfgaProvisionerImage,
-  /^RUN [^\n]* -o \/out\/openfga-provisioner \.\/cmd\/openfga-provisioner$/m,
-);
-assert.match(openfgaProvisionerImage, /^RUN apk add --no-cache ca-certificates \\$/m);
-assert.match(openfgaProvisionerImage, /^[ \t]*&& addgroup -S openfga-provisioner \\$/m);
-assert.match(
-  openfgaProvisionerImage,
-  /^[ \t]*&& adduser -S -D -H -G openfga-provisioner openfga-provisioner( \\)?$/m,
-);
-assert.match(
-  openfgaProvisionerImage,
-  /^COPY --from=build \/out\/openfga-provisioner \/usr\/local\/bin\/openfga-provisioner$/m,
-);
-assert.match(openfgaProvisionerImage, /^USER openfga-provisioner$/m);
-assert.match(
-  openfgaProvisionerImage,
-  /^ENTRYPOINT \["\/usr\/local\/bin\/openfga-provisioner"\]$/m,
-);
 
 console.log("authentication Compose contract verified");

@@ -10,12 +10,10 @@ import (
 type AuditAction string
 
 const (
-	AuditActionGrant                AuditAction = "grant"
-	AuditActionRevoke               AuditAction = "revoke"
-	AuditActionRoleChange           AuditAction = "role_change"
-	AuditActionFailedAccessAttempt  AuditAction = "failed_access_attempt"
-	AuditActionSelfApprovalRejected AuditAction = "self_approval_rejected"
-	AuditActionApprovalGranted      AuditAction = "approval_granted"
+	AuditActionGrant               AuditAction = "grant"
+	AuditActionRevoke              AuditAction = "revoke"
+	AuditActionFailedAccessAttempt AuditAction = "failed_access_attempt"
+	AuditActionApprovalGranted     AuditAction = "approval_granted"
 )
 
 // AuditOutcome reports whether the audited operation succeeded or failed.

@@ -6,15 +6,14 @@ import (
 	"time"
 )
 
-// StackStatus reports whether a stack has finished provisioning. Creation
-// enqueues the owner grant rather than writing it inline, so the stack exists
-// before anyone can act on it; the status makes that window visible instead of
-// leaving the caller to guess why access is missing.
+// StackStatus is a stack's lifecycle state. Ready is the only value: creation
+// writes the stack row and its owner grant in one transaction, so a stack is
+// usable the moment it exists. The field stays on the wire so a later state
+// has somewhere to go.
 type StackStatus string
 
 const (
-	StackStatusProvisioning StackStatus = "provisioning"
-	StackStatusReady        StackStatus = "ready"
+	StackStatusReady StackStatus = "ready"
 )
 
 // Stack is a logical infrastructure composition.

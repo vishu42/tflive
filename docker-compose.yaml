@@ -1,4 +1,14 @@
-# Local development only. Every credential and key defaulted in this file is a
+# The whole local stack, in one file:
+#
+#   docker compose up -d
+#
+# It used to be two. docker-compose.app.yaml existed so infrastructure could be
+# brought up and provisioned first, because an operator had to read the OpenFGA
+# store and model identifiers out of a provisioning run and paste them into
+# .env before the application would start. OpenFGA is embedded now and resolves
+# both in process, so there is no phase boundary and nothing to record.
+#
+# Local development only. Every credential and key defaulted here is a
 # throwaway matching .env.example, including CREDENTIAL_ENCRYPTION_KEY, which is
 # duplicated there. Never point a real deployment at these values.
 name: tflive-compose
@@ -12,9 +22,6 @@ services:
       KEYCLOAK_DB_USER: ${KEYCLOAK_DB_USER:-keycloak}
       KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak-local-only}
       KEYCLOAK_DB_NAME: ${KEYCLOAK_DB_NAME:-keycloak}
-      OPENFGA_DB_USER: ${OPENFGA_DB_USER:-openfga}
-      OPENFGA_DB_PASSWORD: ${OPENFGA_DB_PASSWORD:-openfga-local-only}
-      OPENFGA_DB_NAME: ${OPENFGA_DB_NAME:-openfga}
       TEMPORAL_DB_USER: ${TEMPORAL_DB_USER:-temporal}
       TEMPORAL_DB_PASSWORD: ${TEMPORAL_DB_PASSWORD:-temporal}
     ports:
@@ -95,55 +102,6 @@ services:
       TFLIVE_ENVIRONMENT: ${TFLIVE_ENVIRONMENT:-development}
     restart: "no"
 
-  openfga-migrate:
-    image: openfga/openfga:v1.15.1
-    command: migrate
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      OPENFGA_DATASTORE_ENGINE: postgres
-      OPENFGA_DATASTORE_URI: postgres://${OPENFGA_DB_USER:-openfga}:${OPENFGA_DB_PASSWORD:-openfga-local-only}@postgres:5432/${OPENFGA_DB_NAME:-openfga}?sslmode=disable
-    restart: "no"
-
-  openfga:
-    image: openfga/openfga:v1.15.1
-    command: run
-    depends_on:
-      openfga-migrate:
-        condition: service_completed_successfully
-    environment:
-      OPENFGA_DATASTORE_ENGINE: postgres
-      OPENFGA_DATASTORE_URI: postgres://${OPENFGA_DB_USER:-openfga}:${OPENFGA_DB_PASSWORD:-openfga-local-only}@postgres:5432/${OPENFGA_DB_NAME:-openfga}?sslmode=disable
-      OPENFGA_LOG_FORMAT: json
-      OPENFGA_PLAYGROUND_ENABLED: "false"
-    ports:
-      - "8083:8080"
-      - "8084:8081"
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/grpc_health_probe", "-addr=localhost:8081"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
-
-  openfga-provision:
-    build:
-      context: .
-      dockerfile: Dockerfile.openfga-provisioner
-    command: ["bootstrap"]
-    depends_on:
-      openfga:
-        condition: service_healthy
-    environment:
-      OPENFGA_API_URL: http://openfga:8080
-      OPENFGA_STORE_NAME: tflive
-      OPENFGA_STORE_ID: ${OPENFGA_STORE_ID:-}
-      OPENFGA_MODEL_ID: ${OPENFGA_MODEL_ID:-}
-      OPENFGA_HTTP_TIMEOUT: ${OPENFGA_HTTP_TIMEOUT:-10s}
-      OPENFGA_API_TOKEN: ${OPENFGA_API_TOKEN:-}
-    restart: "no"
-
   temporal:
     image: temporalio/auto-setup:1.28.1
     depends_on:
@@ -207,6 +165,83 @@ services:
       done;
       mc mb --ignore-existing local/${S3_BUCKET:-tflive-artifacts}
       "
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      keycloak-provision:
+        condition: service_completed_successfully
+    environment:
+      HTTP_ADDRESS: ":8081"
+      DATABASE_URL: postgres://${APP_DB_USER:-tflive}:${APP_DB_PASSWORD:-tflive}@postgres:5432/${APP_DB_NAME:-tflive_test}?sslmode=disable
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-terraform-runs}
+      TFLIVE_ENVIRONMENT: development
+      TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3}
+      OIDC_ISSUER_URL: http://keycloak.localhost:8082/realms/tflive
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-tflive-api}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-tflive-api-local-only}
+      TFLIVE_PUBLIC_URL: ${TFLIVE_PUBLIC_URL:-http://localhost:5173}
+      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:-b6f1d2c4a8e0937516243b8c5d7e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0}
+      ARTIFACT_STORE_KIND: filesystem
+      ARTIFACT_STORE_FILESYSTEM_ROOT: /var/lib/tflive/artifacts
+      # Seeds the bootstrap administrator on first boot. Required by the API --
+      # without it the process exits at startup and the service restart-loops.
+      # Defaulted here because this file is the local stack; a real deployment
+      # sets it from the environment like every other secret.
+      TFLIVE_ROOT_PASSWORD: ${TFLIVE_ROOT_PASSWORD:-root-local-only}
+    restart: on-failure
+    ports:
+      - "8081:8081"
+    volumes:
+      - artifacts:/var/lib/tflive/artifacts
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${APP_DB_USER:-tflive}:${APP_DB_PASSWORD:-tflive}@postgres:5432/${APP_DB_NAME:-tflive_test}?sslmode=disable
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-terraform-runs}
+      TFLIVE_ENVIRONMENT: development
+      TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3}
+      OIDC_ISSUER_URL: http://keycloak.localhost:8082/realms/tflive
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-tflive-api}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-tflive-api-local-only}
+      TFLIVE_PUBLIC_URL: ${TFLIVE_PUBLIC_URL:-http://localhost:5173}
+      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:-b6f1d2c4a8e0937516243b8c5d7e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0}
+      ARTIFACT_STORE_KIND: filesystem
+      ARTIFACT_STORE_FILESYSTEM_ROOT: /var/lib/tflive/artifacts
+      WORKER_RUN_ROOT: /var/lib/tflive/runs
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+    restart: on-failure
+    volumes:
+      - artifacts:/var/lib/tflive/artifacts
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    depends_on:
+      - api
+    restart: on-failure
+    ports:
+      - "5173:5173"
 
 volumes:
   postgres-data:

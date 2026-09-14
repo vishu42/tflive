@@ -14,13 +14,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openfga/openfga/pkg/storage/memory"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
-	"github.com/vishu42/tflive/internal/authz"
+
+	"github.com/vishu42/tflive/internal/authorization"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
-	"github.com/vishu42/tflive/internal/openfga"
 	"github.com/vishu42/tflive/internal/queue"
 )
 
@@ -74,8 +75,6 @@ func TestWriteStartupErrorDoesNotLeakSecuritySecrets(t *testing.T) {
 	values := apiTestValues()
 	values["TFLIVE_ENVIRONMENT"] = "production"
 	values["OIDC_ISSUER_URL"] = "https://client:oidc-client-secret-sentinel@id.example.com/realms/tflive"
-	values["OPENFGA_API_URL"] = "https://openfga.example.com"
-	values["OPENFGA_API_TOKEN"] = "openfga-api-token-sentinel"
 	values["KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD"] = "bootstrap-password-sentinel"
 
 	err := runWithDependencies(context.Background(), apiTestGetenv(values), apiDependencies{})
@@ -116,11 +115,13 @@ func TestRunWiresProducerOnlyQueueStore(t *testing.T) {
 		t.Fatal("postgres migrations did not run")
 	}
 	assertAPIQueueSpecs(t, deps.queueSpecs)
-	if deps.service.Authorizer != deps.authorizer {
-		t.Fatal("service Authorizer is not the configured OpenFGA adapter")
+	if deps.service.Authorization != deps.authorizer {
+		t.Fatal("service Authorization is not the embedded authorization")
 	}
-	if deps.openFGAConfig.APIURL.String() != "http://localhost:8080" || deps.openFGAConfig.StoreID != "store-id" || deps.openFGAConfig.ModelID != "model-id" || deps.openFGAConfig.HTTPTimeout != 10*time.Second {
-		t.Fatalf("OpenFGA config = %#v", deps.openFGAConfig)
+	// One setting survives: the store to adopt. There is no URL, token or
+	// timeout, and no identifier for an operator to record between two phases.
+	if deps.openFGAStoreName != config.DefaultOpenFGAStoreName {
+		t.Fatalf("store name = %q, want %q", deps.openFGAStoreName, config.DefaultOpenFGAStoreName)
 	}
 	if deps.service.Stacks != deps.store {
 		t.Fatal("service Stacks is not the store")
@@ -176,12 +177,16 @@ func assertAPIQueueSpecs(t *testing.T, registry *queue.SpecRegistry) {
 		app.KindStartTemplateSync,
 		app.KindSignalRunApproval,
 		app.KindSignalRunCancellation,
-		app.KindGrantStackOwner,
-		app.KindMarkStackReady,
-		authz.StackGrantSpec.Kind,
 	} {
 		if _, ok := registry.Spec(kind); !ok {
 			t.Fatalf("queue spec registry missing %q", kind)
+		}
+	}
+	// The authorization kinds are gone: their writes commit with the domain
+	// change that caused them.
+	for _, retired := range []queue.Kind{"grant_stack_owner", "mark_stack_ready", "reconcile_stack_grant"} {
+		if _, ok := registry.Spec(retired); ok {
+			t.Fatalf("queue spec registry still carries the retired kind %q", retired)
 		}
 	}
 }
@@ -240,8 +245,6 @@ func TestRunGatesSecureCookiesOnRuntimeMode(t *testing.T) {
 				values["TFLIVE_ENVIRONMENT"] = "production"
 				values["OIDC_ISSUER_URL"] = "https://id.example.com/realms/tflive"
 				values["TFLIVE_PUBLIC_URL"] = "https://app.example.com"
-				values["OPENFGA_API_URL"] = "https://openfga.example.com"
-				values["OPENFGA_API_TOKEN"] = "openfga-token"
 			}
 
 			deps := newRecordingAPIDependencies(t)
@@ -346,8 +349,8 @@ func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
 	// neither of which it asserts anything about. Everything it does assert,
 	// migrations and wiring, still runs against the real Postgres.
 	deps := defaultAPIDependencies()
-	deps.newAuthorizer = func(openfga.Config) (authz.Authorizer, error) {
-		return &testAuthorizer{}, nil
+	deps.newAuthorization = func(_ context.Context, _ postgresPool, storeName string) (*authorization.Authorization, error) {
+		return authorization.NewWithDatastore(context.Background(), memory.New(), storeName)
 	}
 
 	errCh := make(chan error, 1)
@@ -448,11 +451,6 @@ func apiTestValues() map[string]string {
 		"OIDC_CLIENT_SECRET":             "oidc-client-secret",
 		"SESSION_ENCRYPTION_KEY":         "01234567890123456789012345678901",
 		"TFLIVE_ROOT_PASSWORD":           "root-local-only",
-		"OPENFGA_API_URL":                "http://localhost:8080",
-		"OPENFGA_STORE_ID":               "store-id",
-		"OPENFGA_MODEL_ID":               "model-id",
-		"OPENFGA_API_TOKEN":              "",
-		"OPENFGA_HTTP_TIMEOUT":           "10s",
 	}
 }
 
@@ -466,21 +464,22 @@ func apiTestGetenv(values map[string]string) func(string) string {
 
 type recordingAPIDependencies struct {
 	apiDependencies
-	pool                *recordingPostgresPool
-	store               *recordingStore
-	queueSpecs          *queue.SpecRegistry
-	credentialCipher    *encryption.Cipher
-	sessionCipher       *encryption.Cipher
-	artifactStoreConfig config.ArtifactStoreConfig
-	logReader           recordingTemplateRunLogReader
-	service             app.Service
-	serverAddress       string
-	serverHandler       http.Handler
-	migrated            bool
-	serviceErr          error
-	serverErr           error
-	openFGAConfig       openfga.Config
-	authorizer          *testAuthorizer
+	pool                     *recordingPostgresPool
+	store                    *recordingStore
+	queueSpecs               *queue.SpecRegistry
+	credentialCipher         *encryption.Cipher
+	sessionCipher            *encryption.Cipher
+	artifactStoreConfig      config.ArtifactStoreConfig
+	logReader                recordingTemplateRunLogReader
+	service                  app.Service
+	serverAddress            string
+	serverHandler            http.Handler
+	migrated                 bool
+	authorizationMigratedDSN string
+	serviceErr               error
+	serverErr                error
+	openFGAStoreName         string
+	authorizer               *authorization.Authorization
 }
 
 func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
@@ -500,6 +499,10 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 				t.Fatalf("migratePostgres pool = %p, want %p", pool, deps.pool)
 			}
 			deps.migrated = true
+			return nil
+		},
+		migrateAuthorization: func(databaseURL string) error {
+			deps.authorizationMigratedDSN = databaseURL
 			return nil
 		},
 		newStore: func(pool postgresPool, specs *queue.SpecRegistry, credentialCipher *encryption.Cipher, sessionCipher *encryption.Cipher) (appRepositories, error) {
@@ -525,8 +528,8 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 		newVerifier: func(context.Context, authn.OIDCVerifierConfig) (tokenVerifier, error) {
 			return testTokenVerifier{}, nil
 		},
-		newAuthorizer: func(cfg openfga.Config) (authz.Authorizer, error) {
-			deps.openFGAConfig = cfg
+		newAuthorization: func(_ context.Context, _ postgresPool, storeName string) (*authorization.Authorization, error) {
+			deps.openFGAStoreName = storeName
 			return deps.authorizer, nil
 		},
 		listenAndServe: func(_ context.Context, address string, handler http.Handler) error {
@@ -535,31 +538,16 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 			return deps.serverErr
 		},
 	}
-	deps.authorizer = &testAuthorizer{}
+	auth, err := authorization.NewWithDatastore(context.Background(), memory.New(), "tflive-test")
+	if err != nil {
+		t.Fatalf("build authorization: %v", err)
+	}
+	t.Cleanup(auth.Close)
+	deps.authorizer = auth
 	return deps
 }
 
 type testTokenVerifier struct{}
-
-type testAuthorizer struct {
-	written []authz.Grant
-}
-
-func (*testAuthorizer) Check(context.Context, authz.CheckRequest) (authz.CheckResult, error) {
-	return authz.CheckResult{}, nil
-}
-func (*testAuthorizer) BatchCheck(context.Context, authz.BatchCheckRequest) (authz.BatchCheckResult, error) {
-	return authz.BatchCheckResult{}, nil
-}
-func (*testAuthorizer) ListGrants(context.Context, authz.ListGrantsRequest) (authz.ListGrantsResult, error) {
-	return authz.ListGrantsResult{}, nil
-}
-func (authorizer *testAuthorizer) WriteRelationships(_ context.Context, mutation authz.Mutation) error {
-	authorizer.written = append(authorizer.written, mutation.Grants()...)
-	return nil
-}
-
-func (*testAuthorizer) DeleteRelationships(context.Context, authz.Mutation) error { return nil }
 
 func (testTokenVerifier) Verify(context.Context, string) (authn.VerifiedToken, error) {
 	return authn.VerifiedToken{Subject: "test-user"}, nil
@@ -789,8 +777,8 @@ func (recordingTemplateRunLogReader) ReadTemplateRunLog(context.Context, domain.
 
 // The API store must satisfy the unit-of-work and queue-reader surfaces the
 // service and the queue endpoint depend on.
-func (store *recordingStore) InTx(ctx context.Context, fn func(app.TxRepo, queue.Enqueuer) error) error {
-	return fn(store, store)
+func (store *recordingStore) InTx(ctx context.Context, fn func(context.Context, app.TxRepo, queue.Enqueuer) error) error {
+	return fn(ctx, store, store)
 }
 
 func (store *recordingStore) Enqueue(context.Context, ...queue.Request) error { return nil }

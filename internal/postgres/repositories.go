@@ -460,8 +460,7 @@ func insertStack(ctx context.Context, tx pgx.Tx, stack domain.Stack) error {
 		credentialIDsJSON = []byte("[]")
 	}
 
-	// A caller that does not care about provisioning gets the terminal status,
-	// so only the queue-driven creation path can leave a stack pending.
+	// A caller that sets no status gets ready, the only one there is.
 	status := stack.Status
 	if status == "" {
 		status = domain.StackStatusReady
@@ -495,26 +494,6 @@ func insertStack(ctx context.Context, tx pgx.Tx, stack domain.Stack) error {
 	}
 	if err != nil {
 		return fmt.Errorf("create stack: %w", err)
-	}
-	return nil
-}
-
-// MarkStackReady flips a provisioned stack to its terminal status. It is
-// idempotent by construction: running it against an already ready stack is a
-// no-op update, which is what makes at-least-once delivery of the
-// mark_stack_ready kind safe.
-func (store *Store) MarkStackReady(ctx context.Context, tenantID domain.TenantID, stackID domain.StackID) error {
-	result, err := store.pool.Exec(ctx, `
-		update stacks
-		   set status = $3
-		 where tenant_id = $1
-		   and id = $2
-	`, tenantID, stackID, string(domain.StackStatusReady))
-	if err != nil {
-		return fmt.Errorf("mark stack ready: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return app.ErrNotFound
 	}
 	return nil
 }

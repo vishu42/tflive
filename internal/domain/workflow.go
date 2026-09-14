@@ -9,7 +9,6 @@ import (
 const (
 	TemplateRunWorkflowName  = "TemplateRunWorkflow"
 	TemplateSyncWorkflowName = "TemplateSyncWorkflow"
-	StackRunWorkflowName     = "StackRunWorkflow"
 
 	ApprovalSignalName = "approval"
 	CancelSignalName   = "cancel"

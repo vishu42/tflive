@@ -87,47 +87,29 @@ the host's browser-facing port, so the provisioner registers
 Requires Docker. No Go or Node toolchain.
 
 > [!NOTE]
-> **Upgrading an existing local stack?** Run
-> `docker compose -f docker-compose.yaml -f docker-compose.app.yaml down -v`
-> before starting it back up. The provisioner no longer creates the
+> **Upgrading an existing local stack?** Run `docker compose down -v` before
+> starting it back up. Two reasons. The provisioner no longer creates the
 > `tflive-web` public client or its audience mapper, but an existing Keycloak
-> volume keeps them from before — and the stale public client can still mint
-> browser-held access tokens, which is the posture this change exists to end.
+> volume keeps them from before — and a stale public client can still mint
+> browser-held access tokens, which is the posture that change exists to end.
+> Separately, OpenFGA's tables moved out of their own database and into the
+> application database, so tuples written before the move are not carried over.
 
-**1. Start the infrastructure and provision it.**
+**1. Start everything.**
 
 ```bash
 cp .env.example .env
 docker compose up -d --wait
 ```
 
-**2. Copy the two OpenFGA identifiers into `.env`.**
-
-```bash
-docker compose logs openfga-provision
-```
-
-It prints exactly two assignments. Copy both into `.env` as text — do not
-execute the output:
-
-```text
-OPENFGA_STORE_ID=<store ID>
-OPENFGA_MODEL_ID=<authorization model ID>
-```
-
-The application will not start without them. That is deliberate: the
-authorization store it runs against should be something you chose, not
-something a script picked.
-
-**3. Start the application.**
-
-```bash
-docker compose -f docker-compose.yaml -f docker-compose.app.yaml up -d
-```
-
 First run builds from source, so it takes a few minutes. Later runs are cached.
 
-**4. Open http://localhost:5173** and sign in with the platform administrator
+There is no second step. OpenFGA runs inside the API, which creates its tables
+in the application database and resolves the store and authorization model from
+the model in this repository at startup. Nothing has to be recorded between
+phases, and nothing has to be pasted into `.env`.
+
+**2. Open http://localhost:5173** and sign in with the platform administrator
 credentials from `.env.example`.
 
 > [!IMPORTANT]
@@ -137,10 +119,8 @@ credentials from `.env.example`.
 
 ### Stopping it
 
-Name both files, or the application keeps running:
-
 ```bash
-docker compose -f docker-compose.yaml -f docker-compose.app.yaml down
+docker compose down
 ```
 
 ### Starting over
@@ -148,11 +128,9 @@ docker compose -f docker-compose.yaml -f docker-compose.app.yaml down
 To wipe everything and begin from a clean slate:
 
 ```bash
-docker compose -f docker-compose.yaml -f docker-compose.app.yaml down -v
+docker compose down -v
 docker compose up -d --wait
 ```
-
-Then repeat from step 2 — a new store means new identifiers.
 
 ### Optional extras
 

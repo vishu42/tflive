@@ -1,51 +1,21 @@
-// Package authz defines the provider-neutral authorization contract — a
-// (Subject, Relation, Object) tuple mirroring OpenFGA's wire shape — and the
-// handler that reconciles grants onto whichever provider implements it.
-package authz
+package authorization
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"unicode"
 )
 
-var (
-	ErrInvalidInput      = errors.New("invalid authorization input")
-	ErrTimeout           = errors.New("authorization timeout")
-	ErrUnavailable       = errors.New("authorization unavailable")
-	ErrMalformedResponse = errors.New("malformed authorization response")
-	ErrWriteUnconfirmed  = errors.New("authorization write unconfirmed")
-)
-
-// SubjectGrantLister reads the direct roles one subject holds on one object.
+// ErrInvalidInput reports input that could not name a subject, object or
+// relation at all -- a malformed identifier, not a refused request.
 //
-// It is deliberately separate from Authorizer: only reconciling handlers need
-// this narrow read, and widening Authorizer would force every implementation
-// to grow a method it never calls.
-type SubjectGrantLister interface {
-	ListSubjectGrants(context.Context, ListSubjectGrantsRequest) (ListGrantsResult, error)
-}
+// It is the only sentinel this package exports. A denial is (false, nil) and a
+// provider failure is an ordinary wrapped error; callers branch on neither.
+// This one is different because callers genuinely act on it: a malformed stack
+// id must read as invalid input rather than as a server fault.
+var ErrInvalidInput = errors.New("invalid authorization input")
 
-// Authorizer is the provider-neutral authorization port.
-type Authorizer interface {
-	Check(context.Context, CheckRequest) (CheckResult, error)
-	BatchCheck(context.Context, BatchCheckRequest) (BatchCheckResult, error)
-	ListGrants(context.Context, ListGrantsRequest) (ListGrantsResult, error)
-	WriteRelationships(context.Context, Mutation) error
-	DeleteRelationships(context.Context, Mutation) error
-}
-
-// identifier is the {type, id} pair that both tuple slots share. It stores the
-// parts rather than the rendered "type:id" string, so a holder can recover the
-// bare id without string surgery on the rendered form.
-//
-// Object and Subject embed it as siblings rather than one wrapping the other.
-// They are the same shape but not the same thing: an object is a resource, a
-// subject is who acts on one, and only a subject may later carry a userset
-// relation ("group:eng#member") that is never legal in the object slot.
 type identifier struct {
 	objectType ObjectType
 	id         string
@@ -153,7 +123,7 @@ var (
 func mustObject(objectType ObjectType, id string) Object {
 	object, err := ObjectFromID(objectType, id)
 	if err != nil {
-		panic(fmt.Sprintf("authz: invalid object %s:%s: %v", objectType, id, err))
+		panic(fmt.Sprintf("authorization: invalid object %s:%s: %v", objectType, id, err))
 	}
 	return object
 }
@@ -161,11 +131,11 @@ func mustObject(objectType ObjectType, id string) Object {
 func mustSubject(objectType ObjectType, id string) Subject {
 	ident, err := newIdentifier(objectType, id)
 	if err != nil {
-		panic(fmt.Sprintf("authz: invalid subject %s:%s: %v", objectType, id, err))
+		panic(fmt.Sprintf("authorization: invalid subject %s:%s: %v", objectType, id, err))
 	}
 	subject := Subject{identifier: ident}
 	if !subject.Valid() {
-		panic(fmt.Sprintf("authz: %s may not occupy the user slot", objectType))
+		panic(fmt.Sprintf("authorization: %s may not occupy the user slot", objectType))
 	}
 	return subject
 }
@@ -250,70 +220,6 @@ func safeTupleToken(token string) bool {
 	return true
 }
 
-// CheckRequest asks whether Subject has Relation on Object.
-type CheckRequest struct {
-	Subject  Subject
-	Relation Relation
-	Object   Object
-}
-
-// Valid reports whether the request can safely cross the adapter boundary.
-//
-//	CheckRequest{user:alice, can_view, stack:abc}.Valid()  → true
-//	CheckRequest{user:alice, parent, stack:abc}.Valid()    → true   (checking is safe)
-//	CheckRequest{user:alice, <zero>, stack:abc}.Valid()    → false
-//	CheckRequest{}.Valid()                                 → false
-func (request CheckRequest) Valid() bool {
-	return request.Subject.Valid() && request.Relation.Valid() && request.Object.Valid()
-}
-
-// CheckResult is the explicit outcome of a Check request.
-type CheckResult struct {
-	Allowed bool
-}
-
-// BatchCheckRequest groups independent checks into one authorization request.
-type BatchCheckRequest struct {
-	Checks []CheckRequest
-}
-
-// Valid reports whether every requested check can cross the adapter boundary.
-func (request BatchCheckRequest) Valid() bool {
-	if len(request.Checks) == 0 {
-		return false
-	}
-	for _, check := range request.Checks {
-		if !check.Valid() {
-			return false
-		}
-	}
-	return true
-}
-
-// BatchCheckResult contains one result, in request order, for every batch check.
-type BatchCheckResult struct {
-	Results []CheckResult
-}
-
-// ListGrantsRequest asks for direct role assignments on an object.
-type ListGrantsRequest struct {
-	Object Object
-}
-
-// Valid reports whether the request can safely cross the adapter boundary.
-//
-//	ListGrantsRequest{Object: stack:abc}.Valid()  → true
-//	ListGrantsRequest{}.Valid()                   → false
-func (request ListGrantsRequest) Valid() bool {
-	return request.Object.Valid()
-}
-
-// ListGrantsResult contains only validated grants. Valid checks well-formed
-// identifiers and a well-formed relation name, not that the relation is a
-// direct, writable one — see Grant.Valid.
-type ListGrantsResult struct {
-	Grants []Grant
-}
 
 // Grant is a direct, grantable role assignment for a subject on an object.
 type Grant struct {
@@ -407,76 +313,4 @@ func NewStructuralRelationship(subject Subject, object Object, relation Relation
 		return Grant{}, fmt.Errorf("%w: invalid structural relationship", ErrInvalidInput)
 	}
 	return grant, nil
-}
-
-// Mutation changes a set of direct role assignments. Confirmation requests
-// that the adapter verifies the resulting state before reporting success.
-type Mutation struct {
-	grants  []Grant
-	confirm bool
-}
-
-// NewMutation returns a validated relationship mutation. It copies grants so
-// callers cannot alter the mutation after validation.
-func NewMutation(grants []Grant, confirm bool) (Mutation, error) {
-	if len(grants) == 0 {
-		return Mutation{}, fmt.Errorf("%w: relationship mutation has no grants", ErrInvalidInput)
-	}
-	validated := make([]Grant, len(grants))
-	for i, grant := range grants {
-		if !grant.Valid() {
-			return Mutation{}, fmt.Errorf("%w: invalid relationship mutation grant", ErrInvalidInput)
-		}
-		validated[i] = grant
-	}
-	return Mutation{grants: validated, confirm: confirm}, nil
-}
-
-// Grants returns a copy of the mutation's validated direct grants.
-func (mutation Mutation) Grants() []Grant {
-	return append([]Grant(nil), mutation.grants...)
-}
-
-// Confirm reports whether the mutation should be confirmed before success.
-func (mutation Mutation) Confirm() bool {
-	return mutation.confirm
-}
-
-// Valid reports whether the mutation contains one or more validated grants.
-func (mutation Mutation) Valid() bool {
-	if len(mutation.grants) == 0 {
-		return false
-	}
-	for _, grant := range mutation.grants {
-		if !grant.Valid() {
-			return false
-		}
-	}
-	return true
-}
-
-// ListSubjectGrantsRequest asks for one subject's direct roles on one object.
-type ListSubjectGrantsRequest struct {
-	Subject Subject
-	Object  Object
-}
-
-// Valid reports whether the request names a well-formed subject and object.
-//
-//	ListSubjectGrantsRequest{user:alice, stack:abc}.Valid()  → true
-//	ListSubjectGrantsRequest{Object: stack:abc}.Valid()      → false  (no subject)
-func (request ListSubjectGrantsRequest) Valid() bool {
-	return request.Subject.Valid() && request.Object.Valid()
-}
-
-// HTTPStatus maps authorization dependency failures to stable API responses.
-func HTTPStatus(err error) (status int, code string, ok bool) {
-	switch {
-	case errors.Is(err, ErrWriteUnconfirmed):
-		return http.StatusServiceUnavailable, "authorization_write_unconfirmed", true
-	case errors.Is(err, ErrTimeout), errors.Is(err, ErrUnavailable), errors.Is(err, ErrMalformedResponse):
-		return http.StatusServiceUnavailable, "authorization_unavailable", true
-	default:
-		return 0, "", false
-	}
 }

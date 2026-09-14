@@ -36,17 +36,11 @@ func TestLoadSecurityConfigDevelopmentModes(t *testing.T) {
 			if cfg.OIDC.ClientID != "tflive-api" {
 				t.Fatalf("ClientID = %q, want tflive-api", cfg.OIDC.ClientID)
 			}
-			if got := cfg.OpenFGA.APIURL.String(); got != "http://localhost:8080" {
-				t.Fatalf("OpenFGA APIURL = %q", got)
-			}
-			if cfg.OpenFGA.StoreID != "store-id" || cfg.OpenFGA.ModelID != "model-id" {
-				t.Fatalf("OpenFGA IDs = %q/%q", cfg.OpenFGA.StoreID, cfg.OpenFGA.ModelID)
-			}
-			if !cfg.OpenFGA.APIToken.Empty() {
-				t.Fatal("development API token is not empty")
-			}
-			if cfg.OpenFGA.RequestTimeout != 10*time.Second {
-				t.Fatalf("RequestTimeout = %s, want 10s", cfg.OpenFGA.RequestTimeout)
+			// The embedded server has one setting left: the store to adopt.
+			// There is no URL to dial, no token to present, and no identifier
+			// for an operator to record between two startup phases.
+			if cfg.OpenFGA.StoreName != DefaultOpenFGAStoreName {
+				t.Fatalf("StoreName = %q, want %q", cfg.OpenFGA.StoreName, DefaultOpenFGAStoreName)
 			}
 		})
 	}
@@ -59,8 +53,6 @@ func TestLoadSecurityConfigProductionAndSecretFormatting(t *testing.T) {
 	values["TFLIVE_ENVIRONMENT"] = "production"
 	values["TFLIVE_PUBLIC_URL"] = "https://app.example.com"
 	values["OIDC_ISSUER_URL"] = "https://id.example.com/realms/tflive"
-	values["OPENFGA_API_URL"] = "https://openfga.example.com"
-	values["OPENFGA_API_TOKEN"] = "openfga-token-sentinel"
 
 	cfg, err := loadSecurityConfig(mapConfigEnv(values))
 	if err != nil {
@@ -69,14 +61,9 @@ func TestLoadSecurityConfigProductionAndSecretFormatting(t *testing.T) {
 	if cfg.Mode != RuntimeProduction {
 		t.Fatalf("Mode = %q, want %q", cfg.Mode, RuntimeProduction)
 	}
-	if got := cfg.OpenFGA.APIToken.Value(); got != "openfga-token-sentinel" {
-		t.Fatalf("APIToken.Value() = %q", got)
-	}
-
-	formatted := fmt.Sprintf("%s\n%v\n%+v\n%#v", cfg.OpenFGA.APIToken, cfg.OpenFGA, cfg.OpenFGA, cfg)
-	if strings.Contains(formatted, "openfga-token-sentinel") {
-		t.Fatalf("formatted configuration leaked token: %s", formatted)
-	}
+	// OpenFGA no longer carries a secret: there is no service to authenticate
+	// to. The redaction this pins is the remaining one, on the client secret.
+	formatted := fmt.Sprintf("%s\n%v\n%+v\n%#v", cfg.OIDC.ClientSecret, cfg.OpenFGA, cfg.OpenFGA, cfg)
 	if strings.Contains(formatted, "directory-reader-secret-sentinel") {
 		t.Fatalf("formatted configuration leaked directory reader secret: %s", formatted)
 	}
@@ -109,6 +96,7 @@ func TestLoadSecurityConfigRejectsMissingAndMalformedValues(t *testing.T) {
 		value string
 		want  string
 	}{
+		{name: "unsafe store name", key: "OPENFGA_STORE_NAME", value: "store name", want: "OPENFGA_STORE_NAME must not contain whitespace or control characters"},
 		{name: "unknown environment", key: "TFLIVE_ENVIRONMENT", value: "staging", want: "TFLIVE_ENVIRONMENT must be development or production"},
 		{name: "missing tenant", key: "TFLIVE_TENANT_ID", value: "", want: "TFLIVE_TENANT_ID is required"},
 		{name: "tenant prefix", key: "TFLIVE_TENANT_ID", value: "-tenant", want: "TFLIVE_TENANT_ID must start"},
@@ -125,19 +113,6 @@ func TestLoadSecurityConfigRejectsMissingAndMalformedValues(t *testing.T) {
 		{name: "issuer fragment", key: "OIDC_ISSUER_URL", value: "https://id.example.com/realms/tflive#keys", want: "OIDC_ISSUER_URL must not include a fragment"},
 		{name: "missing client id", key: "OIDC_CLIENT_ID", value: "", want: "OIDC_CLIENT_ID is required"},
 		{name: "client id whitespace", key: "OIDC_CLIENT_ID", value: "tflive api", want: "OIDC_CLIENT_ID must not contain whitespace or control characters"},
-		{name: "missing OpenFGA URL", key: "OPENFGA_API_URL", value: "", want: "OPENFGA_API_URL is required"},
-		{name: "OpenFGA scheme", key: "OPENFGA_API_URL", value: "ftp://openfga.example.com", want: "OPENFGA_API_URL must be an absolute HTTP or HTTPS URL"},
-		{name: "OpenFGA user info", key: "OPENFGA_API_URL", value: "https://user:api-url-secret-sentinel@openfga.example.com", want: "OPENFGA_API_URL must not include user information"},
-		{name: "OpenFGA query", key: "OPENFGA_API_URL", value: "https://openfga.example.com?x=1", want: "OPENFGA_API_URL must not include a query"},
-		{name: "OpenFGA fragment", key: "OPENFGA_API_URL", value: "https://openfga.example.com#api", want: "OPENFGA_API_URL must not include a fragment"},
-		{name: "missing store ID", key: "OPENFGA_STORE_ID", value: "", want: "OPENFGA_STORE_ID is required"},
-		{name: "unsafe store ID", key: "OPENFGA_STORE_ID", value: "store id", want: "OPENFGA_STORE_ID must not contain whitespace or control characters"},
-		{name: "missing model ID", key: "OPENFGA_MODEL_ID", value: "", want: "OPENFGA_MODEL_ID is required"},
-		{name: "unsafe model ID", key: "OPENFGA_MODEL_ID", value: "model\nid", want: "OPENFGA_MODEL_ID must not contain whitespace or control characters"},
-		{name: "malformed timeout", key: "OPENFGA_HTTP_TIMEOUT", value: "forever", want: "OPENFGA_HTTP_TIMEOUT must be a positive duration"},
-		{name: "zero timeout", key: "OPENFGA_HTTP_TIMEOUT", value: "0s", want: "OPENFGA_HTTP_TIMEOUT must be a positive duration"},
-		{name: "negative timeout", key: "OPENFGA_HTTP_TIMEOUT", value: "-1s", want: "OPENFGA_HTTP_TIMEOUT must be a positive duration"},
-		{name: "unsafe token", key: "OPENFGA_API_TOKEN", value: "api token sentinel", want: "OPENFGA_API_TOKEN must not contain whitespace or control characters"},
 	}
 
 	for _, test := range tests {
@@ -172,8 +147,6 @@ func TestLoadSecurityConfigRejectsInsecureProductionValues(t *testing.T) {
 	}{
 		{name: "HTTP issuer", mutate: func(values map[string]string) { values["OIDC_ISSUER_URL"] = "http://id.example.com/realms/tflive" }, want: "OIDC_ISSUER_URL must use HTTPS in production"},
 		{name: "HTTP public URL", mutate: func(values map[string]string) { values["TFLIVE_PUBLIC_URL"] = "http://app.example.com" }, want: "TFLIVE_PUBLIC_URL must use HTTPS in production"},
-		{name: "HTTP OpenFGA", mutate: func(values map[string]string) { values["OPENFGA_API_URL"] = "http://openfga.example.com" }, want: "OPENFGA_API_URL must use HTTPS in production"},
-		{name: "missing OpenFGA token", mutate: func(values map[string]string) { values["OPENFGA_API_TOKEN"] = "" }, want: "OPENFGA_API_TOKEN is required in production"},
 	}
 
 	for _, test := range tests {
@@ -184,9 +157,7 @@ func TestLoadSecurityConfigRejectsInsecureProductionValues(t *testing.T) {
 			values["TFLIVE_ENVIRONMENT"] = "production"
 			values["TFLIVE_PUBLIC_URL"] = "https://app.example.com"
 			values["OIDC_ISSUER_URL"] = "https://id.example.com/realms/tflive"
-			values["OPENFGA_API_URL"] = "https://openfga.example.com"
-			values["OPENFGA_API_TOKEN"] = "production-token-sentinel"
-			test.mutate(values)
+							test.mutate(values)
 			_, err := loadSecurityConfig(mapConfigEnv(values))
 			if !errors.Is(err, ErrInvalidConfig) || err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want ErrInvalidConfig containing %q", err, test.want)
@@ -329,11 +300,6 @@ func validSecurityValues() map[string]string {
 		"OIDC_CLIENT_SECRET":     "oidc-client-secret",
 		"SESSION_ENCRYPTION_KEY": "01234567890123456789012345678901",
 		"TFLIVE_ROOT_PASSWORD":   "root-local-only",
-		"OPENFGA_API_URL":        "http://localhost:8080",
-		"OPENFGA_STORE_ID":       "store-id",
-		"OPENFGA_MODEL_ID":       "model-id",
-		"OPENFGA_API_TOKEN":      "",
-		"OPENFGA_HTTP_TIMEOUT":   "",
 	}
 }
 
