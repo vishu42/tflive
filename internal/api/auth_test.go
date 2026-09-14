@@ -61,10 +61,6 @@ func withSessions(store authn.SessionStore) authTestOption {
 	return func(cfg *AuthConfig) { cfg.Sessions = store }
 }
 
-func withClock(now time.Time) authTestOption {
-	return func(cfg *AuthConfig) { cfg.Clock = func() time.Time { return now } }
-}
-
 func withLogoutTokenVerifier(verifier LogoutTokenVerifier) authTestOption {
 	return func(cfg *AuthConfig) { cfg.LogoutTokenVerifier = verifier }
 }

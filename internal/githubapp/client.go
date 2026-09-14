@@ -60,14 +60,6 @@ func WithBaseURL(baseURL string) ClientOption {
 	}
 }
 
-func WithHTTPClient(httpClient *http.Client) ClientOption {
-	return func(client *Client) {
-		if httpClient != nil {
-			client.http = httpClient
-		}
-	}
-}
-
 // WithClock replaces the time source, so JWT bounds can be asserted exactly.
 func WithClock(now func() time.Time) ClientOption {
 	return func(client *Client) {

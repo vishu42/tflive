@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vishu42/tflive/internal/app"
-	"github.com/vishu42/tflive/internal/authn"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/storage"
 	"github.com/openfga/openfga/pkg/storage/memory"
+	"github.com/vishu42/tflive/internal/app"
+	"github.com/vishu42/tflive/internal/authn"
 
 	"github.com/vishu42/tflive/internal/authorization"
 	"github.com/vishu42/tflive/internal/domain"
@@ -211,12 +211,6 @@ func TestAuthenticatedServerAllowsConfiguredTenantToReachService(t *testing.T) {
 	if len(body) != 1 || body[0].ID != "stack_123" || body[0].Slug != "acme-prod" {
 		t.Fatalf("stack response = %#v", body)
 	}
-}
-
-type apiTestVerifier struct{}
-
-func (apiTestVerifier) Verify(context.Context, string) (authn.VerifiedToken, error) {
-	return authn.VerifiedToken{Subject: "user-123"}, nil
 }
 
 // sessionCookieServer builds a server whose middleware can actually
@@ -702,10 +696,10 @@ func TestCreateStackMapsUnitOfWorkFailure(t *testing.T) {
 	deps := newAPITestDependencies(t).withPlatformTier("admin")
 	service := app.NewService(app.Service{
 		Authorization: deps.authorizer,
-		Stacks:     &deps.stacks,
-		Work:       &apiUnitOfWork{stacks: &deps.stacks, err: errors.New("authorization unavailable")},
-		StackIDs:   fixedStackIDGenerator{id: deps.createdStackID},
-		Clock:      fixedClock{now: deps.now},
+		Stacks:        &deps.stacks,
+		Work:          &apiUnitOfWork{stacks: &deps.stacks, err: errors.New("authorization unavailable")},
+		StackIDs:      fixedStackIDGenerator{id: deps.createdStackID},
+		Clock:         fixedClock{now: deps.now},
 	})
 	server := NewServer(service, configuredTenantID)
 	response := httptest.NewRecorder()
@@ -727,10 +721,10 @@ func TestCreateStackWritesTheOwnerGrantWithoutQueueing(t *testing.T) {
 	work := &apiUnitOfWork{stacks: &deps.stacks}
 	service := app.NewService(app.Service{
 		Authorization: deps.authorizer,
-		Stacks:     &deps.stacks,
-		Work:       work,
-		StackIDs:   fixedStackIDGenerator{id: deps.createdStackID},
-		Clock:      fixedClock{now: deps.now},
+		Stacks:        &deps.stacks,
+		Work:          work,
+		StackIDs:      fixedStackIDGenerator{id: deps.createdStackID},
+		Clock:         fixedClock{now: deps.now},
 	})
 	server := NewServer(service, configuredTenantID)
 	response := httptest.NewRecorder()
@@ -2506,12 +2500,12 @@ type apiTestDependencies struct {
 	// createdStackID is what the generator mints, kept distinct from stackID so
 	// a creation test does not collide with the tuples seeded for the fixture
 	// stack.
-	createdStackID         domain.StackID
-	stackTemplateID        domain.StackTemplateID
-	runID                  domain.TemplateRunID
-	registrationID         domain.TemplateRegistrationID
-	now                    time.Time
-	work                   *apiUnitOfWork
+	createdStackID  domain.StackID
+	stackTemplateID domain.StackTemplateID
+	runID           domain.TemplateRunID
+	registrationID  domain.TemplateRegistrationID
+	now             time.Time
+	work            *apiUnitOfWork
 }
 
 // newAPITestDependencies builds a harness whose subject is a platform
@@ -2653,7 +2647,7 @@ func (deps *apiTestDependencies) service() *app.Service {
 	}
 	deps.work = work
 	return app.NewService(app.Service{
-		Authorization:               deps.authorizer,
+		Authorization:            deps.authorizer,
 		Work:                     work,
 		Stacks:                   &deps.stacks,
 		StackTemplates:           &deps.stackTemplates,

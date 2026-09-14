@@ -2176,7 +2176,6 @@ type recordingStackRepository struct {
 	gotTenantID     domain.TenantID
 	gotStackID      domain.StackID
 	gotListTenantID domain.TenantID
-	gotListStackIDs []domain.StackID
 	createErr       error
 	getErr          error
 	listErr         error

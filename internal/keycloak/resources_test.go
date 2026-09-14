@@ -3,7 +3,6 @@ package keycloak
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -209,13 +208,4 @@ func decodeTestJSON(t *testing.T, r *http.Request, target any) {
 	if err := json.NewDecoder(r.Body).Decode(target); err != nil {
 		t.Fatalf("decode request %s %s: %v", r.Method, r.URL.Path, err)
 	}
-}
-
-func testResourceID(resource map[string]any) string {
-	id, _ := resource["id"].(string)
-	return id
-}
-
-func unexpectedRequest(r *http.Request) error {
-	return fmt.Errorf("unexpected request %s %s", r.Method, r.URL.String())
 }
