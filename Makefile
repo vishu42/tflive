@@ -16,21 +16,26 @@ TEST_DSN ?= postgres://tflive:tflive@localhost:55432/tflive_test?sslmode=disable
 # preview for a plain description file -- `openapi preview` expects a Redocly
 # project. So the preview stays on v1 until there is a v2 equivalent, while
 # linting tracks v2, which is the version the spec is written against.
-REDOCLY_PREVIEW := @redocly/cli@1
-REDOCLY_LINT    := @redocly/cli@2
+#
+# Both are exact versions, not ranges like `@2`. npx never counts a range as
+# installed: it resolves the range against the registry and prompts to install
+# on every run, even when that version is already in its cache. Bump these by
+# hand.
+REDOCLY_PREVIEW := @redocly/cli@1.34.20
+REDOCLY_LINT    := @redocly/cli@2.53.0
 
 .DEFAULT_GOAL := help
 
-.PHONY: help docs-preview docs-lint differential-test
+.PHONY: help api-docs-preview api-docs-lint differential-test
 
 help: ## List the available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-docs-preview: ## Serve the API reference (docs/openapi.yaml) with live reload
+api-docs-preview: ## Serve the API reference (docs/openapi.yaml) with live reload
 	npx $(REDOCLY_PREVIEW) preview-docs $(SPEC)
 
-docs-lint: ## Validate docs/openapi.yaml against the OpenAPI spec
+api-docs-lint: ## Validate docs/openapi.yaml against the OpenAPI spec
 	npx $(REDOCLY_LINT) lint $(SPEC)
 
 # internal/authorization/write.go is a transcription of OpenFGA's own write path
