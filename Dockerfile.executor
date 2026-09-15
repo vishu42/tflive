@@ -4,7 +4,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/tflive-worker ./cmd/worker
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/tflive-executor ./cmd/executor
 
 FROM alpine:3.21
 
@@ -25,7 +25,7 @@ RUN apk add --no-cache ca-certificates git \
     && adduser -S -D -H -G tflive tflive \
     && mkdir -p /var/lib/tflive/artifacts /var/lib/tflive/runs \
     && chown -R tflive:tflive /var/lib/tflive
-COPY --from=build /out/tflive-worker /usr/local/bin/tflive-worker
+COPY --from=build /out/tflive-executor /usr/local/bin/tflive-executor
 
 USER tflive
-ENTRYPOINT ["/usr/local/bin/tflive-worker"]
+ENTRYPOINT ["/usr/local/bin/tflive-executor"]

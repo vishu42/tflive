@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 
 This repository contains the `tflive` Terraform platform. Go services live in
-`cmd/` (`api`, `worker`, and provisioning commands) and reusable backend code
+`cmd/` (`api`, `executor`, and provisioning commands) and reusable backend code
 is under `internal/`. Key boundaries include `internal/api`, `internal/app`,
 `internal/postgres`, `internal/workflows`, `internal/activities`, and
 `internal/runner`. The React/Vite frontend is in `web/`; infrastructure and
@@ -32,7 +32,7 @@ npm run build
 `npm test` runs Vitest; `npm run build` type-checks and builds the Vite app.
 For local integration work, copy `.env.example` to `.env`, provision OpenFGA
 and Keycloak as described in `README.md`, then run `go run ./cmd/api` and
-`go run ./cmd/worker` in separate shells. Start the UI with `npm run dev`.
+`go run ./cmd/executor` in separate shells. Start the UI with `npm run dev`.
 
 ## Coding Style & Naming Conventions
 

@@ -12,7 +12,7 @@ import (
 
 const (
 	DefaultHTTPAddress                 = ":8081"
-	DefaultWorkerRunRoot               = "/tmp/tflive/runs"
+	DefaultExecutorRunRoot             = "/tmp/tflive/runs"
 	DefaultArtifactStoreFilesystemRoot = "/tmp/tflive/artifacts"
 )
 
@@ -23,7 +23,6 @@ type APIConfig struct {
 	HTTPAddress             string
 	TemporalAddress         string
 	TemporalNamespace       string
-	WorkerRunRoot           string
 	ArtifactStore           ArtifactStoreConfig
 	Security                SecurityConfig
 	CredentialEncryptionKey Secret
@@ -33,15 +32,15 @@ type APIConfig struct {
 	Debug     bool
 }
 
-type WorkerConfig struct {
-	DatabaseURL             string
-	TemporalAddress         string
-	TemporalNamespace       string
-	WorkerRunRoot           string
-	ArtifactStore           ArtifactStoreConfig
-	OpenFGA                 OpenFGAConfig
-	CredentialEncryptionKey Secret
-	GitHubApp               GitHubAppConfig
+// ExecutorConfig is the whole of the executor's configuration. It runs next to
+// tenant Terraform, so it carries no database URL and no key: anything added
+// here is readable by every template that runs.
+type ExecutorConfig struct {
+	TemporalAddress   string
+	TemporalNamespace string
+	// RunRoot is where each run's workspace is checked out.
+	RunRoot       string
+	ArtifactStore ArtifactStoreConfig
 }
 
 type ArtifactStoreKind string
@@ -81,17 +80,12 @@ func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
 		HTTPAddress:       strings.TrimSpace(getenv("HTTP_ADDRESS")),
 		TemporalAddress:   strings.TrimSpace(getenv("TEMPORAL_ADDRESS")),
 		TemporalNamespace: strings.TrimSpace(getenv("TEMPORAL_NAMESPACE")),
-		WorkerRunRoot:     strings.TrimSpace(getenv("WORKER_RUN_ROOT")),
 		ArtifactStore:     artifactStore,
 		Security:          security,
 	}
 	if cfg.HTTPAddress == "" {
 		cfg.HTTPAddress = DefaultHTTPAddress
 	}
-	if cfg.WorkerRunRoot == "" {
-		cfg.WorkerRunRoot = DefaultWorkerRunRoot
-	}
-
 	cfg.Debug = parseBool(getenv("TFLIVE_DEBUG"))
 	credentialKey, err := loadCredentialEncryptionKey(getenv)
 	if err != nil {
@@ -115,44 +109,23 @@ func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
 	return cfg, nil
 }
 
-func LoadWorkerConfig(getenv func(string) string) (WorkerConfig, error) {
-	openFGA, err := loadOpenFGAConfig(getenv)
-	if err != nil {
-		return WorkerConfig{}, err
-	}
+func LoadExecutorConfig(getenv func(string) string) (ExecutorConfig, error) {
 	artifactStore, err := loadArtifactStoreConfig(getenv)
 	if err != nil {
-		return WorkerConfig{}, err
+		return ExecutorConfig{}, err
 	}
 
-	cfg := WorkerConfig{
-		DatabaseURL:       strings.TrimSpace(getenv("DATABASE_URL")),
+	cfg := ExecutorConfig{
 		TemporalAddress:   strings.TrimSpace(getenv("TEMPORAL_ADDRESS")),
 		TemporalNamespace: strings.TrimSpace(getenv("TEMPORAL_NAMESPACE")),
-		WorkerRunRoot:     strings.TrimSpace(getenv("WORKER_RUN_ROOT")),
+		RunRoot:           strings.TrimSpace(getenv("EXECUTOR_RUN_ROOT")),
 		ArtifactStore:     artifactStore,
-		OpenFGA:           openFGA,
 	}
-	if cfg.WorkerRunRoot == "" {
-		cfg.WorkerRunRoot = DefaultWorkerRunRoot
+	if cfg.RunRoot == "" {
+		cfg.RunRoot = DefaultExecutorRunRoot
 	}
-	credentialKey, err := loadCredentialEncryptionKey(getenv)
-	if err != nil {
-		return WorkerConfig{}, err
-	}
-	cfg.CredentialEncryptionKey = credentialKey
-
-	gitHubApp, err := loadGitHubAppConfig(getenv)
-	if err != nil {
-		return WorkerConfig{}, err
-	}
-	cfg.GitHubApp = gitHubApp
-
 	if cfg.TemporalAddress == "" {
-		return WorkerConfig{}, fmt.Errorf("%w: TEMPORAL_ADDRESS is required", ErrInvalidConfig)
-	}
-	if cfg.DatabaseURL == "" {
-		return WorkerConfig{}, fmt.Errorf("%w: DATABASE_URL is required", ErrInvalidConfig)
+		return ExecutorConfig{}, fmt.Errorf("%w: TEMPORAL_ADDRESS is required", ErrInvalidConfig)
 	}
 
 	return cfg, nil

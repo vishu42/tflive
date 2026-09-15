@@ -32,8 +32,8 @@ func TestRunRequiresTemporalAddress(t *testing.T) {
 func TestRunWiresTemporalWorker(t *testing.T) {
 	t.Parallel()
 
-	deps := newRecordingWorkerDependencies(t)
-	if err := runWithDependencies(context.Background(), workerTestEnv, deps.workerDependencies); err != nil {
+	deps := newRecordingExecutorDependencies(t)
+	if err := runWithDependencies(context.Background(), executorTestEnv, deps.executorDependencies); err != nil {
 		t.Fatalf("runWithDependencies returned error: %v", err)
 	}
 
@@ -53,14 +53,14 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if deps.activityKeys == nil {
 		t.Fatal("activities were not given a key ring")
 	}
-	if deps.activityRunRoot != "/tmp/tflive-worker-test" {
-		t.Fatalf("activity run root = %q, want /tmp/tflive-worker-test", deps.activityRunRoot)
+	if deps.activityRunRoot != "/tmp/tflive-executor-test" {
+		t.Fatalf("activity run root = %q, want /tmp/tflive-executor-test", deps.activityRunRoot)
 	}
 	if deps.artifactStoreConfig.Kind != config.ArtifactStoreFilesystem {
 		t.Fatalf("artifact store kind = %q, want filesystem", deps.artifactStoreConfig.Kind)
 	}
-	if deps.artifactStoreConfig.FilesystemRoot != "/tmp/tflive-worker-artifacts" {
-		t.Fatalf("artifact store root = %q, want /tmp/tflive-worker-artifacts", deps.artifactStoreConfig.FilesystemRoot)
+	if deps.artifactStoreConfig.FilesystemRoot != "/tmp/tflive-executor-artifacts" {
+		t.Fatalf("artifact store root = %q, want /tmp/tflive-executor-artifacts", deps.artifactStoreConfig.FilesystemRoot)
 	}
 	if deps.activityLogStore != deps.logStore {
 		t.Fatal("activity log store was not wired")
@@ -73,11 +73,11 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	}
 }
 
-func TestDefaultWorkerDependenciesRegisterOnlyExecutionActivities(t *testing.T) {
+func TestDefaultExecutorDependenciesRegisterOnlyExecutionActivities(t *testing.T) {
 	t.Parallel()
 
 	worker := &recordingTemporalWorker{}
-	deps := defaultWorkerDependencies()
+	deps := defaultExecutorDependencies()
 
 	deps.registerActivities(worker, t.TempDir(), recordingWorkerLogStore{}, runseal.NewKeyRing())
 
@@ -96,10 +96,10 @@ func TestRunWrapsTemporalDialFailure(t *testing.T) {
 	t.Parallel()
 
 	dialErr := errors.New("dial failed")
-	deps := newRecordingWorkerDependencies(t)
+	deps := newRecordingExecutorDependencies(t)
 	deps.dialErr = dialErr
 
-	err := runWithDependencies(context.Background(), workerTestEnv, deps.workerDependencies)
+	err := runWithDependencies(context.Background(), executorTestEnv, deps.executorDependencies)
 	if !errors.Is(err, dialErr) {
 		t.Fatalf("error = %v, want dialErr", err)
 	}
@@ -112,10 +112,10 @@ func TestRunWrapsWorkerRunFailure(t *testing.T) {
 	t.Parallel()
 
 	runErr := errors.New("worker failed")
-	deps := newRecordingWorkerDependencies(t)
+	deps := newRecordingExecutorDependencies(t)
 	deps.worker.runErr = runErr
 
-	err := runWithDependencies(context.Background(), workerTestEnv, deps.workerDependencies)
+	err := runWithDependencies(context.Background(), executorTestEnv, deps.executorDependencies)
 	if !errors.Is(err, runErr) {
 		t.Fatalf("error = %v, want runErr", err)
 	}
@@ -124,27 +124,25 @@ func TestRunWrapsWorkerRunFailure(t *testing.T) {
 	}
 }
 
-func workerTestEnv(key string) string {
+func executorTestEnv(key string) string {
 	switch key {
-	case "DATABASE_URL":
-		return "postgres://user:pass@localhost:5432/db?sslmode=disable"
 	case "TEMPORAL_ADDRESS":
 		return "localhost:7233"
 	case "TEMPORAL_NAMESPACE":
 		return "tflive"
-	case "WORKER_RUN_ROOT":
-		return "/tmp/tflive-worker-test"
+	case "EXECUTOR_RUN_ROOT":
+		return "/tmp/tflive-executor-test"
 	case "ARTIFACT_STORE_KIND":
 		return "filesystem"
 	case "ARTIFACT_STORE_FILESYSTEM_ROOT":
-		return "/tmp/tflive-worker-artifacts"
+		return "/tmp/tflive-executor-artifacts"
 	default:
 		return ""
 	}
 }
 
-type recordingWorkerDependencies struct {
-	workerDependencies
+type recordingExecutorDependencies struct {
+	executorDependencies
 	temporalClient      *recordingWorkerTemporalClient
 	worker              *recordingTemporalWorker
 	temporalConfig      temporal.Config
@@ -158,14 +156,14 @@ type recordingWorkerDependencies struct {
 	dialErr             error
 }
 
-func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
+func newRecordingExecutorDependencies(t *testing.T) *recordingExecutorDependencies {
 	t.Helper()
 
-	deps := &recordingWorkerDependencies{
+	deps := &recordingExecutorDependencies{
 		temporalClient: &recordingWorkerTemporalClient{},
 		worker:         &recordingTemporalWorker{},
 	}
-	deps.workerDependencies = workerDependencies{
+	deps.executorDependencies = executorDependencies{
 		dialTemporal: func(_ context.Context, cfg temporal.Config) (client.Client, error) {
 			deps.temporalConfig = cfg
 			if deps.dialErr != nil {

@@ -5,7 +5,7 @@ Instructions for working on tflive itself. To simply run it, see the
 
 ## Running the app on the host
 
-Run the API, worker, and UI as host processes against the containerised
+Run the API, executor, and UI as host processes against the containerised
 dependencies. This gives you fast rebuilds and a debugger.
 
 Start the dependencies:
@@ -19,7 +19,7 @@ Nothing to copy afterwards. OpenFGA runs inside the API and resolves its store
 and authorization model from the model in this repository at startup.
 
 Compose does not inject `.env` into containers or host processes, so the API
-and worker read those values from your shell. Load them and start each process
+and executor read those values from your shell. Load them and start each process
 in its own terminal:
 
 ```bash
@@ -33,7 +33,7 @@ go run ./cmd/api
 set -a
 source .env
 set +a
-go run ./cmd/worker
+go run ./cmd/executor
 ```
 
 ```bash
@@ -115,7 +115,7 @@ npm run build
 ## Layout
 
 ```text
-cmd/                  API, worker, and provisioner entry points
+cmd/                  API, executor, and provisioner entry points
 internal/app/         application use cases and ports
 internal/api/         HTTP transport
 internal/postgres/    product persistence and migrations
@@ -123,6 +123,7 @@ internal/queue/       durable work queue
 internal/temporal/    Temporal client adapter
 internal/workflows/   deterministic workflows
 internal/activities/  side-effecting Temporal activities
+internal/runseal/     per-run sealing of secrets sent to the executor
 internal/runner/      OpenTofu execution
 internal/authn/       token verification
 internal/authorization/  embedded OpenFGA: model, bootstrap, checks, transactional tuple writes

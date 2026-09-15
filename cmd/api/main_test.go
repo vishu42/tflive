@@ -542,7 +542,6 @@ func apiTestValues() map[string]string {
 		"HTTP_ADDRESS":                   ":9090",
 		"TEMPORAL_ADDRESS":               "localhost:7233",
 		"TEMPORAL_NAMESPACE":             "tflive",
-		"WORKER_RUN_ROOT":                "/var/lib/tflive/runs",
 		"ARTIFACT_STORE_KIND":            "filesystem",
 		"ARTIFACT_STORE_FILESYSTEM_ROOT": "/var/lib/tflive/artifacts",
 		"TFLIVE_ENVIRONMENT":             "development",

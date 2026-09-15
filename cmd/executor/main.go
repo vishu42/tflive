@@ -22,7 +22,7 @@ type temporalWorker interface {
 	Run(<-chan interface{}) error
 }
 
-type workerDependencies struct {
+type executorDependencies struct {
 	// dialTemporal connects to the Temporal namespace where the worker polls for tasks.
 	dialTemporal func(context.Context, temporal.Config) (client.Client, error)
 	// newWorker creates the Temporal worker bound to the execution task queue.
@@ -41,8 +41,8 @@ func main() {
 	}
 }
 
-func defaultWorkerDependencies() workerDependencies {
-	return workerDependencies{
+func defaultExecutorDependencies() executorDependencies {
+	return executorDependencies{
 		dialTemporal: temporal.Dial,
 		newWorker: func(temporalClient client.Client, taskQueue string, options temporalworker.Options) temporalWorker {
 			return temporalworker.New(temporalClient, taskQueue, options)
@@ -74,7 +74,7 @@ func defaultWorkerDependencies() workerDependencies {
 }
 
 func run(ctx context.Context, getenv func(string) string) error {
-	return runWithDependencies(ctx, getenv, defaultWorkerDependencies())
+	return runWithDependencies(ctx, getenv, defaultExecutorDependencies())
 }
 
 // runWithDependencies runs the executor: a Temporal worker on the execution
@@ -82,10 +82,10 @@ func run(ctx context.Context, getenv func(string) string) error {
 // and parses no key. Everything secret a run needs arrives sealed to a key this
 // process generates for that run, and everything a run produces goes back
 // through Temporal to the control plane.
-func runWithDependencies(ctx context.Context, getenv func(string) string, deps workerDependencies) error {
-	cfg, err := config.LoadWorkerConfig(getenv)
+func runWithDependencies(ctx context.Context, getenv func(string) string, deps executorDependencies) error {
+	cfg, err := config.LoadExecutorConfig(getenv)
 	if err != nil {
-		return fmt.Errorf("load worker config: %w", err)
+		return fmt.Errorf("load executor config: %w", err)
 	}
 
 	logStore, err := deps.newLogStore(cfg.ArtifactStore)
@@ -105,7 +105,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 	// Sessions pin a run's workspace activities, and so its sealing key, to this
 	// process.
 	worker := deps.newWorker(temporalClient, domain.ExecutionTaskQueue, temporalworker.Options{EnableSessionWorker: true})
-	deps.registerActivities(worker, cfg.WorkerRunRoot, logStore, runseal.NewKeyRing())
+	deps.registerActivities(worker, cfg.RunRoot, logStore, runseal.NewKeyRing())
 	if err := worker.Run(deps.interruptCh()); err != nil {
 		return fmt.Errorf("run worker: %w", err)
 	}
