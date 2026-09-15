@@ -27,7 +27,9 @@ import (
 type temporalWorker interface {
 	RegisterWorkflowWithOptions(interface{}, workflow.RegisterOptions)
 	RegisterActivityWithOptions(interface{}, activity.RegisterOptions)
+	Start() error
 	Run(<-chan interface{}) error
+	Stop()
 }
 
 type postgresPool interface {
@@ -62,12 +64,13 @@ type workerDependencies struct {
 	// newWorker creates the Temporal worker bound to the configured task queue.
 	newWorker func(client.Client, string, temporalworker.Options) temporalWorker
 	// newDispatcher creates the Temporal workflow and signal dispatcher used by queue handlers.
-	newDispatcher      func(client.Client, string) app.WorkflowDispatcher
+	newDispatcher      func(client.Client) app.WorkflowDispatcher
 	newQueueController func(workerStore, app.WorkflowDispatcher) (queueController, error)
-	// registerWorkflow attaches the workflow implementations this process can execute.
+	// registerWorkflow attaches the workflow implementations to the control worker.
 	registerWorkflow func(temporalWorker)
-	// registerActivities attaches activity handlers and their shared dependencies to the worker.
-	registerActivities func(temporalWorker, workerStore, string, activities.TemplateRunLogStore, activities.GitHubTokenSource)
+	// registerActivities attaches control activities to the first worker and
+	// execution activities to the second.
+	registerActivities func(control temporalWorker, execution temporalWorker, store workerStore, runRoot string, logStore activities.TemplateRunLogStore, gitHubTokens activities.GitHubTokenSource)
 	// newLogStore builds the artifact-backed log store used by Terraform activities.
 	newLogStore func(config.ArtifactStoreConfig, artifacts.LogMetadataRecorder) (activities.TemplateRunLogStore, error)
 	// interruptCh provides the shutdown signal consumed by the Temporal worker run loop.
@@ -125,8 +128,8 @@ func defaultWorkerDependencies() workerDependencies {
 		newWorker: func(temporalClient client.Client, taskQueue string, options temporalworker.Options) temporalWorker {
 			return temporalworker.New(temporalClient, taskQueue, options)
 		},
-		newDispatcher: func(temporalClient client.Client, taskQueue string) app.WorkflowDispatcher {
-			return temporal.NewDispatcher(temporalClient, taskQueue)
+		newDispatcher: func(temporalClient client.Client) app.WorkflowDispatcher {
+			return temporal.NewDispatcher(temporalClient)
 		},
 		newQueueController: func(store workerStore, dispatcher app.WorkflowDispatcher) (queueController, error) {
 			registry, err := newQueueRegistry(store, dispatcher)
@@ -143,28 +146,28 @@ func defaultWorkerDependencies() workerDependencies {
 				Name: domain.TemplateSyncWorkflowName,
 			})
 		},
-		registerActivities: func(worker temporalWorker, store workerStore, runRoot string, logStore activities.TemplateRunLogStore, gitHubTokens activities.GitHubTokenSource) {
+		registerActivities: func(control temporalWorker, execution temporalWorker, store workerStore, runRoot string, logStore activities.TemplateRunLogStore, gitHubTokens activities.GitHubTokenSource) {
 			reader, _ := store.(activities.CredentialReader)
 			decryptor, _ := store.(activities.CredentialDecryptor)
 			templateRunActivities := activities.NewTemplateRunActivitiesWithCredentials(store, runRoot, logStore, reader, decryptor, gitHubTokens)
-			worker.RegisterActivityWithOptions(templateRunActivities.PrepareWorkspace, activity.RegisterOptions{
+			execution.RegisterActivityWithOptions(templateRunActivities.PrepareWorkspace, activity.RegisterOptions{
 				Name: domain.PrepareWorkspaceActivityName,
 			})
-			worker.RegisterActivityWithOptions(templateRunActivities.FetchSource, activity.RegisterOptions{
+			execution.RegisterActivityWithOptions(templateRunActivities.FetchSource, activity.RegisterOptions{
 				Name: domain.FetchSourceActivityName,
 			})
-			worker.RegisterActivityWithOptions(templateRunActivities.RunTerraform, activity.RegisterOptions{
+			execution.RegisterActivityWithOptions(templateRunActivities.RunTerraform, activity.RegisterOptions{
 				Name: domain.RunTerraformActivityName,
 			})
-			worker.RegisterActivityWithOptions(templateRunActivities.RecordTemplateRunStatus, activity.RegisterOptions{
+			control.RegisterActivityWithOptions(templateRunActivities.RecordTemplateRunStatus, activity.RegisterOptions{
 				Name: domain.RecordTemplateRunStatusActivityName,
 			})
 
 			templateSyncActivities := activities.NewTemplateSyncActivities(store, activities.WithTemplateSyncTokenSource(gitHubTokens))
-			worker.RegisterActivityWithOptions(templateSyncActivities.RecordTemplateRegistrationStatus, activity.RegisterOptions{
+			control.RegisterActivityWithOptions(templateSyncActivities.RecordTemplateRegistrationStatus, activity.RegisterOptions{
 				Name: domain.RecordTemplateRegistrationStatusActivityName,
 			})
-			worker.RegisterActivityWithOptions(templateSyncActivities.SyncTemplate, activity.RegisterOptions{
+			control.RegisterActivityWithOptions(templateSyncActivities.SyncTemplate, activity.RegisterOptions{
 				Name: domain.SyncTemplateActivityName,
 			})
 		},
@@ -270,10 +273,13 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 	}
 	defer temporalClient.Close()
 
-	worker := deps.newWorker(temporalClient, cfg.TemporalTaskQueue, temporalworker.Options{EnableSessionWorker: true})
-	deps.registerWorkflow(worker)
-	deps.registerActivities(worker, store, cfg.WorkerRunRoot, logStore, gitHubTokens)
-	dispatcher := deps.newDispatcher(temporalClient, cfg.TemporalTaskQueue)
+	controlWorker := deps.newWorker(temporalClient, domain.ControlTaskQueue, temporalworker.Options{})
+	// Sessions live on the execution queue only: they pin a run's workspace
+	// activities to the host holding its checkout.
+	executionWorker := deps.newWorker(temporalClient, domain.ExecutionTaskQueue, temporalworker.Options{EnableSessionWorker: true})
+	deps.registerWorkflow(controlWorker)
+	deps.registerActivities(controlWorker, executionWorker, store, cfg.WorkerRunRoot, logStore, gitHubTokens)
+	dispatcher := deps.newDispatcher(temporalClient)
 	controller, err := deps.newQueueController(store, dispatcher)
 	if err != nil {
 		return fmt.Errorf("build queue controller: %w", err)
@@ -286,7 +292,13 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 		controller.Run(controllerCtx)
 	}()
 
-	workerErr := worker.Run(deps.interruptCh())
+	if err := controlWorker.Start(); err != nil {
+		cancelController()
+		<-controllerDone
+		return fmt.Errorf("start control worker: %w", err)
+	}
+	workerErr := executionWorker.Run(deps.interruptCh())
+	controlWorker.Stop()
 	cancelController()
 	<-controllerDone
 	if workerErr != nil {

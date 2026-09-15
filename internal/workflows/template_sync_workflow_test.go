@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/vishu42/tflive/internal/domain"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -47,6 +48,33 @@ func TestTemplateSyncWorkflowRecordsCompletedRegistration(t *testing.T) {
 	}
 	if !reflect.DeepEqual(statuses, want) {
 		t.Fatalf("statuses = %#v, want %#v", statuses, want)
+	}
+}
+
+// TestTemplateSyncWorkflowRunsOnControlQueue keeps sync on the control plane:
+// it writes revisions to the database and mints GitHub tokens.
+func TestTemplateSyncWorkflowRunsOnControlQueue(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateSyncWorkflowTestEnvironment(t)
+	var queues []string
+	env.SetOnActivityStartedListener(func(info *activity.Info, _ context.Context, _ converter.EncodedValues) {
+		queues = append(queues, info.TaskQueue)
+	})
+	env.OnActivity(domain.RecordTemplateRegistrationStatusActivityName, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(domain.SyncTemplateActivityName, mock.Anything, mock.Anything).
+		Return(domain.TemplateSyncActivityOutput{Status: domain.TemplateRegistrationCompleted}, nil)
+
+	env.ExecuteWorkflow(TemplateSyncWorkflow, templateSyncWorkflowInput())
+
+	assertWorkflowCompleted(t, env)
+	if len(queues) != 3 {
+		t.Fatalf("activity queues = %#v, want 3 activities", queues)
+	}
+	for _, queue := range queues {
+		if queue != domain.ControlTaskQueue {
+			t.Fatalf("activity queues = %#v, want all %q", queues, domain.ControlTaskQueue)
+		}
 	}
 }
 

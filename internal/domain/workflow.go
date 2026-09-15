@@ -7,6 +7,19 @@ import (
 )
 
 const (
+	// ControlTaskQueue carries workflow tasks and every activity that touches
+	// product state or secrets. Only the control plane polls it.
+	ControlTaskQueue = "control"
+	// ExecutionTaskQueue carries the activities that run next to tenant
+	// Terraform. The executor polls it, and nothing that polls it holds a
+	// database connection or a key.
+	//
+	// Both names are constants rather than configuration: the workflow names the
+	// execution queue in its activity options, and a queue named by env on one
+	// side and by code on the other fails silently, with tasks waiting on a
+	// queue nobody polls. Environments are separated by Temporal namespace.
+	ExecutionTaskQueue = "execution"
+
 	TemplateRunWorkflowName  = "TemplateRunWorkflow"
 	TemplateSyncWorkflowName = "TemplateSyncWorkflow"
 

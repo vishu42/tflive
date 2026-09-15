@@ -181,7 +181,6 @@ services:
       HTTP_ADDRESS: ":8081"
       DATABASE_URL: postgres://${APP_DB_USER:-tflive}:${APP_DB_PASSWORD:-tflive}@postgres:5432/${APP_DB_NAME:-tflive_test}?sslmode=disable
       TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-terraform-runs}
       TFLIVE_ENVIRONMENT: development
       TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3}
@@ -215,7 +214,6 @@ services:
     environment:
       DATABASE_URL: postgres://${APP_DB_USER:-tflive}:${APP_DB_PASSWORD:-tflive}@postgres:5432/${APP_DB_NAME:-tflive_test}?sslmode=disable
       TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-terraform-runs}
       TFLIVE_ENVIRONMENT: development
       TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3}

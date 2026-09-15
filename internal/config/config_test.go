@@ -24,8 +24,6 @@ func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 			return " localhost:7233 "
 		case "TEMPORAL_NAMESPACE":
 			return " tflive "
-		case "TEMPORAL_TASK_QUEUE":
-			return " terraform-runs-dev "
 		case "WORKER_RUN_ROOT":
 			return " /var/lib/tflive/runs "
 		case "ARTIFACT_STORE_KIND":
@@ -64,9 +62,6 @@ func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 	if cfg.TemporalNamespace != "tflive" {
 		t.Fatalf("TemporalNamespace = %q", cfg.TemporalNamespace)
 	}
-	if cfg.TemporalTaskQueue != "terraform-runs-dev" {
-		t.Fatalf("TemporalTaskQueue = %q", cfg.TemporalTaskQueue)
-	}
 	if cfg.WorkerRunRoot != "/var/lib/tflive/runs" {
 		t.Fatalf("WorkerRunRoot = %q, want /var/lib/tflive/runs", cfg.WorkerRunRoot)
 	}
@@ -76,7 +71,7 @@ func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 	assertArtifactStoreConfig(t, cfg.ArtifactStore)
 }
 
-func TestLoadAPIConfigDefaultsTemporalTaskQueue(t *testing.T) {
+func TestLoadAPIConfigAppliesDefaults(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := LoadAPIConfig(withValidSecurity(func(key string) string {
@@ -99,9 +94,6 @@ func TestLoadAPIConfigDefaultsTemporalTaskQueue(t *testing.T) {
 		t.Fatalf("LoadAPIConfig returned error: %v", err)
 	}
 
-	if cfg.TemporalTaskQueue != DefaultTemporalTaskQueue {
-		t.Fatalf("TemporalTaskQueue = %q, want %q", cfg.TemporalTaskQueue, DefaultTemporalTaskQueue)
-	}
 	if cfg.HTTPAddress != DefaultHTTPAddress {
 		t.Fatalf("HTTPAddress = %q, want %q", cfg.HTTPAddress, DefaultHTTPAddress)
 	}
@@ -158,8 +150,6 @@ func TestLoadWorkerConfigReadsWorkerSettings(t *testing.T) {
 			return " localhost:7233 "
 		case "TEMPORAL_NAMESPACE":
 			return " tflive "
-		case "TEMPORAL_TASK_QUEUE":
-			return " terraform-runs-dev "
 		case "WORKER_RUN_ROOT":
 			return " /var/lib/tflive/runs "
 		case "ARTIFACT_STORE_KIND":
@@ -201,16 +191,13 @@ func TestLoadWorkerConfigReadsWorkerSettings(t *testing.T) {
 	if cfg.TemporalNamespace != "tflive" {
 		t.Fatalf("TemporalNamespace = %q", cfg.TemporalNamespace)
 	}
-	if cfg.TemporalTaskQueue != "terraform-runs-dev" {
-		t.Fatalf("TemporalTaskQueue = %q, want terraform-runs-dev", cfg.TemporalTaskQueue)
-	}
 	if cfg.WorkerRunRoot != "/var/lib/tflive/runs" {
 		t.Fatalf("WorkerRunRoot = %q, want /var/lib/tflive/runs", cfg.WorkerRunRoot)
 	}
 	assertArtifactStoreConfig(t, cfg.ArtifactStore)
 }
 
-func TestLoadWorkerConfigDefaultsTemporalTaskQueue(t *testing.T) {
+func TestLoadWorkerConfigAppliesDefaults(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := LoadWorkerConfig(func(key string) string {
@@ -233,9 +220,6 @@ func TestLoadWorkerConfigDefaultsTemporalTaskQueue(t *testing.T) {
 		t.Fatalf("LoadWorkerConfig returned error: %v", err)
 	}
 
-	if cfg.TemporalTaskQueue != DefaultTemporalTaskQueue {
-		t.Fatalf("TemporalTaskQueue = %q, want %q", cfg.TemporalTaskQueue, DefaultTemporalTaskQueue)
-	}
 	if cfg.TemporalNamespace != "" {
 		t.Fatalf("TemporalNamespace = %q, want empty", cfg.TemporalNamespace)
 	}

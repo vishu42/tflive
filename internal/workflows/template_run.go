@@ -48,7 +48,10 @@ var defaultRunRetryPolicy = &temporal.RetryPolicy{
 func TemplateRunWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowInput) error {
 	// Baseline options for every activity scheduled on this context. RunTerraform
 	// overrides them for the long-running commands; see terraformRetryPolicy.
+	// Activities scheduled on ctx itself are control-plane work (status writes),
+	// so they go to the control queue; execution work goes through sessionCtx.
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		TaskQueue:           domain.ControlTaskQueue,
 		StartToCloseTimeout: time.Minute,
 		RetryPolicy:         defaultRunRetryPolicy,
 	})
@@ -66,7 +69,11 @@ func TemplateRunWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowI
 		return err
 	}
 
-	sessionCtx, err := workflow.CreateSession(ctx, &workflow.SessionOptions{
+	// CreateSession takes its base queue from the context's activity options, so
+	// naming the execution queue here is what places the session, and every
+	// activity later scheduled on sessionCtx, on an executor host.
+	executionCtx := workflow.WithTaskQueue(ctx, domain.ExecutionTaskQueue)
+	sessionCtx, err := workflow.CreateSession(executionCtx, &workflow.SessionOptions{
 		CreationTimeout:  time.Minute,
 		ExecutionTimeout: 24 * time.Hour,
 	})

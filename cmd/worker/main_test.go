@@ -107,29 +107,31 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if deps.temporalConfig.Namespace != "tflive" {
 		t.Fatalf("temporal namespace = %q, want tflive", deps.temporalConfig.Namespace)
 	}
-	if deps.workerTaskQueue != "terraform-runs-dev" {
-		t.Fatalf("worker task queue = %q, want terraform-runs-dev", deps.workerTaskQueue)
+	if deps.controlOptions.EnableSessionWorker {
+		t.Fatal("session worker was enabled on the control queue")
 	}
-	if !deps.workerOptions.EnableSessionWorker {
-		t.Fatal("session worker was not enabled")
+	if !deps.executionOptions.EnableSessionWorker {
+		t.Fatal("session worker was not enabled on the execution queue")
 	}
-	if deps.worker.registeredWorkflow != reflect.ValueOf(workflows.TemplateRunWorkflow).Pointer() {
-		t.Fatal("TemplateRunWorkflow was not registered")
+	if deps.controlWorker.registeredWorkflow != reflect.ValueOf(workflows.TemplateRunWorkflow).Pointer() {
+		t.Fatal("TemplateRunWorkflow was not registered on the control worker")
 	}
-	if deps.worker.registeredWorkflowOptions.Name != domain.TemplateRunWorkflowName {
-		t.Fatalf("workflow registration name = %q, want %q", deps.worker.registeredWorkflowOptions.Name, domain.TemplateRunWorkflowName)
+	if deps.controlWorker.registeredWorkflowOptions.Name != domain.TemplateRunWorkflowName {
+		t.Fatalf("workflow registration name = %q, want %q", deps.controlWorker.registeredWorkflowOptions.Name, domain.TemplateRunWorkflowName)
 	}
-	if deps.worker.registeredActivityOptions.Name != domain.RecordTemplateRunStatusActivityName {
-		t.Fatalf("activity registration name = %q, want %q", deps.worker.registeredActivityOptions.Name, domain.RecordTemplateRunStatusActivityName)
+	if !deps.controlWorker.registeredActivities[domain.RecordTemplateRunStatusActivityName] {
+		t.Fatalf("activity %q was not registered on the control worker", domain.RecordTemplateRunStatusActivityName)
 	}
-	if !deps.worker.registeredActivities[domain.PrepareWorkspaceActivityName] {
-		t.Fatalf("activity %q was not registered", domain.PrepareWorkspaceActivityName)
+	for _, name := range []string{domain.PrepareWorkspaceActivityName, domain.FetchSourceActivityName, domain.RunTerraformActivityName} {
+		if !deps.executionWorker.registeredActivities[name] {
+			t.Fatalf("activity %q was not registered on the execution worker", name)
+		}
+		if deps.controlWorker.registeredActivities[name] {
+			t.Fatalf("activity %q was registered on the control worker", name)
+		}
 	}
-	if !deps.worker.registeredActivities[domain.FetchSourceActivityName] {
-		t.Fatalf("activity %q was not registered", domain.FetchSourceActivityName)
-	}
-	if !deps.worker.registeredActivities[domain.RunTerraformActivityName] {
-		t.Fatalf("activity %q was not registered", domain.RunTerraformActivityName)
+	if deps.executionWorker.registeredWorkflows[domain.TemplateRunWorkflowName] {
+		t.Fatal("TemplateRunWorkflow was registered on the execution worker")
 	}
 	if !deps.activityStoreIsWired {
 		t.Fatal("activity was not wired with the Postgres store")
@@ -149,8 +151,11 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if deps.logMetadataRecorder != deps.store {
 		t.Fatal("log metadata recorder was not wired with the Postgres store")
 	}
-	if !deps.worker.ran {
-		t.Fatal("worker was not run")
+	if !deps.executionWorker.ran {
+		t.Fatal("execution worker was not run")
+	}
+	if !deps.controlWorker.started || !deps.controlWorker.stopped {
+		t.Fatal("control worker was not started and stopped")
 	}
 	if !deps.queueController.ran {
 		t.Fatal("queue controller was not run")
@@ -163,34 +168,6 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	}
 	if !deps.pool.closed {
 		t.Fatal("postgres pool was not closed")
-	}
-}
-
-func TestRunUsesDefaultTemporalTaskQueue(t *testing.T) {
-	t.Parallel()
-
-	deps := newRecordingWorkerDependencies(t)
-	err := runWithDependencies(context.Background(), func(key string) string {
-		switch key {
-		case "DATABASE_URL":
-			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
-		case "TEMPORAL_ADDRESS":
-			return "localhost:7233"
-		case "OPENFGA_API_URL":
-			return "http://localhost:8080"
-		case "OPENFGA_STORE_ID":
-			return "store_123"
-		case "OPENFGA_MODEL_ID":
-			return "model_123"
-		default:
-			return ""
-		}
-	}, deps.workerDependencies)
-	if err != nil {
-		t.Fatalf("runWithDependencies returned error: %v", err)
-	}
-	if deps.workerTaskQueue != config.DefaultTemporalTaskQueue {
-		t.Fatalf("worker task queue = %q, want %q", deps.workerTaskQueue, config.DefaultTemporalTaskQueue)
 	}
 }
 
@@ -224,21 +201,22 @@ func TestNewQueueRegistryRegistersAllHandlers(t *testing.T) {
 func TestDefaultWorkerDependenciesRegisterTerraformActivities(t *testing.T) {
 	t.Parallel()
 
-	worker := &recordingTemporalWorker{}
+	control := &recordingTemporalWorker{}
+	execution := &recordingTemporalWorker{}
 	deps := defaultWorkerDependencies()
 
-	deps.registerActivities(worker, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{}, nil)
+	deps.registerActivities(control, execution, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{}, nil)
 
-	if !worker.registeredActivities[domain.PrepareWorkspaceActivityName] {
+	if !execution.registeredActivities[domain.PrepareWorkspaceActivityName] {
 		t.Fatalf("activity %q was not registered", domain.PrepareWorkspaceActivityName)
 	}
-	if !worker.registeredActivities[domain.FetchSourceActivityName] {
+	if !execution.registeredActivities[domain.FetchSourceActivityName] {
 		t.Fatalf("activity %q was not registered", domain.FetchSourceActivityName)
 	}
-	if !worker.registeredActivities[domain.RunTerraformActivityName] {
+	if !execution.registeredActivities[domain.RunTerraformActivityName] {
 		t.Fatalf("activity %q was not registered", domain.RunTerraformActivityName)
 	}
-	if !worker.registeredActivities[domain.RecordTemplateRunStatusActivityName] {
+	if !control.registeredActivities[domain.RecordTemplateRunStatusActivityName] {
 		t.Fatalf("activity %q was not registered", domain.RecordTemplateRunStatusActivityName)
 	}
 }
@@ -262,15 +240,15 @@ func TestDefaultWorkerDependenciesRegisterTemplateSyncWorkflow(t *testing.T) {
 func TestDefaultWorkerDependenciesRegisterTemplateSyncActivities(t *testing.T) {
 	t.Parallel()
 
-	worker := &recordingTemporalWorker{}
+	control := &recordingTemporalWorker{}
 	deps := defaultWorkerDependencies()
 
-	deps.registerActivities(worker, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{}, nil)
+	deps.registerActivities(control, &recordingTemporalWorker{}, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{}, nil)
 
-	if !worker.registeredActivities[domain.RecordTemplateRegistrationStatusActivityName] {
+	if !control.registeredActivities[domain.RecordTemplateRegistrationStatusActivityName] {
 		t.Fatalf("activity %q was not registered", domain.RecordTemplateRegistrationStatusActivityName)
 	}
-	if !worker.registeredActivities[domain.SyncTemplateActivityName] {
+	if !control.registeredActivities[domain.SyncTemplateActivityName] {
 		t.Fatalf("activity %q was not registered", domain.SyncTemplateActivityName)
 	}
 }
@@ -296,7 +274,7 @@ func TestRunWrapsWorkerRunFailure(t *testing.T) {
 
 	runErr := errors.New("worker failed")
 	deps := newRecordingWorkerDependencies(t)
-	deps.worker.runErr = runErr
+	deps.executionWorker.runErr = runErr
 
 	err := runWithDependencies(context.Background(), workerTestEnv, deps.workerDependencies)
 	if !errors.Is(err, runErr) {
@@ -315,8 +293,6 @@ func workerTestEnv(key string) string {
 		return "localhost:7233"
 	case "TEMPORAL_NAMESPACE":
 		return "tflive"
-	case "TEMPORAL_TASK_QUEUE":
-		return "terraform-runs-dev"
 	case "WORKER_RUN_ROOT":
 		return "/tmp/tflive-worker-test"
 	case "ARTIFACT_STORE_KIND":
@@ -337,13 +313,14 @@ func workerTestEnv(key string) string {
 type recordingWorkerDependencies struct {
 	workerDependencies
 	temporalClient       *recordingWorkerTemporalClient
-	worker               *recordingTemporalWorker
+	controlWorker        *recordingTemporalWorker
+	executionWorker      *recordingTemporalWorker
 	pool                 *recordingWorkerPostgresPool
 	store                *recordingWorkerStore
 	credentialCipher     *encryption.Cipher
 	temporalConfig       temporal.Config
-	workerTaskQueue      string
-	workerOptions        temporalworker.Options
+	controlOptions       temporalworker.Options
+	executionOptions     temporalworker.Options
 	artifactStoreConfig  config.ArtifactStoreConfig
 	migrated             bool
 	activityStoreIsWired bool
@@ -361,7 +338,8 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 
 	deps := &recordingWorkerDependencies{
 		temporalClient:  &recordingWorkerTemporalClient{},
-		worker:          &recordingTemporalWorker{},
+		controlWorker:   &recordingTemporalWorker{},
+		executionWorker: &recordingTemporalWorker{},
 		pool:            &recordingWorkerPostgresPool{},
 		store:           &recordingWorkerStore{},
 		queueController: &recordingQueueController{},
@@ -396,16 +374,21 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			if temporalClient != deps.temporalClient {
 				t.Fatalf("newWorker temporalClient = %p, want %p", temporalClient, deps.temporalClient)
 			}
-			deps.workerTaskQueue = taskQueue
-			deps.workerOptions = options
-			return deps.worker
+			switch taskQueue {
+			case domain.ControlTaskQueue:
+				deps.controlOptions = options
+				return deps.controlWorker
+			case domain.ExecutionTaskQueue:
+				deps.executionOptions = options
+				return deps.executionWorker
+			default:
+				t.Fatalf("newWorker task queue = %q", taskQueue)
+				return nil
+			}
 		},
-		newDispatcher: func(temporalClient client.Client, taskQueue string) app.WorkflowDispatcher {
+		newDispatcher: func(temporalClient client.Client) app.WorkflowDispatcher {
 			if temporalClient != deps.temporalClient {
 				t.Fatalf("newDispatcher temporalClient = %p, want %p", temporalClient, deps.temporalClient)
-			}
-			if taskQueue != "terraform-runs-dev" && taskQueue != config.DefaultTemporalTaskQueue {
-				t.Fatalf("newDispatcher task queue = %q", taskQueue)
 			}
 			return deps.dispatcher
 		},
@@ -419,16 +402,16 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			return deps.queueController, nil
 		},
 		registerWorkflow: func(worker temporalWorker) {
-			if worker != deps.worker {
-				t.Fatalf("registerWorkflow worker = %p, want %p", worker, deps.worker)
+			if worker != deps.controlWorker {
+				t.Fatalf("registerWorkflow worker = %p, want %p", worker, deps.controlWorker)
 			}
 			worker.RegisterWorkflowWithOptions(workflows.TemplateRunWorkflow, workflow.RegisterOptions{
 				Name: domain.TemplateRunWorkflowName,
 			})
 		},
-		registerActivities: func(worker temporalWorker, recorder workerStore, runRoot string, logStore activities.TemplateRunLogStore, gitHubTokens activities.GitHubTokenSource) {
-			if worker != deps.worker {
-				t.Fatalf("registerActivities worker = %p, want %p", worker, deps.worker)
+		registerActivities: func(control temporalWorker, worker temporalWorker, recorder workerStore, runRoot string, logStore activities.TemplateRunLogStore, gitHubTokens activities.GitHubTokenSource) {
+			if control != deps.controlWorker || worker != deps.executionWorker {
+				t.Fatalf("registerActivities workers = %p, %p", control, worker)
 			}
 			if recorder != workerStore(deps.store) {
 				t.Fatalf("activity recorder = %p, want store %p", recorder, deps.store)
@@ -460,7 +443,7 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 					Name: domain.RunTerraformActivityName,
 				},
 			)
-			worker.RegisterActivityWithOptions(
+			control.RegisterActivityWithOptions(
 				func(context.Context, domain.TemplateRunStatusActivityInput) error {
 					return nil
 				},
@@ -577,6 +560,17 @@ type recordingTemporalWorker struct {
 	registeredActivities      map[string]bool
 	ran                       bool
 	runErr                    error
+	started                   bool
+	stopped                   bool
+}
+
+func (worker *recordingTemporalWorker) Start() error {
+	worker.started = true
+	return nil
+}
+
+func (worker *recordingTemporalWorker) Stop() {
+	worker.stopped = true
 }
 
 func (worker *recordingTemporalWorker) RegisterWorkflowWithOptions(workflowFn interface{}, options workflow.RegisterOptions) {

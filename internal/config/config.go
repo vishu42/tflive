@@ -12,7 +12,6 @@ import (
 
 const (
 	DefaultHTTPAddress                 = ":8081"
-	DefaultTemporalTaskQueue           = "terraform-runs"
 	DefaultWorkerRunRoot               = "/tmp/tflive/runs"
 	DefaultArtifactStoreFilesystemRoot = "/tmp/tflive/artifacts"
 )
@@ -24,7 +23,6 @@ type APIConfig struct {
 	HTTPAddress             string
 	TemporalAddress         string
 	TemporalNamespace       string
-	TemporalTaskQueue       string
 	WorkerRunRoot           string
 	ArtifactStore           ArtifactStoreConfig
 	Security                SecurityConfig
@@ -36,7 +34,6 @@ type WorkerConfig struct {
 	DatabaseURL             string
 	TemporalAddress         string
 	TemporalNamespace       string
-	TemporalTaskQueue       string
 	WorkerRunRoot           string
 	ArtifactStore           ArtifactStoreConfig
 	OpenFGA                 OpenFGAConfig
@@ -81,16 +78,12 @@ func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
 		HTTPAddress:       strings.TrimSpace(getenv("HTTP_ADDRESS")),
 		TemporalAddress:   strings.TrimSpace(getenv("TEMPORAL_ADDRESS")),
 		TemporalNamespace: strings.TrimSpace(getenv("TEMPORAL_NAMESPACE")),
-		TemporalTaskQueue: strings.TrimSpace(getenv("TEMPORAL_TASK_QUEUE")),
 		WorkerRunRoot:     strings.TrimSpace(getenv("WORKER_RUN_ROOT")),
 		ArtifactStore:     artifactStore,
 		Security:          security,
 	}
 	if cfg.HTTPAddress == "" {
 		cfg.HTTPAddress = DefaultHTTPAddress
-	}
-	if cfg.TemporalTaskQueue == "" {
-		cfg.TemporalTaskQueue = DefaultTemporalTaskQueue
 	}
 	if cfg.WorkerRunRoot == "" {
 		cfg.WorkerRunRoot = DefaultWorkerRunRoot
@@ -127,13 +120,9 @@ func LoadWorkerConfig(getenv func(string) string) (WorkerConfig, error) {
 		DatabaseURL:       strings.TrimSpace(getenv("DATABASE_URL")),
 		TemporalAddress:   strings.TrimSpace(getenv("TEMPORAL_ADDRESS")),
 		TemporalNamespace: strings.TrimSpace(getenv("TEMPORAL_NAMESPACE")),
-		TemporalTaskQueue: strings.TrimSpace(getenv("TEMPORAL_TASK_QUEUE")),
 		WorkerRunRoot:     strings.TrimSpace(getenv("WORKER_RUN_ROOT")),
 		ArtifactStore:     artifactStore,
 		OpenFGA:           openFGA,
-	}
-	if cfg.TemporalTaskQueue == "" {
-		cfg.TemporalTaskQueue = DefaultTemporalTaskQueue
 	}
 	if cfg.WorkerRunRoot == "" {
 		cfg.WorkerRunRoot = DefaultWorkerRunRoot

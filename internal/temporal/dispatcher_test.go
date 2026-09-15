@@ -24,7 +24,7 @@ func TestStartTemplateRunExecutesWorkflow(t *testing.T) {
 	t.Parallel()
 
 	workflowClient := &recordingWorkflowClient{}
-	dispatcher := newDispatcher(workflowClient, "terraform-runs")
+	dispatcher := newDispatcher(workflowClient)
 	input := domain.TemplateRunWorkflowInput{
 		RunID:           domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
@@ -41,7 +41,7 @@ func TestStartTemplateRunExecutesWorkflow(t *testing.T) {
 	if workflowClient.executeOptions.ID != "template-run/tenant_123/run_123" {
 		t.Fatalf("workflow ID = %q", workflowClient.executeOptions.ID)
 	}
-	if workflowClient.executeOptions.TaskQueue != "terraform-runs" {
+	if workflowClient.executeOptions.TaskQueue != domain.ControlTaskQueue {
 		t.Fatalf("task queue = %q", workflowClient.executeOptions.TaskQueue)
 	}
 	if workflowClient.executeOptions.WorkflowIDReusePolicy != enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE {
@@ -65,7 +65,7 @@ func TestStartTemplateSyncExecutesWorkflow(t *testing.T) {
 	t.Parallel()
 
 	workflowClient := &recordingWorkflowClient{}
-	dispatcher := newDispatcher(workflowClient, "terraform-runs")
+	dispatcher := newDispatcher(workflowClient)
 	input := domain.TemplateSyncWorkflowInput{
 		RegistrationID: domain.TemplateRegistrationID("template_registration_123"),
 		TenantID:       domain.TenantID("tenant_123"),
@@ -82,7 +82,7 @@ func TestStartTemplateSyncExecutesWorkflow(t *testing.T) {
 	if workflowClient.executeOptions.ID != "template-sync/tenant_123/template_registration_123" {
 		t.Fatalf("workflow ID = %q", workflowClient.executeOptions.ID)
 	}
-	if workflowClient.executeOptions.TaskQueue != "terraform-runs" {
+	if workflowClient.executeOptions.TaskQueue != domain.ControlTaskQueue {
 		t.Fatalf("task queue = %q", workflowClient.executeOptions.TaskQueue)
 	}
 	if workflowClient.executeWorkflow != domain.TemplateSyncWorkflowName {
@@ -100,7 +100,7 @@ func TestApproveTemplateRunSignalsWorkflow(t *testing.T) {
 	t.Parallel()
 
 	workflowClient := &recordingWorkflowClient{}
-	dispatcher := newDispatcher(workflowClient, "terraform-runs")
+	dispatcher := newDispatcher(workflowClient)
 	signal := domain.ApprovalSignal{ApprovedBy: approverSubject}
 
 	err := dispatcher.ApproveTemplateRun(
@@ -131,7 +131,7 @@ func TestCancelTemplateRunSignalsWorkflow(t *testing.T) {
 	t.Parallel()
 
 	workflowClient := &recordingWorkflowClient{}
-	dispatcher := newDispatcher(workflowClient, "terraform-runs")
+	dispatcher := newDispatcher(workflowClient)
 	signal := domain.CancelSignal{
 		RequestedBy: requesterSubject,
 		Reason:      "superseded by a newer run",
@@ -165,7 +165,7 @@ func TestStartTemplateRunWrapsClientError(t *testing.T) {
 	t.Parallel()
 
 	clientErr := errors.New("temporal unavailable")
-	dispatcher := newDispatcher(&recordingWorkflowClient{executeErr: clientErr}, "terraform-runs")
+	dispatcher := newDispatcher(&recordingWorkflowClient{executeErr: clientErr})
 
 	err := dispatcher.StartTemplateRun(context.Background(), domain.TemplateRunWorkflowInput{
 		RunID:    domain.TemplateRunID("run_123"),
@@ -183,7 +183,7 @@ func TestStartTemplateSyncWrapsClientError(t *testing.T) {
 	t.Parallel()
 
 	clientErr := errors.New("temporal unavailable")
-	dispatcher := newDispatcher(&recordingWorkflowClient{executeErr: clientErr}, "terraform-runs")
+	dispatcher := newDispatcher(&recordingWorkflowClient{executeErr: clientErr})
 
 	err := dispatcher.StartTemplateSync(context.Background(), domain.TemplateSyncWorkflowInput{
 		RegistrationID: domain.TemplateRegistrationID("template_registration_123"),
@@ -201,7 +201,7 @@ func TestApproveTemplateRunWrapsClientError(t *testing.T) {
 	t.Parallel()
 
 	clientErr := errors.New("temporal unavailable")
-	dispatcher := newDispatcher(&recordingWorkflowClient{signalErr: clientErr}, "terraform-runs")
+	dispatcher := newDispatcher(&recordingWorkflowClient{signalErr: clientErr})
 
 	err := dispatcher.ApproveTemplateRun(
 		context.Background(),
@@ -221,7 +221,7 @@ func TestCancelTemplateRunWrapsClientError(t *testing.T) {
 	t.Parallel()
 
 	clientErr := errors.New("temporal unavailable")
-	dispatcher := newDispatcher(&recordingWorkflowClient{signalErr: clientErr}, "terraform-runs")
+	dispatcher := newDispatcher(&recordingWorkflowClient{signalErr: clientErr})
 
 	err := dispatcher.CancelTemplateRun(
 		context.Background(),

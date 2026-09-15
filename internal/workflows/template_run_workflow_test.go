@@ -96,6 +96,45 @@ func TestTemplateRunWorkflowUsesSessionForWorkspaceActivities(t *testing.T) {
 	}
 }
 
+// TestTemplateRunWorkflowRoutesActivitiesByPlane protects the control/data
+// plane split. Status writes need the database, so they must stay on the
+// control queue; the session must be created on the execution queue, or
+// Terraform would run on a host that holds the control plane's secrets.
+func TestTemplateRunWorkflowRoutesActivitiesByPlane(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	queues := map[string][]string{}
+	env.SetOnActivityStartedListener(func(info *activity.Info, _ context.Context, _ converter.EncodedValues) {
+		queues[info.ActivityType.Name] = append(queues[info.ActivityType.Name], info.TaskQueue)
+	})
+	env.OnActivity(domain.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(domain.PrepareWorkspaceActivityOutput{WorkspacePath: "run/workspace"}, nil)
+	env.OnActivity(domain.FetchSourceActivityName, mock.Anything, mock.Anything).
+		Return(domain.FetchSourceActivityOutput{TerraformPath: "run/workspace/source"}, nil)
+	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, templateRunWorkflowInput(domain.OperationPlan))
+
+	assertWorkflowCompleted(t, env)
+	statusQueues := queues[domain.RecordTemplateRunStatusActivityName]
+	if len(statusQueues) == 0 {
+		t.Fatal("no status activity ran")
+	}
+	for _, queue := range statusQueues {
+		if queue != domain.ControlTaskQueue {
+			t.Fatalf("status activity queues = %#v, want all %q", statusQueues, domain.ControlTaskQueue)
+		}
+	}
+	// The SDK creates a session through an internal activity on
+	// "<base queue>__internal_session_creation"; the base is what places it.
+	wantCreation := domain.ExecutionTaskQueue + "__internal_session_creation"
+	if got := queues["internalSessionCreationActivity"]; len(got) != 1 || got[0] != wantCreation {
+		t.Fatalf("session creation queues = %#v, want [%q]", got, wantCreation)
+	}
+}
+
 // TestTemplateRunWorkflowGivesFetchSourceALongerTimeout guards against the
 // default one-minute activity budget silently swallowing FetchSource again.
 // That activity now resolves a GitHub token before it ever invokes git, which

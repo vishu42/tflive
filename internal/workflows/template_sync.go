@@ -24,7 +24,10 @@ var syncRetryPolicy = &temporal.RetryPolicy{
 }
 
 func TemplateSyncWorkflow(ctx workflow.Context, input domain.TemplateSyncWorkflowInput) error {
+	// Sync clones and parses a repository but runs none of its code, so all of
+	// it stays on the control plane.
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		TaskQueue:           domain.ControlTaskQueue,
 		StartToCloseTimeout: 5 * time.Minute,
 		RetryPolicy:         syncRetryPolicy,
 	})
