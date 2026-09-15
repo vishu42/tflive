@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -237,6 +238,100 @@ func TestTemplateRunWorkflowRecordsLogOfFailedCommand(t *testing.T) {
 	}
 	if !strings.Contains(failedStatus.ErrorSummary, "plan: exit status 1") {
 		t.Fatalf("failure summary = %q, want the command error", failedStatus.ErrorSummary)
+	}
+}
+
+// Secrets cross Temporal only sealed to the key the executor returned from
+// PrepareWorkspace: the control plane seals, on the control queue, and the
+// executor receives only ciphertext. The key is released when the run ends.
+func TestTemplateRunWorkflowSealsSecretsToTheExecutorKey(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	publicKey := []byte("executor-public-key-0123456789ab")
+	queues := map[string][]string{}
+	env.SetOnActivityStartedListener(func(info *activity.Info, _ context.Context, _ converter.EncodedValues) {
+		queues[info.ActivityType.Name] = append(queues[info.ActivityType.Name], info.TaskQueue)
+	})
+	var sealRequests int
+	var terraformEnvironments [][]byte
+	var fetchInput domain.FetchSourceActivityInput
+	var released domain.ReleaseRunKeyActivityInput
+	env.OnActivity(domain.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(domain.PrepareWorkspaceActivityOutput{WorkspacePath: "run/workspace", PublicKey: publicKey}, nil)
+	env.OnActivity(domain.SealSourceTokenActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.SealSourceTokenActivityInput) (domain.SealSourceTokenActivityOutput, error) {
+			if string(input.PublicKey) != string(publicKey) || input.RepoOwner != "acme" {
+				t.Fatalf("seal source token input = %#v", input)
+			}
+			return domain.SealSourceTokenActivityOutput{SealedToken: []byte("sealed-token"), FetchHint: "; hint"}, nil
+		})
+	env.OnActivity(domain.FetchSourceActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.FetchSourceActivityInput) (domain.FetchSourceActivityOutput, error) {
+			fetchInput = input
+			return domain.FetchSourceActivityOutput{TerraformPath: "run/workspace/source"}, nil
+		})
+	env.OnActivity(domain.SealRunCredentialsActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.SealRunCredentialsActivityInput) (domain.SealRunCredentialsActivityOutput, error) {
+			if string(input.PublicKey) != string(publicKey) || input.StackTemplateID != "stack_template_123" {
+				t.Fatalf("seal credentials input = %#v", input)
+			}
+			sealRequests++
+			return domain.SealRunCredentialsActivityOutput{SealedEnvironment: []byte(fmt.Sprintf("sealed-env-%d", sealRequests))}, nil
+		})
+	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
+			terraformEnvironments = append(terraformEnvironments, input.SealedEnvironment)
+			return domain.RunTerraformActivityOutput{}, nil
+		})
+	env.OnActivity(domain.ReleaseRunKeyActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.ReleaseRunKeyActivityInput) error {
+			released = input
+			return nil
+		})
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, templateRunWorkflowInput(domain.OperationPlan))
+
+	assertWorkflowCompleted(t, env)
+	if string(fetchInput.SealedToken) != "sealed-token" || fetchInput.FetchHint != "; hint" {
+		t.Fatalf("fetch source input = %#v, want the sealed token and hint", fetchInput)
+	}
+	// One fresh seal per command: init, select_workspace, plan.
+	want := [][]byte{[]byte("sealed-env-1"), []byte("sealed-env-2"), []byte("sealed-env-3")}
+	if !reflect.DeepEqual(terraformEnvironments, want) {
+		t.Fatalf("terraform sealed environments = %q, want %q", terraformEnvironments, want)
+	}
+	for _, name := range []string{domain.SealSourceTokenActivityName, domain.SealRunCredentialsActivityName} {
+		for _, queue := range queues[name] {
+			if queue != domain.ControlTaskQueue {
+				t.Fatalf("%s queues = %#v, want all %q", name, queues[name], domain.ControlTaskQueue)
+			}
+		}
+	}
+	if released.RunID != "run_123" || released.TenantID != "tenant_123" {
+		t.Fatalf("released key = %#v, want run_123's", released)
+	}
+	if got, prepare := queues[domain.ReleaseRunKeyActivityName], queues[domain.PrepareWorkspaceActivityName]; len(got) != 1 || got[0] != prepare[0] {
+		t.Fatalf("release key queues = %#v, want the session queue %#v", got, prepare)
+	}
+}
+
+// Opened credentials live on RunTerraformActivityInput inside the executor. The
+// field must never serialize, or a workflow that set it would write plaintext
+// into history.
+func TestRunTerraformActivityInputNeverSerializesEnvironment(t *testing.T) {
+	t.Parallel()
+
+	payload, err := converter.GetDefaultDataConverter().ToPayload(domain.RunTerraformActivityInput{
+		RunID:       "run_123",
+		Environment: map[string]string{"AWS_SECRET_ACCESS_KEY": "canary-7f3a"},
+	})
+	if err != nil {
+		t.Fatalf("ToPayload returned error: %v", err)
+	}
+	if strings.Contains(string(payload.GetData()), "canary-7f3a") {
+		t.Fatalf("payload = %s, want no plaintext environment", payload.GetData())
 	}
 }
 
@@ -726,6 +821,24 @@ func newTemplateRunWorkflowTestEnvironment(t *testing.T) *testsuite.TestWorkflow
 			return nil
 		},
 		activity.RegisterOptions{Name: domain.RecordTemplateRunLogActivityName},
+	)
+	env.RegisterActivityWithOptions(
+		func(context.Context, domain.SealSourceTokenActivityInput) (domain.SealSourceTokenActivityOutput, error) {
+			return domain.SealSourceTokenActivityOutput{}, nil
+		},
+		activity.RegisterOptions{Name: domain.SealSourceTokenActivityName},
+	)
+	env.RegisterActivityWithOptions(
+		func(context.Context, domain.SealRunCredentialsActivityInput) (domain.SealRunCredentialsActivityOutput, error) {
+			return domain.SealRunCredentialsActivityOutput{}, nil
+		},
+		activity.RegisterOptions{Name: domain.SealRunCredentialsActivityName},
+	)
+	env.RegisterActivityWithOptions(
+		func(context.Context, domain.ReleaseRunKeyActivityInput) error {
+			return nil
+		},
+		activity.RegisterOptions{Name: domain.ReleaseRunKeyActivityName},
 	)
 	env.RegisterActivityWithOptions(
 		func(context.Context, domain.PrepareWorkspaceActivityInput) (domain.PrepareWorkspaceActivityOutput, error) {

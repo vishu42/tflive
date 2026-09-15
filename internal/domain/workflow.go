@@ -33,6 +33,9 @@ const (
 	FetchSourceActivityName                      = "FetchSource"
 	RunTerraformActivityName                     = "RunTerraform"
 	SyncTemplateActivityName                     = "SyncTemplate"
+	SealSourceTokenActivityName                  = "SealSourceToken"
+	SealRunCredentialsActivityName               = "SealRunCredentials"
+	ReleaseRunKeyActivityName                    = "ReleaseRunKey"
 
 	// TerraformCommandFailedErrorType marks a RunTerraform failure whose
 	// ApplicationError details carry the uploaded log's TemplateRunLog.
@@ -78,6 +81,49 @@ type PrepareWorkspaceActivityInput struct {
 // PrepareWorkspaceActivityOutput identifies the prepared local run workspace.
 type PrepareWorkspaceActivityOutput struct {
 	WorkspacePath string
+	// PublicKey is the run's sealing key. Its private half never leaves the
+	// executor that prepared the workspace.
+	PublicKey []byte
+}
+
+// RunKeyID names a run's key on the executor holding it.
+func RunKeyID(tenantID TenantID, runID TemplateRunID) string {
+	return string(tenantID) + "/" + string(runID)
+}
+
+// SealSourceTokenActivityInput asks the control plane for a repository token
+// sealed to the run's key.
+type SealSourceTokenActivityInput struct {
+	RepoOwner string
+	RepoName  string
+	PublicKey []byte
+}
+
+// SealSourceTokenActivityOutput carries the sealed token, which is an empty
+// string when none could be resolved. FetchHint explains why, for a fetch that
+// then fails unauthenticated.
+type SealSourceTokenActivityOutput struct {
+	SealedToken []byte
+	FetchHint   string
+}
+
+// SealRunCredentialsActivityInput asks the control plane for a StackTemplate's
+// decrypted credentials sealed to the run's key.
+type SealRunCredentialsActivityInput struct {
+	TenantID        TenantID
+	StackTemplateID StackTemplateID
+	PublicKey       []byte
+}
+
+// SealRunCredentialsActivityOutput carries the sealed environment map.
+type SealRunCredentialsActivityOutput struct {
+	SealedEnvironment []byte
+}
+
+// ReleaseRunKeyActivityInput asks the executor to drop a finished run's key.
+type ReleaseRunKeyActivityInput struct {
+	TenantID TenantID
+	RunID    TemplateRunID
 }
 
 // FetchSourceActivityInput asks the worker to clone a template source into a prepared run workspace.
@@ -94,6 +140,9 @@ type FetchSourceActivityInput struct {
 	// ResolvedCommitSHA is the exact commit to check out.
 	ResolvedCommitSHA string
 	RootPath          string
+	// SealedToken is the repository token sealed to the run's key.
+	SealedToken []byte
+	FetchHint   string
 }
 
 // FetchSourceActivityOutput identifies the Terraform module directory within the cloned source.
@@ -111,7 +160,11 @@ type RunTerraformActivityInput struct {
 	WorkspaceName   string
 	Command         TerraformCommandType
 	ConfigJSON      json.RawMessage
-	Environment     map[string]string
+	// SealedEnvironment is the run's credentials sealed to its key.
+	SealedEnvironment []byte
+	// Environment is the opened credentials, filled in on the executor. It is
+	// excluded from JSON so it can never be written into workflow history.
+	Environment map[string]string `json:"-"`
 }
 
 // RunTerraformActivityOutput reports what a Terraform command left behind.

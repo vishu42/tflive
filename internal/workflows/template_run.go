@@ -86,6 +86,7 @@ func TemplateRunWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowI
 	run.sessionCtx = sessionCtx
 
 	err = run.execute(operation)
+	run.releaseKey()
 	workflow.CompleteSession(sessionCtx)
 	if err != nil {
 		if errors.Is(err, errTemplateRunCanceled) {
@@ -105,6 +106,9 @@ type templateRunWorkflow struct {
 	input         domain.TemplateRunWorkflowInput
 	workspacePath string
 	terraformPath string
+	// publicKey is the executor's sealing key for this run; everything secret
+	// the executor needs is sealed to it on the control plane.
+	publicKey []byte
 }
 
 // execute prepares the workspace and invokes the already-resolved operation.
@@ -177,10 +181,38 @@ func (run *templateRunWorkflow) prepareLocalWorkspace() error {
 		return err
 	}
 	run.workspacePath = output.WorkspacePath
+	run.publicKey = output.PublicKey
 	return nil
 }
 
+// releaseKey asks the executor to drop the run's sealing key. It is best effort:
+// if the session already failed the executor is gone and its keys with it, and
+// the key ring evicts abandoned keys on its own.
+func (run *templateRunWorkflow) releaseKey() {
+	if run.publicKey == nil {
+		return
+	}
+	_ = workflow.ExecuteActivity(
+		run.sessionCtx,
+		domain.ReleaseRunKeyActivityName,
+		domain.ReleaseRunKeyActivityInput{TenantID: run.input.TenantID, RunID: run.input.RunID},
+	).Get(run.sessionCtx, nil)
+}
+
 func (run *templateRunWorkflow) fetchSource() error {
+	var token domain.SealSourceTokenActivityOutput
+	if err := workflow.ExecuteActivity(
+		run.ctx,
+		domain.SealSourceTokenActivityName,
+		domain.SealSourceTokenActivityInput{
+			RepoOwner: run.input.RepoOwner,
+			RepoName:  run.input.RepoName,
+			PublicKey: run.publicKey,
+		},
+	).Get(run.ctx, &token); err != nil {
+		return err
+	}
+
 	input := domain.FetchSourceActivityInput{
 		RunID:             run.input.RunID,
 		TenantID:          run.input.TenantID,
@@ -190,16 +222,12 @@ func (run *templateRunWorkflow) fetchSource() error {
 		SourceRef:         run.input.SelectedRef,
 		ResolvedCommitSHA: run.input.ResolvedCommitSHA,
 		RootPath:          run.input.RootPath,
+		SealedToken:       token.SealedToken,
+		FetchHint:         token.FetchHint,
 	}
 
-	// FetchSource resolves a GitHub App installation token before it ever
-	// invokes git, which can cost up to two API round trips at the client's
-	// HTTP timeout on top of the clone/checkout itself. A per-worker-process
-	// cache absorbs that cost after the first fetch for a repository, but the
-	// first run -- and every run immediately after a worker restart -- pays it
-	// in full, and the default one-minute budget below was sized for a bare
-	// git operation, not one with token resolution in front of it. This
-	// activity gets a longer budget of its own rather than raising the
+	// A clone of a large repository can outlast the default one-minute budget,
+	// so FetchSource gets a longer one of its own rather than raising the
 	// default for every other activity in the run.
 	fetchSourceCtx := workflow.WithActivityOptions(run.sessionCtx, workflow.ActivityOptions{
 		StartToCloseTimeout: 3 * time.Minute,
@@ -356,15 +384,31 @@ func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType
 		}
 	}
 
+	// Sealed for every command rather than once per run: credentials are read
+	// fresh each time, and an apply can start a day after its plan.
+	var credentials domain.SealRunCredentialsActivityOutput
+	if err := workflow.ExecuteActivity(
+		run.ctx,
+		domain.SealRunCredentialsActivityName,
+		domain.SealRunCredentialsActivityInput{
+			TenantID:        run.input.TenantID,
+			StackTemplateID: run.input.StackTemplateID,
+			PublicKey:       run.publicKey,
+		},
+	).Get(run.ctx, &credentials); err != nil {
+		return err
+	}
+
 	input := domain.RunTerraformActivityInput{
-		RunID:           run.input.RunID,
-		TenantID:        run.input.TenantID,
-		StackTemplateID: run.input.StackTemplateID,
-		WorkspacePath:   run.workspacePath,
-		TerraformPath:   run.terraformPath,
-		WorkspaceName:   run.input.WorkspaceName,
-		Command:         command,
-		ConfigJSON:      run.input.ConfigJSON,
+		RunID:             run.input.RunID,
+		TenantID:          run.input.TenantID,
+		StackTemplateID:   run.input.StackTemplateID,
+		WorkspacePath:     run.workspacePath,
+		TerraformPath:     run.terraformPath,
+		WorkspaceName:     run.input.WorkspaceName,
+		Command:           command,
+		ConfigJSON:        run.input.ConfigJSON,
+		SealedEnvironment: credentials.SealedEnvironment,
 	}
 
 	activityCtx, cancelActivity := workflow.WithCancel(run.sessionCtx)

@@ -13,6 +13,7 @@ import (
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/logsink"
 	"github.com/vishu42/tflive/internal/runner"
+	"github.com/vishu42/tflive/internal/runseal"
 	"go.temporal.io/sdk/temporal"
 )
 
@@ -46,49 +47,30 @@ type CredentialReader interface {
 }
 
 type CredentialDecryptor interface {
-	// Decrypt opens one credential only inside the worker execution boundary.
+	// Decrypt opens one stored credential. Only the control plane holds the key.
 	Decrypt(string) (string, error)
 }
 
-// TemplateRunActivities groups the activity handlers registered by the worker.
-//
-// Temporal invokes methods on this value when TemplateRunWorkflow schedules the
-// matching activity names. The struct holds the dependencies those handlers need
-// outside the deterministic workflow runtime: persistence, filesystem paths, and
-// local OpenTofu execution.
+// TemplateRunActivities are the execution activities: the ones that run next
+// to tenant Terraform on the executor, which holds no database connection and
+// no keys beyond its per-run sealing keys.
 type TemplateRunActivities struct {
-	// recorder writes status changes back to the application store.
-	recorder StatusRecorder
 	// runRoot is the base directory under which per-tenant, per-run workspaces are created.
 	runRoot string
 	// terraformRunner executes Terraform-compatible commands for RunTerraform activity calls.
 	terraformRunner TerraformRunner
 	// git clones template source repositories into run workspaces.
-	git                 runner.GitRunner
-	credentialReader    CredentialReader
-	credentialDecryptor CredentialDecryptor
-	// tokens resolves short-lived GitHub App tokens for private source repositories.
-	tokens GitHubTokenSource
+	git runner.GitRunner
+	// keys holds each in-flight run's private sealing key.
+	keys *runseal.KeyRing
 }
 
-// NewTemplateRunActivities constructs the activity handler set registered by the worker.
+// NewTemplateRunActivities constructs the execution activities.
 //
-// By default it wires a local OpenTofu-backed runner backed by real subprocess
-// execution. Tests may pass a TerraformRunner override, which keeps the public
-// constructor small while still allowing activity tests to avoid invoking the
-// OpenTofu binary.
-func NewTemplateRunActivities(recorder StatusRecorder, runRoot string, terraformRunners ...TerraformRunner) *TemplateRunActivities {
-	return NewTemplateRunActivitiesWithLogStore(recorder, runRoot, nil, terraformRunners...)
-}
-
-func NewTemplateRunActivitiesWithLogStore(recorder StatusRecorder, runRoot string, logStore TemplateRunLogStore, terraformRunners ...TerraformRunner) *TemplateRunActivities {
-	return NewTemplateRunActivitiesWithCredentials(recorder, runRoot, logStore, nil, nil, nil, terraformRunners...)
-}
-
-// NewTemplateRunActivitiesWithCredentials wires runtime credential lookup and
-// decryption into activities, plus the GitHub token source used to fetch source
-// from a private repository.
-func NewTemplateRunActivitiesWithCredentials(recorder StatusRecorder, runRoot string, logStore TemplateRunLogStore, credentialReader CredentialReader, credentialDecryptor CredentialDecryptor, tokens GitHubTokenSource, terraformRunners ...TerraformRunner) *TemplateRunActivities {
+// By default it wires a local OpenTofu-backed runner that uploads phase logs
+// to logStore. Tests may pass a TerraformRunner override to avoid invoking the
+// OpenTofu binary. A nil keys gets a fresh ring.
+func NewTemplateRunActivities(runRoot string, logStore TemplateRunLogStore, keys *runseal.KeyRing, terraformRunners ...TerraformRunner) *TemplateRunActivities {
 	terraformRunner := TerraformRunner(localTerraformRunner{
 		runner:   runner.NewLocalProcessRunner(),
 		logStore: logStore,
@@ -96,15 +78,15 @@ func NewTemplateRunActivitiesWithCredentials(recorder StatusRecorder, runRoot st
 	if len(terraformRunners) > 0 {
 		terraformRunner = terraformRunners[0]
 	}
+	if keys == nil {
+		keys = runseal.NewKeyRing()
+	}
 
 	return &TemplateRunActivities{
-		recorder:            recorder,
-		runRoot:             runRoot,
-		terraformRunner:     terraformRunner,
-		git:                 runner.NewLocalGitRunner(),
-		credentialReader:    credentialReader,
-		credentialDecryptor: credentialDecryptor,
-		tokens:              tokens,
+		runRoot:         runRoot,
+		terraformRunner: terraformRunner,
+		git:             runner.NewLocalGitRunner(),
+		keys:            keys,
 	}
 }
 
@@ -125,7 +107,21 @@ func (activities *TemplateRunActivities) PrepareWorkspace(ctx context.Context, i
 		return domain.PrepareWorkspaceActivityOutput{}, fmt.Errorf("prepare workspace directory: %w", err)
 	}
 
-	return domain.PrepareWorkspaceActivityOutput{WorkspacePath: workspacePath}, nil
+	// The session pins every later activity of this run to this process, so the
+	// key generated here is the one that opens what the control plane seals.
+	publicKey, err := activities.keys.Generate(domain.RunKeyID(input.TenantID, input.RunID))
+	if err != nil {
+		return domain.PrepareWorkspaceActivityOutput{}, err
+	}
+
+	return domain.PrepareWorkspaceActivityOutput{WorkspacePath: workspacePath, PublicKey: publicKey}, nil
+}
+
+// ReleaseRunKey drops a finished run's sealing key, so nothing sealed to it can
+// be opened afterwards.
+func (activities *TemplateRunActivities) ReleaseRunKey(_ context.Context, input domain.ReleaseRunKeyActivityInput) error {
+	activities.keys.Forget(domain.RunKeyID(input.TenantID, input.RunID))
+	return nil
 }
 
 // FetchSource clones the template source into the prepared run workspace.
@@ -152,14 +148,19 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 	if err != nil {
 		return domain.FetchSourceActivityOutput{}, err
 	}
-	// Resolving a credential is best effort: the checkout is the operation
-	// allowed to fail, not the lookup standing in front of it. A 404 from the
-	// installation endpoint cannot be told apart from a public repo nobody ever
-	// needed to install the App on, and a 503 says nothing about the repository
-	// at all -- so in every case the fetch proceeds with the zero credential.
-	// Otherwise a GitHub API hiccup would fail runs against public repos that
-	// never needed a token in the first place.
-	credential, credentialErr := repoCredential(ctx, activities.tokens, input.RepoOwner, input.RepoName)
+	// The control plane resolved the token best effort and sealed it to this
+	// run's key; an empty token means the fetch proceeds unauthenticated, with
+	// FetchHint explaining why should it then fail.
+	var credential runner.GitCredential
+	if len(input.SealedToken) > 0 {
+		var token string
+		if err := activities.keys.Open(domain.RunKeyID(input.TenantID, input.RunID), input.SealedToken, &token); err != nil {
+			return domain.FetchSourceActivityOutput{}, fmt.Errorf("open source token: %w", err)
+		}
+		if token != "" {
+			credential = runner.NewGitCredential(token)
+		}
+	}
 	// The commit is what the revision means, so it is what runs. Checking out a
 	// ref would let the source move between a plan and the apply that was
 	// approved against it, and would ignore the revision entirely once an
@@ -171,10 +172,10 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 	// run resolves its own source.
 	if commitSHA := strings.TrimSpace(input.ResolvedCommitSHA); commitSHA != "" {
 		if err := git.CheckoutCommit(ctx, repoURL, commitSHA, sourcePath, credential); err != nil {
-			return domain.FetchSourceActivityOutput{}, fmt.Errorf("checkout source commit %s: %w%s", commitSHA, err, unauthenticatedFetchHint(credentialErr, input.RepoOwner, input.RepoName))
+			return domain.FetchSourceActivityOutput{}, fmt.Errorf("checkout source commit %s: %w%s", commitSHA, err, input.FetchHint)
 		}
 	} else if err := git.Clone(ctx, repoURL, input.SourceRef, sourcePath, credential); err != nil {
-		return domain.FetchSourceActivityOutput{}, fmt.Errorf("clone source: %w%s", err, unauthenticatedFetchHint(credentialErr, input.RepoOwner, input.RepoName))
+		return domain.FetchSourceActivityOutput{}, fmt.Errorf("clone source: %w%s", err, input.FetchHint)
 	}
 
 	terraformPath := filepath.Clean(filepath.Join(sourcePath, rootPath))
@@ -187,22 +188,20 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 
 // RunTerraform executes one Terraform phase requested by TemplateRunWorkflow.
 //
-// This activity resolves and decrypts credentials only at worker runtime, then
+// It opens the credentials the control plane sealed to this run's key, then
 // delegates command selection, log handling, and subprocess execution to the
-// configured TerraformRunner implementation. It never puts plaintext credentials
-// into workflow input or API responses.
+// configured TerraformRunner. Plaintext credentials exist only in this process
+// and the Terraform subprocess, never in workflow history.
 //
 // A command that fails after its log was uploaded is reported as an
 // ApplicationError carrying the log metadata as details, so the workflow can
 // still record the log a user needs to see why the command failed.
 func (activities *TemplateRunActivities) RunTerraform(ctx context.Context, input domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
-	if activities.credentialReader != nil {
-		if activities.credentialDecryptor == nil {
-			return domain.RunTerraformActivityOutput{}, fmt.Errorf("resolve terraform credentials: decryptor is unavailable")
-		}
-		environment, err := resolveCredentialEnvironment(ctx, activities.credentialReader, activities.credentialDecryptor, input.TenantID, input.StackTemplateID)
-		if err != nil {
-			return domain.RunTerraformActivityOutput{}, fmt.Errorf("resolve terraform credentials: %w", err)
+	input.Environment = nil
+	if len(input.SealedEnvironment) > 0 {
+		var environment map[string]string
+		if err := activities.keys.Open(domain.RunKeyID(input.TenantID, input.RunID), input.SealedEnvironment, &environment); err != nil {
+			return domain.RunTerraformActivityOutput{}, fmt.Errorf("open terraform credentials: %w", err)
 		}
 		input.Environment = environment
 	}

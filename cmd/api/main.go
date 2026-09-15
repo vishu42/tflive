@@ -60,8 +60,7 @@ type appRepositories interface {
 type controlStore interface {
 	queue.Backend
 	queue.Enqueuer
-	activities.StatusRecorder
-	activities.LogMetadataRecorder
+	activities.ControlStore
 	activities.TemplateSyncStore
 	app.TemplateRunCancellationReconciler
 }
@@ -243,12 +242,18 @@ func registerControl(worker temporalWorker, store controlStore, gitHubTokens act
 		Name: domain.TemplateSyncWorkflowName,
 	})
 
-	control := activities.NewControlActivities(store, store)
+	control := activities.NewControlActivities(store, gitHubTokens)
 	worker.RegisterActivityWithOptions(control.RecordTemplateRunStatus, activity.RegisterOptions{
 		Name: domain.RecordTemplateRunStatusActivityName,
 	})
 	worker.RegisterActivityWithOptions(control.RecordTemplateRunLog, activity.RegisterOptions{
 		Name: domain.RecordTemplateRunLogActivityName,
+	})
+	worker.RegisterActivityWithOptions(control.SealRunCredentials, activity.RegisterOptions{
+		Name: domain.SealRunCredentialsActivityName,
+	})
+	worker.RegisterActivityWithOptions(control.SealSourceToken, activity.RegisterOptions{
+		Name: domain.SealSourceTokenActivityName,
 	})
 
 	sync := activities.NewTemplateSyncActivities(store, activities.WithTemplateSyncTokenSource(gitHubTokens))

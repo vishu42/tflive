@@ -249,6 +249,8 @@ func TestRegisterControlRegistersWorkflowsAndControlActivities(t *testing.T) {
 	wantActivities := map[string]bool{
 		domain.RecordTemplateRunStatusActivityName:          true,
 		domain.RecordTemplateRunLogActivityName:             true,
+		domain.SealRunCredentialsActivityName:               true,
+		domain.SealSourceTokenActivityName:                  true,
 		domain.RecordTemplateRegistrationStatusActivityName: true,
 		domain.SyncTemplateActivityName:                     true,
 	}
@@ -986,6 +988,14 @@ func (recordingStore) RecordTemplateRunStatus(context.Context, domain.TemplateRu
 
 func (recordingStore) RecordTemplateRunLog(context.Context, domain.TemplateRunLog) error {
 	return nil
+}
+
+func (recordingStore) ListCredentialsForStackTemplate(context.Context, domain.TenantID, domain.StackTemplateID) ([]domain.CredentialSet, error) {
+	return nil, nil
+}
+
+func (recordingStore) Decrypt(string) (string, error) {
+	return "", nil
 }
 
 type recordingAPITemporalClient struct {

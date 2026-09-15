@@ -6,14 +6,11 @@ import (
 	"log"
 	"os"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/activities"
 	"github.com/vishu42/tflive/internal/artifacts"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/domain"
-	"github.com/vishu42/tflive/internal/encryption"
-	"github.com/vishu42/tflive/internal/githubapp"
-	"github.com/vishu42/tflive/internal/postgres"
+	"github.com/vishu42/tflive/internal/runseal"
 	"github.com/vishu42/tflive/internal/temporal"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
@@ -25,28 +22,13 @@ type temporalWorker interface {
 	Run(<-chan interface{}) error
 }
 
-type postgresPool interface {
-	Ping(context.Context) error
-	Close()
-}
-
-// workerStore is what the execution activities still read from the database:
-// the credentials to decrypt.
-type workerStore interface {
-	activities.StatusRecorder
-}
-
 type workerDependencies struct {
-	// newPostgresPool opens the database connection pool used by the worker.
-	newPostgresPool func(context.Context, string) (postgresPool, error)
-	// newStore builds the persistence adapter shared by worker activities.
-	newStore func(postgresPool, *encryption.Cipher) (workerStore, error)
 	// dialTemporal connects to the Temporal namespace where the worker polls for tasks.
 	dialTemporal func(context.Context, temporal.Config) (client.Client, error)
 	// newWorker creates the Temporal worker bound to the execution task queue.
 	newWorker func(client.Client, string, temporalworker.Options) temporalWorker
 	// registerActivities attaches the execution activities to the worker.
-	registerActivities func(worker temporalWorker, store workerStore, runRoot string, logStore activities.TemplateRunLogStore, gitHubTokens activities.GitHubTokenSource)
+	registerActivities func(worker temporalWorker, runRoot string, logStore activities.TemplateRunLogStore, keys *runseal.KeyRing)
 	// newLogStore builds the artifact-backed log store used by Terraform activities.
 	newLogStore func(config.ArtifactStoreConfig) (activities.TemplateRunLogStore, error)
 	// interruptCh provides the shutdown signal consumed by the Temporal worker run loop.
@@ -61,24 +43,12 @@ func main() {
 
 func defaultWorkerDependencies() workerDependencies {
 	return workerDependencies{
-		newPostgresPool: func(ctx context.Context, databaseURL string) (postgresPool, error) {
-			return pgxpool.New(ctx, databaseURL)
-		},
-		newStore: func(pool postgresPool, cipher *encryption.Cipher) (workerStore, error) {
-			pgxPool, ok := pool.(*pgxpool.Pool)
-			if !ok {
-				return nil, fmt.Errorf("unexpected postgres pool type %T", pool)
-			}
-			return postgres.NewStore(pgxPool, postgres.WithCredentialCipher(cipher)), nil
-		},
 		dialTemporal: temporal.Dial,
 		newWorker: func(temporalClient client.Client, taskQueue string, options temporalworker.Options) temporalWorker {
 			return temporalworker.New(temporalClient, taskQueue, options)
 		},
-		registerActivities: func(worker temporalWorker, store workerStore, runRoot string, logStore activities.TemplateRunLogStore, gitHubTokens activities.GitHubTokenSource) {
-			reader, _ := store.(activities.CredentialReader)
-			decryptor, _ := store.(activities.CredentialDecryptor)
-			templateRunActivities := activities.NewTemplateRunActivitiesWithCredentials(store, runRoot, logStore, reader, decryptor, gitHubTokens)
+		registerActivities: func(worker temporalWorker, runRoot string, logStore activities.TemplateRunLogStore, keys *runseal.KeyRing) {
+			templateRunActivities := activities.NewTemplateRunActivities(runRoot, logStore, keys)
 			worker.RegisterActivityWithOptions(templateRunActivities.PrepareWorkspace, activity.RegisterOptions{
 				Name: domain.PrepareWorkspaceActivityName,
 			})
@@ -87,6 +57,9 @@ func defaultWorkerDependencies() workerDependencies {
 			})
 			worker.RegisterActivityWithOptions(templateRunActivities.RunTerraform, activity.RegisterOptions{
 				Name: domain.RunTerraformActivityName,
+			})
+			worker.RegisterActivityWithOptions(templateRunActivities.ReleaseRunKey, activity.RegisterOptions{
+				Name: domain.ReleaseRunKeyActivityName,
 			})
 		},
 		newLogStore: func(cfg config.ArtifactStoreConfig) (activities.TemplateRunLogStore, error) {
@@ -104,75 +77,17 @@ func run(ctx context.Context, getenv func(string) string) error {
 	return runWithDependencies(ctx, getenv, defaultWorkerDependencies())
 }
 
-// scrubConsumedSecret removes a secret from the process environment once its
-// value has already been parsed into the in-memory object the worker
-// actually uses. It exists as its own function so the scrub can be verified
-// by test without exercising the rest of worker startup (real Postgres,
-// Temporal, etc.).
-//
-// os.Unsetenv only errors when given a malformed variable name (one
-// containing "="), which never happens for the fixed names this is called
-// with, so the error is not worth surfacing.
-func scrubConsumedSecret(name string) {
-	_ = os.Unsetenv(name)
-}
-
+// runWithDependencies runs the executor: a Temporal worker on the execution
+// queue, next to tenant Terraform. It deliberately opens no database connection
+// and parses no key. Everything secret a run needs arrives sealed to a key this
+// process generates for that run, and everything a run produces goes back
+// through Temporal to the control plane.
 func runWithDependencies(ctx context.Context, getenv func(string) string, deps workerDependencies) error {
 	cfg, err := config.LoadWorkerConfig(getenv)
 	if err != nil {
 		return fmt.Errorf("load worker config: %w", err)
 	}
 
-	pool, err := deps.newPostgresPool(ctx, cfg.DatabaseURL)
-	if err != nil {
-		return fmt.Errorf("create postgres pool: %w", err)
-	}
-	defer pool.Close()
-
-	if err := pool.Ping(ctx); err != nil {
-		return fmt.Errorf("ping postgres: %w", err)
-	}
-
-	var credentialCipher *encryption.Cipher
-	if !cfg.CredentialEncryptionKey.Empty() {
-		credentialCipher, err = encryption.NewCipher(cfg.CredentialEncryptionKey.Value())
-		if err != nil {
-			return fmt.Errorf("create credential cipher: %w", err)
-		}
-		// The key text is now sealed inside credentialCipher and never read from
-		// the environment again. Leaving it in os.Environ would hand it to every
-		// Terraform subprocess this worker starts: runner.CommandExecutor inherits
-		// the full process environment (see internal/runner/executor.go) because
-		// Terraform legitimately needs PATH, HOME, and provider credentials from
-		// it, and that inheritance cannot distinguish "meant for Terraform" from
-		// "meant for us."
-		scrubConsumedSecret("CREDENTIAL_ENCRYPTION_KEY")
-	}
-
-	var gitHubTokens *githubapp.TokenSource
-	if cfg.GitHubApp.Enabled() {
-		privateKey, err := githubapp.ParsePrivateKey(cfg.GitHubApp.PrivateKey.Value())
-		if err != nil {
-			// Unreachable in practice: LoadWorkerConfig parses the same key at
-			// startup precisely so this cannot fail here.
-			return fmt.Errorf("parse github app private key: %w", err)
-		}
-		gitHubTokens = githubapp.NewTokenSource(githubapp.NewClient(cfg.GitHubApp.AppID, privateKey))
-		// The PEM text is now parsed into privateKey and never read from the
-		// environment again. This key mints installation tokens for every
-		// repository across every installation of the App -- strictly more
-		// powerful than the repo-scoped token the rest of this branch works hard
-		// to contain -- so it must not sit in os.Environ where every Terraform
-		// subprocess (an `external` data source, local-exec, a provider binary)
-		// can read it. See the CREDENTIAL_ENCRYPTION_KEY comment above for why
-		// executor.go's environment inheritance can't be the place this is fixed.
-		scrubConsumedSecret("GITHUB_APP_PRIVATE_KEY")
-	}
-
-	store, err := deps.newStore(pool, credentialCipher)
-	if err != nil {
-		return fmt.Errorf("wire activities: %w", err)
-	}
 	logStore, err := deps.newLogStore(cfg.ArtifactStore)
 	if err != nil {
 		return fmt.Errorf("wire log store: %w", err)
@@ -187,11 +102,10 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 	}
 	defer temporalClient.Close()
 
-	// The API owns the control queue: workflows, status writes, the queue loop
-	// and migrations. This process only polls for execution work. Sessions pin a
-	// run's workspace activities to the host holding its checkout.
+	// Sessions pin a run's workspace activities, and so its sealing key, to this
+	// process.
 	worker := deps.newWorker(temporalClient, domain.ExecutionTaskQueue, temporalworker.Options{EnableSessionWorker: true})
-	deps.registerActivities(worker, store, cfg.WorkerRunRoot, logStore, gitHubTokens)
+	deps.registerActivities(worker, cfg.WorkerRunRoot, logStore, runseal.NewKeyRing())
 	if err := worker.Run(deps.interruptCh()); err != nil {
 		return fmt.Errorf("run worker: %w", err)
 	}
