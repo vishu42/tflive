@@ -27,11 +27,16 @@ const (
 	CancelSignalName   = "cancel"
 
 	RecordTemplateRunStatusActivityName          = "RecordTemplateRunStatus"
+	RecordTemplateRunLogActivityName             = "RecordTemplateRunLog"
 	RecordTemplateRegistrationStatusActivityName = "RecordTemplateRegistrationStatus"
 	PrepareWorkspaceActivityName                 = "PrepareWorkspace"
 	FetchSourceActivityName                      = "FetchSource"
 	RunTerraformActivityName                     = "RunTerraform"
 	SyncTemplateActivityName                     = "SyncTemplate"
+
+	// TerraformCommandFailedErrorType marks a RunTerraform failure whose
+	// ApplicationError details carry the uploaded log's TemplateRunLog.
+	TerraformCommandFailedErrorType = "TerraformCommandFailed"
 )
 
 // TemplateRunWorkflowInput starts one Terraform operation for one StackTemplate.
@@ -107,6 +112,13 @@ type RunTerraformActivityInput struct {
 	Command         TerraformCommandType
 	ConfigJSON      json.RawMessage
 	Environment     map[string]string
+}
+
+// RunTerraformActivityOutput reports what a Terraform command left behind.
+type RunTerraformActivityOutput struct {
+	// Log describes the uploaded phase log. The executor has no database, so
+	// the workflow records it through a control activity.
+	Log TemplateRunLog
 }
 
 // TemplateSyncWorkflowInput starts template metadata sync for a public GitHub template.

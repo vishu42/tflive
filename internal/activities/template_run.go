@@ -13,6 +13,7 @@ import (
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/logsink"
 	"github.com/vishu42/tflive/internal/runner"
+	"go.temporal.io/sdk/temporal"
 )
 
 type StatusRecorder interface {
@@ -26,14 +27,17 @@ type StatusRecorder interface {
 // provide a fake runner to verify activity behavior without starting external
 // processes.
 type TerraformRunner interface {
-	// RunTerraform executes the Terraform command requested by the workflow.
-	RunTerraform(context.Context, domain.RunTerraformActivityInput) error
+	// RunTerraform executes the Terraform command requested by the workflow and
+	// returns the metadata of the log it uploaded, if any. A command that fails
+	// after its log was uploaded returns both.
+	RunTerraform(context.Context, domain.RunTerraformActivityInput) (domain.TemplateRunLog, error)
 }
 
 // TemplateRunLogStore persists output produced by a template run.
 type TemplateRunLogStore interface {
-	// PutTemplateRunLog stores the output for a run phase so it can be retrieved later.
-	PutTemplateRunLog(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string, body io.Reader) error
+	// PutTemplateRunLog stores the output for a run phase and returns the
+	// metadata row describing it.
+	PutTemplateRunLog(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string, body io.Reader) (domain.TemplateRunLog, error)
 }
 
 type CredentialReader interface {
@@ -187,22 +191,32 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 // delegates command selection, log handling, and subprocess execution to the
 // configured TerraformRunner implementation. It never puts plaintext credentials
 // into workflow input or API responses.
-func (activities *TemplateRunActivities) RunTerraform(ctx context.Context, input domain.RunTerraformActivityInput) error {
+//
+// A command that fails after its log was uploaded is reported as an
+// ApplicationError carrying the log metadata as details, so the workflow can
+// still record the log a user needs to see why the command failed.
+func (activities *TemplateRunActivities) RunTerraform(ctx context.Context, input domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
 	if activities.credentialReader != nil {
 		if activities.credentialDecryptor == nil {
-			return fmt.Errorf("resolve terraform credentials: decryptor is unavailable")
+			return domain.RunTerraformActivityOutput{}, fmt.Errorf("resolve terraform credentials: decryptor is unavailable")
 		}
 		environment, err := resolveCredentialEnvironment(ctx, activities.credentialReader, activities.credentialDecryptor, input.TenantID, input.StackTemplateID)
 		if err != nil {
-			return fmt.Errorf("resolve terraform credentials: %w", err)
+			return domain.RunTerraformActivityOutput{}, fmt.Errorf("resolve terraform credentials: %w", err)
 		}
 		input.Environment = environment
 	}
-	if err := activities.terraformRunner.RunTerraform(ctx, input); err != nil {
-		return fmt.Errorf("run terraform: %w", err)
+	log, err := activities.terraformRunner.RunTerraform(ctx, input)
+	if err != nil {
+		if log.ObjectKey == "" {
+			return domain.RunTerraformActivityOutput{}, fmt.Errorf("run terraform: %w", err)
+		}
+		return domain.RunTerraformActivityOutput{}, temporal.NewApplicationErrorWithOptions("run terraform", domain.TerraformCommandFailedErrorType, temporal.ApplicationErrorOptions{
+			Cause:   err,
+			Details: []interface{}{log},
+		})
 	}
-
-	return nil
+	return domain.RunTerraformActivityOutput{Log: log}, nil
 }
 
 // localTerraformRunner adapts the shared runner package to the activity interface.
@@ -223,15 +237,15 @@ type localTerraformRunner struct {
 // the same writer for now, preserving command output ordering in a single phase
 // log. The log file is closed after the command completes, and close errors are
 // surfaced only when the command itself succeeded.
-func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input domain.RunTerraformActivityInput) error {
+func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input domain.RunTerraformActivityInput) (domain.TemplateRunLog, error) {
 	phase, err := logsink.PhaseForTerraformCommand(input.Command)
 	if err != nil {
-		return err
+		return domain.TemplateRunLog{}, err
 	}
 
 	writer, err := logsink.NewFileSink(input.WorkspacePath).OpenPhase(phase)
 	if err != nil {
-		return fmt.Errorf("open terraform log: %w", err)
+		return domain.TemplateRunLog{}, fmt.Errorf("open terraform log: %w", err)
 	}
 
 	redactingWriter := newRedactingWriter(writer, credentialValues(input.Environment))
@@ -246,26 +260,25 @@ func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input 
 	})
 	closeErr := redactingWriter.Close()
 	if closeErr != nil {
-		return fmt.Errorf("close terraform log: %w", closeErr)
+		return domain.TemplateRunLog{}, fmt.Errorf("close terraform log: %w", closeErr)
 	}
+	var log domain.TemplateRunLog
 	if localRunner.logStore != nil {
 		file, err := os.Open(filepath.Join(input.WorkspacePath, "logs", phase+".log"))
 		if err != nil {
-			return fmt.Errorf("open terraform log for upload: %w", err)
+			return domain.TemplateRunLog{}, fmt.Errorf("open terraform log for upload: %w", err)
 		}
-		uploadErr := localRunner.logStore.PutTemplateRunLog(ctx, input.TenantID, input.RunID, phase, file)
+		uploaded, uploadErr := localRunner.logStore.PutTemplateRunLog(ctx, input.TenantID, input.RunID, phase, file)
 		closeErr := file.Close()
 		if uploadErr != nil {
-			return fmt.Errorf("upload terraform log: %w", uploadErr)
+			return domain.TemplateRunLog{}, fmt.Errorf("upload terraform log: %w", uploadErr)
 		}
 		if closeErr != nil {
-			return fmt.Errorf("close terraform log after upload: %w", closeErr)
+			return domain.TemplateRunLog{}, fmt.Errorf("close terraform log after upload: %w", closeErr)
 		}
+		log = uploaded
 	}
-	if runErr != nil {
-		return runErr
-	}
-	return nil
+	return log, runErr
 }
 
 type redactingWriter struct {

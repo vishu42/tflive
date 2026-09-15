@@ -55,9 +55,9 @@ func TestTemplateRunWorkflowUsesSessionForWorkspaceActivities(t *testing.T) {
 					return domain.FetchSourceActivityOutput{TerraformPath: "run/workspace/source"}, nil
 				})
 			env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
-				Return(func(ctx context.Context, _ domain.RunTerraformActivityInput) error {
+				Return(func(ctx context.Context, _ domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
 					workspaceTaskQueues = append(workspaceTaskQueues, activity.GetInfo(ctx).TaskQueue)
-					return nil
+					return domain.RunTerraformActivityOutput{}, nil
 				})
 			env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
 				Return(func(ctx context.Context, activityInput domain.TemplateRunStatusActivityInput) error {
@@ -112,7 +112,7 @@ func TestTemplateRunWorkflowRoutesActivitiesByPlane(t *testing.T) {
 		Return(domain.PrepareWorkspaceActivityOutput{WorkspacePath: "run/workspace"}, nil)
 	env.OnActivity(domain.FetchSourceActivityName, mock.Anything, mock.Anything).
 		Return(domain.FetchSourceActivityOutput{TerraformPath: "run/workspace/source"}, nil)
-	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).Return(domain.RunTerraformActivityOutput{}, nil)
 	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
 
 	env.ExecuteWorkflow(TemplateRunWorkflow, templateRunWorkflowInput(domain.OperationPlan))
@@ -132,6 +132,111 @@ func TestTemplateRunWorkflowRoutesActivitiesByPlane(t *testing.T) {
 	wantCreation := domain.ExecutionTaskQueue + "__internal_session_creation"
 	if got := queues["internalSessionCreationActivity"]; len(got) != 1 || got[0] != wantCreation {
 		t.Fatalf("session creation queues = %#v, want [%q]", got, wantCreation)
+	}
+}
+
+// The executor has no database, so the log metadata it returns must be
+// recorded by the control plane: after the command, before its finished status.
+func TestTemplateRunWorkflowRecordsCommandLogsOnControlQueue(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	var events []string
+	var logQueues []string
+	env.SetOnActivityStartedListener(func(info *activity.Info, _ context.Context, _ converter.EncodedValues) {
+		if info.ActivityType.Name == domain.RecordTemplateRunLogActivityName {
+			logQueues = append(logQueues, info.TaskQueue)
+		}
+	})
+	mockPrepareWorkspace(t, env)
+	env.OnActivity(domain.FetchSourceActivityName, mock.Anything, mock.Anything).
+		Return(domain.FetchSourceActivityOutput{TerraformPath: "run/workspace/source"}, nil)
+	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
+			events = append(events, "terraform:"+string(input.Command))
+			return domain.RunTerraformActivityOutput{Log: domain.TemplateRunLog{
+				TenantID:  input.TenantID,
+				RunID:     input.RunID,
+				Phase:     string(input.Command),
+				ObjectKey: "logs/" + string(input.Command) + ".log",
+			}}, nil
+		})
+	env.OnActivity(domain.RecordTemplateRunLogActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, log domain.TemplateRunLog) error {
+			events = append(events, "log:"+log.Phase)
+			return nil
+		})
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.TemplateRunStatusActivityInput) error {
+			if input.Status == domain.TemplateRunPlanFinished {
+				events = append(events, string(input.Status))
+			}
+			return nil
+		})
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, templateRunWorkflowInput(domain.OperationPlan))
+
+	assertWorkflowCompleted(t, env)
+	want := []string{
+		"terraform:init", "log:init",
+		"terraform:select_workspace", "log:select_workspace",
+		"terraform:plan", "log:plan", string(domain.TemplateRunPlanFinished),
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+	for _, queue := range logQueues {
+		if queue != domain.ControlTaskQueue {
+			t.Fatalf("log activity queues = %#v, want all %q", logQueues, domain.ControlTaskQueue)
+		}
+	}
+}
+
+// A failed command's log explains the failure, so it is recorded from the
+// error's details before the run is marked failed.
+func TestTemplateRunWorkflowRecordsLogOfFailedCommand(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	failedLog := domain.TemplateRunLog{TenantID: "tenant_123", RunID: "run_123", Phase: "plan", ObjectKey: "logs/plan.log"}
+	var recorded []domain.TemplateRunLog
+	var failedStatus domain.TemplateRunStatusActivityInput
+	mockPrepareWorkspace(t, env)
+	env.OnActivity(domain.FetchSourceActivityName, mock.Anything, mock.Anything).
+		Return(domain.FetchSourceActivityOutput{TerraformPath: "run/workspace/source"}, nil)
+	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
+			if input.Command != domain.TerraformCommandPlan {
+				return domain.RunTerraformActivityOutput{}, nil
+			}
+			return domain.RunTerraformActivityOutput{}, temporal.NewApplicationErrorWithOptions("run terraform", domain.TerraformCommandFailedErrorType, temporal.ApplicationErrorOptions{
+				Cause:   errors.New("plan: exit status 1"),
+				Details: []interface{}{failedLog},
+			})
+		})
+	env.OnActivity(domain.RecordTemplateRunLogActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, log domain.TemplateRunLog) error {
+			recorded = append(recorded, log)
+			return nil
+		})
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.TemplateRunStatusActivityInput) error {
+			if input.Status == domain.TemplateRunFailed {
+				failedStatus = input
+			}
+			return nil
+		})
+
+	env.ExecuteWorkflow(TemplateRunWorkflow, templateRunWorkflowInput(domain.OperationPlan))
+
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() == nil {
+		t.Fatalf("workflow completed=%v error=%v, want a failed run", env.IsWorkflowCompleted(), env.GetWorkflowError())
+	}
+	if len(recorded) != 1 || recorded[0] != failedLog {
+		t.Fatalf("recorded logs = %#v, want only the failed plan log", recorded)
+	}
+	if !strings.Contains(failedStatus.ErrorSummary, "plan: exit status 1") {
+		t.Fatalf("failure summary = %q, want the command error", failedStatus.ErrorSummary)
 	}
 }
 
@@ -246,7 +351,7 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 			return domain.FetchSourceActivityOutput{TerraformPath: "/tmp/tflive/runs/tenant_123/run_123/source/modules/vpc"}, nil
 		})
 	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput domain.RunTerraformActivityInput) error {
+		Return(func(_ context.Context, activityInput domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
 			if activityInput.RunID != input.RunID {
 				t.Fatalf("run terraform RunID = %q, want %q", activityInput.RunID, input.RunID)
 			}
@@ -266,7 +371,7 @@ func TestTemplateRunWorkflowRecordsPlanStatuses(t *testing.T) {
 				t.Fatalf("run terraform ConfigJSON = %s, want %s", activityInput.ConfigJSON, input.ConfigJSON)
 			}
 			events = append(events, "terraform:"+string(activityInput.Command))
-			return nil
+			return domain.RunTerraformActivityOutput{}, nil
 		})
 	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, activityInput domain.TemplateRunStatusActivityInput) error {
@@ -617,6 +722,12 @@ func newTemplateRunWorkflowTestEnvironment(t *testing.T) *testsuite.TestWorkflow
 		activity.RegisterOptions{Name: domain.RecordTemplateRunStatusActivityName},
 	)
 	env.RegisterActivityWithOptions(
+		func(context.Context, domain.TemplateRunLog) error {
+			return nil
+		},
+		activity.RegisterOptions{Name: domain.RecordTemplateRunLogActivityName},
+	)
+	env.RegisterActivityWithOptions(
 		func(context.Context, domain.PrepareWorkspaceActivityInput) (domain.PrepareWorkspaceActivityOutput, error) {
 			return domain.PrepareWorkspaceActivityOutput{}, nil
 		},
@@ -629,8 +740,8 @@ func newTemplateRunWorkflowTestEnvironment(t *testing.T) *testsuite.TestWorkflow
 		activity.RegisterOptions{Name: domain.FetchSourceActivityName},
 	)
 	env.RegisterActivityWithOptions(
-		func(context.Context, domain.RunTerraformActivityInput) error {
-			return nil
+		func(context.Context, domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
+			return domain.RunTerraformActivityOutput{}, nil
 		},
 		activity.RegisterOptions{Name: domain.RunTerraformActivityName},
 	)
@@ -655,9 +766,9 @@ func mockRunTerraform(t *testing.T, env *testsuite.TestWorkflowEnvironment, comm
 	t.Helper()
 
 	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput domain.RunTerraformActivityInput) error {
+		Return(func(_ context.Context, activityInput domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
 			*commands = append(*commands, activityInput.Command)
-			return nil
+			return domain.RunTerraformActivityOutput{}, nil
 		})
 }
 
@@ -835,12 +946,12 @@ func TestTemplateRunWorkflowExhaustsRetriesOnTerraformError(t *testing.T) {
 
 	var planAttempts int
 	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput domain.RunTerraformActivityInput) error {
+		Return(func(_ context.Context, activityInput domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
 			if activityInput.Command == domain.TerraformCommandPlan {
 				planAttempts++
-				return errors.New("rate limit exceeded")
+				return domain.RunTerraformActivityOutput{}, errors.New("rate limit exceeded")
 			}
-			return nil
+			return domain.RunTerraformActivityOutput{}, nil
 		})
 
 	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
@@ -869,16 +980,16 @@ func TestTemplateRunWorkflowNonRetryableTerraformError(t *testing.T) {
 
 	var terraformAttempts int
 	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput domain.RunTerraformActivityInput) error {
+		Return(func(_ context.Context, activityInput domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
 			terraformAttempts++
 			if activityInput.Command == domain.TerraformCommandPlan {
-				return temporal.NewNonRetryableApplicationError(
+				return domain.RunTerraformActivityOutput{}, temporal.NewNonRetryableApplicationError(
 					"unsupported terraform command",
 					"UnsupportedCommand",
 					nil,
 				)
 			}
-			return nil
+			return domain.RunTerraformActivityOutput{}, nil
 		})
 
 	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)

@@ -61,6 +61,7 @@ type controlStore interface {
 	queue.Backend
 	queue.Enqueuer
 	activities.StatusRecorder
+	activities.LogMetadataRecorder
 	activities.TemplateSyncStore
 	app.TemplateRunCancellationReconciler
 }
@@ -242,9 +243,12 @@ func registerControl(worker temporalWorker, store controlStore, gitHubTokens act
 		Name: domain.TemplateSyncWorkflowName,
 	})
 
-	control := activities.NewControlActivities(store)
+	control := activities.NewControlActivities(store, store)
 	worker.RegisterActivityWithOptions(control.RecordTemplateRunStatus, activity.RegisterOptions{
 		Name: domain.RecordTemplateRunStatusActivityName,
+	})
+	worker.RegisterActivityWithOptions(control.RecordTemplateRunLog, activity.RegisterOptions{
+		Name: domain.RecordTemplateRunLogActivityName,
 	})
 
 	sync := activities.NewTemplateSyncActivities(store, activities.WithTemplateSyncTokenSource(gitHubTokens))

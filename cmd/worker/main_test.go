@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/vishu42/tflive/internal/activities"
-	"github.com/vishu42/tflive/internal/artifacts"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
@@ -129,9 +128,6 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if deps.activityLogStore != deps.logStore {
 		t.Fatal("activity log store was not wired")
 	}
-	if deps.logMetadataRecorder != deps.store {
-		t.Fatal("log metadata recorder was not wired with the Postgres store")
-	}
 	if !deps.worker.ran {
 		t.Fatal("worker was not run")
 	}
@@ -233,7 +229,6 @@ type recordingWorkerDependencies struct {
 	activityRunRoot      string
 	activityLogStore     activities.TemplateRunLogStore
 	logStore             recordingWorkerLogStore
-	logMetadataRecorder  artifacts.LogMetadataRecorder
 	dialErr              error
 }
 
@@ -308,9 +303,8 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 				},
 			)
 		},
-		newLogStore: func(cfg config.ArtifactStoreConfig, recorder artifacts.LogMetadataRecorder) (activities.TemplateRunLogStore, error) {
+		newLogStore: func(cfg config.ArtifactStoreConfig) (activities.TemplateRunLogStore, error) {
 			deps.artifactStoreConfig = cfg
-			deps.logMetadataRecorder = recorder
 			return deps.logStore, nil
 		},
 		interruptCh: func() <-chan interface{} {
@@ -349,8 +343,8 @@ func (store *recordingWorkerStore) RecordTemplateRunLog(context.Context, domain.
 
 type recordingWorkerLogStore struct{}
 
-func (recordingWorkerLogStore) PutTemplateRunLog(context.Context, domain.TenantID, domain.TemplateRunID, string, io.Reader) error {
-	return nil
+func (recordingWorkerLogStore) PutTemplateRunLog(context.Context, domain.TenantID, domain.TemplateRunID, string, io.Reader) (domain.TemplateRunLog, error) {
+	return domain.TemplateRunLog{}, nil
 }
 
 type recordingWorkerTemporalClient struct {

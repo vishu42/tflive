@@ -12,10 +12,16 @@ import (
 // control queue, never next to tenant Terraform.
 type ControlActivities struct {
 	runs StatusRecorder
+	logs LogMetadataRecorder
 }
 
-func NewControlActivities(runs StatusRecorder) *ControlActivities {
-	return &ControlActivities{runs: runs}
+// LogMetadataRecorder persists the metadata row for an uploaded phase log.
+type LogMetadataRecorder interface {
+	RecordTemplateRunLog(ctx context.Context, log domain.TemplateRunLog) error
+}
+
+func NewControlActivities(runs StatusRecorder, logs LogMetadataRecorder) *ControlActivities {
+	return &ControlActivities{runs: runs, logs: logs}
 }
 
 // RecordTemplateRunStatus records one workflow status transition.
@@ -25,6 +31,15 @@ func NewControlActivities(runs StatusRecorder) *ControlActivities {
 func (activities *ControlActivities) RecordTemplateRunStatus(ctx context.Context, input domain.TemplateRunStatusActivityInput) error {
 	if err := activities.runs.RecordTemplateRunStatus(ctx, input); err != nil {
 		return fmt.Errorf("record template run status: %w", err)
+	}
+	return nil
+}
+
+// RecordTemplateRunLog records the metadata for a phase log the executor has
+// already uploaded. The row is keyed by run and phase, so a retry upserts.
+func (activities *ControlActivities) RecordTemplateRunLog(ctx context.Context, log domain.TemplateRunLog) error {
+	if err := activities.logs.RecordTemplateRunLog(ctx, log); err != nil {
+		return fmt.Errorf("record template run log metadata: %w", err)
 	}
 	return nil
 }

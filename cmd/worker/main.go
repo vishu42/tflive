@@ -31,10 +31,9 @@ type postgresPool interface {
 }
 
 // workerStore is what the execution activities still read from the database:
-// credentials to decrypt, and the log metadata row written after upload.
+// the credentials to decrypt.
 type workerStore interface {
 	activities.StatusRecorder
-	artifacts.LogMetadataRecorder
 }
 
 type workerDependencies struct {
@@ -49,7 +48,7 @@ type workerDependencies struct {
 	// registerActivities attaches the execution activities to the worker.
 	registerActivities func(worker temporalWorker, store workerStore, runRoot string, logStore activities.TemplateRunLogStore, gitHubTokens activities.GitHubTokenSource)
 	// newLogStore builds the artifact-backed log store used by Terraform activities.
-	newLogStore func(config.ArtifactStoreConfig, artifacts.LogMetadataRecorder) (activities.TemplateRunLogStore, error)
+	newLogStore func(config.ArtifactStoreConfig) (activities.TemplateRunLogStore, error)
 	// interruptCh provides the shutdown signal consumed by the Temporal worker run loop.
 	interruptCh func() <-chan interface{}
 }
@@ -90,12 +89,12 @@ func defaultWorkerDependencies() workerDependencies {
 				Name: domain.RunTerraformActivityName,
 			})
 		},
-		newLogStore: func(cfg config.ArtifactStoreConfig, recorder artifacts.LogMetadataRecorder) (activities.TemplateRunLogStore, error) {
+		newLogStore: func(cfg config.ArtifactStoreConfig) (activities.TemplateRunLogStore, error) {
 			store, err := artifacts.NewObjectStore(cfg)
 			if err != nil {
 				return nil, err
 			}
-			return artifacts.NewRecordedLogStore(store, recorder), nil
+			return artifacts.NewLogStore(store), nil
 		},
 		interruptCh: temporalworker.InterruptCh,
 	}
@@ -174,7 +173,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps w
 	if err != nil {
 		return fmt.Errorf("wire activities: %w", err)
 	}
-	logStore, err := deps.newLogStore(cfg.ArtifactStore, store)
+	logStore, err := deps.newLogStore(cfg.ArtifactStore)
 	if err != nil {
 		return fmt.Errorf("wire log store: %w", err)
 	}

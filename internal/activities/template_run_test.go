@@ -13,13 +13,14 @@ import (
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/githubapp"
 	gitrunner "github.com/vishu42/tflive/internal/runner"
+	"go.temporal.io/sdk/temporal"
 )
 
 func TestRecordTemplateRunStatusDelegatesToRecorder(t *testing.T) {
 	t.Parallel()
 
 	recorder := &recordingStatusRecorder{}
-	activities := NewControlActivities(recorder)
+	activities := NewControlActivities(recorder, nil)
 	input := domain.TemplateRunStatusActivityInput{
 		RunID:           domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
@@ -41,7 +42,7 @@ func TestRecordTemplateRunStatusWrapsRecorderError(t *testing.T) {
 	t.Parallel()
 
 	recorderErr := errors.New("database unavailable")
-	activities := NewControlActivities(&recordingStatusRecorder{err: recorderErr})
+	activities := NewControlActivities(&recordingStatusRecorder{err: recorderErr}, nil)
 
 	err := activities.RecordTemplateRunStatus(context.Background(), domain.TemplateRunStatusActivityInput{
 		RunID:    domain.TemplateRunID("run_123"),
@@ -250,12 +251,69 @@ func TestRunTerraformDelegatesToRunner(t *testing.T) {
 		Command:       domain.TerraformCommandPlan,
 	}
 
-	if err := activities.RunTerraform(context.Background(), input); err != nil {
+	output, err := activities.RunTerraform(context.Background(), input)
+	if err != nil {
 		t.Fatalf("RunTerraform returned error: %v", err)
 	}
 
 	if !reflect.DeepEqual(runner.input, input) {
 		t.Fatalf("runner input = %#v, want %#v", runner.input, input)
+	}
+	if output.Log != runner.log {
+		t.Fatalf("output log = %#v, want %#v", output.Log, runner.log)
+	}
+}
+
+func TestRecordTemplateRunLogDelegatesToRecorder(t *testing.T) {
+	t.Parallel()
+
+	recorder := &recordingLogMetadataRecorder{}
+	log := domain.TemplateRunLog{TenantID: "tenant_123", RunID: "run_123", Phase: "plan", ObjectKey: "tenants/tenant_123/runs/run_123/logs/plan.log"}
+
+	if err := NewControlActivities(nil, recorder).RecordTemplateRunLog(context.Background(), log); err != nil {
+		t.Fatalf("RecordTemplateRunLog returned error: %v", err)
+	}
+	if recorder.log != log {
+		t.Fatalf("recorded log = %#v, want %#v", recorder.log, log)
+	}
+
+	recorder.err = errors.New("database unavailable")
+	err := NewControlActivities(nil, recorder).RecordTemplateRunLog(context.Background(), log)
+	if !errors.Is(err, recorder.err) || !strings.Contains(err.Error(), "record template run log metadata") {
+		t.Fatalf("error = %v, want wrapped recorder error", err)
+	}
+}
+
+// A failed command's log is what explains the failure, so it must reach the
+// workflow even though the activity errored: as ApplicationError details.
+func TestRunTerraformAttachesUploadedLogToCommandFailure(t *testing.T) {
+	t.Parallel()
+
+	runnerErr := errors.New("terraform failed")
+	log := domain.TemplateRunLog{TenantID: "tenant_123", RunID: "run_123", Phase: "apply", ObjectKey: "tenants/tenant_123/runs/run_123/logs/apply.log"}
+	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, t.TempDir(), &recordingTerraformRunner{log: log, err: runnerErr})
+
+	_, err := activities.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+		RunID:    domain.TemplateRunID("run_123"),
+		TenantID: domain.TenantID("tenant_123"),
+		Command:  domain.TerraformCommandApply,
+	})
+	var applicationErr *temporal.ApplicationError
+	if !errors.As(err, &applicationErr) {
+		t.Fatalf("error = %T %v, want *temporal.ApplicationError", err, err)
+	}
+	if applicationErr.Type() != domain.TerraformCommandFailedErrorType {
+		t.Fatalf("error type = %q, want %q", applicationErr.Type(), domain.TerraformCommandFailedErrorType)
+	}
+	if !errors.Is(err, runnerErr) || !strings.Contains(err.Error(), "run terraform") {
+		t.Fatalf("error = %v, want run terraform context wrapping runnerErr", err)
+	}
+	var got domain.TemplateRunLog
+	if err := applicationErr.Details(&got); err != nil {
+		t.Fatalf("Details returned error: %v", err)
+	}
+	if got != log {
+		t.Fatalf("details log = %#v, want %#v", got, log)
 	}
 }
 
@@ -271,7 +329,7 @@ func TestLocalTerraformRunnerWritesCommandLogFile(t *testing.T) {
 		runner: gitrunner.NewLocalProcessRunnerWithExecutor(executor),
 	}
 
-	err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+	log, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
 		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
@@ -289,6 +347,9 @@ func TestLocalTerraformRunnerWritesCommandLogFile(t *testing.T) {
 	}
 	if string(got) != "plan stdout\nplan stderr\n" {
 		t.Fatalf("plan log = %q", string(got))
+	}
+	if log != (domain.TemplateRunLog{}) {
+		t.Fatalf("log = %#v, want none without a log store", log)
 	}
 	if !reflect.DeepEqual(executor.env, []string{"TF_VAR_region=us-east-1"}) {
 		t.Fatalf("env = %#v, want TF_VAR_region", executor.env)
@@ -309,7 +370,7 @@ func TestLocalTerraformRunnerUploadsCommandLogFile(t *testing.T) {
 		logStore: logStore,
 	}
 
-	err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+	log, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
 		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
@@ -332,6 +393,9 @@ func TestLocalTerraformRunnerUploadsCommandLogFile(t *testing.T) {
 	if logStore.content != "plan stdout\nplan stderr\n" {
 		t.Fatalf("uploaded content = %q", logStore.content)
 	}
+	if log != logStore.returned {
+		t.Fatalf("log = %#v, want the uploaded metadata %#v", log, logStore.returned)
+	}
 }
 
 func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
@@ -349,7 +413,7 @@ func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
 		logStore: logStore,
 	}
 
-	err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+	log, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
 		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
@@ -362,6 +426,9 @@ func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
 	if logStore.content != "plan stdout before failure\n" {
 		t.Fatalf("uploaded content = %q", logStore.content)
 	}
+	if log != logStore.returned {
+		t.Fatalf("log = %#v, want the uploaded metadata alongside the error", log)
+	}
 }
 
 func TestRunTerraformWrapsRunnerError(t *testing.T) {
@@ -370,7 +437,7 @@ func TestRunTerraformWrapsRunnerError(t *testing.T) {
 	runnerErr := errors.New("terraform failed")
 	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, t.TempDir(), &recordingTerraformRunner{err: runnerErr})
 
-	err := activities.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+	_, err := activities.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
 		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
@@ -397,12 +464,23 @@ func (recorder *recordingStatusRecorder) RecordTemplateRunStatus(_ context.Conte
 
 type recordingTerraformRunner struct {
 	input domain.RunTerraformActivityInput
+	log   domain.TemplateRunLog
 	err   error
 }
 
-func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input domain.RunTerraformActivityInput) error {
+func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input domain.RunTerraformActivityInput) (domain.TemplateRunLog, error) {
 	runner.input = input
-	return runner.err
+	return runner.log, runner.err
+}
+
+type recordingLogMetadataRecorder struct {
+	log domain.TemplateRunLog
+	err error
+}
+
+func (recorder *recordingLogMetadataRecorder) RecordTemplateRunLog(_ context.Context, log domain.TemplateRunLog) error {
+	recorder.log = log
+	return recorder.err
 }
 
 type recordingSourceGitRunner struct {
@@ -445,19 +523,21 @@ type recordingTemplateRunLogStore struct {
 	runID    domain.TemplateRunID
 	phase    string
 	content  string
+	returned domain.TemplateRunLog
 	err      error
 }
 
-func (store *recordingTemplateRunLogStore) PutTemplateRunLog(_ context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string, body io.Reader) error {
+func (store *recordingTemplateRunLogStore) PutTemplateRunLog(_ context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string, body io.Reader) (domain.TemplateRunLog, error) {
 	store.tenantID = tenantID
 	store.runID = runID
 	store.phase = phase
 	content, err := io.ReadAll(body)
 	if err != nil {
-		return err
+		return domain.TemplateRunLog{}, err
 	}
 	store.content = string(content)
-	return store.err
+	store.returned = domain.TemplateRunLog{TenantID: tenantID, RunID: runID, Phase: phase, ObjectKey: "logs/" + phase + ".log", SizeBytes: int64(len(content))}
+	return store.returned, store.err
 }
 
 type recordingCommandExecutor struct {

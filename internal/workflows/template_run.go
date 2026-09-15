@@ -386,10 +386,11 @@ func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType
 	cancelCh := workflow.GetSignalChannel(run.ctx, domain.CancelSignalName)
 	selector := workflow.NewSelector(run.ctx)
 
+	var output domain.RunTerraformActivityOutput
 	var activityErr error
 	var canceled bool
 	selector.AddFuture(future, func(f workflow.Future) {
-		activityErr = f.Get(run.ctx, nil)
+		activityErr = f.Get(run.ctx, &output)
 	})
 	selector.AddReceive(cancelCh, func(channel workflow.ReceiveChannel, _ bool) {
 		var signal domain.CancelSignal
@@ -406,13 +407,50 @@ func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType
 		return errTemplateRunCanceled
 	}
 	if activityErr != nil {
+		// A failed command's log is what explains the failure, so it is recorded
+		// before the error propagates.
+		if log, ok := failedCommandLog(activityErr); ok {
+			if err := run.recordLog(log); err != nil {
+				return fmt.Errorf("%w (also failed to record its log: %v)", activityErr, err)
+			}
+		}
 		return activityErr
+	}
+	if err := run.recordLog(output.Log); err != nil {
+		return err
 	}
 
 	if statuses.after != "" {
 		return run.recordStatus(statuses.after)
 	}
 	return nil
+}
+
+// recordLog hands the metadata of a log the executor uploaded to the control
+// plane, which owns the database. A command that uploaded nothing is skipped.
+func (run *templateRunWorkflow) recordLog(log domain.TemplateRunLog) error {
+	if log.ObjectKey == "" {
+		return nil
+	}
+	return workflow.ExecuteActivity(
+		run.ctx,
+		domain.RecordTemplateRunLogActivityName,
+		log,
+	).Get(run.ctx, nil)
+}
+
+// failedCommandLog recovers the log metadata RunTerraform attaches to a command
+// failure whose log was already uploaded.
+func failedCommandLog(err error) (domain.TemplateRunLog, bool) {
+	var applicationErr *temporal.ApplicationError
+	if !errors.As(err, &applicationErr) || applicationErr.Type() != domain.TerraformCommandFailedErrorType || !applicationErr.HasDetails() {
+		return domain.TemplateRunLog{}, false
+	}
+	var log domain.TemplateRunLog
+	if err := applicationErr.Details(&log); err != nil {
+		return domain.TemplateRunLog{}, false
+	}
+	return log, true
 }
 
 func (run *templateRunWorkflow) recordStatus(status domain.TemplateRunStatus) error {

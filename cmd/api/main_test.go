@@ -248,6 +248,7 @@ func TestRegisterControlRegistersWorkflowsAndControlActivities(t *testing.T) {
 	}
 	wantActivities := map[string]bool{
 		domain.RecordTemplateRunStatusActivityName:          true,
+		domain.RecordTemplateRunLogActivityName:             true,
 		domain.RecordTemplateRegistrationStatusActivityName: true,
 		domain.SyncTemplateActivityName:                     true,
 	}
@@ -980,6 +981,10 @@ func (store *recordingStore) Reschedule(context.Context, int64, time.Duration, s
 func (store *recordingStore) Prune(context.Context, time.Duration) (int64, error) { return 0, nil }
 
 func (recordingStore) RecordTemplateRunStatus(context.Context, domain.TemplateRunStatusActivityInput) error {
+	return nil
+}
+
+func (recordingStore) RecordTemplateRunLog(context.Context, domain.TemplateRunLog) error {
 	return nil
 }
 
