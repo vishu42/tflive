@@ -104,20 +104,6 @@ func NewTemplateRunActivitiesWithCredentials(recorder StatusRecorder, runRoot st
 	}
 }
 
-// RecordTemplateRunStatus records a workflow status transition in durable storage.
-//
-// Workflows call this as an activity because database writes are side effects and
-// cannot run directly inside Temporal workflow code. The input includes tenant
-// and run identifiers so the store can update the correct run without relying on
-// process-local state.
-func (activities *TemplateRunActivities) RecordTemplateRunStatus(ctx context.Context, input domain.TemplateRunStatusActivityInput) error {
-	if err := activities.recorder.RecordTemplateRunStatus(ctx, input); err != nil {
-		return fmt.Errorf("record template run status: %w", err)
-	}
-
-	return nil
-}
-
 // PrepareWorkspace creates the filesystem workspace used by later Terraform activities.
 //
 // The workspace path is derived from the configured run root plus tenant and run

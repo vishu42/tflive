@@ -437,6 +437,30 @@ func withValidSecurity(getenv func(string) string) func(string) string {
 	}
 }
 
+func TestLoadAPIConfigReadsGitHubApp(t *testing.T) {
+	t.Parallel()
+
+	encoded, _ := testRSAPrivateKeyPEM(t)
+	values := map[string]string{
+		"DATABASE_URL":           "postgres://user:pass@localhost:5432/db?sslmode=disable",
+		"TEMPORAL_ADDRESS":       "localhost:7233",
+		"GITHUB_APP_ID":          "12345",
+		"GITHUB_APP_PRIVATE_KEY": encoded,
+	}
+	cfg, err := LoadAPIConfig(withValidSecurity(func(name string) string { return values[name] }))
+	if err != nil {
+		t.Fatalf("LoadAPIConfig returned error: %v", err)
+	}
+	if !cfg.GitHubApp.Enabled() || cfg.GitHubApp.AppID != "12345" {
+		t.Fatalf("GitHubApp = %+v, want enabled with AppID 12345", cfg.GitHubApp)
+	}
+
+	delete(values, "GITHUB_APP_PRIVATE_KEY")
+	if _, err := LoadAPIConfig(withValidSecurity(func(name string) string { return values[name] })); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("partial GitHub App error = %v, want ErrInvalidConfig", err)
+	}
+}
+
 func TestLoadWorkerConfigReadsGitHubApp(t *testing.T) {
 	t.Parallel()
 

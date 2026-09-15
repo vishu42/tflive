@@ -19,7 +19,7 @@ func TestRecordTemplateRunStatusDelegatesToRecorder(t *testing.T) {
 	t.Parallel()
 
 	recorder := &recordingStatusRecorder{}
-	activities := NewTemplateRunActivities(recorder, t.TempDir())
+	activities := NewControlActivities(recorder)
 	input := domain.TemplateRunStatusActivityInput{
 		RunID:           domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
@@ -41,7 +41,7 @@ func TestRecordTemplateRunStatusWrapsRecorderError(t *testing.T) {
 	t.Parallel()
 
 	recorderErr := errors.New("database unavailable")
-	activities := NewTemplateRunActivities(&recordingStatusRecorder{err: recorderErr}, t.TempDir())
+	activities := NewControlActivities(&recordingStatusRecorder{err: recorderErr})
 
 	err := activities.RecordTemplateRunStatus(context.Background(), domain.TemplateRunStatusActivityInput{
 		RunID:    domain.TemplateRunID("run_123"),

@@ -8,21 +8,16 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/vishu42/tflive/internal/activities"
-	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/artifacts"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
-	"github.com/vishu42/tflive/internal/queue"
 	"github.com/vishu42/tflive/internal/temporal"
-	"github.com/vishu42/tflive/internal/workflows"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	temporalworker "go.temporal.io/sdk/worker"
-	"go.temporal.io/sdk/workflow"
 )
 
 // scrubConsumedSecret is what stands between a parsed GitHub App private key
@@ -98,40 +93,26 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if !deps.pool.pinged {
 		t.Fatal("postgres pool was not pinged")
 	}
-	if !deps.migrated {
-		t.Fatal("postgres migrations did not run")
-	}
 	if deps.temporalConfig.Address != "localhost:7233" {
 		t.Fatalf("temporal address = %q, want localhost:7233", deps.temporalConfig.Address)
 	}
 	if deps.temporalConfig.Namespace != "tflive" {
 		t.Fatalf("temporal namespace = %q, want tflive", deps.temporalConfig.Namespace)
 	}
-	if deps.controlOptions.EnableSessionWorker {
-		t.Fatal("session worker was enabled on the control queue")
+	// The API owns the control queue now; this process must never poll it.
+	if deps.workerTaskQueue != domain.ExecutionTaskQueue {
+		t.Fatalf("worker task queue = %q, want %q", deps.workerTaskQueue, domain.ExecutionTaskQueue)
 	}
-	if !deps.executionOptions.EnableSessionWorker {
-		t.Fatal("session worker was not enabled on the execution queue")
-	}
-	if deps.controlWorker.registeredWorkflow != reflect.ValueOf(workflows.TemplateRunWorkflow).Pointer() {
-		t.Fatal("TemplateRunWorkflow was not registered on the control worker")
-	}
-	if deps.controlWorker.registeredWorkflowOptions.Name != domain.TemplateRunWorkflowName {
-		t.Fatalf("workflow registration name = %q, want %q", deps.controlWorker.registeredWorkflowOptions.Name, domain.TemplateRunWorkflowName)
-	}
-	if !deps.controlWorker.registeredActivities[domain.RecordTemplateRunStatusActivityName] {
-		t.Fatalf("activity %q was not registered on the control worker", domain.RecordTemplateRunStatusActivityName)
+	if !deps.workerOptions.EnableSessionWorker {
+		t.Fatal("session worker was not enabled")
 	}
 	for _, name := range []string{domain.PrepareWorkspaceActivityName, domain.FetchSourceActivityName, domain.RunTerraformActivityName} {
-		if !deps.executionWorker.registeredActivities[name] {
-			t.Fatalf("activity %q was not registered on the execution worker", name)
-		}
-		if deps.controlWorker.registeredActivities[name] {
-			t.Fatalf("activity %q was registered on the control worker", name)
+		if !deps.worker.registeredActivities[name] {
+			t.Fatalf("activity %q was not registered", name)
 		}
 	}
-	if deps.executionWorker.registeredWorkflows[domain.TemplateRunWorkflowName] {
-		t.Fatal("TemplateRunWorkflow was registered on the execution worker")
+	if len(deps.worker.registeredActivities) != 3 {
+		t.Fatalf("registered activities = %v, want only the three execution activities", deps.worker.registeredActivities)
 	}
 	if !deps.activityStoreIsWired {
 		t.Fatal("activity was not wired with the Postgres store")
@@ -151,17 +132,8 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if deps.logMetadataRecorder != deps.store {
 		t.Fatal("log metadata recorder was not wired with the Postgres store")
 	}
-	if !deps.executionWorker.ran {
-		t.Fatal("execution worker was not run")
-	}
-	if !deps.controlWorker.started || !deps.controlWorker.stopped {
-		t.Fatal("control worker was not started and stopped")
-	}
-	if !deps.queueController.ran {
-		t.Fatal("queue controller was not run")
-	}
-	if !deps.queueController.stopped {
-		t.Fatal("queue controller was not stopped with the worker")
+	if !deps.worker.ran {
+		t.Fatal("worker was not run")
 	}
 	if !deps.temporalClient.closed {
 		t.Fatal("temporal client was not closed")
@@ -171,85 +143,21 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	}
 }
 
-func TestNewQueueRegistryRegistersAllHandlers(t *testing.T) {
-	registry, err := newQueueRegistry(&recordingWorkerStore{}, recordingWorkflowDispatcher{})
-	if err != nil {
-		t.Fatalf("newQueueRegistry returned error: %v", err)
-	}
-
-	// Four, not seven. The worker has no authorization work left: granting the
-	// founding owner, reconciling a role change and flipping a stack to ready
-	// were queued only because a tuple write could not commit with the domain
-	// write that caused it, and now it can.
-	want := map[queue.Kind]bool{
-		app.KindStartTemplateRun:      true,
-		app.KindStartTemplateSync:     true,
-		app.KindSignalRunApproval:     true,
-		app.KindSignalRunCancellation: true,
-	}
-	got := registry.Kinds()
-	if len(got) != len(want) {
-		t.Fatalf("registered handler count = %d, want %d (%v)", len(got), len(want), got)
-	}
-	for _, kind := range got {
-		if !want[kind] {
-			t.Fatalf("unexpected registered handler %q", kind)
-		}
-	}
-}
-
-func TestDefaultWorkerDependenciesRegisterTerraformActivities(t *testing.T) {
-	t.Parallel()
-
-	control := &recordingTemporalWorker{}
-	execution := &recordingTemporalWorker{}
-	deps := defaultWorkerDependencies()
-
-	deps.registerActivities(control, execution, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{}, nil)
-
-	if !execution.registeredActivities[domain.PrepareWorkspaceActivityName] {
-		t.Fatalf("activity %q was not registered", domain.PrepareWorkspaceActivityName)
-	}
-	if !execution.registeredActivities[domain.FetchSourceActivityName] {
-		t.Fatalf("activity %q was not registered", domain.FetchSourceActivityName)
-	}
-	if !execution.registeredActivities[domain.RunTerraformActivityName] {
-		t.Fatalf("activity %q was not registered", domain.RunTerraformActivityName)
-	}
-	if !control.registeredActivities[domain.RecordTemplateRunStatusActivityName] {
-		t.Fatalf("activity %q was not registered", domain.RecordTemplateRunStatusActivityName)
-	}
-}
-
-func TestDefaultWorkerDependenciesRegisterTemplateSyncWorkflow(t *testing.T) {
+func TestDefaultWorkerDependenciesRegisterOnlyExecutionActivities(t *testing.T) {
 	t.Parallel()
 
 	worker := &recordingTemporalWorker{}
 	deps := defaultWorkerDependencies()
 
-	deps.registerWorkflow(worker)
+	deps.registerActivities(worker, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{}, nil)
 
-	if !worker.registeredWorkflows[domain.TemplateRunWorkflowName] {
-		t.Fatalf("workflow %q was not registered", domain.TemplateRunWorkflowName)
+	want := map[string]bool{
+		domain.PrepareWorkspaceActivityName: true,
+		domain.FetchSourceActivityName:      true,
+		domain.RunTerraformActivityName:     true,
 	}
-	if !worker.registeredWorkflows[domain.TemplateSyncWorkflowName] {
-		t.Fatalf("workflow %q was not registered", domain.TemplateSyncWorkflowName)
-	}
-}
-
-func TestDefaultWorkerDependenciesRegisterTemplateSyncActivities(t *testing.T) {
-	t.Parallel()
-
-	control := &recordingTemporalWorker{}
-	deps := defaultWorkerDependencies()
-
-	deps.registerActivities(control, &recordingTemporalWorker{}, &recordingWorkerStore{}, t.TempDir(), recordingWorkerLogStore{}, nil)
-
-	if !control.registeredActivities[domain.RecordTemplateRegistrationStatusActivityName] {
-		t.Fatalf("activity %q was not registered", domain.RecordTemplateRegistrationStatusActivityName)
-	}
-	if !control.registeredActivities[domain.SyncTemplateActivityName] {
-		t.Fatalf("activity %q was not registered", domain.SyncTemplateActivityName)
+	if !reflect.DeepEqual(worker.registeredActivities, want) {
+		t.Fatalf("registered activities = %v, want %v", worker.registeredActivities, want)
 	}
 }
 
@@ -274,7 +182,7 @@ func TestRunWrapsWorkerRunFailure(t *testing.T) {
 
 	runErr := errors.New("worker failed")
 	deps := newRecordingWorkerDependencies(t)
-	deps.executionWorker.runErr = runErr
+	deps.worker.runErr = runErr
 
 	err := runWithDependencies(context.Background(), workerTestEnv, deps.workerDependencies)
 	if !errors.Is(err, runErr) {
@@ -313,48 +221,35 @@ func workerTestEnv(key string) string {
 type recordingWorkerDependencies struct {
 	workerDependencies
 	temporalClient       *recordingWorkerTemporalClient
-	controlWorker        *recordingTemporalWorker
-	executionWorker      *recordingTemporalWorker
+	worker               *recordingTemporalWorker
 	pool                 *recordingWorkerPostgresPool
 	store                *recordingWorkerStore
 	credentialCipher     *encryption.Cipher
 	temporalConfig       temporal.Config
-	controlOptions       temporalworker.Options
-	executionOptions     temporalworker.Options
+	workerTaskQueue      string
+	workerOptions        temporalworker.Options
 	artifactStoreConfig  config.ArtifactStoreConfig
-	migrated             bool
 	activityStoreIsWired bool
 	activityRunRoot      string
 	activityLogStore     activities.TemplateRunLogStore
 	logStore             recordingWorkerLogStore
 	logMetadataRecorder  artifacts.LogMetadataRecorder
 	dialErr              error
-	dispatcher           recordingWorkflowDispatcher
-	queueController      *recordingQueueController
 }
 
 func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 	t.Helper()
 
 	deps := &recordingWorkerDependencies{
-		temporalClient:  &recordingWorkerTemporalClient{},
-		controlWorker:   &recordingTemporalWorker{},
-		executionWorker: &recordingTemporalWorker{},
-		pool:            &recordingWorkerPostgresPool{},
-		store:           &recordingWorkerStore{},
-		queueController: &recordingQueueController{},
+		temporalClient: &recordingWorkerTemporalClient{},
+		worker:         &recordingTemporalWorker{},
+		pool:           &recordingWorkerPostgresPool{},
+		store:          &recordingWorkerStore{},
 	}
 	deps.workerDependencies = workerDependencies{
 		newPostgresPool: func(_ context.Context, databaseURL string) (postgresPool, error) {
 			deps.pool.databaseURL = databaseURL
 			return deps.pool, nil
-		},
-		migratePostgres: func(_ context.Context, pool postgresPool) error {
-			if pool != deps.pool {
-				t.Fatalf("migratePostgres pool = %p, want %p", pool, deps.pool)
-			}
-			deps.migrated = true
-			return nil
 		},
 		newStore: func(pool postgresPool, cipher *encryption.Cipher) (workerStore, error) {
 			if pool != deps.pool {
@@ -374,44 +269,13 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 			if temporalClient != deps.temporalClient {
 				t.Fatalf("newWorker temporalClient = %p, want %p", temporalClient, deps.temporalClient)
 			}
-			switch taskQueue {
-			case domain.ControlTaskQueue:
-				deps.controlOptions = options
-				return deps.controlWorker
-			case domain.ExecutionTaskQueue:
-				deps.executionOptions = options
-				return deps.executionWorker
-			default:
-				t.Fatalf("newWorker task queue = %q", taskQueue)
-				return nil
-			}
+			deps.workerTaskQueue = taskQueue
+			deps.workerOptions = options
+			return deps.worker
 		},
-		newDispatcher: func(temporalClient client.Client) app.WorkflowDispatcher {
-			if temporalClient != deps.temporalClient {
-				t.Fatalf("newDispatcher temporalClient = %p, want %p", temporalClient, deps.temporalClient)
-			}
-			return deps.dispatcher
-		},
-		newQueueController: func(store workerStore, dispatcher app.WorkflowDispatcher) (queueController, error) {
-			if store != workerStore(deps.store) {
-				t.Fatalf("newQueueController store = %p, want %p", store, deps.store)
-			}
-			if dispatcher != deps.dispatcher {
-				t.Fatalf("newQueueController dispatcher = %p, want %p", dispatcher, deps.dispatcher)
-			}
-			return deps.queueController, nil
-		},
-		registerWorkflow: func(worker temporalWorker) {
-			if worker != deps.controlWorker {
-				t.Fatalf("registerWorkflow worker = %p, want %p", worker, deps.controlWorker)
-			}
-			worker.RegisterWorkflowWithOptions(workflows.TemplateRunWorkflow, workflow.RegisterOptions{
-				Name: domain.TemplateRunWorkflowName,
-			})
-		},
-		registerActivities: func(control temporalWorker, worker temporalWorker, recorder workerStore, runRoot string, logStore activities.TemplateRunLogStore, gitHubTokens activities.GitHubTokenSource) {
-			if control != deps.controlWorker || worker != deps.executionWorker {
-				t.Fatalf("registerActivities workers = %p, %p", control, worker)
+		registerActivities: func(worker temporalWorker, recorder workerStore, runRoot string, logStore activities.TemplateRunLogStore, gitHubTokens activities.GitHubTokenSource) {
+			if worker != deps.worker {
+				t.Fatalf("registerActivities worker = %p, want %p", worker, deps.worker)
 			}
 			if recorder != workerStore(deps.store) {
 				t.Fatalf("activity recorder = %p, want store %p", recorder, deps.store)
@@ -441,14 +305,6 @@ func newRecordingWorkerDependencies(t *testing.T) *recordingWorkerDependencies {
 				},
 				activity.RegisterOptions{
 					Name: domain.RunTerraformActivityName,
-				},
-			)
-			control.RegisterActivityWithOptions(
-				func(context.Context, domain.TemplateRunStatusActivityInput) error {
-					return nil
-				},
-				activity.RegisterOptions{
-					Name: domain.RecordTemplateRunStatusActivityName,
 				},
 			)
 		},
@@ -487,53 +343,8 @@ func (store *recordingWorkerStore) RecordTemplateRunStatus(context.Context, doma
 	return nil
 }
 
-func (store *recordingWorkerStore) RecordTemplateRegistrationStatus(context.Context, domain.TemplateRegistrationStatusActivityInput) error {
-	return nil
-}
-
-func (store *recordingWorkerStore) UpsertTemplateRevisionWithVariables(context.Context, domain.TemplateRevision, []domain.TemplateVariable) (domain.TemplateRevision, error) {
-	return domain.TemplateRevision{}, nil
-}
-
 func (store *recordingWorkerStore) RecordTemplateRunLog(context.Context, domain.TemplateRunLog) error {
 	return nil
-}
-
-func (store *recordingWorkerStore) Enqueue(context.Context, ...queue.Request) error {
-	return nil
-}
-
-func (store *recordingWorkerStore) ReconcileTemplateRunCancellation(context.Context, domain.TenantID, domain.TemplateRunID, string) error {
-	return nil
-}
-
-type recordingWorkflowDispatcher struct{}
-
-func (recordingWorkflowDispatcher) StartTemplateRun(context.Context, domain.TemplateRunWorkflowInput) error {
-	return nil
-}
-
-func (recordingWorkflowDispatcher) StartTemplateSync(context.Context, domain.TemplateSyncWorkflowInput) error {
-	return nil
-}
-
-func (recordingWorkflowDispatcher) ApproveTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID, domain.ApprovalSignal) error {
-	return nil
-}
-
-func (recordingWorkflowDispatcher) CancelTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID, domain.CancelSignal) error {
-	return nil
-}
-
-type recordingQueueController struct {
-	ran     bool
-	stopped bool
-}
-
-func (dispatcher *recordingQueueController) Run(ctx context.Context) {
-	dispatcher.ran = true
-	<-ctx.Done()
-	dispatcher.stopped = true
 }
 
 type recordingWorkerLogStore struct{}
@@ -552,34 +363,11 @@ func (temporalClient *recordingWorkerTemporalClient) Close() {
 }
 
 type recordingTemporalWorker struct {
-	registeredWorkflow        uintptr
-	registeredWorkflowOptions workflow.RegisterOptions
-	registeredWorkflows       map[string]bool
 	registeredActivity        uintptr
 	registeredActivityOptions activity.RegisterOptions
 	registeredActivities      map[string]bool
 	ran                       bool
 	runErr                    error
-	started                   bool
-	stopped                   bool
-}
-
-func (worker *recordingTemporalWorker) Start() error {
-	worker.started = true
-	return nil
-}
-
-func (worker *recordingTemporalWorker) Stop() {
-	worker.stopped = true
-}
-
-func (worker *recordingTemporalWorker) RegisterWorkflowWithOptions(workflowFn interface{}, options workflow.RegisterOptions) {
-	if worker.registeredWorkflows == nil {
-		worker.registeredWorkflows = make(map[string]bool)
-	}
-	worker.registeredWorkflow = reflect.ValueOf(workflowFn).Pointer()
-	worker.registeredWorkflowOptions = options
-	worker.registeredWorkflows[options.Name] = true
 }
 
 func (worker *recordingTemporalWorker) RegisterActivityWithOptions(activityFn interface{}, options activity.RegisterOptions) {
@@ -594,22 +382,4 @@ func (worker *recordingTemporalWorker) RegisterActivityWithOptions(activityFn in
 func (worker *recordingTemporalWorker) Run(<-chan interface{}) error {
 	worker.ran = true
 	return worker.runErr
-}
-
-// recordingWorkerStore must satisfy queue.Backend now that the worker runs a
-// queue controller instead of the authorization dispatcher.
-func (store *recordingWorkerStore) Claim(context.Context, time.Duration, int, []queue.Kind) ([]queue.Item, error) {
-	return nil, nil
-}
-
-func (store *recordingWorkerStore) Complete(context.Context, int64, int64) (bool, error) {
-	return true, nil
-}
-
-func (store *recordingWorkerStore) Reschedule(context.Context, int64, time.Duration, string) error {
-	return nil
-}
-
-func (store *recordingWorkerStore) Prune(context.Context, time.Duration) (int64, error) {
-	return 0, nil
 }

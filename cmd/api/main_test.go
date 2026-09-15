@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -18,11 +19,17 @@ import (
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/authn"
 
+	"github.com/vishu42/tflive/internal/activities"
 	"github.com/vishu42/tflive/internal/authorization"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/queue"
+	"github.com/vishu42/tflive/internal/temporal"
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/client"
+	temporalworker "go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 )
 
 func TestRunRequiresDatabaseURL(t *testing.T) {
@@ -97,7 +104,7 @@ func TestWriteStartupErrorDoesNotLeakSecuritySecrets(t *testing.T) {
 	}
 }
 
-func TestRunWiresProducerOnlyQueueStore(t *testing.T) {
+func TestRunWiresStoreAndService(t *testing.T) {
 	t.Parallel()
 
 	deps := newRecordingAPIDependencies(t)
@@ -164,6 +171,88 @@ func TestRunWiresProducerOnlyQueueStore(t *testing.T) {
 	}
 	if !deps.pool.closed {
 		t.Fatal("postgres pool was not closed")
+	}
+}
+
+// TestRunWiresControlPlane covers the half of the control plane that is not
+// HTTP. Everything here needs the database or the keys, which is why it runs in
+// the API rather than beside tenant Terraform.
+func TestRunWiresControlPlane(t *testing.T) {
+	t.Parallel()
+
+	deps := newRecordingAPIDependencies(t)
+	if err := runWithDependencies(context.Background(), apiTestEnv, deps.apiDependencies); err != nil {
+		t.Fatalf("runWithDependencies returned error: %v", err)
+	}
+
+	if deps.temporalConfig.Address != "localhost:7233" || deps.temporalConfig.Namespace != "tflive" {
+		t.Fatalf("temporal config = %+v, want localhost:7233 in tflive", deps.temporalConfig)
+	}
+	if deps.workerTaskQueue != domain.ControlTaskQueue {
+		t.Fatalf("worker task queue = %q, want %q", deps.workerTaskQueue, domain.ControlTaskQueue)
+	}
+	if deps.workerOptions.EnableSessionWorker {
+		t.Fatal("session worker enabled on the control queue; sessions belong to the executor")
+	}
+	if deps.registeredControlStore != controlStore(deps.store) {
+		t.Fatal("control activities were not wired with the store")
+	}
+	if deps.gitHubTokens != nil {
+		t.Fatalf("GitHub token source = %#v, want nil when no App is configured", deps.gitHubTokens)
+	}
+	if deps.queueControllerStore != controlStore(deps.store) {
+		t.Fatal("queue controller was not wired with the store")
+	}
+	if deps.queueControllerDispatcher != deps.dispatcher {
+		t.Fatal("queue controller was not wired with the Temporal dispatcher")
+	}
+	if !deps.worker.started || !deps.worker.stopped {
+		t.Fatalf("control worker started=%v stopped=%v, want both", deps.worker.started, deps.worker.stopped)
+	}
+	if !deps.queueController.ran || !deps.queueController.stopped {
+		t.Fatalf("queue controller ran=%v stopped=%v, want both", deps.queueController.ran, deps.queueController.stopped)
+	}
+	if !deps.temporalClient.closed {
+		t.Fatal("temporal client was not closed")
+	}
+}
+
+func TestRunWrapsTemporalDialFailure(t *testing.T) {
+	t.Parallel()
+
+	dialErr := errors.New("dial failed")
+	deps := newRecordingAPIDependencies(t)
+	deps.dialErr = dialErr
+
+	err := runWithDependencies(context.Background(), apiTestEnv, deps.apiDependencies)
+	if !errors.Is(err, dialErr) || !strings.Contains(err.Error(), "dial temporal") {
+		t.Fatalf("error = %v, want wrapped dial failure", err)
+	}
+	if deps.serverHandler != nil {
+		t.Fatal("API served without a control plane")
+	}
+}
+
+func TestRegisterControlRegistersWorkflowsAndControlActivities(t *testing.T) {
+	t.Parallel()
+
+	worker := &recordingControlWorker{}
+	registerControl(worker, &recordingStore{}, nil)
+
+	wantWorkflows := map[string]bool{
+		domain.TemplateRunWorkflowName:  true,
+		domain.TemplateSyncWorkflowName: true,
+	}
+	if !reflect.DeepEqual(worker.workflows, wantWorkflows) {
+		t.Fatalf("workflows = %v, want %v", worker.workflows, wantWorkflows)
+	}
+	wantActivities := map[string]bool{
+		domain.RecordTemplateRunStatusActivityName:          true,
+		domain.RecordTemplateRegistrationStatusActivityName: true,
+		domain.SyncTemplateActivityName:                     true,
+	}
+	if !reflect.DeepEqual(worker.activities, wantActivities) {
+		t.Fatalf("activities = %v, want %v", worker.activities, wantActivities)
 	}
 }
 
@@ -352,6 +441,17 @@ func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
 	deps.newAuthorization = func(_ context.Context, _ postgresPool, storeName string) (*authorization.Authorization, error) {
 		return authorization.NewWithDatastore(context.Background(), memory.New(), storeName)
 	}
+	// Nor does it assert anything about Temporal, which it would otherwise need
+	// running. The queue loop still runs for real against Postgres.
+	deps.dialTemporal = func(context.Context, temporal.Config) (client.Client, error) {
+		return &recordingAPITemporalClient{}, nil
+	}
+	deps.newWorker = func(client.Client, string, temporalworker.Options) temporalWorker {
+		return &recordingControlWorker{}
+	}
+	deps.newDispatcher = func(client.Client) app.WorkflowDispatcher {
+		return recordingAPIDispatcher{}
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -479,14 +579,30 @@ type recordingAPIDependencies struct {
 	serverErr                error
 	openFGAStoreName         string
 	authorizer               *authorization.Authorization
+
+	temporalClient            *recordingAPITemporalClient
+	temporalConfig            temporal.Config
+	dialErr                   error
+	worker                    *recordingControlWorker
+	workerTaskQueue           string
+	workerOptions             temporalworker.Options
+	dispatcher                recordingAPIDispatcher
+	registeredControlStore    controlStore
+	gitHubTokens              activities.GitHubTokenSource
+	queueController           *recordingAPIQueueController
+	queueControllerStore      controlStore
+	queueControllerDispatcher app.WorkflowDispatcher
 }
 
 func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 	t.Helper()
 
 	deps := &recordingAPIDependencies{
-		pool:  &recordingPostgresPool{},
-		store: &recordingStore{},
+		pool:            &recordingPostgresPool{},
+		store:           &recordingStore{},
+		temporalClient:  &recordingAPITemporalClient{},
+		worker:          &recordingControlWorker{},
+		queueController: &recordingAPIQueueController{},
 	}
 	deps.apiDependencies = apiDependencies{
 		newPostgresPool: func(_ context.Context, databaseURL string) (postgresPool, error) {
@@ -535,6 +651,33 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 			deps.serverAddress = address
 			deps.serverHandler = handler
 			return deps.serverErr
+		},
+		dialTemporal: func(_ context.Context, cfg temporal.Config) (client.Client, error) {
+			deps.temporalConfig = cfg
+			if deps.dialErr != nil {
+				return nil, deps.dialErr
+			}
+			return deps.temporalClient, nil
+		},
+		newWorker: func(temporalClient client.Client, taskQueue string, options temporalworker.Options) temporalWorker {
+			if temporalClient != deps.temporalClient {
+				t.Fatalf("newWorker client = %p, want %p", temporalClient, deps.temporalClient)
+			}
+			deps.workerTaskQueue = taskQueue
+			deps.workerOptions = options
+			return deps.worker
+		},
+		newDispatcher: func(client.Client) app.WorkflowDispatcher {
+			return deps.dispatcher
+		},
+		newQueueController: func(store controlStore, dispatcher app.WorkflowDispatcher) (queueController, error) {
+			deps.queueControllerStore = store
+			deps.queueControllerDispatcher = dispatcher
+			return deps.queueController, nil
+		},
+		registerControl: func(worker temporalWorker, store controlStore, gitHubTokens activities.GitHubTokenSource) {
+			deps.registeredControlStore = store
+			deps.gitHubTokens = gitHubTokens
 		},
 	}
 	auth, err := authorization.NewWithDatastore(context.Background(), memory.New(), "tflive-test")
@@ -821,4 +964,85 @@ func (store *recordingStore) EnsureLocalAccount(_ context.Context, account authn
 	store.accounts[account.Username] = account
 	store.ensuredAccounts = append(store.ensuredAccounts, account)
 	return true, nil
+}
+
+// Control plane store surface: the queue loop's backend and the status write.
+func (store *recordingStore) Claim(context.Context, time.Duration, int, []queue.Kind) ([]queue.Item, error) {
+	return nil, nil
+}
+
+func (store *recordingStore) Complete(context.Context, int64, int64) (bool, error) { return true, nil }
+
+func (store *recordingStore) Reschedule(context.Context, int64, time.Duration, string) error {
+	return nil
+}
+
+func (store *recordingStore) Prune(context.Context, time.Duration) (int64, error) { return 0, nil }
+
+func (recordingStore) RecordTemplateRunStatus(context.Context, domain.TemplateRunStatusActivityInput) error {
+	return nil
+}
+
+type recordingAPITemporalClient struct {
+	client.Client
+	closed bool
+}
+
+func (temporalClient *recordingAPITemporalClient) Close() { temporalClient.closed = true }
+
+type recordingControlWorker struct {
+	workflows  map[string]bool
+	activities map[string]bool
+	started    bool
+	stopped    bool
+}
+
+func (worker *recordingControlWorker) RegisterWorkflowWithOptions(_ interface{}, options workflow.RegisterOptions) {
+	if worker.workflows == nil {
+		worker.workflows = map[string]bool{}
+	}
+	worker.workflows[options.Name] = true
+}
+
+func (worker *recordingControlWorker) RegisterActivityWithOptions(_ interface{}, options activity.RegisterOptions) {
+	if worker.activities == nil {
+		worker.activities = map[string]bool{}
+	}
+	worker.activities[options.Name] = true
+}
+
+func (worker *recordingControlWorker) Start() error {
+	worker.started = true
+	return nil
+}
+
+func (worker *recordingControlWorker) Stop() { worker.stopped = true }
+
+type recordingAPIQueueController struct {
+	ran     bool
+	stopped bool
+}
+
+func (controller *recordingAPIQueueController) Run(ctx context.Context) {
+	controller.ran = true
+	<-ctx.Done()
+	controller.stopped = true
+}
+
+type recordingAPIDispatcher struct{}
+
+func (recordingAPIDispatcher) StartTemplateRun(context.Context, domain.TemplateRunWorkflowInput) error {
+	return nil
+}
+
+func (recordingAPIDispatcher) StartTemplateSync(context.Context, domain.TemplateSyncWorkflowInput) error {
+	return nil
+}
+
+func (recordingAPIDispatcher) ApproveTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID, domain.ApprovalSignal) error {
+	return nil
+}
+
+func (recordingAPIDispatcher) CancelTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID, domain.CancelSignal) error {
+	return nil
 }

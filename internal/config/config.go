@@ -27,7 +27,10 @@ type APIConfig struct {
 	ArtifactStore           ArtifactStoreConfig
 	Security                SecurityConfig
 	CredentialEncryptionKey Secret
-	Debug                   bool
+	// GitHubApp mints installation tokens for template sync, which runs on the
+	// control plane.
+	GitHubApp GitHubAppConfig
+	Debug     bool
 }
 
 type WorkerConfig struct {
@@ -95,6 +98,12 @@ func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
 		return APIConfig{}, err
 	}
 	cfg.CredentialEncryptionKey = credentialKey
+
+	gitHubApp, err := loadGitHubAppConfig(getenv)
+	if err != nil {
+		return APIConfig{}, err
+	}
+	cfg.GitHubApp = gitHubApp
 
 	if cfg.DatabaseURL == "" {
 		return APIConfig{}, fmt.Errorf("%w: DATABASE_URL is required", ErrInvalidConfig)
