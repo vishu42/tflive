@@ -9,7 +9,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -115,7 +117,7 @@ func credentialEncryptor(store appRepositories) app.CredentialEncryptor {
 
 // controlPlaneStore mirrors sessionStore: the queue loop and control activities
 // reach the store through an assertion that fails at startup, rather than at
-// the first run a worker picks up.
+// the first run the control worker picks up.
 func controlPlaneStore(store appRepositories) (controlStore, error) {
 	control, ok := store.(controlStore)
 	if !ok {
@@ -158,10 +160,29 @@ func sessionStore(store appRepositories) (authn.SessionStore, error) {
 }
 
 func main() {
-	if err := run(context.Background(), os.Getenv); err != nil {
+	ctx, stop := shutdownContext()
+	defer stop()
+
+	if err := run(ctx, os.Getenv); err != nil {
 		writeStartupError(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// shutdownContext returns a context canceled on SIGINT or SIGTERM.
+//
+// The API is not only an HTTP server: since the control plane moved here it
+// also runs the Temporal worker on the control queue and the queue loop. Both
+// stop by way of the context this returns -- listenAndServe shuts the server
+// down on it, and run's deferred stopControlPlane drains the worker. Handing
+// run a context.Background() instead means the process dies on SIGTERM with
+// the worker still registered, abandoning in-flight control activities until
+// Temporal times them out.
+//
+// cmd/executor gets the same behavior from worker.Run(InterruptCh()), which is
+// what cmd/worker used before the split.
+func shutdownContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 }
 
 func writeStartupError(writer io.Writer, err error) {
@@ -489,6 +510,7 @@ func startControlPlane(ctx context.Context, cfg config.APIConfig, deps apiDepend
 		return nil, fmt.Errorf("dial temporal: %w", err)
 	}
 
+	// TODO: no session worker here?
 	worker := deps.newWorker(temporalClient, domain.ControlTaskQueue, temporalworker.Options{})
 	deps.registerControl(worker, control, gitHubTokens)
 	controller, err := deps.newQueueController(control, deps.newDispatcher(temporalClient))

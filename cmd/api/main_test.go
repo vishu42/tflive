@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1059,4 +1060,84 @@ func (recordingAPIDispatcher) ApproveTemplateRun(context.Context, domain.TenantI
 
 func (recordingAPIDispatcher) CancelTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID, domain.CancelSignal) error {
 	return nil
+}
+
+// TestShutdownContextCancelsOnSIGTERM pins the signal wiring main depends on.
+// Without it the API process dies with the control-plane worker still
+// registered: in-flight control activities are abandoned and Temporal waits out
+// their StartToCloseTimeout before anything else may claim them. cmd/executor
+// gets this from worker.Run(InterruptCh()); the API has to ask for it.
+//
+// Not parallel: it signals its own process, and the handler is only installed
+// for the life of the returned context.
+func TestShutdownContextCancelsOnSIGTERM(t *testing.T) {
+	ctx, stop := shutdownContext()
+	defer stop()
+
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("signal self: %v", err)
+	}
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdownContext did not cancel on SIGTERM")
+	}
+}
+
+// TestRunStopsControlPlaneWhenContextIsCanceled exercises the path the fix
+// above makes reachable, with the real listenAndServe rather than the fake:
+// cancelling the context must shut the server down, stop the control worker and
+// close the Temporal client, and run must report that as a clean exit.
+func TestRunStopsControlPlaneWhenContextIsCanceled(t *testing.T) {
+	t.Parallel()
+
+	deps := newRecordingAPIDependencies(t)
+
+	// Delegate to the real listenAndServe, but announce when run reaches it.
+	// Cancelling on a timer instead races startup: bootstrap seeds the root
+	// account through OpenFGA first, and a context cancelled mid-seed fails the
+	// run rather than shutting it down.
+	serving := make(chan struct{})
+	deps.apiDependencies.listenAndServe = func(ctx context.Context, address string, handler http.Handler) error {
+		close(serving)
+		return listenAndServe(ctx, address, handler)
+	}
+
+	values := apiTestValues()
+	values["HTTP_ADDRESS"] = "127.0.0.1:0"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runWithDependencies(ctx, apiTestGetenv(values), deps.apiDependencies)
+	}()
+
+	select {
+	case <-serving:
+	case err := <-errCh:
+		t.Fatalf("runWithDependencies returned before serving: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("runWithDependencies never reached listenAndServe")
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("runWithDependencies returned error on shutdown: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("runWithDependencies did not return after context cancellation")
+	}
+
+	if !deps.worker.stopped {
+		t.Fatal("control worker was not stopped on shutdown")
+	}
+	if !deps.queueController.stopped {
+		t.Fatal("queue controller was not stopped on shutdown")
+	}
+	if !deps.temporalClient.closed {
+		t.Fatal("temporal client was not closed on shutdown")
+	}
 }
