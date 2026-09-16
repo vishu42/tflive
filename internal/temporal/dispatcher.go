@@ -15,31 +15,27 @@ type workflowClient interface {
 }
 
 type Dispatcher struct {
-	client    workflowClient
-	taskQueue string
+	client workflowClient
 }
 
-func NewDispatcher(temporalClient client.Client, taskQueue string) *Dispatcher {
-	return newDispatcher(temporalClient, taskQueue)
+func NewDispatcher(temporalClient client.Client) *Dispatcher {
+	return newDispatcher(temporalClient)
 }
 
-func newDispatcher(temporalClient workflowClient, taskQueue string) *Dispatcher {
-	return &Dispatcher{
-		client:    temporalClient,
-		taskQueue: taskQueue,
-	}
+func newDispatcher(temporalClient workflowClient) *Dispatcher {
+	return &Dispatcher{client: temporalClient}
 }
 
 // StartTemplateRun dispatches one TemplateRunWorkflow execution to Temporal.
 // The workflow ID is derived from tenant ID and run ID so repeated callers target
-// the same logical run, and the configured task queue determines which workers
-// can pick up the workflow and its activities.
+// the same logical run. Workflows run on the control queue; the workflow itself
+// routes execution activities to the executor.
 func (dispatcher *Dispatcher) StartTemplateRun(ctx context.Context, input domain.TemplateRunWorkflowInput) error {
 	_, err := dispatcher.client.ExecuteWorkflow(
 		ctx,
 		client.StartWorkflowOptions{
 			ID:                       templateRunWorkflowID(input.TenantID, input.RunID),
-			TaskQueue:                dispatcher.taskQueue,
+			TaskQueue:                domain.ControlTaskQueue,
 			WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 			WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
 		},
@@ -58,7 +54,7 @@ func (dispatcher *Dispatcher) StartTemplateSync(ctx context.Context, input domai
 		ctx,
 		client.StartWorkflowOptions{
 			ID:        templateSyncWorkflowID(input.TenantID, input.RegistrationID),
-			TaskQueue: dispatcher.taskQueue,
+			TaskQueue: domain.ControlTaskQueue,
 		},
 		domain.TemplateSyncWorkflowName,
 		input)

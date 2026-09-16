@@ -28,56 +28,45 @@ type ObjectStore interface {
 	GetObject(ctx context.Context, key string) ([]byte, error)
 }
 
-type LogMetadataRecorder interface {
-	RecordTemplateRunLog(ctx context.Context, log domain.TemplateRunLog) error
-}
-
 type LogStore struct {
-	store    ObjectStore
-	recorder LogMetadataRecorder
-	now      func() time.Time
+	store ObjectStore
+	now   func() time.Time
 }
 
 func NewLogStore(store ObjectStore) LogStore {
 	return LogStore{store: store, now: time.Now}
 }
 
-func NewRecordedLogStore(store ObjectStore, recorder LogMetadataRecorder) LogStore {
-	return LogStore{store: store, recorder: recorder, now: time.Now}
-}
-
-func (store LogStore) PutTemplateRunLog(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string, body io.Reader) error {
+// PutTemplateRunLog uploads one phase log and returns the metadata describing
+// it. It does not record that metadata: the uploader runs on the data plane,
+// which has no database, so the workflow hands the returned row to a control
+// activity instead. The key is deterministic, so a retried upload overwrites
+// rather than duplicates.
+func (store LogStore) PutTemplateRunLog(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string, body io.Reader) (domain.TemplateRunLog, error) {
 	key, err := LogKey(tenantID, runID, phase)
 	if err != nil {
-		return err
+		return domain.TemplateRunLog{}, err
 	}
 	content, err := io.ReadAll(body)
 	if err != nil {
-		return fmt.Errorf("read template run log: %w", err)
+		return domain.TemplateRunLog{}, fmt.Errorf("read template run log: %w", err)
 	}
-	// Object persistence is intentionally first: the deterministic key and metadata upsert make retries idempotent, while Temporal activity retry converges the two stores without queueing metadata.
 	if err := store.store.PutObject(ctx, key, logContentType, bytes.NewReader(content)); err != nil {
-		return fmt.Errorf("put template run log: %w", err)
+		return domain.TemplateRunLog{}, fmt.Errorf("put template run log: %w", err)
 	}
-	if store.recorder != nil {
-		now := store.now
-		if now == nil {
-			now = time.Now
-		}
-		log := domain.TemplateRunLog{
-			TenantID:    tenantID,
-			RunID:       runID,
-			Phase:       phase,
-			ObjectKey:   key,
-			ContentType: logContentType,
-			SizeBytes:   int64(len(content)),
-			UploadedAt:  now().UTC(),
-		}
-		if err := store.recorder.RecordTemplateRunLog(ctx, log); err != nil {
-			return fmt.Errorf("record template run log metadata: %w", err)
-		}
+	now := store.now
+	if now == nil {
+		now = time.Now
 	}
-	return nil
+	return domain.TemplateRunLog{
+		TenantID:    tenantID,
+		RunID:       runID,
+		Phase:       phase,
+		ObjectKey:   key,
+		ContentType: logContentType,
+		SizeBytes:   int64(len(content)),
+		UploadedAt:  now().UTC(),
+	}, nil
 }
 
 func (store LogStore) ReadTemplateRunLog(ctx context.Context, log domain.TemplateRunLog) ([]byte, error) {

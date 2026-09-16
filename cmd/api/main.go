@@ -9,10 +9,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vishu42/tflive/internal/activities"
 	"github.com/vishu42/tflive/internal/api"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/artifacts"
@@ -20,9 +23,17 @@ import (
 	"github.com/vishu42/tflive/internal/authorization"
 	"github.com/vishu42/tflive/internal/bootstrap"
 	"github.com/vishu42/tflive/internal/config"
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
+	"github.com/vishu42/tflive/internal/githubapp"
 	"github.com/vishu42/tflive/internal/postgres"
 	"github.com/vishu42/tflive/internal/queue"
+	"github.com/vishu42/tflive/internal/temporal"
+	"github.com/vishu42/tflive/internal/workflows"
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/client"
+	temporalworker "go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 )
 
 type postgresPool interface {
@@ -45,6 +56,28 @@ type appRepositories interface {
 	queue.Reader
 }
 
+// controlStore is what the control plane needs from the store beyond serving
+// HTTP: the queue loop claims and settles intents, and the control activities
+// write run and registration state.
+type controlStore interface {
+	queue.Backend
+	queue.Enqueuer
+	activities.ControlStore
+	activities.TemplateSyncStore
+	app.TemplateRunCancellationReconciler
+}
+
+type temporalWorker interface {
+	RegisterWorkflowWithOptions(interface{}, workflow.RegisterOptions)
+	RegisterActivityWithOptions(interface{}, activity.RegisterOptions)
+	Start() error
+	Stop()
+}
+
+type queueController interface {
+	Run(context.Context)
+}
+
 type tokenVerifier interface {
 	authn.Verifier
 	authn.EndpointSource
@@ -62,6 +95,14 @@ type apiDependencies struct {
 	newVerifier          func(context.Context, authn.OIDCVerifierConfig) (tokenVerifier, error)
 	newAuthorization     func(context.Context, postgresPool, string) (*authorization.Authorization, error)
 	listenAndServe       func(context.Context, string, http.Handler) error
+
+	dialTemporal       func(context.Context, temporal.Config) (client.Client, error)
+	newWorker          func(client.Client, string, temporalworker.Options) temporalWorker
+	newDispatcher      func(client.Client) app.WorkflowDispatcher
+	newQueueController func(controlStore, app.WorkflowDispatcher) (queueController, error)
+	// registerControl attaches both workflows and every control activity to the
+	// worker polling the control queue.
+	registerControl func(temporalWorker, controlStore, activities.GitHubTokenSource)
 }
 
 func credentialRepository(store appRepositories) app.CredentialRepository {
@@ -72,6 +113,17 @@ func credentialRepository(store appRepositories) app.CredentialRepository {
 func credentialEncryptor(store appRepositories) app.CredentialEncryptor {
 	encryptor, _ := store.(app.CredentialEncryptor)
 	return encryptor
+}
+
+// controlPlaneStore mirrors sessionStore: the queue loop and control activities
+// reach the store through an assertion that fails at startup, rather than at
+// the first run the control worker picks up.
+func controlPlaneStore(store appRepositories) (controlStore, error) {
+	control, ok := store.(controlStore)
+	if !ok {
+		return nil, fmt.Errorf("store %T does not implement the control plane store", store)
+	}
+	return control, nil
 }
 
 // rootAccountStore is localAccountStore's read-write counterpart: seeding also
@@ -108,10 +160,29 @@ func sessionStore(store appRepositories) (authn.SessionStore, error) {
 }
 
 func main() {
-	if err := run(context.Background(), os.Getenv); err != nil {
+	ctx, stop := shutdownContext()
+	defer stop()
+
+	if err := run(ctx, os.Getenv); err != nil {
 		writeStartupError(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// shutdownContext returns a context canceled on SIGINT or SIGTERM.
+//
+// The API is not only an HTTP server: since the control plane moved here it
+// also runs the Temporal worker on the control queue and the queue loop. Both
+// stop by way of the context this returns -- listenAndServe shuts the server
+// down on it, and run's deferred stopControlPlane drains the worker. Handing
+// run a context.Background() instead means the process dies on SIGTERM with
+// the worker still registered, abandoning in-flight control activities until
+// Temporal times them out.
+//
+// cmd/executor gets the same behavior from worker.Run(InterruptCh()), which is
+// what cmd/worker used before the split.
+func shutdownContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 }
 
 func writeStartupError(writer io.Writer, err error) {
@@ -166,7 +237,53 @@ func defaultAPIDependencies() apiDependencies {
 			return authorization.New(ctx, concrete, storeName)
 		},
 		listenAndServe: listenAndServe,
+		dialTemporal:   temporal.Dial,
+		newWorker: func(temporalClient client.Client, taskQueue string, options temporalworker.Options) temporalWorker {
+			return temporalworker.New(temporalClient, taskQueue, options)
+		},
+		newDispatcher: func(temporalClient client.Client) app.WorkflowDispatcher {
+			return temporal.NewDispatcher(temporalClient)
+		},
+		newQueueController: func(store controlStore, dispatcher app.WorkflowDispatcher) (queueController, error) {
+			registry, err := app.NewQueueRegistry(dispatcher, store)
+			if err != nil {
+				return nil, err
+			}
+			return queue.NewController(store, registry, store, queue.Options{}), nil
+		},
+		registerControl: registerControl,
 	}
+}
+
+func registerControl(worker temporalWorker, store controlStore, gitHubTokens activities.GitHubTokenSource) {
+	worker.RegisterWorkflowWithOptions(workflows.TemplateRunWorkflow, workflow.RegisterOptions{
+		Name: domain.TemplateRunWorkflowName,
+	})
+	worker.RegisterWorkflowWithOptions(workflows.TemplateSyncWorkflow, workflow.RegisterOptions{
+		Name: domain.TemplateSyncWorkflowName,
+	})
+
+	control := activities.NewControlActivities(store, gitHubTokens)
+	worker.RegisterActivityWithOptions(control.RecordTemplateRunStatus, activity.RegisterOptions{
+		Name: domain.RecordTemplateRunStatusActivityName,
+	})
+	worker.RegisterActivityWithOptions(control.RecordTemplateRunLog, activity.RegisterOptions{
+		Name: domain.RecordTemplateRunLogActivityName,
+	})
+	worker.RegisterActivityWithOptions(control.SealRunCredentials, activity.RegisterOptions{
+		Name: domain.SealRunCredentialsActivityName,
+	})
+	worker.RegisterActivityWithOptions(control.SealSourceToken, activity.RegisterOptions{
+		Name: domain.SealSourceTokenActivityName,
+	})
+
+	sync := activities.NewTemplateSyncActivities(store, activities.WithTemplateSyncTokenSource(gitHubTokens))
+	worker.RegisterActivityWithOptions(sync.RecordTemplateRegistrationStatus, activity.RegisterOptions{
+		Name: domain.RecordTemplateRegistrationStatusActivityName,
+	})
+	worker.RegisterActivityWithOptions(sync.SyncTemplate, activity.RegisterOptions{
+		Name: domain.SyncTemplateActivityName,
+	})
 }
 
 func run(ctx context.Context, getenv func(string) string) error {
@@ -346,11 +463,79 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 	defer stopReaper()
 	go authn.ReapSessions(reaperCtx, sessions, authn.DefaultSessionReapInterval, nil)
 
+	stopControlPlane, err := startControlPlane(ctx, cfg, deps, store)
+	if err != nil {
+		return err
+	}
+	defer stopControlPlane()
+
 	if err := deps.listenAndServe(ctx, cfg.HTTPAddress, handler); err != nil {
 		return fmt.Errorf("listen and serve api: %w", err)
 	}
 
 	return nil
+}
+
+// startControlPlane runs the half of the control plane that is not HTTP: the
+// Temporal worker on the control queue, which executes both workflows and the
+// activities that write product state, and the queue loop, which turns
+// committed intents into workflow starts and signals.
+//
+// It lives in the API because every piece of it needs the database and the
+// keys, and the process that runs tenant Terraform must hold neither. The
+// returned function stops the queue loop, then the worker, then closes the
+// Temporal client.
+func startControlPlane(ctx context.Context, cfg config.APIConfig, deps apiDependencies, store appRepositories) (func(), error) {
+	control, err := controlPlaneStore(store)
+	if err != nil {
+		return nil, fmt.Errorf("wire control plane store: %w", err)
+	}
+
+	// A nil interface, not a typed nil pointer, when no App is configured.
+	var gitHubTokens activities.GitHubTokenSource
+	if cfg.GitHubApp.Enabled() {
+		privateKey, err := githubapp.ParsePrivateKey(cfg.GitHubApp.PrivateKey.Value())
+		if err != nil {
+			// Unreachable in practice: LoadAPIConfig parses the same key.
+			return nil, fmt.Errorf("parse github app private key: %w", err)
+		}
+		gitHubTokens = githubapp.NewTokenSource(githubapp.NewClient(cfg.GitHubApp.AppID, privateKey))
+	}
+
+	temporalClient, err := deps.dialTemporal(ctx, temporal.Config{
+		Address:   cfg.TemporalAddress,
+		Namespace: cfg.TemporalNamespace,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("dial temporal: %w", err)
+	}
+
+	// TODO: no session worker here?
+	worker := deps.newWorker(temporalClient, domain.ControlTaskQueue, temporalworker.Options{})
+	deps.registerControl(worker, control, gitHubTokens)
+	controller, err := deps.newQueueController(control, deps.newDispatcher(temporalClient))
+	if err != nil {
+		temporalClient.Close()
+		return nil, fmt.Errorf("build queue controller: %w", err)
+	}
+	if err := worker.Start(); err != nil {
+		temporalClient.Close()
+		return nil, fmt.Errorf("start control worker: %w", err)
+	}
+
+	controllerCtx, cancelController := context.WithCancel(ctx)
+	controllerDone := make(chan struct{})
+	go func() {
+		defer close(controllerDone)
+		controller.Run(controllerCtx)
+	}()
+
+	return func() {
+		cancelController()
+		<-controllerDone
+		worker.Stop()
+		temporalClient.Close()
+	}, nil
 }
 
 func listenAndServe(ctx context.Context, address string, handler http.Handler) error {

@@ -92,7 +92,7 @@ func TestLogStoreReadsAndWritesPhaseLogs(t *testing.T) {
 	store := NewLogStore(NewFilesystemStore(t.TempDir()))
 	ctx := context.Background()
 
-	err := store.PutTemplateRunLog(ctx, domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"), "plan", strings.NewReader("plan output\n"))
+	_, err := store.PutTemplateRunLog(ctx, domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"), "plan", strings.NewReader("plan output\n"))
 	if err != nil {
 		t.Fatalf("PutTemplateRunLog returned error: %v", err)
 	}
@@ -108,16 +108,15 @@ func TestLogStoreReadsAndWritesPhaseLogs(t *testing.T) {
 	}
 }
 
-func TestLogStoreRecordsMetadataAfterWritingPhaseLog(t *testing.T) {
+func TestLogStoreReturnsMetadataForWrittenPhaseLog(t *testing.T) {
 	t.Parallel()
 
-	recorder := &recordingLogMetadataRecorder{}
-	store := NewRecordedLogStore(NewFilesystemStore(t.TempDir()), recorder)
+	store := NewLogStore(NewFilesystemStore(t.TempDir()))
 	store.now = func() time.Time {
 		return time.Date(2026, 7, 6, 10, 15, 0, 0, time.UTC)
 	}
 
-	err := store.PutTemplateRunLog(context.Background(), domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"), "plan", strings.NewReader("plan output\n"))
+	got, err := store.PutTemplateRunLog(context.Background(), domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"), "plan", strings.NewReader("plan output\n"))
 	if err != nil {
 		t.Fatalf("PutTemplateRunLog returned error: %v", err)
 	}
@@ -131,8 +130,12 @@ func TestLogStoreRecordsMetadataAfterWritingPhaseLog(t *testing.T) {
 		SizeBytes:   12,
 		UploadedAt:  time.Date(2026, 7, 6, 10, 15, 0, 0, time.UTC),
 	}
-	if recorder.log != want {
-		t.Fatalf("recorded metadata = %#v, want %#v", recorder.log, want)
+	if got != want {
+		t.Fatalf("metadata = %#v, want %#v", got, want)
+	}
+	content, err := store.ReadTemplateRunLog(context.Background(), got)
+	if err != nil || string(content) != "plan output\n" {
+		t.Fatalf("ReadTemplateRunLog = %q, %v; want the written log", content, err)
 	}
 }
 
@@ -173,16 +176,6 @@ func TestS3StorePutsAndGetsObject(t *testing.T) {
 	if string(content) != "plan output\n" {
 		t.Fatalf("content = %q, want plan output", string(content))
 	}
-}
-
-type recordingLogMetadataRecorder struct {
-	log domain.TemplateRunLog
-	err error
-}
-
-func (recorder *recordingLogMetadataRecorder) RecordTemplateRunLog(_ context.Context, log domain.TemplateRunLog) error {
-	recorder.log = log
-	return recorder.err
 }
 
 type recordingRoundTripper struct {

@@ -181,7 +181,6 @@ services:
       HTTP_ADDRESS: ":8081"
       DATABASE_URL: postgres://${APP_DB_USER:-tflive}:${APP_DB_PASSWORD:-tflive}@postgres:5432/${APP_DB_NAME:-tflive_test}?sslmode=disable
       TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-terraform-runs}
       TFLIVE_ENVIRONMENT: development
       TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3}
@@ -192,6 +191,10 @@ services:
       SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:-b6f1d2c4a8e0937516243b8c5d7e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0}
       ARTIFACT_STORE_KIND: filesystem
       ARTIFACT_STORE_FILESYSTEM_ROOT: /var/lib/tflive/artifacts
+      # Template sync runs in the API's control-plane worker and clones private
+      # repositories with an installation token.
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       # Seeds the bootstrap administrator on first boot. Required by the API --
       # without it the process exits at startup and the service restart-loops.
       # Defaulted here because this file is the local stack; a real deployment
@@ -203,32 +206,27 @@ services:
     volumes:
       - artifacts:/var/lib/tflive/artifacts
 
-  worker:
+  # The data plane. It runs tenant Terraform, so it gets no database URL and no
+  # key: secrets arrive sealed to a per-run key, and results go back to the API
+  # through Temporal. Add nothing here a template must not read.
+  #
+  # Two replicas, so runs actually land on different hosts. A run's workspace
+  # activities and sealing key stay on one executor through a Temporal session;
+  # EXECUTOR_RUN_ROOT is container-local for the same reason.
+  executor:
     build:
       context: .
-      dockerfile: Dockerfile.worker
+      dockerfile: Dockerfile.executor
+    deploy:
+      replicas: 2
     depends_on:
-      postgres:
-        condition: service_healthy
       temporal:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://${APP_DB_USER:-tflive}:${APP_DB_PASSWORD:-tflive}@postgres:5432/${APP_DB_NAME:-tflive_test}?sslmode=disable
       TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-terraform-runs}
-      TFLIVE_ENVIRONMENT: development
-      TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
-      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3}
-      OIDC_ISSUER_URL: http://keycloak.localhost:8082/realms/tflive
-      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-tflive-api}
-      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-tflive-api-local-only}
-      TFLIVE_PUBLIC_URL: ${TFLIVE_PUBLIC_URL:-http://localhost:5173}
-      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:-b6f1d2c4a8e0937516243b8c5d7e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0}
       ARTIFACT_STORE_KIND: filesystem
       ARTIFACT_STORE_FILESYSTEM_ROOT: /var/lib/tflive/artifacts
-      WORKER_RUN_ROOT: /var/lib/tflive/runs
-      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
-      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      EXECUTOR_RUN_ROOT: /var/lib/tflive/runs
     restart: on-failure
     volumes:
       - artifacts:/var/lib/tflive/artifacts

@@ -48,7 +48,10 @@ var defaultRunRetryPolicy = &temporal.RetryPolicy{
 func TemplateRunWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowInput) error {
 	// Baseline options for every activity scheduled on this context. RunTerraform
 	// overrides them for the long-running commands; see terraformRetryPolicy.
+	// Activities scheduled on ctx itself are control-plane work (status writes),
+	// so they go to the control queue; execution work goes through sessionCtx.
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		TaskQueue:           domain.ControlTaskQueue,
 		StartToCloseTimeout: time.Minute,
 		RetryPolicy:         defaultRunRetryPolicy,
 	})
@@ -66,7 +69,11 @@ func TemplateRunWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowI
 		return err
 	}
 
-	sessionCtx, err := workflow.CreateSession(ctx, &workflow.SessionOptions{
+	// CreateSession takes its base queue from the context's activity options, so
+	// naming the execution queue here is what places the session, and every
+	// activity later scheduled on sessionCtx, on an executor host.
+	executionCtx := workflow.WithTaskQueue(ctx, domain.ExecutionTaskQueue)
+	sessionCtx, err := workflow.CreateSession(executionCtx, &workflow.SessionOptions{
 		CreationTimeout:  time.Minute,
 		ExecutionTimeout: 24 * time.Hour,
 	})
@@ -79,6 +86,7 @@ func TemplateRunWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowI
 	run.sessionCtx = sessionCtx
 
 	err = run.execute(operation)
+	run.releaseKey()
 	workflow.CompleteSession(sessionCtx)
 	if err != nil {
 		if errors.Is(err, errTemplateRunCanceled) {
@@ -98,6 +106,9 @@ type templateRunWorkflow struct {
 	input         domain.TemplateRunWorkflowInput
 	workspacePath string
 	terraformPath string
+	// publicKey is the executor's sealing key for this run; everything secret
+	// the executor needs is sealed to it on the control plane.
+	publicKey []byte
 }
 
 // execute prepares the workspace and invokes the already-resolved operation.
@@ -150,7 +161,7 @@ func (run *templateRunWorkflow) prepareWorkspace() error {
 	return run.runTerraform(domain.TerraformCommandSelectWorkspace)
 }
 
-// prepareLocalWorkspace schedules the worker-side activity that creates the
+// prepareLocalWorkspace schedules the executor-side activity that creates the
 // per-run filesystem workspace and returns its absolute path. Workflows cannot
 // create directories directly because Temporal workflows must stay deterministic,
 // so the side effect lives in PrepareWorkspace. The returned path is stored on
@@ -170,10 +181,38 @@ func (run *templateRunWorkflow) prepareLocalWorkspace() error {
 		return err
 	}
 	run.workspacePath = output.WorkspacePath
+	run.publicKey = output.PublicKey
 	return nil
 }
 
+// releaseKey asks the executor to drop the run's sealing key. It is best effort:
+// if the session already failed the executor is gone and its keys with it, and
+// the key ring evicts abandoned keys on its own.
+func (run *templateRunWorkflow) releaseKey() {
+	if run.publicKey == nil {
+		return
+	}
+	_ = workflow.ExecuteActivity(
+		run.sessionCtx,
+		domain.ReleaseRunKeyActivityName,
+		domain.ReleaseRunKeyActivityInput{TenantID: run.input.TenantID, RunID: run.input.RunID},
+	).Get(run.sessionCtx, nil)
+}
+
 func (run *templateRunWorkflow) fetchSource() error {
+	var token domain.SealSourceTokenActivityOutput
+	if err := workflow.ExecuteActivity(
+		run.ctx,
+		domain.SealSourceTokenActivityName,
+		domain.SealSourceTokenActivityInput{
+			RepoOwner: run.input.RepoOwner,
+			RepoName:  run.input.RepoName,
+			PublicKey: run.publicKey,
+		},
+	).Get(run.ctx, &token); err != nil {
+		return err
+	}
+
 	input := domain.FetchSourceActivityInput{
 		RunID:             run.input.RunID,
 		TenantID:          run.input.TenantID,
@@ -183,16 +222,12 @@ func (run *templateRunWorkflow) fetchSource() error {
 		SourceRef:         run.input.SelectedRef,
 		ResolvedCommitSHA: run.input.ResolvedCommitSHA,
 		RootPath:          run.input.RootPath,
+		SealedToken:       token.SealedToken,
+		FetchHint:         token.FetchHint,
 	}
 
-	// FetchSource resolves a GitHub App installation token before it ever
-	// invokes git, which can cost up to two API round trips at the client's
-	// HTTP timeout on top of the clone/checkout itself. A per-worker-process
-	// cache absorbs that cost after the first fetch for a repository, but the
-	// first run -- and every run immediately after a worker restart -- pays it
-	// in full, and the default one-minute budget below was sized for a bare
-	// git operation, not one with token resolution in front of it. This
-	// activity gets a longer budget of its own rather than raising the
+	// A clone of a large repository can outlast the default one-minute budget,
+	// so FetchSource gets a longer one of its own rather than raising the
 	// default for every other activity in the run.
 	fetchSourceCtx := workflow.WithActivityOptions(run.sessionCtx, workflow.ActivityOptions{
 		StartToCloseTimeout: 3 * time.Minute,
@@ -349,15 +384,31 @@ func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType
 		}
 	}
 
+	// Sealed for every command rather than once per run: credentials are read
+	// fresh each time, and an apply can start a day after its plan.
+	var credentials domain.SealRunCredentialsActivityOutput
+	if err := workflow.ExecuteActivity(
+		run.ctx,
+		domain.SealRunCredentialsActivityName,
+		domain.SealRunCredentialsActivityInput{
+			TenantID:        run.input.TenantID,
+			StackTemplateID: run.input.StackTemplateID,
+			PublicKey:       run.publicKey,
+		},
+	).Get(run.ctx, &credentials); err != nil {
+		return err
+	}
+
 	input := domain.RunTerraformActivityInput{
-		RunID:           run.input.RunID,
-		TenantID:        run.input.TenantID,
-		StackTemplateID: run.input.StackTemplateID,
-		WorkspacePath:   run.workspacePath,
-		TerraformPath:   run.terraformPath,
-		WorkspaceName:   run.input.WorkspaceName,
-		Command:         command,
-		ConfigJSON:      run.input.ConfigJSON,
+		RunID:             run.input.RunID,
+		TenantID:          run.input.TenantID,
+		StackTemplateID:   run.input.StackTemplateID,
+		WorkspacePath:     run.workspacePath,
+		TerraformPath:     run.terraformPath,
+		WorkspaceName:     run.input.WorkspaceName,
+		Command:           command,
+		ConfigJSON:        run.input.ConfigJSON,
+		SealedEnvironment: credentials.SealedEnvironment,
 	}
 
 	activityCtx, cancelActivity := workflow.WithCancel(run.sessionCtx)
@@ -379,10 +430,11 @@ func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType
 	cancelCh := workflow.GetSignalChannel(run.ctx, domain.CancelSignalName)
 	selector := workflow.NewSelector(run.ctx)
 
+	var output domain.RunTerraformActivityOutput
 	var activityErr error
 	var canceled bool
 	selector.AddFuture(future, func(f workflow.Future) {
-		activityErr = f.Get(run.ctx, nil)
+		activityErr = f.Get(run.ctx, &output)
 	})
 	selector.AddReceive(cancelCh, func(channel workflow.ReceiveChannel, _ bool) {
 		var signal domain.CancelSignal
@@ -399,13 +451,62 @@ func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType
 		return errTemplateRunCanceled
 	}
 	if activityErr != nil {
+		// A failed command's log is what explains the failure, so it is recorded
+		// before the error propagates.
+		if log, ok := failedCommandLog(activityErr); ok {
+			if err := run.recordLog(log); err != nil {
+				return fmt.Errorf("%w (also failed to record its log: %v)", activityErr, err)
+			}
+		}
 		return activityErr
+	}
+	if err := run.recordLog(output.Log); err != nil {
+		return err
 	}
 
 	if statuses.after != "" {
 		return run.recordStatus(statuses.after)
 	}
 	return nil
+}
+
+// recordLog hands the metadata of a log the executor uploaded to the control
+// plane, which owns the database. A command that uploaded nothing is skipped.
+//
+// The identity is taken from the workflow's own input, never from the returned
+// metadata. RunTerraform runs on the data plane, so everything it returns is
+// attacker-controlled once an executor is compromised, and
+// RecordTemplateRunLog upserts on (tenant_id, run_id, phase) while checking
+// only that the run exists — not that it is this run. A log claiming another
+// tenant's run would therefore repoint that run's object_key.
+//
+// On the honest path this overwrites nothing: PutTemplateRunLog derives both
+// fields from the activity input the workflow supplied.
+func (run *templateRunWorkflow) recordLog(log domain.TemplateRunLog) error {
+	if log.ObjectKey == "" {
+		return nil
+	}
+	log.TenantID = run.input.TenantID
+	log.RunID = run.input.RunID
+	return workflow.ExecuteActivity(
+		run.ctx,
+		domain.RecordTemplateRunLogActivityName,
+		log,
+	).Get(run.ctx, nil)
+}
+
+// failedCommandLog recovers the log metadata RunTerraform attaches to a command
+// failure whose log was already uploaded.
+func failedCommandLog(err error) (domain.TemplateRunLog, bool) {
+	var applicationErr *temporal.ApplicationError
+	if !errors.As(err, &applicationErr) || applicationErr.Type() != domain.TerraformCommandFailedErrorType || !applicationErr.HasDetails() {
+		return domain.TemplateRunLog{}, false
+	}
+	var log domain.TemplateRunLog
+	if err := applicationErr.Details(&log); err != nil {
+		return domain.TemplateRunLog{}, false
+	}
+	return log, true
 }
 
 func (run *templateRunWorkflow) recordStatus(status domain.TemplateRunStatus) error {

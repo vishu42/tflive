@@ -13,13 +13,15 @@ import (
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/githubapp"
 	gitrunner "github.com/vishu42/tflive/internal/runner"
+	"github.com/vishu42/tflive/internal/runseal"
+	"go.temporal.io/sdk/temporal"
 )
 
 func TestRecordTemplateRunStatusDelegatesToRecorder(t *testing.T) {
 	t.Parallel()
 
 	recorder := &recordingStatusRecorder{}
-	activities := NewTemplateRunActivities(recorder, t.TempDir())
+	activities := NewControlActivities(&controlStoreStub{status: recorder}, nil)
 	input := domain.TemplateRunStatusActivityInput{
 		RunID:           domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
@@ -41,7 +43,7 @@ func TestRecordTemplateRunStatusWrapsRecorderError(t *testing.T) {
 	t.Parallel()
 
 	recorderErr := errors.New("database unavailable")
-	activities := NewTemplateRunActivities(&recordingStatusRecorder{err: recorderErr}, t.TempDir())
+	activities := NewControlActivities(&controlStoreStub{status: &recordingStatusRecorder{err: recorderErr}}, nil)
 
 	err := activities.RecordTemplateRunStatus(context.Background(), domain.TemplateRunStatusActivityInput{
 		RunID:    domain.TemplateRunID("run_123"),
@@ -60,7 +62,7 @@ func TestPrepareWorkspaceCreatesRunDirectory(t *testing.T) {
 	t.Parallel()
 
 	runRoot := t.TempDir()
-	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, runRoot)
+	activities := NewTemplateRunActivities(runRoot, nil, nil)
 	input := domain.PrepareWorkspaceActivityInput{
 		RunID:    domain.TemplateRunID("run_123"),
 		TenantID: domain.TenantID("tenant_123"),
@@ -87,7 +89,7 @@ func TestPrepareWorkspaceCreatesRunDirectory(t *testing.T) {
 func TestPrepareWorkspaceRejectsEmptyRoot(t *testing.T) {
 	t.Parallel()
 
-	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, "")
+	activities := NewTemplateRunActivities("", nil, nil)
 
 	_, err := activities.PrepareWorkspace(context.Background(), domain.PrepareWorkspaceActivityInput{
 		RunID:    domain.TemplateRunID("run_123"),
@@ -104,7 +106,7 @@ func TestPrepareWorkspaceRejectsEmptyRoot(t *testing.T) {
 func TestPrepareWorkspaceRejectsUnsafePathComponents(t *testing.T) {
 	t.Parallel()
 
-	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, t.TempDir())
+	activities := NewTemplateRunActivities(t.TempDir(), nil, nil)
 
 	_, err := activities.PrepareWorkspace(context.Background(), domain.PrepareWorkspaceActivityInput{
 		RunID:    domain.TemplateRunID("run_123"),
@@ -128,7 +130,6 @@ func TestFetchSourceChecksOutTheResolvedCommitRatherThanTheRef(t *testing.T) {
 	workspacePath := t.TempDir()
 	git := &recordingSourceGitRunner{}
 	activities := &TemplateRunActivities{
-		recorder:        &recordingStatusRecorder{},
 		runRoot:         t.TempDir(),
 		terraformRunner: &recordingTerraformRunner{},
 		git:             git,
@@ -178,7 +179,6 @@ func TestFetchSourceFallsBackToTheRefWhenNoCommitWasResolved(t *testing.T) {
 	workspacePath := t.TempDir()
 	git := &recordingSourceGitRunner{}
 	activities := &TemplateRunActivities{
-		recorder:        &recordingStatusRecorder{},
 		runRoot:         t.TempDir(),
 		terraformRunner: &recordingTerraformRunner{},
 		git:             git,
@@ -214,7 +214,6 @@ func TestFetchSourceRejectsUnsafeRootPath(t *testing.T) {
 
 	git := &recordingSourceGitRunner{}
 	activities := &TemplateRunActivities{
-		recorder:        &recordingStatusRecorder{},
 		runRoot:         t.TempDir(),
 		terraformRunner: &recordingTerraformRunner{},
 		git:             git,
@@ -241,7 +240,7 @@ func TestRunTerraformDelegatesToRunner(t *testing.T) {
 	t.Parallel()
 
 	runner := &recordingTerraformRunner{}
-	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, t.TempDir(), runner)
+	activities := NewTemplateRunActivities(t.TempDir(), nil, nil, runner)
 	input := domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
 		TenantID:      domain.TenantID("tenant_123"),
@@ -250,12 +249,69 @@ func TestRunTerraformDelegatesToRunner(t *testing.T) {
 		Command:       domain.TerraformCommandPlan,
 	}
 
-	if err := activities.RunTerraform(context.Background(), input); err != nil {
+	output, err := activities.RunTerraform(context.Background(), input)
+	if err != nil {
 		t.Fatalf("RunTerraform returned error: %v", err)
 	}
 
 	if !reflect.DeepEqual(runner.input, input) {
 		t.Fatalf("runner input = %#v, want %#v", runner.input, input)
+	}
+	if output.Log != runner.log {
+		t.Fatalf("output log = %#v, want %#v", output.Log, runner.log)
+	}
+}
+
+func TestRecordTemplateRunLogDelegatesToRecorder(t *testing.T) {
+	t.Parallel()
+
+	recorder := &recordingLogMetadataRecorder{}
+	log := domain.TemplateRunLog{TenantID: "tenant_123", RunID: "run_123", Phase: "plan", ObjectKey: "tenants/tenant_123/runs/run_123/logs/plan.log"}
+
+	if err := NewControlActivities(&controlStoreStub{logs: recorder}, nil).RecordTemplateRunLog(context.Background(), log); err != nil {
+		t.Fatalf("RecordTemplateRunLog returned error: %v", err)
+	}
+	if recorder.log != log {
+		t.Fatalf("recorded log = %#v, want %#v", recorder.log, log)
+	}
+
+	recorder.err = errors.New("database unavailable")
+	err := NewControlActivities(&controlStoreStub{logs: recorder}, nil).RecordTemplateRunLog(context.Background(), log)
+	if !errors.Is(err, recorder.err) || !strings.Contains(err.Error(), "record template run log metadata") {
+		t.Fatalf("error = %v, want wrapped recorder error", err)
+	}
+}
+
+// A failed command's log is what explains the failure, so it must reach the
+// workflow even though the activity errored: as ApplicationError details.
+func TestRunTerraformAttachesUploadedLogToCommandFailure(t *testing.T) {
+	t.Parallel()
+
+	runnerErr := errors.New("terraform failed")
+	log := domain.TemplateRunLog{TenantID: "tenant_123", RunID: "run_123", Phase: "apply", ObjectKey: "tenants/tenant_123/runs/run_123/logs/apply.log"}
+	activities := NewTemplateRunActivities(t.TempDir(), nil, nil, &recordingTerraformRunner{log: log, err: runnerErr})
+
+	_, err := activities.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+		RunID:    domain.TemplateRunID("run_123"),
+		TenantID: domain.TenantID("tenant_123"),
+		Command:  domain.TerraformCommandApply,
+	})
+	var applicationErr *temporal.ApplicationError
+	if !errors.As(err, &applicationErr) {
+		t.Fatalf("error = %T %v, want *temporal.ApplicationError", err, err)
+	}
+	if applicationErr.Type() != domain.TerraformCommandFailedErrorType {
+		t.Fatalf("error type = %q, want %q", applicationErr.Type(), domain.TerraformCommandFailedErrorType)
+	}
+	if !errors.Is(err, runnerErr) || !strings.Contains(err.Error(), "run terraform") {
+		t.Fatalf("error = %v, want run terraform context wrapping runnerErr", err)
+	}
+	var got domain.TemplateRunLog
+	if err := applicationErr.Details(&got); err != nil {
+		t.Fatalf("Details returned error: %v", err)
+	}
+	if got != log {
+		t.Fatalf("details log = %#v, want %#v", got, log)
 	}
 }
 
@@ -271,7 +327,7 @@ func TestLocalTerraformRunnerWritesCommandLogFile(t *testing.T) {
 		runner: gitrunner.NewLocalProcessRunnerWithExecutor(executor),
 	}
 
-	err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+	log, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
 		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
@@ -289,6 +345,9 @@ func TestLocalTerraformRunnerWritesCommandLogFile(t *testing.T) {
 	}
 	if string(got) != "plan stdout\nplan stderr\n" {
 		t.Fatalf("plan log = %q", string(got))
+	}
+	if log != (domain.TemplateRunLog{}) {
+		t.Fatalf("log = %#v, want none without a log store", log)
 	}
 	if !reflect.DeepEqual(executor.env, []string{"TF_VAR_region=us-east-1"}) {
 		t.Fatalf("env = %#v, want TF_VAR_region", executor.env)
@@ -309,7 +368,7 @@ func TestLocalTerraformRunnerUploadsCommandLogFile(t *testing.T) {
 		logStore: logStore,
 	}
 
-	err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+	log, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
 		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
@@ -332,6 +391,9 @@ func TestLocalTerraformRunnerUploadsCommandLogFile(t *testing.T) {
 	if logStore.content != "plan stdout\nplan stderr\n" {
 		t.Fatalf("uploaded content = %q", logStore.content)
 	}
+	if log != logStore.returned {
+		t.Fatalf("log = %#v, want the uploaded metadata %#v", log, logStore.returned)
+	}
 }
 
 func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
@@ -349,7 +411,7 @@ func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
 		logStore: logStore,
 	}
 
-	err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+	log, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
 		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
@@ -362,15 +424,18 @@ func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
 	if logStore.content != "plan stdout before failure\n" {
 		t.Fatalf("uploaded content = %q", logStore.content)
 	}
+	if log != logStore.returned {
+		t.Fatalf("log = %#v, want the uploaded metadata alongside the error", log)
+	}
 }
 
 func TestRunTerraformWrapsRunnerError(t *testing.T) {
 	t.Parallel()
 
 	runnerErr := errors.New("terraform failed")
-	activities := NewTemplateRunActivities(&recordingStatusRecorder{}, t.TempDir(), &recordingTerraformRunner{err: runnerErr})
+	activities := NewTemplateRunActivities(t.TempDir(), nil, nil, &recordingTerraformRunner{err: runnerErr})
 
-	err := activities.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+	_, err := activities.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
 		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
@@ -397,12 +462,23 @@ func (recorder *recordingStatusRecorder) RecordTemplateRunStatus(_ context.Conte
 
 type recordingTerraformRunner struct {
 	input domain.RunTerraformActivityInput
+	log   domain.TemplateRunLog
 	err   error
 }
 
-func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input domain.RunTerraformActivityInput) error {
+func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input domain.RunTerraformActivityInput) (domain.TemplateRunLog, error) {
 	runner.input = input
-	return runner.err
+	return runner.log, runner.err
+}
+
+type recordingLogMetadataRecorder struct {
+	log domain.TemplateRunLog
+	err error
+}
+
+func (recorder *recordingLogMetadataRecorder) RecordTemplateRunLog(_ context.Context, log domain.TemplateRunLog) error {
+	recorder.log = log
+	return recorder.err
 }
 
 type recordingSourceGitRunner struct {
@@ -445,19 +521,21 @@ type recordingTemplateRunLogStore struct {
 	runID    domain.TemplateRunID
 	phase    string
 	content  string
+	returned domain.TemplateRunLog
 	err      error
 }
 
-func (store *recordingTemplateRunLogStore) PutTemplateRunLog(_ context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string, body io.Reader) error {
+func (store *recordingTemplateRunLogStore) PutTemplateRunLog(_ context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, phase string, body io.Reader) (domain.TemplateRunLog, error) {
 	store.tenantID = tenantID
 	store.runID = runID
 	store.phase = phase
 	content, err := io.ReadAll(body)
 	if err != nil {
-		return err
+		return domain.TemplateRunLog{}, err
 	}
 	store.content = string(content)
-	return store.err
+	store.returned = domain.TemplateRunLog{TenantID: tenantID, RunID: runID, Phase: phase, ObjectKey: "logs/" + phase + ".log", SizeBytes: int64(len(content))}
+	return store.returned, store.err
 }
 
 type recordingCommandExecutor struct {
@@ -478,58 +556,71 @@ func (executor *recordingCommandExecutor) Run(_ context.Context, _ string, env [
 	return executor.err
 }
 
+// fetchWithSealedToken drives a run's source fetch across the plane split: the
+// control plane resolves and seals the token to a key the executor generated,
+// then the executor opens it and checks out.
+func fetchWithSealedToken(t *testing.T, tokens GitHubTokenSource, git gitrunner.GitRunner, owner string, repo string) error {
+	t.Helper()
+
+	keys := runseal.NewKeyRing()
+	publicKey, err := keys.Generate(domain.RunKeyID("tenant_123", "run_123"))
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	sealed, err := NewControlActivities(nil, tokens).SealSourceToken(context.Background(), domain.SealSourceTokenActivityInput{
+		RepoOwner: owner,
+		RepoName:  repo,
+		PublicKey: publicKey,
+	})
+	if err != nil {
+		t.Fatalf("SealSourceToken returned error: %v", err)
+	}
+	if strings.Contains(string(sealed.SealedToken), "ghs_") {
+		t.Fatal("sealed token contains the plaintext token")
+	}
+
+	executor := &TemplateRunActivities{
+		runRoot:         t.TempDir(),
+		terraformRunner: &recordingTerraformRunner{},
+		git:             git,
+		keys:            keys,
+	}
+	_, err = executor.FetchSource(context.Background(), domain.FetchSourceActivityInput{
+		TenantID:          "tenant_123",
+		RunID:             "run_123",
+		WorkspacePath:     t.TempDir(),
+		RepoOwner:         owner,
+		RepoName:          repo,
+		ResolvedCommitSHA: "a1b2c3d",
+		RootPath:          "modules/vpc",
+		SealedToken:       sealed.SealedToken,
+		FetchHint:         sealed.FetchHint,
+	})
+	return err
+}
+
 // A run's checkout needs the credential just as a registration's clone does;
 // this is the path that feeds Terraform.
 func TestFetchSourcePassesInstallationTokenToCheckout(t *testing.T) {
 	t.Parallel()
 
 	git := &recordingSourceGitRunner{}
-	activities := &TemplateRunActivities{
-		recorder:        &recordingStatusRecorder{},
-		runRoot:         t.TempDir(),
-		terraformRunner: &recordingTerraformRunner{},
-		git:             git,
-		tokens:          stubTokenSource{token: "ghs_minted"},
-	}
-
-	if _, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
-		WorkspacePath:     t.TempDir(),
-		RepoOwner:         "acme",
-		RepoName:          "private-infra",
-		ResolvedCommitSHA: "a1b2c3d",
-		RootPath:          "modules/vpc",
-	}); err != nil {
+	if err := fetchWithSealedToken(t, stubTokenSource{token: "ghs_minted"}, git, "acme", "private-infra"); err != nil {
 		t.Fatalf("FetchSource returned error: %v", err)
 	}
-
 	if git.credential != gitrunner.NewGitCredential("ghs_minted") {
 		t.Fatal("checkout did not receive the installation credential")
 	}
 }
 
-// A missing installation is not itself a failure -- see the doc comment on
-// repoCredential's call site in FetchSource. The checkout still goes ahead
-// unauthenticated, and only once that checkout fails for its own reason does
-// the missing installation become the user's problem.
+// A missing installation is not itself a failure. The checkout still goes
+// ahead unauthenticated, and only once that checkout fails for its own reason
+// does the missing installation become the user's problem.
 func TestFetchSourceReportsUninstalledApp(t *testing.T) {
 	t.Parallel()
 
 	checkoutErr := errors.New("authentication required")
-	activities := &TemplateRunActivities{
-		recorder:        &recordingStatusRecorder{},
-		runRoot:         t.TempDir(),
-		terraformRunner: &recordingTerraformRunner{},
-		git:             &recordingSourceGitRunner{err: checkoutErr},
-		tokens:          stubTokenSource{err: githubapp.ErrAppNotInstalled},
-	}
-
-	_, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
-		WorkspacePath:     t.TempDir(),
-		RepoOwner:         "acme",
-		RepoName:          "private-infra",
-		ResolvedCommitSHA: "a1b2c3d",
-		RootPath:          "modules/vpc",
-	})
+	err := fetchWithSealedToken(t, stubTokenSource{err: githubapp.ErrAppNotInstalled}, &recordingSourceGitRunner{err: checkoutErr}, "acme", "private-infra")
 	if !errors.Is(err, checkoutErr) {
 		t.Fatalf("error = %v, want it to wrap the underlying checkout failure", err)
 	}
@@ -543,28 +634,14 @@ func TestFetchSourceReportsUninstalledApp(t *testing.T) {
 
 // The regression this guards: configuring a GitHub App must not break
 // fetching source from a public repository it was never installed on. A 404
-// from the installation lookup cannot be told apart from that case, so
-// FetchSource must fall back to an unauthenticated checkout and succeed
-// exactly as it would with no token source configured at all.
+// from the installation lookup cannot be told apart from that case, so the
+// fetch must fall back to an unauthenticated checkout and succeed exactly as it
+// would with no token source configured at all.
 func TestFetchSourceSucceedsWithZeroCredentialWhenAppNotInstalled(t *testing.T) {
 	t.Parallel()
 
 	git := &recordingSourceGitRunner{}
-	activities := &TemplateRunActivities{
-		recorder:        &recordingStatusRecorder{},
-		runRoot:         t.TempDir(),
-		terraformRunner: &recordingTerraformRunner{},
-		git:             git,
-		tokens:          stubTokenSource{err: githubapp.ErrAppNotInstalled},
-	}
-
-	if _, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
-		WorkspacePath:     t.TempDir(),
-		RepoOwner:         "hashicorp",
-		RepoName:          "terraform-aws-modules",
-		ResolvedCommitSHA: "a1b2c3d",
-		RootPath:          "modules/vpc",
-	}); err != nil {
+	if err := fetchWithSealedToken(t, stubTokenSource{err: githubapp.ErrAppNotInstalled}, git, "hashicorp", "terraform-aws-modules"); err != nil {
 		t.Fatalf("FetchSource returned error: %v", err)
 	}
 	if git.credential != (gitrunner.GitCredential{}) {
@@ -572,28 +649,14 @@ func TestFetchSourceSucceedsWithZeroCredentialWhenAppNotInstalled(t *testing.T) 
 	}
 }
 
-// The same for a run's checkout: a GitHub API failure that is not a missing
-// installation must not fail a run against a public repository, which never
-// needed the token the lookup failed to produce.
+// The same for a GitHub API failure that is not a missing installation: it must
+// not fail a run against a public repository, which never needed the token.
 func TestFetchSourceSucceedsWithZeroCredentialWhenTokenLookupFails(t *testing.T) {
 	t.Parallel()
 
 	git := &recordingSourceGitRunner{}
-	activities := &TemplateRunActivities{
-		recorder:        &recordingStatusRecorder{},
-		runRoot:         t.TempDir(),
-		terraformRunner: &recordingTerraformRunner{},
-		git:             git,
-		tokens:          stubTokenSource{err: errors.New("resolve installation: unexpected status 503 Service Unavailable")},
-	}
-
-	if _, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
-		WorkspacePath:     t.TempDir(),
-		RepoOwner:         "hashicorp",
-		RepoName:          "terraform-aws-modules",
-		ResolvedCommitSHA: "a1b2c3d",
-		RootPath:          "modules/vpc",
-	}); err != nil {
+	tokens := stubTokenSource{err: errors.New("resolve installation: unexpected status 503 Service Unavailable")}
+	if err := fetchWithSealedToken(t, tokens, git, "hashicorp", "terraform-aws-modules"); err != nil {
 		t.Fatalf("FetchSource returned error: %v", err)
 	}
 	if git.credential != (gitrunner.GitCredential{}) {
@@ -608,21 +671,7 @@ func TestFetchSourceReportsTokenLookupFailure(t *testing.T) {
 
 	checkoutErr := errors.New("authentication required")
 	lookupErr := errors.New("resolve installation: unexpected status 503 Service Unavailable")
-	activities := &TemplateRunActivities{
-		recorder:        &recordingStatusRecorder{},
-		runRoot:         t.TempDir(),
-		terraformRunner: &recordingTerraformRunner{},
-		git:             &recordingSourceGitRunner{err: checkoutErr},
-		tokens:          stubTokenSource{err: lookupErr},
-	}
-
-	_, err := activities.FetchSource(context.Background(), domain.FetchSourceActivityInput{
-		WorkspacePath:     t.TempDir(),
-		RepoOwner:         "acme",
-		RepoName:          "private-infra",
-		ResolvedCommitSHA: "a1b2c3d",
-		RootPath:          "modules/vpc",
-	})
+	err := fetchWithSealedToken(t, stubTokenSource{err: lookupErr}, &recordingSourceGitRunner{err: checkoutErr}, "acme", "private-infra")
 	if !errors.Is(err, checkoutErr) {
 		t.Fatalf("error = %v, want it to wrap the underlying checkout failure", err)
 	}
@@ -632,4 +681,123 @@ func TestFetchSourceReportsTokenLookupFailure(t *testing.T) {
 	if strings.Contains(err.Error(), "not installed") {
 		t.Fatalf("error = %v, must not blame a missing installation for an API failure", err)
 	}
+}
+
+// With no App configured the fetch is unauthenticated and needs no hint.
+func TestFetchSourceWithoutTokenSourceIsUnauthenticated(t *testing.T) {
+	t.Parallel()
+
+	git := &recordingSourceGitRunner{}
+	if err := fetchWithSealedToken(t, nil, git, "hashicorp", "terraform-aws-modules"); err != nil {
+		t.Fatalf("FetchSource returned error: %v", err)
+	}
+	if git.credential != (gitrunner.GitCredential{}) {
+		t.Fatal("checkout received a credential with no token source configured")
+	}
+}
+
+// Credentials reach Terraform only through the run's key: sealed on the control
+// plane, opened on the executor, never present in plaintext in between.
+func TestRunCredentialsRoundTripThroughTheRunKey(t *testing.T) {
+	t.Parallel()
+
+	keys := runseal.NewKeyRing()
+	publicKey, err := keys.Generate(domain.RunKeyID("tenant_123", "run_123"))
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	store := &controlStoreStub{credentials: []domain.CredentialSet{
+		{StackID: "stack_123", Name: "AWS_SECRET_ACCESS_KEY", Ciphertext: "canary-7f3a"},
+	}}
+	sealed, err := NewControlActivities(store, nil).SealRunCredentials(context.Background(), domain.SealRunCredentialsActivityInput{
+		TenantID:        "tenant_123",
+		StackTemplateID: "stack_template_123",
+		PublicKey:       publicKey,
+	})
+	if err != nil {
+		t.Fatalf("SealRunCredentials returned error: %v", err)
+	}
+	if strings.Contains(string(sealed.SealedEnvironment), "canary-7f3a") {
+		t.Fatal("sealed environment contains the plaintext credential")
+	}
+
+	runner := &recordingTerraformRunner{}
+	executor := NewTemplateRunActivities(t.TempDir(), nil, keys, runner)
+	if _, err := executor.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+		TenantID:          "tenant_123",
+		RunID:             "run_123",
+		Command:           domain.TerraformCommandPlan,
+		SealedEnvironment: sealed.SealedEnvironment,
+	}); err != nil {
+		t.Fatalf("RunTerraform returned error: %v", err)
+	}
+	if runner.input.Environment["AWS_SECRET_ACCESS_KEY"] != "decrypted:canary-7f3a" {
+		t.Fatalf("terraform environment = %v, want the opened credential", runner.input.Environment)
+	}
+
+	// After release, the same sealed value is unreadable.
+	if err := executor.ReleaseRunKey(context.Background(), domain.ReleaseRunKeyActivityInput{TenantID: "tenant_123", RunID: "run_123"}); err != nil {
+		t.Fatalf("ReleaseRunKey returned error: %v", err)
+	}
+	_, err = executor.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+		TenantID:          "tenant_123",
+		RunID:             "run_123",
+		Command:           domain.TerraformCommandPlan,
+		SealedEnvironment: sealed.SealedEnvironment,
+	})
+	if !errors.Is(err, runseal.ErrNoKey) {
+		t.Fatalf("error after release = %v, want runseal.ErrNoKey", err)
+	}
+}
+
+// PrepareWorkspace hands back the key the run's secrets get sealed to.
+func TestPrepareWorkspaceReturnsRunPublicKey(t *testing.T) {
+	t.Parallel()
+
+	keys := runseal.NewKeyRing()
+	output, err := NewTemplateRunActivities(t.TempDir(), nil, keys).PrepareWorkspace(context.Background(), domain.PrepareWorkspaceActivityInput{
+		TenantID: "tenant_123",
+		RunID:    "run_123",
+	})
+	if err != nil {
+		t.Fatalf("PrepareWorkspace returned error: %v", err)
+	}
+	sealed, err := runseal.Seal(output.PublicKey, "value")
+	if err != nil {
+		t.Fatalf("Seal returned error: %v", err)
+	}
+	var opened string
+	if err := keys.Open(domain.RunKeyID("tenant_123", "run_123"), sealed, &opened); err != nil || opened != "value" {
+		t.Fatalf("Open = %q, %v; want the key PrepareWorkspace returned to open", opened, err)
+	}
+}
+
+// controlStoreStub satisfies ControlStore, delegating the writes to recorders a
+// test cares about.
+type controlStoreStub struct {
+	credentials []domain.CredentialSet
+	status      *recordingStatusRecorder
+	logs        *recordingLogMetadataRecorder
+}
+
+func (store *controlStoreStub) RecordTemplateRunStatus(ctx context.Context, input domain.TemplateRunStatusActivityInput) error {
+	if store.status == nil {
+		return nil
+	}
+	return store.status.RecordTemplateRunStatus(ctx, input)
+}
+
+func (store *controlStoreStub) RecordTemplateRunLog(ctx context.Context, log domain.TemplateRunLog) error {
+	if store.logs == nil {
+		return nil
+	}
+	return store.logs.RecordTemplateRunLog(ctx, log)
+}
+
+func (store *controlStoreStub) ListCredentialsForStackTemplate(context.Context, domain.TenantID, domain.StackTemplateID) ([]domain.CredentialSet, error) {
+	return store.credentials, nil
+}
+
+func (*controlStoreStub) Decrypt(value string) (string, error) {
+	return "decrypted:" + value, nil
 }

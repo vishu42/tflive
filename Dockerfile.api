@@ -8,7 +8,9 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/tflive-api ./cmd/a
 
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates \
+# git: template sync clones repositories, and it runs in the API's control-plane
+# worker.
+RUN apk add --no-cache ca-certificates git \
     && addgroup -S tflive \
     && adduser -S -D -H -G tflive tflive \
     && mkdir -p /var/lib/tflive/artifacts \

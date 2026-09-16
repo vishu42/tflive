@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -24,10 +25,6 @@ func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 			return " localhost:7233 "
 		case "TEMPORAL_NAMESPACE":
 			return " tflive "
-		case "TEMPORAL_TASK_QUEUE":
-			return " terraform-runs-dev "
-		case "WORKER_RUN_ROOT":
-			return " /var/lib/tflive/runs "
 		case "ARTIFACT_STORE_KIND":
 			return " s3 "
 		case "ARTIFACT_STORE_FILESYSTEM_ROOT":
@@ -64,19 +61,13 @@ func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
 	if cfg.TemporalNamespace != "tflive" {
 		t.Fatalf("TemporalNamespace = %q", cfg.TemporalNamespace)
 	}
-	if cfg.TemporalTaskQueue != "terraform-runs-dev" {
-		t.Fatalf("TemporalTaskQueue = %q", cfg.TemporalTaskQueue)
-	}
-	if cfg.WorkerRunRoot != "/var/lib/tflive/runs" {
-		t.Fatalf("WorkerRunRoot = %q, want /var/lib/tflive/runs", cfg.WorkerRunRoot)
-	}
 	if cfg.Security.TenantID != "tenant_123" {
 		t.Fatalf("Security.TenantID = %q, want tenant_123", cfg.Security.TenantID)
 	}
 	assertArtifactStoreConfig(t, cfg.ArtifactStore)
 }
 
-func TestLoadAPIConfigDefaultsTemporalTaskQueue(t *testing.T) {
+func TestLoadAPIConfigAppliesDefaults(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := LoadAPIConfig(withValidSecurity(func(key string) string {
@@ -99,17 +90,11 @@ func TestLoadAPIConfigDefaultsTemporalTaskQueue(t *testing.T) {
 		t.Fatalf("LoadAPIConfig returned error: %v", err)
 	}
 
-	if cfg.TemporalTaskQueue != DefaultTemporalTaskQueue {
-		t.Fatalf("TemporalTaskQueue = %q, want %q", cfg.TemporalTaskQueue, DefaultTemporalTaskQueue)
-	}
 	if cfg.HTTPAddress != DefaultHTTPAddress {
 		t.Fatalf("HTTPAddress = %q, want %q", cfg.HTTPAddress, DefaultHTTPAddress)
 	}
 	if cfg.TemporalNamespace != "" {
 		t.Fatalf("TemporalNamespace = %q, want empty", cfg.TemporalNamespace)
-	}
-	if cfg.WorkerRunRoot != DefaultWorkerRunRoot {
-		t.Fatalf("WorkerRunRoot = %q, want %q", cfg.WorkerRunRoot, DefaultWorkerRunRoot)
 	}
 	if cfg.ArtifactStore.Kind != ArtifactStoreFilesystem {
 		t.Fatalf("ArtifactStore.Kind = %q, want %q", cfg.ArtifactStore.Kind, ArtifactStoreFilesystem)
@@ -142,134 +127,6 @@ func TestLoadAPIConfigRequiresTemporalAddress(t *testing.T) {
 		}
 		return ""
 	}))
-	if !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("error = %v, want ErrInvalidConfig", err)
-	}
-}
-
-func TestLoadWorkerConfigReadsWorkerSettings(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := LoadWorkerConfig(func(key string) string {
-		switch key {
-		case "DATABASE_URL":
-			return " postgres://user:pass@localhost:5432/db?sslmode=disable "
-		case "TEMPORAL_ADDRESS":
-			return " localhost:7233 "
-		case "TEMPORAL_NAMESPACE":
-			return " tflive "
-		case "TEMPORAL_TASK_QUEUE":
-			return " terraform-runs-dev "
-		case "WORKER_RUN_ROOT":
-			return " /var/lib/tflive/runs "
-		case "ARTIFACT_STORE_KIND":
-			return " s3 "
-		case "ARTIFACT_STORE_FILESYSTEM_ROOT":
-			return " /var/lib/tflive/artifacts "
-		case "S3_BUCKET":
-			return " tflive-artifacts "
-		case "S3_REGION":
-			return " us-east-1 "
-		case "S3_ENDPOINT":
-			return " https://s3.us-east-1.amazonaws.com "
-		case "S3_ACCESS_KEY_ID":
-			return " access-key "
-		case "S3_SECRET_ACCESS_KEY":
-			return " secret-key "
-		case "S3_FORCE_PATH_STYLE":
-			return " true "
-		case "OPENFGA_API_URL":
-			return "http://localhost:8080"
-		case "OPENFGA_STORE_ID":
-			return "store-id"
-		case "OPENFGA_MODEL_ID":
-			return "model-id"
-		default:
-			return ""
-		}
-	})
-	if err != nil {
-		t.Fatalf("LoadWorkerConfig returned error: %v", err)
-	}
-
-	if cfg.DatabaseURL != "postgres://user:pass@localhost:5432/db?sslmode=disable" {
-		t.Fatalf("DatabaseURL = %q", cfg.DatabaseURL)
-	}
-	if cfg.TemporalAddress != "localhost:7233" {
-		t.Fatalf("TemporalAddress = %q", cfg.TemporalAddress)
-	}
-	if cfg.TemporalNamespace != "tflive" {
-		t.Fatalf("TemporalNamespace = %q", cfg.TemporalNamespace)
-	}
-	if cfg.TemporalTaskQueue != "terraform-runs-dev" {
-		t.Fatalf("TemporalTaskQueue = %q, want terraform-runs-dev", cfg.TemporalTaskQueue)
-	}
-	if cfg.WorkerRunRoot != "/var/lib/tflive/runs" {
-		t.Fatalf("WorkerRunRoot = %q, want /var/lib/tflive/runs", cfg.WorkerRunRoot)
-	}
-	assertArtifactStoreConfig(t, cfg.ArtifactStore)
-}
-
-func TestLoadWorkerConfigDefaultsTemporalTaskQueue(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := LoadWorkerConfig(func(key string) string {
-		switch key {
-		case "DATABASE_URL":
-			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
-		case "TEMPORAL_ADDRESS":
-			return "localhost:7233"
-		case "OPENFGA_API_URL":
-			return "http://localhost:8080"
-		case "OPENFGA_STORE_ID":
-			return "store-id"
-		case "OPENFGA_MODEL_ID":
-			return "model-id"
-		default:
-			return ""
-		}
-	})
-	if err != nil {
-		t.Fatalf("LoadWorkerConfig returned error: %v", err)
-	}
-
-	if cfg.TemporalTaskQueue != DefaultTemporalTaskQueue {
-		t.Fatalf("TemporalTaskQueue = %q, want %q", cfg.TemporalTaskQueue, DefaultTemporalTaskQueue)
-	}
-	if cfg.TemporalNamespace != "" {
-		t.Fatalf("TemporalNamespace = %q, want empty", cfg.TemporalNamespace)
-	}
-	if cfg.WorkerRunRoot != DefaultWorkerRunRoot {
-		t.Fatalf("WorkerRunRoot = %q, want %q", cfg.WorkerRunRoot, DefaultWorkerRunRoot)
-	}
-	if cfg.ArtifactStore.Kind != ArtifactStoreFilesystem {
-		t.Fatalf("ArtifactStore.Kind = %q, want %q", cfg.ArtifactStore.Kind, ArtifactStoreFilesystem)
-	}
-	if cfg.ArtifactStore.FilesystemRoot != DefaultArtifactStoreFilesystemRoot {
-		t.Fatalf("ArtifactStore.FilesystemRoot = %q, want %q", cfg.ArtifactStore.FilesystemRoot, DefaultArtifactStoreFilesystemRoot)
-	}
-}
-
-func TestLoadWorkerConfigRequiresTemporalAddress(t *testing.T) {
-	t.Parallel()
-
-	_, err := LoadWorkerConfig(func(string) string {
-		return ""
-	})
-	if !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("error = %v, want ErrInvalidConfig", err)
-	}
-}
-
-func TestLoadWorkerConfigRequiresDatabaseURL(t *testing.T) {
-	t.Parallel()
-
-	_, err := LoadWorkerConfig(func(key string) string {
-		if key == "TEMPORAL_ADDRESS" {
-			return "localhost:7233"
-		}
-		return ""
-	})
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("error = %v, want ErrInvalidConfig", err)
 	}
@@ -339,61 +196,6 @@ func TestLoadAPIConfigRejectsMalformedCredentialEncryptionKey(t *testing.T) {
 	}
 }
 
-func TestLoadWorkerConfigAcceptsValidCredentialEncryptionKey(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := LoadWorkerConfig(func(key string) string {
-		switch key {
-		case "DATABASE_URL":
-			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
-		case "TEMPORAL_ADDRESS":
-			return "localhost:7233"
-		case "OPENFGA_API_URL":
-			return "http://localhost:8080"
-		case "OPENFGA_STORE_ID":
-			return "store-id"
-		case "OPENFGA_MODEL_ID":
-			return "model-id"
-		case "CREDENTIAL_ENCRYPTION_KEY":
-			return "01234567890123456789012345678901"
-		default:
-			return ""
-		}
-	})
-	if err != nil {
-		t.Fatalf("LoadWorkerConfig returned error: %v", err)
-	}
-	if cfg.CredentialEncryptionKey.Value() != "01234567890123456789012345678901" {
-		t.Fatalf("CredentialEncryptionKey.Value() = %q", cfg.CredentialEncryptionKey.Value())
-	}
-}
-
-func TestLoadWorkerConfigRejectsMalformedCredentialEncryptionKey(t *testing.T) {
-	t.Parallel()
-
-	_, err := LoadWorkerConfig(func(key string) string {
-		switch key {
-		case "DATABASE_URL":
-			return "postgres://user:pass@localhost:5432/db?sslmode=disable"
-		case "TEMPORAL_ADDRESS":
-			return "localhost:7233"
-		case "OPENFGA_API_URL":
-			return "http://localhost:8080"
-		case "OPENFGA_STORE_ID":
-			return "store-id"
-		case "OPENFGA_MODEL_ID":
-			return "model-id"
-		case "CREDENTIAL_ENCRYPTION_KEY":
-			return "too-short"
-		default:
-			return ""
-		}
-	})
-	if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "CREDENTIAL_ENCRYPTION_KEY") {
-		t.Fatalf("error = %v, want ErrInvalidConfig mentioning CREDENTIAL_ENCRYPTION_KEY", err)
-	}
-}
-
 func TestLoadAPIConfigRejectsInvalidArtifactStoreKind(t *testing.T) {
 	t.Parallel()
 
@@ -453,33 +255,38 @@ func withValidSecurity(getenv func(string) string) func(string) string {
 	}
 }
 
-func TestLoadWorkerConfigReadsGitHubApp(t *testing.T) {
+func TestLoadAPIConfigReadsGitHubApp(t *testing.T) {
 	t.Parallel()
 
 	encoded, _ := testRSAPrivateKeyPEM(t)
-	cfg, err := LoadWorkerConfig(withValidWorkerEnv(map[string]string{
-		"GITHUB_APP_ID":          " 12345 ",
+	values := map[string]string{
+		"DATABASE_URL":           "postgres://user:pass@localhost:5432/db?sslmode=disable",
+		"TEMPORAL_ADDRESS":       "localhost:7233",
+		"GITHUB_APP_ID":          "12345",
 		"GITHUB_APP_PRIVATE_KEY": encoded,
-	}))
+	}
+	cfg, err := LoadAPIConfig(withValidSecurity(func(name string) string { return values[name] }))
 	if err != nil {
-		t.Fatalf("LoadWorkerConfig returned error: %v", err)
+		t.Fatalf("LoadAPIConfig returned error: %v", err)
 	}
-	if !cfg.GitHubApp.Enabled() {
-		t.Fatal("GitHubApp should be enabled")
+	if !cfg.GitHubApp.Enabled() || cfg.GitHubApp.AppID != "12345" {
+		t.Fatalf("GitHubApp = %+v, want enabled with AppID 12345", cfg.GitHubApp)
 	}
-	if cfg.GitHubApp.AppID != "12345" {
-		t.Fatalf("AppID = %q, want 12345", cfg.GitHubApp.AppID)
+
+	delete(values, "GITHUB_APP_PRIVATE_KEY")
+	if _, err := LoadAPIConfig(withValidSecurity(func(name string) string { return values[name] })); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("partial GitHub App error = %v, want ErrInvalidConfig", err)
 	}
 }
 
 // An unconfigured App is the supported default, not a misconfiguration: the
 // deployment simply cannot reach private repositories.
-func TestLoadWorkerConfigAllowsAbsentGitHubApp(t *testing.T) {
+func TestLoadAPIConfigAllowsAbsentGitHubApp(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := LoadWorkerConfig(withValidWorkerEnv(nil))
+	cfg, err := LoadAPIConfig(withValidAPIEnv(nil))
 	if err != nil {
-		t.Fatalf("LoadWorkerConfig returned error: %v", err)
+		t.Fatalf("LoadAPIConfig returned error: %v", err)
 	}
 	if cfg.GitHubApp.Enabled() {
 		t.Fatal("GitHubApp should be disabled")
@@ -488,7 +295,7 @@ func TestLoadWorkerConfigAllowsAbsentGitHubApp(t *testing.T) {
 
 // Half a configuration is always a mistake, and one that would otherwise
 // surface as a puzzling clone failure much later.
-func TestLoadWorkerConfigRejectsPartialGitHubApp(t *testing.T) {
+func TestLoadAPIConfigRejectsPartialGitHubApp(t *testing.T) {
 	t.Parallel()
 
 	encoded, _ := testRSAPrivateKeyPEM(t)
@@ -496,13 +303,13 @@ func TestLoadWorkerConfigRejectsPartialGitHubApp(t *testing.T) {
 		"id without key": {"GITHUB_APP_ID": "12345"},
 		"key without id": {"GITHUB_APP_PRIVATE_KEY": encoded},
 	} {
-		if _, err := LoadWorkerConfig(withValidWorkerEnv(env)); !errors.Is(err, ErrInvalidConfig) {
+		if _, err := LoadAPIConfig(withValidAPIEnv(env)); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("%s: error = %v, want ErrInvalidConfig", name, err)
 		}
 	}
 }
 
-func TestLoadWorkerConfigRejectsMalformedGitHubAppValues(t *testing.T) {
+func TestLoadAPIConfigRejectsMalformedGitHubAppValues(t *testing.T) {
 	t.Parallel()
 
 	encoded, _ := testRSAPrivateKeyPEM(t)
@@ -510,7 +317,7 @@ func TestLoadWorkerConfigRejectsMalformedGitHubAppValues(t *testing.T) {
 		"non-numeric app id": {"GITHUB_APP_ID": "not-a-number", "GITHUB_APP_PRIVATE_KEY": encoded},
 		"malformed key":      {"GITHUB_APP_ID": "12345", "GITHUB_APP_PRIVATE_KEY": "not-a-key"},
 	} {
-		if _, err := LoadWorkerConfig(withValidWorkerEnv(env)); !errors.Is(err, ErrInvalidConfig) {
+		if _, err := LoadAPIConfig(withValidAPIEnv(env)); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("%s: error = %v, want ErrInvalidConfig", name, err)
 		}
 	}
@@ -541,20 +348,90 @@ func testRSAPrivateKeyPEM(t *testing.T) (string, *rsa.PrivateKey) {
 	return string(encoded), key
 }
 
-// withValidWorkerEnv returns a getenv covering the worker's required settings,
-// with overrides layered on top.
-func withValidWorkerEnv(overrides map[string]string) func(string) string {
+func withValidAPIEnv(overrides map[string]string) func(string) string {
 	base := map[string]string{
 		"DATABASE_URL":     "postgres://user:pass@localhost:5432/db?sslmode=disable",
 		"TEMPORAL_ADDRESS": "localhost:7233",
-		"OPENFGA_API_URL":  "http://localhost:8080",
-		"OPENFGA_STORE_ID": "store-id",
-		"OPENFGA_MODEL_ID": "model-id",
 	}
-	return func(key string) string {
+	return withValidSecurity(func(key string) string {
 		if value, ok := overrides[key]; ok {
 			return value
 		}
 		return base[key]
+	})
+}
+
+func TestLoadExecutorConfigReadsExecutorSettings(t *testing.T) {
+	t.Parallel()
+
+	values := map[string]string{
+		"TEMPORAL_ADDRESS":               " localhost:7233 ",
+		"TEMPORAL_NAMESPACE":             " tflive ",
+		"EXECUTOR_RUN_ROOT":              " /var/lib/tflive/runs ",
+		"ARTIFACT_STORE_KIND":            " s3 ",
+		"ARTIFACT_STORE_FILESYSTEM_ROOT": " /var/lib/tflive/artifacts ",
+		"S3_BUCKET":                      " tflive-artifacts ",
+		"S3_REGION":                      " us-east-1 ",
+		"S3_ENDPOINT":                    " https://s3.us-east-1.amazonaws.com ",
+		"S3_ACCESS_KEY_ID":               " access-key ",
+		"S3_SECRET_ACCESS_KEY":           " secret-key ",
+		"S3_FORCE_PATH_STYLE":            " true ",
+	}
+	cfg, err := LoadExecutorConfig(func(key string) string { return values[key] })
+	if err != nil {
+		t.Fatalf("LoadExecutorConfig returned error: %v", err)
+	}
+
+	if cfg.TemporalAddress != "localhost:7233" || cfg.TemporalNamespace != "tflive" {
+		t.Fatalf("temporal = %q in %q", cfg.TemporalAddress, cfg.TemporalNamespace)
+	}
+	if cfg.RunRoot != "/var/lib/tflive/runs" {
+		t.Fatalf("RunRoot = %q, want /var/lib/tflive/runs", cfg.RunRoot)
+	}
+	assertArtifactStoreConfig(t, cfg.ArtifactStore)
+}
+
+func TestLoadExecutorConfigAppliesDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadExecutorConfig(func(key string) string {
+		if key == "TEMPORAL_ADDRESS" {
+			return "localhost:7233"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("LoadExecutorConfig returned error: %v", err)
+	}
+	if cfg.RunRoot != DefaultExecutorRunRoot {
+		t.Fatalf("RunRoot = %q, want %q", cfg.RunRoot, DefaultExecutorRunRoot)
+	}
+	if cfg.ArtifactStore.Kind != ArtifactStoreFilesystem || cfg.ArtifactStore.FilesystemRoot != DefaultArtifactStoreFilesystemRoot {
+		t.Fatalf("ArtifactStore = %+v, want the filesystem default", cfg.ArtifactStore)
+	}
+}
+
+func TestLoadExecutorConfigRequiresTemporalAddress(t *testing.T) {
+	t.Parallel()
+
+	if _, err := LoadExecutorConfig(func(string) string { return "" }); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("error = %v, want ErrInvalidConfig", err)
+	}
+}
+
+// The executor runs beside tenant Terraform, so whatever its configuration
+// holds, a template can read. This pins the field set: adding one means
+// deciding, here, that tenants may see it.
+func TestExecutorConfigHoldsNoControlPlaneSettings(t *testing.T) {
+	t.Parallel()
+
+	var got []string
+	configType := reflect.TypeOf(ExecutorConfig{})
+	for i := 0; i < configType.NumField(); i++ {
+		got = append(got, configType.Field(i).Name)
+	}
+	want := []string{"TemporalAddress", "TemporalNamespace", "RunRoot", "ArtifactStore"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ExecutorConfig fields = %v, want %v", got, want)
 	}
 }

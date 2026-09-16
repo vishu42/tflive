@@ -7,6 +7,19 @@ import (
 )
 
 const (
+	// ControlTaskQueue carries workflow tasks and every activity that touches
+	// product state or secrets. Only the control plane polls it.
+	ControlTaskQueue = "control"
+	// ExecutionTaskQueue carries the activities that run next to tenant
+	// Terraform. The executor polls it, and nothing that polls it holds a
+	// database connection or a key.
+	//
+	// Both names are constants rather than configuration: the workflow names the
+	// execution queue in its activity options, and a queue named by env on one
+	// side and by code on the other fails silently, with tasks waiting on a
+	// queue nobody polls. Environments are separated by Temporal namespace.
+	ExecutionTaskQueue = "execution"
+
 	TemplateRunWorkflowName  = "TemplateRunWorkflow"
 	TemplateSyncWorkflowName = "TemplateSyncWorkflow"
 
@@ -14,11 +27,19 @@ const (
 	CancelSignalName   = "cancel"
 
 	RecordTemplateRunStatusActivityName          = "RecordTemplateRunStatus"
+	RecordTemplateRunLogActivityName             = "RecordTemplateRunLog"
 	RecordTemplateRegistrationStatusActivityName = "RecordTemplateRegistrationStatus"
 	PrepareWorkspaceActivityName                 = "PrepareWorkspace"
 	FetchSourceActivityName                      = "FetchSource"
 	RunTerraformActivityName                     = "RunTerraform"
 	SyncTemplateActivityName                     = "SyncTemplate"
+	SealSourceTokenActivityName                  = "SealSourceToken"
+	SealRunCredentialsActivityName               = "SealRunCredentials"
+	ReleaseRunKeyActivityName                    = "ReleaseRunKey"
+
+	// TerraformCommandFailedErrorType marks a RunTerraform failure whose
+	// ApplicationError details carry the uploaded log's TemplateRunLog.
+	TerraformCommandFailedErrorType = "TerraformCommandFailed"
 )
 
 // TemplateRunWorkflowInput starts one Terraform operation for one StackTemplate.
@@ -41,7 +62,7 @@ type TemplateRunWorkflowInput struct {
 	ConfigJSON        json.RawMessage
 }
 
-// TemplateRunStatusActivityInput asks the worker to persist one run status transition.
+// TemplateRunStatusActivityInput asks the control plane to persist one run status transition.
 type TemplateRunStatusActivityInput struct {
 	RunID           TemplateRunID
 	TenantID        TenantID
@@ -51,7 +72,7 @@ type TemplateRunStatusActivityInput struct {
 	ErrorSummary    string
 }
 
-// PrepareWorkspaceActivityInput asks the worker to create a local run workspace.
+// PrepareWorkspaceActivityInput asks the executor to create a local run workspace.
 type PrepareWorkspaceActivityInput struct {
 	RunID    TemplateRunID
 	TenantID TenantID
@@ -60,9 +81,52 @@ type PrepareWorkspaceActivityInput struct {
 // PrepareWorkspaceActivityOutput identifies the prepared local run workspace.
 type PrepareWorkspaceActivityOutput struct {
 	WorkspacePath string
+	// PublicKey is the run's sealing key. Its private half never leaves the
+	// executor that prepared the workspace.
+	PublicKey []byte
 }
 
-// FetchSourceActivityInput asks the worker to clone a template source into a prepared run workspace.
+// RunKeyID names a run's key on the executor holding it.
+func RunKeyID(tenantID TenantID, runID TemplateRunID) string {
+	return string(tenantID) + "/" + string(runID)
+}
+
+// SealSourceTokenActivityInput asks the control plane for a repository token
+// sealed to the run's key.
+type SealSourceTokenActivityInput struct {
+	RepoOwner string
+	RepoName  string
+	PublicKey []byte
+}
+
+// SealSourceTokenActivityOutput carries the sealed token, which is an empty
+// string when none could be resolved. FetchHint explains why, for a fetch that
+// then fails unauthenticated.
+type SealSourceTokenActivityOutput struct {
+	SealedToken []byte
+	FetchHint   string
+}
+
+// SealRunCredentialsActivityInput asks the control plane for a StackTemplate's
+// decrypted credentials sealed to the run's key.
+type SealRunCredentialsActivityInput struct {
+	TenantID        TenantID
+	StackTemplateID StackTemplateID
+	PublicKey       []byte
+}
+
+// SealRunCredentialsActivityOutput carries the sealed environment map.
+type SealRunCredentialsActivityOutput struct {
+	SealedEnvironment []byte
+}
+
+// ReleaseRunKeyActivityInput asks the executor to drop a finished run's key.
+type ReleaseRunKeyActivityInput struct {
+	TenantID TenantID
+	RunID    TemplateRunID
+}
+
+// FetchSourceActivityInput asks the executor to clone a template source into a prepared run workspace.
 type FetchSourceActivityInput struct {
 	RunID         TemplateRunID
 	TenantID      TenantID
@@ -76,6 +140,9 @@ type FetchSourceActivityInput struct {
 	// ResolvedCommitSHA is the exact commit to check out.
 	ResolvedCommitSHA string
 	RootPath          string
+	// SealedToken is the repository token sealed to the run's key.
+	SealedToken []byte
+	FetchHint   string
 }
 
 // FetchSourceActivityOutput identifies the Terraform module directory within the cloned source.
@@ -83,7 +150,7 @@ type FetchSourceActivityOutput struct {
 	TerraformPath string
 }
 
-// RunTerraformActivityInput asks the worker to run one Terraform subprocess command.
+// RunTerraformActivityInput asks the executor to run one Terraform subprocess command.
 type RunTerraformActivityInput struct {
 	RunID           TemplateRunID
 	TenantID        TenantID
@@ -93,7 +160,18 @@ type RunTerraformActivityInput struct {
 	WorkspaceName   string
 	Command         TerraformCommandType
 	ConfigJSON      json.RawMessage
-	Environment     map[string]string
+	// SealedEnvironment is the run's credentials sealed to its key.
+	SealedEnvironment []byte
+	// Environment is the opened credentials, filled in on the executor. It is
+	// excluded from JSON so it can never be written into workflow history.
+	Environment map[string]string `json:"-"`
+}
+
+// RunTerraformActivityOutput reports what a Terraform command left behind.
+type RunTerraformActivityOutput struct {
+	// Log describes the uploaded phase log. The executor has no database, so
+	// the workflow records it through a control activity.
+	Log TemplateRunLog
 }
 
 // TemplateSyncWorkflowInput starts template metadata sync for a public GitHub template.
@@ -106,7 +184,7 @@ type TemplateSyncWorkflowInput struct {
 	RootPath       string
 }
 
-// TemplateSyncActivityInput asks the worker to sync one template registration source.
+// TemplateSyncActivityInput asks the control plane to sync one template registration source.
 type TemplateSyncActivityInput struct {
 	RegistrationID TemplateRegistrationID
 	TenantID       TenantID
@@ -124,7 +202,7 @@ type TemplateSyncActivityOutput struct {
 	ErrorSummary       string
 }
 
-// TemplateRegistrationStatusActivityInput asks the worker to persist one registration status transition.
+// TemplateRegistrationStatusActivityInput asks the control plane to persist one registration status transition.
 type TemplateRegistrationStatusActivityInput struct {
 	RegistrationID     TemplateRegistrationID
 	TenantID           TenantID

@@ -16,7 +16,7 @@ This document describes tflive's current MVP product model, system architecture,
 - Start every Terraform run in a fresh empty working directory.
 - Persist product metadata, activity history, run state, logs, and artifacts.
 - Use a stable Terraform workspace per installed stack template.
-- Keep the MVP fast by running Terraform in worker activity processes, not Kubernetes Jobs.
+- Keep the MVP fast by running Terraform in executor activity processes, not Kubernetes Jobs.
 
 ## Non-Goals For MVP
 
@@ -34,65 +34,25 @@ The MVP uses Temporal OSS as the durable workflow engine, Postgres as the applic
 
 The architecture also defines a pluggable `EventBus` interface for system events, live log fanout, and future pub/sub needs. The MVP can start with a no-op, in-memory, or simple local implementation, then swap in Redis, NATS JetStream, Kafka, or another broker without changing API or workflow semantics.
 
-The API does not call workers directly. For a template run, it atomically writes the queued run and a durable workflow-start intent to Postgres, then returns. A dispatcher hosted by the existing worker process claims that intent and starts the Temporal workflow. The API still starts template-sync workflows and sends approval or cancellation signals directly to Temporal. Worker pods poll Temporal task queues and run Terraform activities.
+The system is split into a control plane and a data plane (design: `docs/superpowers/specs/2026-09-15-control-plane-split.md`). The API process is the control plane: it serves HTTP, owns the database and every key, runs the queue loop that turns committed intents into workflow starts and signals, and polls Temporal's `control` task queue for workflow tasks and the activities that write product state. The executor process is the data plane: it polls only the `execution` task queue and runs workspace preparation, source checkout, and Terraform. It holds no database URL and no key. Neither process calls the other; every exchange goes through Temporal. [Apply run sequence](apply-run-sequence.md) walks an apply through every round trip.
 
 ```text
- +------------+        +-------------+       signals/sync       +----------------+
- |            |        |             +------------------------->+                |
- |    UI      +------->+ API Server  |                          | Temporal       |
- |            |        |             |                          | Server         |
- +-----+------+        +------+------+                          +-------+--------+
-       ^                      |                                         ^
-       | state/log APIs       | run + outbox (one transaction)         |
-       |                      v                                         |
-       |              +------------------+                               |
-       +--------------+ App Postgres     |                               |
-                      | product state    |                               |
-                      | workflow_outbox  |                               |
-                      +--------+---------+                               |
-                               | claim with lease                        |
-                               v                                        |
-                      +-------+------------------------------------------+------+
-                      | Worker Process                                         |
-                      |                                                        |
-                      | Outbox Dispatcher -- start workflow -------------------+
-                      | Temporal Worker  <--- workflow/activity task polling ---+
-                      +------------------------------+-------------------------+
-                                                     |
-                                                     v
-                                           +---------+---------+
-                                           | LocalProcess      |
-                                           | Terraform Runner  |
-                                           +---------+---------+
-                                                      |
-                   +----------------+-----------------+------------------+
-                   |                |                                    |
-                   v                v                                    v
-          +--------+------+  +------+-------+                    +-------+-------+
-          | GitHub App    |  | Vault/Secret |                    | Log Sink      |
-          | installation  |  | Store        |                    | stream/store  |
-          | tokens        |  +--------------+                    +-------+-------+
-          +---------------+                                             |
-                                               +------------------------+----------------+
-                                               |                                         |
-                                               v                                         v
-                                      +--------+-------+                         +-------+--------+
-                                      | Object Storage |                         | EventBus      |
-                                      | logs/artifacts |                         | Interface     |
-                                      +----------------+                         +-------+--------+
-                                                                                         |
-                                                                                         v
-                                                                                +--------+-------+
-                                                                                | API live log  |
-                                                                                | stream/events |
-                                                                                +----------------+
-
- Temporal Server persists workflow and queue state to:
-
- +----------------------+
- | Temporal Persistence |
- | DB                   |
- +----------------------+
+UI --> tflive-api  (control plane)                      Temporal Server
+         HTTP                                                 ^       ^
+         queue loop ---------- start workflow / signal -------+       |
+         worker on "control" -- poll / respond ---------------+       |
+           workflows, status and log writes,                          |
+           template sync, credential sealing                          |
+              |                                                       | poll / respond
+              v                                                       | "execution"
+         App Postgres                                                 |
+           product state, work_queue                    tflive-executor  (data plane)
+                                                          PrepareWorkspace (run key)
+                                                          FetchSource, RunTerraform --> tofu
+                                                          no database, no keys
+                                                                      |
+                                                                      v
+                                                  artifact store, cloud APIs, state backends
 ```
 
 ## Core Boundaries
@@ -138,43 +98,44 @@ The API server is responsible for:
 - Serving UI-facing run, stack, template, and log endpoints.
 - Exposing live log streams to the UI.
 
-The API does not execute Terraform and does not communicate directly with worker processes.
+The API does not execute Terraform and does not communicate directly with the executor; both talk only to Temporal.
 
 ### Temporal
 
 Temporal is the execution coordinator. It owns workflow durability, task queues, retries, timers, cancellation, and approval waits.
 
-The MVP uses one shared task queue:
+Work is split across two task queues, named by constants in `internal/domain`:
 
 ```text
-terraform-runs
+control     workflow tasks and control activities; polled by the API
+execution   workspace, source, and Terraform activities; polled by executors
 ```
 
-All worker pods poll this queue. Operation type is represented in run metadata:
+Operation type is represented in run metadata:
 
 ```text
 plan | apply | destroy
 ```
 
-Every worker replica enables Temporal Session Workers. A `TemplateRun` creates
+Every executor replica enables Temporal Session Workers. A `TemplateRun` creates
 one session for its filesystem-dependent work, so workspace preparation, source
-checkout, and Terraform activities stay on the same worker replica. The session
+checkout, and Terraform activities stay on the same executor replica. The session
 also remains owned by that replica while an apply or destroy workflow waits for
 approval before continuing. The session has a 1-minute creation timeout and a
 24-hour execution timeout; the execution timeout bounds the entire session,
 including any approval wait. Status activities can run independently. Run
 metadata and status are persisted in Postgres, while completed logs and
 artifacts are uploaded to the configured S3-compatible artifact store. The
-live workspace and phase-log spool remain worker-local until the activity
-completes, so a worker crash can lose in-flight local output.
+live workspace and phase-log spool remain executor-local until the activity
+completes, so an executor crash can lose in-flight local output.
 
-### Workers
+### Executors
 
-Workers are Go processes that poll Temporal and execute workflow activities.
+Executors are Go processes that poll the `execution` task queue and run the activities that sit next to tenant Terraform. They open no database connection and parse no key. Secrets a run needs, the repository token and the credential environment, are sealed on the control plane to an X25519 key the executor generates for that run in `PrepareWorkspace` (`internal/runseal`), so Temporal history holds only a public key and ciphertext. Results, including uploaded log metadata, return to the control plane through Temporal.
 
-The same process also runs the workflow-outbox dispatcher. Multiple worker replicas can safely host dispatchers because claims use short Postgres leases and `FOR UPDATE SKIP LOCKED`; no database transaction remains open during the Temporal RPC.
+The queue loop runs in the API. Multiple API replicas can safely run it because claims use short Postgres leases and `FOR UPDATE SKIP LOCKED`; no database transaction remains open during the Temporal RPC.
 
-For MVP, workers use a local process runner:
+For MVP, executors use a local process runner:
 
 ```text
 LocalProcessRunner
@@ -198,11 +159,11 @@ The runner should be implemented behind an interface so a future `KubernetesJobR
 
 ### Runner Security
 
-The MVP local process runner is optimized for fast feedback, but it should be treated as trusted-template execution. OpenTofu/Terraform providers, provisioners, external data sources, and local-exec style behavior may execute code inside the worker pod with access to the run's injected credentials.
+The MVP local process runner is optimized for fast feedback, but it should be treated as trusted-template execution. OpenTofu/Terraform providers, provisioners, external data sources, and local-exec style behavior may execute code inside the executor pod with access to the run's injected credentials. The executor holds no database URL or key, but it can still reach Temporal, which has no access control yet; see "Temporal access control" in the control plane split spec.
 
-MVP worker deployments should use the following guardrails:
+MVP executor deployments should use the following guardrails:
 
-- Run worker containers as non-root.
+- Run executor containers as non-root.
 - Avoid host mounts and shared writable volumes.
 - Use fresh per-run working directories with cleanup after every run.
 - Apply CPU, memory, ephemeral storage, and wall-clock limits.
@@ -210,8 +171,8 @@ MVP worker deployments should use the following guardrails:
 - Prefer short-lived credentials wherever supported.
 - Avoid persisting secret values to Postgres, object storage, Temporal payloads, or logs.
 - Redact known secret values before logs are streamed or persisted.
-- Restrict worker network egress where practical.
-- Separate workers by task queue or deployment if future tenants, templates, or credential sets require stronger trust boundaries.
+- Restrict executor network egress where practical.
+- Separate executors by task queue or deployment if future tenants, templates, or credential sets require stronger trust boundaries.
 
 Stronger isolation, such as a Kubernetes Job per run, sandboxed containers, remote runners, or per-tenant runner pools, remains a deferred design topic. The `LocalProcessRunner` interface keeps that migration path open without changing workflow semantics.
 
@@ -221,8 +182,8 @@ The Go implementation should keep product concepts, application use cases, adapt
 
 ```text
 cmd/
-  tflive-api/
-  tflive-worker/
+  api/
+  executor/
 
 internal/
   domain/
@@ -247,8 +208,8 @@ internal/
 
 Package ownership:
 
-- `cmd/tflive-api`: API server boot, config loading, dependency wiring, and HTTP server startup.
-- `cmd/tflive-worker`: worker boot, config loading, Temporal worker registration, outbox-dispatch lifecycle, and activity dependency wiring.
+- `cmd/api`: control plane boot: config loading, dependency wiring, HTTP server, the queue loop, and the Temporal worker on the `control` queue.
+- `cmd/executor`: data plane boot: Temporal worker on the `execution` queue with the execution activities. No database, no keys.
 - `internal/domain`: the product's core entities and shared contracts, including IDs, statuses, operation types, validation helpers, entities such as `Tenant`, `Template`, `Stack`, `StackTemplate`, `TemplateRun`, `StackRun`, and `CredentialSet`, plus Temporal workflow payloads, signal names, query names, and constants. Keep this package focused on stable cross-boundary data contracts; concrete behavior and side effects belong in the packages that own them.
 - `internal/app`: application use cases such as creating stacks, registering templates, adding templates to stacks, starting runs, approving runs, canceling runs, listing runs, and fetching log metadata. This package owns use-case interfaces for persistence, workflow dispatch, events, locks, artifacts, and secrets; concrete adapters implement those interfaces outside `app`.
 - `internal/api`: HTTP handlers, request and response DTOs, routing, SSE endpoints, API validation, and mapping API input into app commands.
@@ -282,7 +243,7 @@ Package dataflow:
                       +----------+-----------+
                                  ^
                                  |
-cmd/tflive-api                 |                   cmd/tflive-worker
+cmd/api                         |                   cmd/executor
   config + wiring                |                     config + wiring
         |                        |                           |
         v                        |                           v
@@ -310,7 +271,7 @@ internal/auth
 tenant/user context
 ```
 
-The worker composition path additionally wires `internal/postgres` as the durable outbox, `internal/dispatch` as the claim/retry loop, and `internal/temporal` as the workflow starter. These packages meet through narrow interfaces assembled in `cmd/tflive-worker`.
+The API composition path additionally wires `internal/postgres` as the durable work queue, `internal/queue` as the claim/retry loop, and `internal/temporal` as the workflow starter, assembled in `cmd/api`.
 
 ## Template Model
 
@@ -506,7 +467,7 @@ Runner secrets are execution credentials, not template input values. Examples:
 - cloud provider credentials
 - GitHub App installation token
 
-These are resolved at runtime from the secret store and injected only into the worker process environment. Known secret values are redacted from logs before streaming or persistence.
+These are resolved on the control plane, sealed to the run's executor key, and opened only inside the executor for the Terraform subprocess environment. Known secret values are redacted from logs before streaming or persistence.
 
 ## Credential Sets
 
@@ -546,7 +507,7 @@ GitHubIntegration
   status
 ```
 
-As of the private-repository work (#239) no `GitHubIntegration` row exists yet. The worker holds
+As of the private-repository work (#239) no `GitHubIntegration` row exists yet. The API holds
 the App's id and private key in configuration and resolves the installation covering a repository
 on demand via `GET /repos/{owner}/{repo}/installation`, then mints a repository-scoped read-only
 token for the clone. Nothing is persisted, so no schema or lifecycle has to stay in sync with
@@ -559,7 +520,7 @@ repository the App was installed on.
 
 Resolving that token is best effort, and deliberately so. The installation endpoint 404s both for
 a private repository nobody granted access to and for a public one nobody ever needed to install
-the App on, and those two are indistinguishable from the worker; a 503 says nothing about the
+the App on, and those two are indistinguishable from the API; a 503 says nothing about the
 repository at all. So a failed resolution never fails the fetch. The clone proceeds with no
 credential, which is exactly right for a public repository and fails at git for a private one,
 carrying the reason it was unauthenticated.
@@ -578,7 +539,7 @@ Not covered: repositories using git-LFS, and Terraform module sources of the for
 `source = "git::https://github.com/org/private-module"`, which Terraform fetches itself without
 the credential.
 
-During template registration or execution, the worker generates a short-lived GitHub App installation token and clones the repository over HTTPS.
+During template registration the API mints a short-lived GitHub App installation token and clones the repository itself. During a run the API mints the token and seals it to the run's executor key; the executor opens it and clones over HTTPS.
 
 Selected refs are resolved to immutable commit SHAs during template sync and every run. A `TemplateRun` stores both the user-selected ref and the resolved commit SHA. For apply operations, the post-approval apply uses the same resolved commit SHA that produced the displayed plan unless the user starts a new run.
 
@@ -593,7 +554,7 @@ API request
        -> insert workflow_outbox row
   -> commit and return
 
-Worker outbox dispatcher
+API queue loop
   -> lease one pending row
   -> start the Temporal workflow
   -> mark the row processed, or schedule a retry
@@ -605,9 +566,9 @@ The outbox ID and Temporal workflow ID are both deterministic:
 template-run/{tenant_id}/{run_id}
 ```
 
-Temporal is configured to use an existing running execution and reject a duplicate completed execution. Consequently, dispatch is at least once but workflow creation is idempotent: a worker can safely retry after a timeout, crash, or successful Temporal start followed by a failed Postgres completion update.
+Temporal is configured to use an existing running execution and reject a duplicate completed execution. Consequently, dispatch is at least once but workflow creation is idempotent: the queue loop can safely retry after a timeout, crash, or successful Temporal start followed by a failed Postgres completion update.
 
-Dispatchers poll Postgres for eligible rows, claim with `FOR UPDATE SKIP LOCKED`, and store a short lease before calling Temporal. The claim transaction ends before the network call. A failed start clears the lease and defers the next attempt; an abandoned lease becomes claimable after it expires. This lets multiple worker replicas drain the same table without a separate message broker or a long-running database transaction.
+Dispatchers poll Postgres for eligible rows, claim with `FOR UPDATE SKIP LOCKED`, and store a short lease before calling Temporal. The claim transaction ends before the network call. A failed start clears the lease and defers the next attempt; an abandoned lease becomes claimable after it expires. This lets multiple API replicas drain the same table without a separate message broker or a long-running database transaction.
 
 Migration `0007_workflow_outbox.sql` also backfills existing queued template runs. Replaying a run that was already submitted to Temporal is safe because it targets the same deterministic workflow ID.
 
@@ -689,8 +650,8 @@ Cancellation is cooperative and must leave the product lock, run status, and log
 
 - The API records the cancel request actor and timestamp, then sends a cancellation signal to Temporal.
 - If the run is queued or waiting for approval, the workflow can mark it canceled without starting more Terraform work.
-- If a Terraform subprocess is active, the worker first sends a graceful interrupt, waits for a bounded shutdown period, then terminates the process if needed.
-- Long-running activities heartbeat cancellation progress so Temporal can observe worker liveness.
+- If a Terraform subprocess is active, the executor first sends a graceful interrupt, waits for a bounded shutdown period, then terminates the process if needed.
+- Long-running activities heartbeat cancellation progress so Temporal can observe executor liveness.
 - Partial logs are flushed to object storage before the run reaches `canceled`.
 - The product-level lock is released only during cancellation finalization.
 - Canceling an apply or destroy does not imply infrastructure rollback; the next run should use Terraform state and backend locking to determine the current infrastructure state.
@@ -830,9 +791,9 @@ Postgres remains the product source of truth for the UI.
 
 ## Scaling
 
-Workers scale horizontally as Kubernetes deployments.
+Executors scale horizontally as Kubernetes deployments.
 
-Each worker pod has local concurrency limits, for example:
+Each executor pod has local concurrency limits, for example:
 
 ```text
 max concurrent Terraform activities per pod = 2
@@ -841,10 +802,10 @@ max concurrent Terraform activities per pod = 2
 Total execution capacity is:
 
 ```text
-worker replicas * per-pod Terraform concurrency
+executor replicas * per-pod Terraform concurrency
 ```
 
-If all workers are busy, new tasks remain queued in Temporal until a worker has capacity.
+If all executors are busy, new tasks remain queued in Temporal until an executor has capacity.
 
 Session affinity makes these capacity settings distinct. The ordinary Terraform
 activity concurrency shown above controls activity execution; it is not the
@@ -854,9 +815,9 @@ capacity. This implementation enables session workers but does not set
 SDK default. An apply or destroy run waiting for approval continues to occupy
 its session until it completes or the 24-hour session execution timeout expires.
 Separate workflow runs may be assigned to different replicas while all replicas
-continue polling the shared `terraform-runs` task queue. No shared filesystem is
-required for the session's worker-private `WORKER_RUN_ROOT` live workspace while
-the session owner remains available. If the session-owning worker crashes,
+continue polling the shared `execution` task queue. No shared filesystem is
+required for the session's executor-private `EXECUTOR_RUN_ROOT` live workspace while
+the session owner remains available. If the session-owning executor crashes,
 Temporal fails the session and the run; this design does not automatically
 re-establish a session or reconstruct its local workspace on another replica.
 
@@ -867,7 +828,7 @@ HPA can be added using metrics such as:
 - active Terraform activity count
 - CPU and memory as secondary signals
 
-`WORKER_RUN_ROOT` is a worker-private local root for each run's temporary
+`EXECUTOR_RUN_ROOT` is an executor-private local root for each run's temporary
 workspace and local phase-log spool. It is not a shared-volume configuration:
 another replica cannot use the path to recover an interrupted session. Durable
 recovery would require rehydrating the workspace from durable inputs before a
@@ -889,7 +850,7 @@ Future design should answer:
 
 ### Stronger Runner Isolation
 
-MVP uses local subprocess execution inside worker pods for speed.
+MVP uses local subprocess execution inside executor pods for speed.
 
 Future options:
 
@@ -903,7 +864,7 @@ Future options:
 Authorization is OpenFGA, embedded in the API process. There is no OpenFGA
 service to run and nothing to provision: the API applies OpenFGA's migrations to
 the application database, then adopts or creates its store and model from
-`internal/authorization/authorization-model.fga` at startup. The worker does no
+`internal/authorization/authorization-model.fga` at startup. The executor does no
 authorization work and embeds nothing.
 
 `internal/authorization` is the whole boundary. It exposes `Can`, `CanAll`,
@@ -965,7 +926,7 @@ The MVP identifies useful scaling metrics, but a full observability contract is 
 
 Future design should answer:
 
-- which structured log fields are required across API, worker, and workflow code
+- which structured log fields are required across API, executor, and workflow code
 - which run and phase duration metrics are emitted
 - how cancellation, failure, and approval wait time are measured
 - whether traces connect API requests, Temporal workflows, activities, and log streams

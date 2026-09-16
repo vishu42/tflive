@@ -201,8 +201,8 @@ An `Authorization` header authenticates nothing. tflive previously accepted an
 `Authorization: Bearer <id-token>` header for "a CLI or service-to-service
 caller," and that was removed because:
 
-- **Nothing used it.** There is no CLI in this repository; the worker reaches
-  Postgres, Temporal, and OpenFGA directly and never calls the API; and the web
+- **Nothing used it.** There is no CLI in this repository; the executor reaches
+  only Temporal and the artifact store and never calls the API; and the web
   client sends no `Authorization` header — it relies on the cookie.
 - **A CLI could not have used it.** The flow is server-side, so no endpoint
   hands a token to a caller, and the token lives 300 seconds with no refresh

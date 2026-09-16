@@ -20,7 +20,7 @@ const (
 	// GitHub rejects an App JWT whose exp is more than ten minutes past its iat.
 	// Nine leaves room for the request itself without courting the boundary.
 	appJWTLifetime = 9 * time.Minute
-	// The iat is backdated so a worker clock running slightly fast does not
+	// The iat is backdated so a host clock running slightly fast does not
 	// produce a token GitHub considers issued in the future.
 	appJWTBackdate = time.Minute
 	// Enough of an error body to diagnose, bounded so a hostile or broken

@@ -147,7 +147,7 @@ func TestTokenSourcePropagatesNotInstalled(t *testing.T) {
 	}
 }
 
-// The worker stores a nil *TokenSource in an interface when no App is
+// The API stores a nil *TokenSource in an interface when no App is
 // configured. A nil receiver guard is what keeps that from panicking on the
 // first clone of a public repository.
 func TestNilTokenSourceThroughInterfaceIsSafe(t *testing.T) {
