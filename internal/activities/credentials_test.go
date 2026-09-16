@@ -41,20 +41,28 @@ func (testCredentialDecryptor) Decrypt(value string) (string, error) {
 	return "decrypted:" + value, nil
 }
 
-// TestResolveCredentialEnvironmentTemplateOverridesStack verifies inheritance and template precedence.
+// TestResolveCredentialEnvironmentTemplateOverridesStack verifies inheritance and template precedence
+// regardless of the order the store returns credentials in.
 func TestResolveCredentialEnvironmentTemplateOverridesStack(t *testing.T) {
-	environment, err := resolveCredentialEnvironment(context.Background(), testCredentialReader{credentials: []domain.CredentialSet{
-		{StackID: "stack_123", Name: "CLOUD_REGION", Ciphertext: "stack-region"},
-		{StackID: "stack_123", Name: "CLOUD_TOKEN", Ciphertext: "stack-token"},
-		{StackTemplateID: "template_123", Name: "CLOUD_TOKEN", Ciphertext: "template-token"},
-	}}, testCredentialDecryptor{}, "tenant_123", "template_123")
-	if err != nil {
-		t.Fatalf("resolveCredentialEnvironment returned error: %v", err)
-	}
-	if environment["CLOUD_REGION"] != "decrypted:stack-region" {
-		t.Fatalf("region = %q", environment["CLOUD_REGION"])
-	}
-	if environment["CLOUD_TOKEN"] != "decrypted:template-token" {
-		t.Fatalf("token = %q", environment["CLOUD_TOKEN"])
+	stackRegion := domain.CredentialSet{StackID: "stack_123", Name: "CLOUD_REGION", Ciphertext: "stack-region"}
+	stackToken := domain.CredentialSet{StackID: "stack_123", Name: "CLOUD_TOKEN", Ciphertext: "stack-token"}
+	templateToken := domain.CredentialSet{StackTemplateID: "template_123", Name: "CLOUD_TOKEN", Ciphertext: "template-token"}
+
+	for name, credentials := range map[string][]domain.CredentialSet{
+		"template last":  {stackRegion, stackToken, templateToken},
+		"template first": {templateToken, stackRegion, stackToken},
+	} {
+		t.Run(name, func(t *testing.T) {
+			environment, err := resolveCredentialEnvironment(context.Background(), testCredentialReader{credentials: credentials}, testCredentialDecryptor{}, "tenant_123", "template_123")
+			if err != nil {
+				t.Fatalf("resolveCredentialEnvironment returned error: %v", err)
+			}
+			if environment["CLOUD_REGION"] != "decrypted:stack-region" {
+				t.Fatalf("region = %q", environment["CLOUD_REGION"])
+			}
+			if environment["CLOUD_TOKEN"] != "decrypted:template-token" {
+				t.Fatalf("token = %q", environment["CLOUD_TOKEN"])
+			}
+		})
 	}
 }
