@@ -209,10 +209,16 @@ services:
   # The data plane. It runs tenant Terraform, so it gets no database URL and no
   # key: secrets arrive sealed to a per-run key, and results go back to the API
   # through Temporal. Add nothing here a template must not read.
+  #
+  # Two replicas, so runs actually land on different hosts. A run's workspace
+  # activities and sealing key stay on one executor through a Temporal session;
+  # EXECUTOR_RUN_ROOT is container-local for the same reason.
   executor:
     build:
       context: .
       dockerfile: Dockerfile.executor
+    deploy:
+      replicas: 2
     depends_on:
       temporal:
         condition: service_healthy
