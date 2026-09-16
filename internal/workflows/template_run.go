@@ -472,10 +472,22 @@ func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType
 
 // recordLog hands the metadata of a log the executor uploaded to the control
 // plane, which owns the database. A command that uploaded nothing is skipped.
+//
+// The identity is taken from the workflow's own input, never from the returned
+// metadata. RunTerraform runs on the data plane, so everything it returns is
+// attacker-controlled once an executor is compromised, and
+// RecordTemplateRunLog upserts on (tenant_id, run_id, phase) while checking
+// only that the run exists — not that it is this run. A log claiming another
+// tenant's run would therefore repoint that run's object_key.
+//
+// On the honest path this overwrites nothing: PutTemplateRunLog derives both
+// fields from the activity input the workflow supplied.
 func (run *templateRunWorkflow) recordLog(log domain.TemplateRunLog) error {
 	if log.ObjectKey == "" {
 		return nil
 	}
+	log.TenantID = run.input.TenantID
+	log.RunID = run.input.RunID
 	return workflow.ExecuteActivity(
 		run.ctx,
 		domain.RecordTemplateRunLogActivityName,

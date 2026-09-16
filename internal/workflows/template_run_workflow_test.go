@@ -1162,3 +1162,110 @@ func TestTerraformRetryPolicy(t *testing.T) {
 		t.Fatalf("NonRetryableErrorTypes = %v, want %v", terraformRetryPolicy.NonRetryableErrorTypes, wantNonRetryable)
 	}
 }
+
+// TestTemplateRunWorkflowPinsLogIdentityToTheRun proves the control plane does
+// not take the executor's word for whose run a log belongs to.
+//
+// RunTerraform is a data-plane activity, so its result is attacker-controlled
+// once an executor is compromised. RecordTemplateRunLog upserts on
+// (tenant_id, run_id, phase) and guards only that the run exists, not that it
+// is this run — so a returned TenantID/RunID naming another tenant's run would
+// repoint that run's object_key at a key of the executor's choosing.
+//
+// The workflow knows the identity from its own input and overwrites it. On the
+// honest path this changes nothing: PutTemplateRunLog derives both fields from
+// the activity input the workflow supplied.
+func TestTemplateRunWorkflowPinsLogIdentityToTheRun(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	mockPrepareWorkspace(t, env)
+	env.OnActivity(domain.FetchSourceActivityName, mock.Anything, mock.Anything).
+		Return(domain.FetchSourceActivityOutput{TerraformPath: "run/workspace/source"}, nil)
+
+	// A hostile executor claims every log belongs to another tenant's run.
+	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
+			return domain.RunTerraformActivityOutput{Log: domain.TemplateRunLog{
+				TenantID:  domain.TenantID("tenant_victim"),
+				RunID:     domain.TemplateRunID("run_victim"),
+				Phase:     string(input.Command),
+				ObjectKey: "logs/" + string(input.Command) + ".log",
+			}}, nil
+		})
+
+	var recorded []domain.TemplateRunLog
+	env.OnActivity(domain.RecordTemplateRunLogActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, log domain.TemplateRunLog) error {
+			recorded = append(recorded, log)
+			return nil
+		})
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(nil)
+
+	input := templateRunWorkflowInput(domain.OperationPlan)
+	env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+	assertWorkflowCompleted(t, env)
+	if len(recorded) == 0 {
+		t.Fatal("no log metadata recorded")
+	}
+	for _, log := range recorded {
+		if log.TenantID != input.TenantID {
+			t.Fatalf("recorded %s log tenant = %q, want %q", log.Phase, log.TenantID, input.TenantID)
+		}
+		if log.RunID != input.RunID {
+			t.Fatalf("recorded %s log run = %q, want %q", log.Phase, log.RunID, input.RunID)
+		}
+	}
+}
+
+// The same pin has to hold on the failure path, where the log metadata arrives
+// in an ApplicationError's details rather than the activity result.
+func TestTemplateRunWorkflowPinsLogIdentityOfFailedCommand(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	mockPrepareWorkspace(t, env)
+	env.OnActivity(domain.FetchSourceActivityName, mock.Anything, mock.Anything).
+		Return(domain.FetchSourceActivityOutput{TerraformPath: "run/workspace/source"}, nil)
+
+	hostileLog := domain.TemplateRunLog{
+		TenantID:  domain.TenantID("tenant_victim"),
+		RunID:     domain.TemplateRunID("run_victim"),
+		Phase:     "plan",
+		ObjectKey: "logs/plan.log",
+	}
+	var recorded []domain.TemplateRunLog
+	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
+			if input.Command != domain.TerraformCommandPlan {
+				return domain.RunTerraformActivityOutput{}, nil
+			}
+			return domain.RunTerraformActivityOutput{}, temporal.NewApplicationError(
+				"terraform plan failed",
+				domain.TerraformCommandFailedErrorType,
+				hostileLog,
+			)
+		})
+	env.OnActivity(domain.RecordTemplateRunLogActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, log domain.TemplateRunLog) error {
+			recorded = append(recorded, log)
+			return nil
+		})
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(nil)
+
+	input := templateRunWorkflowInput(domain.OperationPlan)
+	env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+	if len(recorded) == 0 {
+		t.Fatal("no log metadata recorded for the failed command")
+	}
+	for _, log := range recorded {
+		if log.TenantID != input.TenantID || log.RunID != input.RunID {
+			t.Fatalf("recorded %s log identity = %q/%q, want %q/%q",
+				log.Phase, log.TenantID, log.RunID, input.TenantID, input.RunID)
+		}
+	}
+}
