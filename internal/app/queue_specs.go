@@ -4,7 +4,7 @@ import (
 	"github.com/vishu42/tflive/internal/queue"
 )
 
-// QueueSpecs returns every queue contract shared by API producers and workers.
+// QueueSpecs returns every queue contract shared by API producers and the queue loop.
 //
 // Authorization work is absent by design. Granting the founding owner,
 // reconciling a role change and flipping a stack to ready were all queued once,

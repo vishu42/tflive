@@ -61,7 +61,8 @@ func (store *Store) Encrypt(value string) (string, error) {
 	return store.credentialCipher.Encrypt(value)
 }
 
-// Decrypt opens stored credential ciphertext for worker-local runtime use.
+// Decrypt opens stored credential ciphertext so the control plane can seal it
+// to a run's executor key.
 func (store *Store) Decrypt(value string) (string, error) {
 	if store.credentialCipher == nil {
 		return "", app.ErrCredentialEncryptionUnavailable

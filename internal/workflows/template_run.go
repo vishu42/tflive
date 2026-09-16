@@ -161,7 +161,7 @@ func (run *templateRunWorkflow) prepareWorkspace() error {
 	return run.runTerraform(domain.TerraformCommandSelectWorkspace)
 }
 
-// prepareLocalWorkspace schedules the worker-side activity that creates the
+// prepareLocalWorkspace schedules the executor-side activity that creates the
 // per-run filesystem workspace and returns its absolute path. Workflows cannot
 // create directories directly because Temporal workflows must stay deterministic,
 // so the side effect lives in PrepareWorkspace. The returned path is stored on

@@ -62,7 +62,7 @@ type TemplateRunWorkflowInput struct {
 	ConfigJSON        json.RawMessage
 }
 
-// TemplateRunStatusActivityInput asks the worker to persist one run status transition.
+// TemplateRunStatusActivityInput asks the control plane to persist one run status transition.
 type TemplateRunStatusActivityInput struct {
 	RunID           TemplateRunID
 	TenantID        TenantID
@@ -72,7 +72,7 @@ type TemplateRunStatusActivityInput struct {
 	ErrorSummary    string
 }
 
-// PrepareWorkspaceActivityInput asks the worker to create a local run workspace.
+// PrepareWorkspaceActivityInput asks the executor to create a local run workspace.
 type PrepareWorkspaceActivityInput struct {
 	RunID    TemplateRunID
 	TenantID TenantID
@@ -126,7 +126,7 @@ type ReleaseRunKeyActivityInput struct {
 	RunID    TemplateRunID
 }
 
-// FetchSourceActivityInput asks the worker to clone a template source into a prepared run workspace.
+// FetchSourceActivityInput asks the executor to clone a template source into a prepared run workspace.
 type FetchSourceActivityInput struct {
 	RunID         TemplateRunID
 	TenantID      TenantID
@@ -150,7 +150,7 @@ type FetchSourceActivityOutput struct {
 	TerraformPath string
 }
 
-// RunTerraformActivityInput asks the worker to run one Terraform subprocess command.
+// RunTerraformActivityInput asks the executor to run one Terraform subprocess command.
 type RunTerraformActivityInput struct {
 	RunID           TemplateRunID
 	TenantID        TenantID
@@ -184,7 +184,7 @@ type TemplateSyncWorkflowInput struct {
 	RootPath       string
 }
 
-// TemplateSyncActivityInput asks the worker to sync one template registration source.
+// TemplateSyncActivityInput asks the control plane to sync one template registration source.
 type TemplateSyncActivityInput struct {
 	RegistrationID TemplateRegistrationID
 	TenantID       TenantID
@@ -202,7 +202,7 @@ type TemplateSyncActivityOutput struct {
 	ErrorSummary       string
 }
 
-// TemplateRegistrationStatusActivityInput asks the worker to persist one registration status transition.
+// TemplateRegistrationStatusActivityInput asks the control plane to persist one registration status transition.
 type TemplateRegistrationStatusActivityInput struct {
 	RegistrationID     TemplateRegistrationID
 	TenantID           TenantID

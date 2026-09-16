@@ -16,7 +16,7 @@ This document describes tflive's current MVP product model, system architecture,
 - Start every Terraform run in a fresh empty working directory.
 - Persist product metadata, activity history, run state, logs, and artifacts.
 - Use a stable Terraform workspace per installed stack template.
-- Keep the MVP fast by running Terraform in worker activity processes, not Kubernetes Jobs.
+- Keep the MVP fast by running Terraform in executor activity processes, not Kubernetes Jobs.
 
 ## Non-Goals For MVP
 
@@ -34,7 +34,7 @@ The MVP uses Temporal OSS as the durable workflow engine, Postgres as the applic
 
 The architecture also defines a pluggable `EventBus` interface for system events, live log fanout, and future pub/sub needs. The MVP can start with a no-op, in-memory, or simple local implementation, then swap in Redis, NATS JetStream, Kafka, or another broker without changing API or workflow semantics.
 
-The system is split into a control plane and a data plane (design: `docs/superpowers/specs/2026-09-15-control-plane-split.md`). The API process is the control plane: it serves HTTP, owns the database and every key, runs the queue loop that turns committed intents into workflow starts and signals, and polls Temporal's `control` task queue for workflow tasks and the activities that write product state. The executor process is the data plane: it polls only the `execution` task queue and runs workspace preparation, source checkout, and Terraform. It holds no database URL and no key. Neither process calls the other; every exchange goes through Temporal.
+The system is split into a control plane and a data plane (design: `docs/superpowers/specs/2026-09-15-control-plane-split.md`). The API process is the control plane: it serves HTTP, owns the database and every key, runs the queue loop that turns committed intents into workflow starts and signals, and polls Temporal's `control` task queue for workflow tasks and the activities that write product state. The executor process is the data plane: it polls only the `execution` task queue and runs workspace preparation, source checkout, and Terraform. It holds no database URL and no key. Neither process calls the other; every exchange goes through Temporal. [Apply run sequence](apply-run-sequence.md) walks an apply through every round trip.
 
 ```text
 UI --> tflive-api  (control plane)                      Temporal Server
@@ -109,7 +109,9 @@ Work is split across two task queues, named by constants in `internal/domain`:
 ```text
 control     workflow tasks and control activities; polled by the API
 execution   workspace, source, and Terraform activities; polled by executors
-``` Operation type is represented in run metadata:
+```
+
+Operation type is represented in run metadata:
 
 ```text
 plan | apply | destroy
@@ -117,15 +119,15 @@ plan | apply | destroy
 
 Every executor replica enables Temporal Session Workers. A `TemplateRun` creates
 one session for its filesystem-dependent work, so workspace preparation, source
-checkout, and Terraform activities stay on the same worker replica. The session
+checkout, and Terraform activities stay on the same executor replica. The session
 also remains owned by that replica while an apply or destroy workflow waits for
 approval before continuing. The session has a 1-minute creation timeout and a
 24-hour execution timeout; the execution timeout bounds the entire session,
 including any approval wait. Status activities can run independently. Run
 metadata and status are persisted in Postgres, while completed logs and
 artifacts are uploaded to the configured S3-compatible artifact store. The
-live workspace and phase-log spool remain worker-local until the activity
-completes, so a worker crash can lose in-flight local output.
+live workspace and phase-log spool remain executor-local until the activity
+completes, so an executor crash can lose in-flight local output.
 
 ### Executors
 
@@ -157,11 +159,11 @@ The runner should be implemented behind an interface so a future `KubernetesJobR
 
 ### Runner Security
 
-The MVP local process runner is optimized for fast feedback, but it should be treated as trusted-template execution. OpenTofu/Terraform providers, provisioners, external data sources, and local-exec style behavior may execute code inside the worker pod with access to the run's injected credentials.
+The MVP local process runner is optimized for fast feedback, but it should be treated as trusted-template execution. OpenTofu/Terraform providers, provisioners, external data sources, and local-exec style behavior may execute code inside the executor pod with access to the run's injected credentials. The executor holds no database URL or key, but it can still reach Temporal, which has no access control yet; see "Temporal access control" in the control plane split spec.
 
-MVP worker deployments should use the following guardrails:
+MVP executor deployments should use the following guardrails:
 
-- Run worker containers as non-root.
+- Run executor containers as non-root.
 - Avoid host mounts and shared writable volumes.
 - Use fresh per-run working directories with cleanup after every run.
 - Apply CPU, memory, ephemeral storage, and wall-clock limits.
@@ -169,8 +171,8 @@ MVP worker deployments should use the following guardrails:
 - Prefer short-lived credentials wherever supported.
 - Avoid persisting secret values to Postgres, object storage, Temporal payloads, or logs.
 - Redact known secret values before logs are streamed or persisted.
-- Restrict worker network egress where practical.
-- Separate workers by task queue or deployment if future tenants, templates, or credential sets require stronger trust boundaries.
+- Restrict executor network egress where practical.
+- Separate executors by task queue or deployment if future tenants, templates, or credential sets require stronger trust boundaries.
 
 Stronger isolation, such as a Kubernetes Job per run, sandboxed containers, remote runners, or per-tenant runner pools, remains a deferred design topic. The `LocalProcessRunner` interface keeps that migration path open without changing workflow semantics.
 
@@ -648,8 +650,8 @@ Cancellation is cooperative and must leave the product lock, run status, and log
 
 - The API records the cancel request actor and timestamp, then sends a cancellation signal to Temporal.
 - If the run is queued or waiting for approval, the workflow can mark it canceled without starting more Terraform work.
-- If a Terraform subprocess is active, the worker first sends a graceful interrupt, waits for a bounded shutdown period, then terminates the process if needed.
-- Long-running activities heartbeat cancellation progress so Temporal can observe worker liveness.
+- If a Terraform subprocess is active, the executor first sends a graceful interrupt, waits for a bounded shutdown period, then terminates the process if needed.
+- Long-running activities heartbeat cancellation progress so Temporal can observe executor liveness.
 - Partial logs are flushed to object storage before the run reaches `canceled`.
 - The product-level lock is released only during cancellation finalization.
 - Canceling an apply or destroy does not imply infrastructure rollback; the next run should use Terraform state and backend locking to determine the current infrastructure state.
@@ -789,9 +791,9 @@ Postgres remains the product source of truth for the UI.
 
 ## Scaling
 
-Workers scale horizontally as Kubernetes deployments.
+Executors scale horizontally as Kubernetes deployments.
 
-Each worker pod has local concurrency limits, for example:
+Each executor pod has local concurrency limits, for example:
 
 ```text
 max concurrent Terraform activities per pod = 2
@@ -800,10 +802,10 @@ max concurrent Terraform activities per pod = 2
 Total execution capacity is:
 
 ```text
-worker replicas * per-pod Terraform concurrency
+executor replicas * per-pod Terraform concurrency
 ```
 
-If all workers are busy, new tasks remain queued in Temporal until a worker has capacity.
+If all executors are busy, new tasks remain queued in Temporal until an executor has capacity.
 
 Session affinity makes these capacity settings distinct. The ordinary Terraform
 activity concurrency shown above controls activity execution; it is not the
@@ -848,7 +850,7 @@ Future design should answer:
 
 ### Stronger Runner Isolation
 
-MVP uses local subprocess execution inside worker pods for speed.
+MVP uses local subprocess execution inside executor pods for speed.
 
 Future options:
 
@@ -862,7 +864,7 @@ Future options:
 Authorization is OpenFGA, embedded in the API process. There is no OpenFGA
 service to run and nothing to provision: the API applies OpenFGA's migrations to
 the application database, then adopts or creates its store and model from
-`internal/authorization/authorization-model.fga` at startup. The worker does no
+`internal/authorization/authorization-model.fga` at startup. The executor does no
 authorization work and embeds nothing.
 
 `internal/authorization` is the whole boundary. It exposes `Can`, `CanAll`,
@@ -924,7 +926,7 @@ The MVP identifies useful scaling metrics, but a full observability contract is 
 
 Future design should answer:
 
-- which structured log fields are required across API, worker, and workflow code
+- which structured log fields are required across API, executor, and workflow code
 - which run and phase duration metrics are emitted
 - how cancellation, failure, and approval wait time are measured
 - whether traces connect API requests, Temporal workflows, activities, and log streams

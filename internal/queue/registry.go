@@ -76,7 +76,7 @@ func (registry *SpecRegistry) Resolve(request Request) (Resolved, error) {
 	}, nil
 }
 
-// Registry maps a Kind to its Handler. The worker needs this one; producers
+// Registry maps a Kind to its Handler. The queue loop needs this one; producers
 // need only the specs it is built from.
 type Registry struct {
 	handlers map[Kind]Handler

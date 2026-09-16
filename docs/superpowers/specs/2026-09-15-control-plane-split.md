@@ -1,7 +1,8 @@
 # Control plane split: api owns control, executor only executes
 
-Status: design, no code written. Run sandboxing is out of scope and follows
-this work (see "Not in this change").
+Status: implemented on `feat/control-plane-split` (steps 1–5). Run sandboxing
+and Temporal access control are out of scope and follow this work (see "Not in
+this change").
 
 ## Problem
 
@@ -41,8 +42,8 @@ tflive-api                                                    tflive-executor
  ├─ queue loop (work_queue → Temporal)        ──start/signal─▶     (sessions enabled)
  └─ Temporal worker, queue "control"          ◀─poll/respond─      ├─ PrepareWorkspace  (+ run keypair)
      ├─ TemplateRunWorkflow, TemplateSyncWorkflow                   ├─ FetchSource       (opens sealed token)
-     ├─ RecordTemplateRunStatus, RecordTemplateRunLog               └─ RunTerraform      (opens sealed creds)
-     ├─ SealRunCredentials, SealSourceToken
+     ├─ RecordTemplateRunStatus, RecordTemplateRunLog               ├─ RunTerraform      (opens sealed creds)
+     ├─ SealRunCredentials, SealSourceToken                         └─ ReleaseRunKey     (drops the keypair)
      └─ RecordTemplateRegistrationStatus, SyncTemplate
           │                                     temporal-server
           ▼                                        ▲    ▲
@@ -99,7 +100,8 @@ control    SealSourceToken    → installation token for owner/repo, box.SealAno
 execution  FetchSource        → opens token, clones
 control    SealRunCredentials → reads + decrypts credential rows, seals the env map
 execution  RunTerraform       → opens env, runs tofu          (seal again before every command)
-end of session                 → executor drops the private key
+execution  ReleaseRunKey      → executor drops the private key (runseal also expires
+                                  unreleased keys after 25h, past the 24h session)
 ```
 
 Temporal history holds only the public key and ciphertext. Sealing again before
@@ -114,9 +116,19 @@ token passes through history where other runs can use it while live); Temporal
 payload codec (every executor holds the key that decrypts all history);
 plaintext activity results (secrets in history forever).
 
-**Limit:** this protects credentials in Temporal and in transit. It does not
-stop one run reading another run's tofu environment on a shared executor. That
-is run sandboxing, not this change.
+**Limit:** this protects credentials in Temporal history and in transit. It
+does not stop one run reading another run's tofu environment on a shared
+executor. That is run sandboxing, not this change.
+
+Nor does it stop a compromised executor from obtaining any tenant's
+credentials. A `local-exec` can reach Temporal, which has no access control:
+it can poll `control` and answer a workflow task by scheduling
+`SealRunCredentials` for another tenant against a public key it holds, or start
+a `TemplateRunWorkflow` naming another tenant's stack template. Removing
+`DATABASE_URL` and the keys from the executor raises the bar from reading an
+environment variable to speaking the Temporal protocol; it does not close the
+cross-tenant exposure described in Problem. That needs "Temporal access
+control" below.
 
 ### D4. Template sync moves wholly to control
 

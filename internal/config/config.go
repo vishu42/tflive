@@ -150,8 +150,8 @@ func loadCredentialEncryptionKey(getenv func(string) string) (Secret, error) {
 // GitHubAppConfig identifies the GitHub App whose installations grant access to
 // private template repositories.
 //
-// It lives on the worker alone: the API process never clones, so it has no use
-// for a signing key and should not hold one.
+// It lives on the API alone: the control plane mints installation tokens and
+// seals them to the executor, which never holds the signing key.
 type GitHubAppConfig struct {
 	AppID      string
 	PrivateKey Secret

@@ -17,7 +17,7 @@ const (
 	OperationDestroy OperationType = "destroy"
 )
 
-// TerraformCommandType identifies one Terraform subprocess command run by a worker.
+// TerraformCommandType identifies one Terraform subprocess command run by an executor.
 type TerraformCommandType string
 
 const (

@@ -24,10 +24,10 @@ const (
 	approverSubject  = domain.UserID("cb4afba6-d18d-496f-80ce-8a50b94f09be")
 )
 
-// TestTemplateRunWorkflowUsesSessionForWorkspaceActivities protects the worker
+// TestTemplateRunWorkflowUsesSessionForWorkspaceActivities protects the executor
 // affinity contract for the filesystem-backed workspace. If a future change
 // schedules any workspace activity on the normal queue, it could run on a
-// different worker that does not have the run's local files. The apply and
+// different executor that does not have the run's local files. The apply and
 // destroy cases also prove that the session survives the approval wait.
 func TestTemplateRunWorkflowUsesSessionForWorkspaceActivities(t *testing.T) {
 	for _, testCase := range []struct {
