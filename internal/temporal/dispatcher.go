@@ -3,6 +3,7 @@ package temporal
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/vishu42/tflive/internal/domain"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -15,15 +16,28 @@ type workflowClient interface {
 }
 
 type Dispatcher struct {
-	client workflowClient
+	client  workflowClient
+	options DispatcherOptions
 }
 
-func NewDispatcher(temporalClient client.Client) *Dispatcher {
-	return newDispatcher(temporalClient)
+// DispatcherOptions carries the deployment-wide policy applied when a workflow
+// is started, as opposed to what the caller asked to run.
+type DispatcherOptions struct {
+	// TerraformTimeout bounds each Terraform command the run issues. Zero
+	// leaves the workflow's own default in place.
+	TerraformTimeout time.Duration
 }
 
-func newDispatcher(temporalClient workflowClient) *Dispatcher {
-	return &Dispatcher{client: temporalClient}
+func NewDispatcher(temporalClient client.Client, options DispatcherOptions) *Dispatcher {
+	return newDispatcher(temporalClient, options)
+}
+
+func newDispatcher(temporalClient workflowClient, options ...DispatcherOptions) *Dispatcher {
+	dispatcher := &Dispatcher{client: temporalClient}
+	if len(options) > 0 {
+		dispatcher.options = options[0]
+	}
+	return dispatcher
 }
 
 // StartTemplateRun dispatches one TemplateRunWorkflow execution to Temporal.
@@ -31,6 +45,14 @@ func newDispatcher(temporalClient workflowClient) *Dispatcher {
 // the same logical run. Workflows run on the control queue; the workflow itself
 // routes execution activities to the executor.
 func (dispatcher *Dispatcher) StartTemplateRun(ctx context.Context, input domain.TemplateRunWorkflowInput) error {
+	// The timeout is stamped here rather than carried from the request: it is
+	// deployment configuration, not something a caller chose, and stamping it
+	// at dispatch means a run that sat in the queue across a reconfiguration
+	// starts with the timeout in force now. Once started, the run keeps this
+	// value for its whole life, because it is in the workflow's input.
+	if input.TerraformTimeout <= 0 {
+		input.TerraformTimeout = dispatcher.options.TerraformTimeout
+	}
 	_, err := dispatcher.client.ExecuteWorkflow(
 		ctx,
 		client.StartWorkflowOptions{

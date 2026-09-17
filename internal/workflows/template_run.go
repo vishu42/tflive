@@ -342,6 +342,18 @@ func (run *templateRunWorkflow) complete() error {
 	return run.recordStatus(domain.TemplateRunCompleted)
 }
 
+// terraformTimeout is how long one Terraform command may run before Temporal
+// fails it. It comes from the deployment's configuration, stamped onto the
+// input when the run was dispatched, so a run keeps the budget it started with
+// even if the control plane is reconfigured while it is in flight. Zero means
+// nothing configured it, which is the default.
+func (run *templateRunWorkflow) terraformTimeout() time.Duration {
+	if run.input.TerraformTimeout > 0 {
+		return run.input.TerraformTimeout
+	}
+	return domain.DefaultTerraformTimeout
+}
+
 // terraformRetryPolicy is applied to long-running Terraform commands (plan,
 // apply). MaximumAttempts is temporarily pinned to 1 (no automatic retries) —
 // in Temporal, 0 means unlimited attempts, not zero retries, so 1 is the
@@ -414,11 +426,18 @@ func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType
 	activityCtx, cancelActivity := workflow.WithCancel(run.sessionCtx)
 	defer cancelActivity()
 
-	// Apply a longer timeout and more generous retry policy for Terraform
-	// commands that involve cloud API calls (plan, apply). Init and workspace
-	// selection use the default workflow-level options.
+	// Every Terraform command gets the configured budget and the more generous
+	// retry policy, including init and workspace selection: init downloads
+	// providers and modules over the network, which is no more predictable
+	// than the plan that follows it.
+	//
+	// The heartbeat timeout is what distinguishes a command that is working
+	// from one whose executor is gone: without it, a dead executor is
+	// indistinguishable from a slow apply until the whole Terraform timeout
+	// expires, and a cancel signal has no path to the running process.
 	terraformCtx := workflow.WithActivityOptions(activityCtx, workflow.ActivityOptions{
-		StartToCloseTimeout: 10 * time.Minute,
+		StartToCloseTimeout: run.terraformTimeout(),
+		HeartbeatTimeout:    domain.TerraformHeartbeatTimeout,
 		RetryPolicy:         terraformRetryPolicy,
 	})
 

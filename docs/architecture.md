@@ -129,6 +129,20 @@ artifacts are uploaded to the configured S3-compatible artifact store. The
 live workspace and phase-log spool remain executor-local until the activity
 completes, so an executor crash can lose in-flight local output.
 
+Each Terraform command inside that session is bounded separately by
+`TFLIVE_TERRAFORM_TIMEOUT` (default 45 minutes), read by the API and stamped
+onto the workflow input when the run is dispatched, so the budget a run started
+with stays visible in its history. The ceiling is per command, not per run: a
+run issues `init`, workspace selection, and then `plan`, `apply`, or `destroy`,
+and each gets the full budget. While a command runs, the executor heartbeats
+every 20 seconds, and Temporal fails the activity if two minutes pass without
+one -- six intervals of slack, because a Terraform command is not retried and a
+heartbeat lost to a pause should not kill a run mid-apply. The heartbeat
+carries no payload: Temporal reads only its arrival, so what keeps the activity
+alive is that one came, not what it said. It is also the only channel by which
+a cancel signal reaches a running command: Temporal delivers activity
+cancellation on the heartbeat response.
+
 ### Executors
 
 Executors are Go processes that poll the `execution` task queue and run the activities that sit next to tenant Terraform. They open no database connection and parse no key. Secrets a run needs, the repository token and the credential environment, are sealed on the control plane to an X25519 key the executor generates for that run in `PrepareWorkspace` (`internal/runseal`), so Temporal history holds only a public key and ciphertext. Results, including uploaded log metadata, return to the control plane through Temporal.

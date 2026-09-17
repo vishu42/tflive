@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/encryption"
 	"github.com/vishu42/tflive/internal/githubapp"
 )
@@ -29,7 +31,11 @@ type APIConfig struct {
 	// GitHubApp mints installation tokens for template sync, which runs on the
 	// control plane.
 	GitHubApp GitHubAppConfig
-	Debug     bool
+	// TerraformTimeout bounds each Terraform command a run issues. The control
+	// plane owns it because the control plane is what schedules the command and
+	// tells Temporal how long to wait; the executor never sees the value.
+	TerraformTimeout time.Duration
+	Debug            bool
 }
 
 // ExecutorConfig is the whole of the executor's configuration. It runs next to
@@ -99,6 +105,12 @@ func LoadAPIConfig(getenv func(string) string) (APIConfig, error) {
 	}
 	cfg.GitHubApp = gitHubApp
 
+	terraformTimeout, err := loadTerraformTimeout(getenv)
+	if err != nil {
+		return APIConfig{}, err
+	}
+	cfg.TerraformTimeout = terraformTimeout
+
 	if cfg.DatabaseURL == "" {
 		return APIConfig{}, fmt.Errorf("%w: DATABASE_URL is required", ErrInvalidConfig)
 	}
@@ -129,6 +141,30 @@ func LoadExecutorConfig(getenv func(string) string) (ExecutorConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// loadTerraformTimeout reads TFLIVE_TERRAFORM_TIMEOUT, the ceiling on a single
+// Terraform command.
+//
+// The value is a Go duration ("90m", "1h30m") rather than a bare number,
+// because a bare number here is the kind of setting where minutes and seconds
+// are confused once and the mistake is found by an apply that dies. Anything
+// unparseable or non-positive fails at startup: a deployment that meant to
+// raise the ceiling should not silently fall back to the default it was trying
+// to replace.
+func loadTerraformTimeout(getenv func(string) string) (time.Duration, error) {
+	value := strings.TrimSpace(getenv("TFLIVE_TERRAFORM_TIMEOUT"))
+	if value == "" {
+		return domain.DefaultTerraformTimeout, nil
+	}
+	timeout, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%w: TFLIVE_TERRAFORM_TIMEOUT must be a duration such as 45m or 2h", ErrInvalidConfig)
+	}
+	if timeout <= 0 {
+		return 0, fmt.Errorf("%w: TFLIVE_TERRAFORM_TIMEOUT must be greater than zero", ErrInvalidConfig)
+	}
+	return timeout, nil
 }
 
 // loadCredentialEncryptionKey validates CREDENTIAL_ENCRYPTION_KEY the same

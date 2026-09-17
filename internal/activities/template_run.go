@@ -9,11 +9,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/logsink"
 	"github.com/vishu42/tflive/internal/runner"
 	"github.com/vishu42/tflive/internal/runseal"
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )
 
@@ -227,6 +229,31 @@ type localTerraformRunner struct {
 	// runner owns Terraform CLI argument construction and subprocess execution.
 	runner   *runner.LocalProcessRunner
 	logStore TemplateRunLogStore
+	// heartbeat reports liveness to Temporal. Tests replace it; a zero value
+	// means recordActivityHeartbeat, which is a no-op off an activity context.
+	heartbeat func(context.Context)
+	// heartbeatInterval overrides domain.TerraformHeartbeatInterval in tests
+	// that cannot wait twenty seconds for a tick.
+	heartbeatInterval time.Duration
+}
+
+// recordActivityHeartbeat reports to Temporal when there is an activity to
+// report to. The same runner is exercised directly by tests holding an
+// ordinary context, where recording a heartbeat would panic.
+//
+// The heartbeat carries no details. Temporal does not read them: what keeps an
+// activity alive is that a heartbeat arrived, not what it said, and the
+// timeout behaves identically whether the payload describes the command's
+// progress or is empty. Progress reporting is worth adding back the day
+// someone needs to diagnose a stalled run from the Temporal UI, and it would
+// have to carry what the command has produced and how long it has been quiet,
+// since neither is derivable from the heartbeat timestamps Temporal keeps on
+// its own. Nothing reads it today, so nothing is sent.
+func recordActivityHeartbeat(ctx context.Context) {
+	if !activity.IsActivity(ctx) {
+		return
+	}
+	activity.RecordHeartbeat(ctx)
 }
 
 // RunTerraform writes command output to the workspace log file and runs OpenTofu.
@@ -248,6 +275,7 @@ func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input 
 	}
 
 	redactingWriter := newRedactingWriter(writer, credentialValues(input.Environment))
+	stopHeartbeat := localRunner.startHeartbeat(ctx)
 	runErr := localRunner.runner.Run(ctx, runner.TerraformCommand{
 		WorkspacePath: terraformPath(input),
 		WorkspaceName: input.WorkspaceName,
@@ -257,6 +285,7 @@ func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input 
 		Stdout:        redactingWriter,
 		Stderr:        redactingWriter,
 	})
+	stopHeartbeat()
 	closeErr := redactingWriter.Close()
 	if closeErr != nil {
 		return domain.TemplateRunLog{}, fmt.Errorf("close terraform log: %w", closeErr)
@@ -278,6 +307,48 @@ func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input 
 		log = uploaded
 	}
 	return log, runErr
+}
+
+// startHeartbeat reports liveness to Temporal until the returned stop function
+// is called.
+//
+// The ticker is what keeps a long apply alive: Temporal fails an activity that
+// misses its heartbeat timeout, so a command that runs for the better part of
+// an hour has to say so on its own, and only the executor knows it is still
+// there. Stopping is synchronous -- the goroutine has ended before stop
+// returns -- so no heartbeat is recorded after the activity has returned.
+func (localRunner localTerraformRunner) startHeartbeat(ctx context.Context) (stop func()) {
+	heartbeat := localRunner.heartbeat
+	if heartbeat == nil {
+		heartbeat = recordActivityHeartbeat
+	}
+	interval := localRunner.heartbeatInterval
+	if interval <= 0 {
+		interval = domain.TerraformHeartbeatInterval
+	}
+
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				heartbeat(ctx)
+			}
+		}
+	}()
+
+	return func() {
+		close(done)
+		<-stopped
+	}
 }
 
 type redactingWriter struct {
