@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/domain"
@@ -58,6 +59,55 @@ func TestStartTemplateRunExecutesWorkflow(t *testing.T) {
 	}
 	if !reflect.DeepEqual(workflowClient.executeArgs[0], input) {
 		t.Fatalf("workflow input = %#v, want %#v", workflowClient.executeArgs[0], input)
+	}
+}
+
+// TestStartTemplateRunStampsTheConfiguredTerraformTimeout pins where the
+// Terraform ceiling enters a run. Starting is the last moment a queued run can
+// pick up the deployment's current setting; after that the value travels in
+// the workflow input, where the run keeps it and an operator can read it back
+// out of history.
+func TestStartTemplateRunStampsTheConfiguredTerraformTimeout(t *testing.T) {
+	t.Parallel()
+
+	workflowClient := &recordingWorkflowClient{}
+	dispatcher := newDispatcher(workflowClient, DispatcherOptions{TerraformTimeout: 90 * time.Minute})
+
+	if err := dispatcher.StartTemplateRun(context.Background(), domain.TemplateRunWorkflowInput{
+		RunID:    domain.TemplateRunID("run_123"),
+		TenantID: domain.TenantID("tenant_123"),
+	}); err != nil {
+		t.Fatalf("StartTemplateRun returned error: %v", err)
+	}
+
+	started, ok := workflowClient.executeArgs[0].(domain.TemplateRunWorkflowInput)
+	if !ok {
+		t.Fatalf("workflow input = %#v, want a TemplateRunWorkflowInput", workflowClient.executeArgs[0])
+	}
+	if started.TerraformTimeout != 90*time.Minute {
+		t.Fatalf("TerraformTimeout = %v, want 90m", started.TerraformTimeout)
+	}
+}
+
+// TestStartTemplateRunWithoutAConfiguredTimeoutLeavesItToTheWorkflow keeps an
+// unconfigured dispatcher from stamping a zero that reads as a deliberate
+// choice. The workflow, not the dispatcher, owns the default.
+func TestStartTemplateRunWithoutAConfiguredTimeoutLeavesItToTheWorkflow(t *testing.T) {
+	t.Parallel()
+
+	workflowClient := &recordingWorkflowClient{}
+	dispatcher := newDispatcher(workflowClient)
+
+	if err := dispatcher.StartTemplateRun(context.Background(), domain.TemplateRunWorkflowInput{
+		RunID:    domain.TemplateRunID("run_123"),
+		TenantID: domain.TenantID("tenant_123"),
+	}); err != nil {
+		t.Fatalf("StartTemplateRun returned error: %v", err)
+	}
+
+	started := workflowClient.executeArgs[0].(domain.TemplateRunWorkflowInput)
+	if started.TerraformTimeout != 0 {
+		t.Fatalf("TerraformTimeout = %v, want zero so the workflow applies its default", started.TerraformTimeout)
 	}
 }
 

@@ -98,7 +98,7 @@ type apiDependencies struct {
 
 	dialTemporal       func(context.Context, temporal.Config) (client.Client, error)
 	newWorker          func(client.Client, string, temporalworker.Options) temporalWorker
-	newDispatcher      func(client.Client) app.WorkflowDispatcher
+	newDispatcher      func(client.Client, temporal.DispatcherOptions) app.WorkflowDispatcher
 	newQueueController func(controlStore, app.WorkflowDispatcher) (queueController, error)
 	// registerControl attaches both workflows and every control activity to the
 	// worker polling the control queue.
@@ -241,8 +241,8 @@ func defaultAPIDependencies() apiDependencies {
 		newWorker: func(temporalClient client.Client, taskQueue string, options temporalworker.Options) temporalWorker {
 			return temporalworker.New(temporalClient, taskQueue, options)
 		},
-		newDispatcher: func(temporalClient client.Client) app.WorkflowDispatcher {
-			return temporal.NewDispatcher(temporalClient)
+		newDispatcher: func(temporalClient client.Client, options temporal.DispatcherOptions) app.WorkflowDispatcher {
+			return temporal.NewDispatcher(temporalClient, options)
 		},
 		newQueueController: func(store controlStore, dispatcher app.WorkflowDispatcher) (queueController, error) {
 			registry, err := app.NewQueueRegistry(dispatcher, store)
@@ -513,7 +513,9 @@ func startControlPlane(ctx context.Context, cfg config.APIConfig, deps apiDepend
 	// TODO: no session worker here?
 	worker := deps.newWorker(temporalClient, domain.ControlTaskQueue, temporalworker.Options{})
 	deps.registerControl(worker, control, gitHubTokens)
-	controller, err := deps.newQueueController(control, deps.newDispatcher(temporalClient))
+	controller, err := deps.newQueueController(control, deps.newDispatcher(temporalClient, temporal.DispatcherOptions{
+		TerraformTimeout: cfg.TerraformTimeout,
+	}))
 	if err != nil {
 		temporalClient.Close()
 		return nil, fmt.Errorf("build queue controller: %w", err)

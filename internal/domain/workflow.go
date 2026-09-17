@@ -4,6 +4,7 @@ package domain
 
 import (
 	"encoding/json"
+	"time"
 )
 
 const (
@@ -42,6 +43,38 @@ const (
 	TerraformCommandFailedErrorType = "TerraformCommandFailed"
 )
 
+const (
+	// DefaultTerraformTimeout bounds one Terraform command -- not one run. A
+	// run issues several (init, workspace select, plan, apply), and each gets
+	// the full budget.
+	//
+	// It is deliberately generous: an apply that creates a managed database or
+	// a cluster legitimately runs for tens of minutes, and a run killed
+	// mid-apply leaves state the next run has to reconcile. Deployments that
+	// know their templates are shorter than this lower it with
+	// TFLIVE_TERRAFORM_TIMEOUT rather than living with a default that fails
+	// honest work.
+	DefaultTerraformTimeout = 45 * time.Minute
+
+	// TerraformHeartbeatInterval is how often a running Terraform command
+	// reports liveness, and TerraformHeartbeatTimeout is how long Temporal
+	// waits for the next report before failing the activity.
+	//
+	// The pair is the only thing that makes a lost executor visible before the
+	// full Terraform timeout expires, and the only channel by which a cancel
+	// signal reaches a running command: Temporal delivers activity
+	// cancellation on the heartbeat response, so an activity that never
+	// heartbeats can never be canceled.
+	//
+	// The slack between them is deliberately wide -- six intervals. Terraform
+	// commands are not retried, so a heartbeat lost to a GC pause or a blip in
+	// the Temporal frontend would kill a run in the middle of an apply, which
+	// is far more expensive than noticing a dead executor two minutes later
+	// instead of forty seconds later.
+	TerraformHeartbeatInterval = 20 * time.Second
+	TerraformHeartbeatTimeout  = 6 * TerraformHeartbeatInterval
+)
+
 // TemplateRunWorkflowInput starts one Terraform operation for one StackTemplate.
 type TemplateRunWorkflowInput struct {
 	RunID           TemplateRunID
@@ -60,6 +93,11 @@ type TemplateRunWorkflowInput struct {
 	RepoName          string
 	RootPath          string
 	ConfigJSON        json.RawMessage
+	// TerraformTimeout bounds each Terraform command this run issues. It is
+	// stamped by the dispatcher from deployment configuration so the value a
+	// run was started with stays visible in its workflow history; zero means
+	// DefaultTerraformTimeout.
+	TerraformTimeout time.Duration
 }
 
 // TemplateRunStatusActivityInput asks the control plane to persist one run status transition.

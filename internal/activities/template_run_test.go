@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/githubapp"
@@ -429,6 +431,102 @@ func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
 	}
 }
 
+// TestLocalTerraformRunnerHeartbeatsWhileTheCommandRuns covers what a
+// heartbeat is for: an apply that legitimately runs for half an hour has to
+// keep telling Temporal it is alive, or Temporal fails the activity at the
+// heartbeat timeout long before the command's real budget is spent. The silent
+// case is the important one -- a command producing no output at all still has
+// to report, because output is not what keeps it alive.
+func TestLocalTerraformRunnerHeartbeatsWhileTheCommandRuns(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		stdout string
+	}{
+		{name: "with output", stdout: "plan stdout\n"},
+		{name: "silent", stdout: ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			executor := &blockingCommandExecutor{
+				stdout:  testCase.stdout,
+				release: make(chan struct{}),
+			}
+			heartbeats := newHeartbeatRecorder()
+			terraformRunner := localTerraformRunner{
+				runner:            gitrunner.NewLocalProcessRunnerWithExecutor(executor),
+				heartbeat:         heartbeats.record,
+				heartbeatInterval: time.Millisecond,
+			}
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+					RunID:         domain.TemplateRunID("run_123"),
+					TenantID:      domain.TenantID("tenant_123"),
+					WorkspacePath: t.TempDir(),
+					WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+					Command:       domain.TerraformCommandPlan,
+				})
+				done <- err
+			}()
+
+			select {
+			case <-heartbeats.first:
+			case <-time.After(5 * time.Second):
+				t.Fatal("no heartbeat was recorded while the command was running")
+			}
+			close(executor.release)
+			if err := <-done; err != nil {
+				t.Fatalf("RunTerraform returned error: %v", err)
+			}
+		})
+	}
+}
+
+// TestLocalTerraformRunnerStopsHeartbeatingWhenTheCommandEnds guards the
+// lifetime of the heartbeat goroutine. A heartbeat recorded after the activity
+// returned is reported against a finished activity, and a goroutine per
+// Terraform command that never exits is a leak on a long-lived executor.
+func TestLocalTerraformRunnerStopsHeartbeatingWhenTheCommandEnds(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	close(release)
+	executor := &blockingCommandExecutor{stdout: "plan stdout\n", release: release}
+	heartbeats := newHeartbeatRecorder()
+	terraformRunner := localTerraformRunner{
+		runner:            gitrunner.NewLocalProcessRunnerWithExecutor(executor),
+		heartbeat:         heartbeats.record,
+		heartbeatInterval: time.Millisecond,
+	}
+
+	if _, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+		RunID:         domain.TemplateRunID("run_123"),
+		TenantID:      domain.TenantID("tenant_123"),
+		WorkspacePath: t.TempDir(),
+		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+		Command:       domain.TerraformCommandPlan,
+	}); err != nil {
+		t.Fatalf("RunTerraform returned error: %v", err)
+	}
+
+	settled := heartbeats.count()
+	time.Sleep(50 * time.Millisecond)
+	if got := heartbeats.count(); got != settled {
+		t.Fatalf("heartbeats after the command ended = %d, want none beyond the %d recorded during it", got-settled, settled)
+	}
+}
+
+// TestRecordActivityHeartbeatIsSafeOffAnActivity pins the guard that lets the
+// same runner be driven directly by tests and by tools: the Temporal SDK
+// panics when asked to heartbeat on a context that is not an activity's.
+func TestRecordActivityHeartbeatIsSafeOffAnActivity(t *testing.T) {
+	t.Parallel()
+
+	recordActivityHeartbeat(context.Background())
+}
+
 func TestRunTerraformWrapsRunnerError(t *testing.T) {
 	t.Parallel()
 
@@ -536,6 +634,53 @@ func (store *recordingTemplateRunLogStore) PutTemplateRunLog(_ context.Context, 
 	store.content = string(content)
 	store.returned = domain.TemplateRunLog{TenantID: tenantID, RunID: runID, Phase: phase, ObjectKey: "logs/" + phase + ".log", SizeBytes: int64(len(content))}
 	return store.returned, store.err
+}
+
+// blockingCommandExecutor writes its output and then waits, standing in for an
+// OpenTofu process that is still working when the heartbeat ticks.
+type blockingCommandExecutor struct {
+	stdout  string
+	release chan struct{}
+}
+
+func (executor *blockingCommandExecutor) Run(ctx context.Context, _ string, _ []string, stdout io.Writer, _ io.Writer, _ string, _ ...string) error {
+	if _, err := io.WriteString(stdout, executor.stdout); err != nil {
+		return err
+	}
+	select {
+	case <-executor.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// heartbeatRecorder counts what a running command reported and closes first as
+// soon as anything is reported. Heartbeats arrive on the runner's own
+// goroutine, so the recorder is guarded and never blocks it: a recorder that
+// blocked would deadlock the stop it is observing.
+type heartbeatRecorder struct {
+	mutex sync.Mutex
+	beats int
+	first chan struct{}
+	once  sync.Once
+}
+
+func newHeartbeatRecorder() *heartbeatRecorder {
+	return &heartbeatRecorder{first: make(chan struct{})}
+}
+
+func (recorder *heartbeatRecorder) record(_ context.Context) {
+	recorder.mutex.Lock()
+	recorder.beats++
+	recorder.mutex.Unlock()
+	recorder.once.Do(func() { close(recorder.first) })
+}
+
+func (recorder *heartbeatRecorder) count() int {
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	return recorder.beats
 }
 
 type recordingCommandExecutor struct {

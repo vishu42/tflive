@@ -367,6 +367,60 @@ func TestTemplateRunWorkflowGivesFetchSourceALongerTimeout(t *testing.T) {
 	}
 }
 
+// TestTemplateRunWorkflowBoundsTerraformCommandsByTheConfiguredTimeout pins the
+// two halves of how a long Terraform command survives: the budget comes from
+// the run's input, so a deployment can raise it, and a heartbeat timeout is
+// always set, so a lost executor fails within a couple of heartbeat intervals
+// instead of consuming the whole budget. A hard-coded StartToCloseTimeout here is what killed runs
+// longer than ten minutes.
+func TestTemplateRunWorkflowBoundsTerraformCommandsByTheConfiguredTimeout(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		configured  time.Duration
+		wantTimeout time.Duration
+	}{
+		{name: "configured", configured: 90 * time.Minute, wantTimeout: 90 * time.Minute},
+		{name: "unset", configured: 0, wantTimeout: domain.DefaultTerraformTimeout},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			env := newTemplateRunWorkflowTestEnvironment(t)
+			input := templateRunWorkflowInput(domain.OperationPlan)
+			input.TerraformTimeout = testCase.configured
+			var timeouts []time.Duration
+			var heartbeatTimeouts []time.Duration
+
+			env.OnActivity(domain.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+				Return(domain.PrepareWorkspaceActivityOutput{WorkspacePath: "run/workspace"}, nil)
+			env.OnActivity(domain.FetchSourceActivityName, mock.Anything, mock.Anything).
+				Return(domain.FetchSourceActivityOutput{TerraformPath: "run/workspace/source"}, nil)
+			env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
+				Return(func(ctx context.Context, _ domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
+					timeouts = append(timeouts, activity.GetInfo(ctx).StartToCloseTimeout)
+					heartbeatTimeouts = append(heartbeatTimeouts, activity.GetInfo(ctx).HeartbeatTimeout)
+					return domain.RunTerraformActivityOutput{}, nil
+				})
+			env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).Return(nil)
+
+			env.ExecuteWorkflow(TemplateRunWorkflow, input)
+
+			assertWorkflowCompleted(t, env)
+			if len(timeouts) == 0 {
+				t.Fatal("no Terraform command ran")
+			}
+			for _, timeout := range timeouts {
+				if timeout != testCase.wantTimeout {
+					t.Fatalf("RunTerraform StartToCloseTimeout = %v, want %v", timeout, testCase.wantTimeout)
+				}
+			}
+			for _, timeout := range heartbeatTimeouts {
+				if timeout != domain.TerraformHeartbeatTimeout {
+					t.Fatalf("RunTerraform HeartbeatTimeout = %v, want %v", timeout, domain.TerraformHeartbeatTimeout)
+				}
+			}
+		})
+	}
+}
+
 func TestTemplateRunWorkflowReturnsSessionFailureDuringApproval(t *testing.T) {
 	env := newTemplateRunWorkflowTestEnvironment(t)
 	env.SetTestTimeout(time.Second)

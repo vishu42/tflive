@@ -195,6 +195,9 @@ services:
       # repositories with an installation token.
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      # How long one Terraform command may run. The control plane owns it: it
+      # is what tells Temporal when to give up on an executor.
+      TFLIVE_TERRAFORM_TIMEOUT: ${TFLIVE_TERRAFORM_TIMEOUT:-45m}
       # Seeds the bootstrap administrator on first boot. Required by the API --
       # without it the process exits at startup and the service restart-loops.
       # Defaulted here because this file is the local stack; a real deployment

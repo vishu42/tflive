@@ -10,6 +10,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/vishu42/tflive/internal/domain"
 )
 
 func TestLoadAPIConfigReadsAPISettings(t *testing.T) {
@@ -101,6 +104,82 @@ func TestLoadAPIConfigAppliesDefaults(t *testing.T) {
 	}
 	if cfg.ArtifactStore.FilesystemRoot != DefaultArtifactStoreFilesystemRoot {
 		t.Fatalf("ArtifactStore.FilesystemRoot = %q, want %q", cfg.ArtifactStore.FilesystemRoot, DefaultArtifactStoreFilesystemRoot)
+	}
+}
+
+// TestLoadAPIConfigReadsTerraformTimeout covers the ceiling on a single
+// Terraform command, including the case that matters most: an unset value has
+// to land on the generous default, because the alternative is runs that die
+// mid-apply on a deployment nobody configured.
+func TestLoadAPIConfigReadsTerraformTimeout(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{name: "unset", value: "", want: domain.DefaultTerraformTimeout},
+		{name: "minutes", value: " 90m ", want: 90 * time.Minute},
+		{name: "hours and minutes", value: "1h30m", want: 90 * time.Minute},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := LoadAPIConfig(withValidSecurity(func(key string) string {
+				switch key {
+				case "DATABASE_URL":
+					return "postgres://user:pass@localhost:5432/db?sslmode=disable"
+				case "TEMPORAL_ADDRESS":
+					return "localhost:7233"
+				case "TFLIVE_TERRAFORM_TIMEOUT":
+					return testCase.value
+				default:
+					return ""
+				}
+			}))
+			if err != nil {
+				t.Fatalf("LoadAPIConfig returned error: %v", err)
+			}
+			if cfg.TerraformTimeout != testCase.want {
+				t.Fatalf("TerraformTimeout = %v, want %v", cfg.TerraformTimeout, testCase.want)
+			}
+		})
+	}
+}
+
+// TestLoadAPIConfigRejectsUnusableTerraformTimeout keeps a misconfigured
+// ceiling from degrading into the default it was meant to replace: an operator
+// who wrote "45" meaning minutes should hear about it at startup, not from an
+// apply that was killed.
+func TestLoadAPIConfigRejectsUnusableTerraformTimeout(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []string{"45", "forever", "0", "-10m"} {
+		value := value
+		t.Run(value, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := LoadAPIConfig(withValidSecurity(func(key string) string {
+				switch key {
+				case "DATABASE_URL":
+					return "postgres://user:pass@localhost:5432/db?sslmode=disable"
+				case "TEMPORAL_ADDRESS":
+					return "localhost:7233"
+				case "TFLIVE_TERRAFORM_TIMEOUT":
+					return value
+				default:
+					return ""
+				}
+			}))
+			if !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("error = %v, want ErrInvalidConfig", err)
+			}
+			if err == nil || !strings.Contains(err.Error(), "TFLIVE_TERRAFORM_TIMEOUT") {
+				t.Fatalf("error = %v, want it to name TFLIVE_TERRAFORM_TIMEOUT", err)
+			}
+		})
 	}
 }
 

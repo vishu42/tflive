@@ -453,7 +453,7 @@ func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
 	deps.newWorker = func(client.Client, string, temporalworker.Options) temporalWorker {
 		return &recordingControlWorker{}
 	}
-	deps.newDispatcher = func(client.Client) app.WorkflowDispatcher {
+	deps.newDispatcher = func(client.Client, temporal.DispatcherOptions) app.WorkflowDispatcher {
 		return recordingAPIDispatcher{}
 	}
 
@@ -670,7 +670,7 @@ func newRecordingAPIDependencies(t *testing.T) *recordingAPIDependencies {
 			deps.workerOptions = options
 			return deps.worker
 		},
-		newDispatcher: func(client.Client) app.WorkflowDispatcher {
+		newDispatcher: func(client.Client, temporal.DispatcherOptions) app.WorkflowDispatcher {
 			return deps.dispatcher
 		},
 		newQueueController: func(store controlStore, dispatcher app.WorkflowDispatcher) (queueController, error) {
