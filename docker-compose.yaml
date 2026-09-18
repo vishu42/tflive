@@ -233,6 +233,9 @@ services:
     restart: on-failure
     volumes:
       - artifacts:/var/lib/tflive/artifacts
+      # Shared by both replicas so a provider is downloaded once per host, not
+      # once per replica. Holds provider binaries only, never credentials.
+      - plugin-cache:/var/lib/tflive/plugin-cache
 
   web:
     build:
@@ -248,3 +251,4 @@ volumes:
   postgres-data:
   minio-data:
   artifacts:
+  plugin-cache:
