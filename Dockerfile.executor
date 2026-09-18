@@ -23,9 +23,17 @@ RUN apk add --no-cache ca-certificates git \
     && cd / \
     && addgroup -S tflive \
     && adduser -S -D -H -G tflive tflive \
-    && mkdir -p /var/lib/tflive/artifacts /var/lib/tflive/runs \
+    && mkdir -p /var/lib/tflive/artifacts /var/lib/tflive/runs /var/lib/tflive/plugin-cache \
     && chown -R tflive:tflive /var/lib/tflive
 COPY --from=build /out/tflive-executor /usr/local/bin/tflive-executor
+
+# tofu inherits this from the executor, so every init reuses providers already
+# unpacked here. It only skips the download when the template commits a
+# .terraform.lock.hcl whose hashes the cached copy matches; without one, tofu
+# re-downloads to verify. Do not set TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE:
+# the cache is shared by every tenant's run and writable by them, and that flag
+# makes tofu trust whatever binary is in it.
+ENV TF_PLUGIN_CACHE_DIR=/var/lib/tflive/plugin-cache
 
 USER tflive
 ENTRYPOINT ["/usr/local/bin/tflive-executor"]
