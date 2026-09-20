@@ -15,6 +15,17 @@ cp .env.example .env
 docker compose up -d --wait
 ```
 
+That stack has no identity provider, and the API serves local accounts. For
+Keycloak and OIDC sign-in, uncomment the `OIDC_ISSUER_URL` and `OIDC_CLIENT_*`
+lines in `.env` and bring the profile up:
+
+```bash
+docker compose --profile auth up -d --wait
+```
+
+The two go together. An issuer in the environment with no Keycloak running is a
+boot failure: the API discovers the provider while it starts.
+
 Nothing to copy afterwards. OpenFGA runs inside the API and resolves its store
 and authorization model from the model in this repository at startup.
 

@@ -1,0 +1,41 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  # Resource usage per container, keyed by container ID in the "name" label.
+  # cAdvisor reads containers through containerd, which does not carry
+  # Docker's labels, so the Compose service name comes from the job below.
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    metric_relabel_configs:
+      # Cgroups that are not containers (the VM root, buildkit) have no name.
+      - source_labels: [name]
+        regex: ""
+        action: drop
+
+  # One target per container in this stack, found through the Docker socket,
+  # so its "up" series carries name=<container ID> and service=<Compose
+  # service>. Dashboards join cAdvisor series on name to group by service.
+  # The scrape itself is only a vehicle for those labels: it hits Prometheus's
+  # own endpoint and keeps none of what it returns.
+  - job_name: compose-services
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        filters:
+          - name: label
+            values: ["com.docker.compose.project=tflive-compose"]
+    relabel_configs:
+      - source_labels: [__meta_docker_container_id]
+        target_label: name
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        target_label: service
+      - target_label: __address__
+        replacement: localhost:9090
+      # docker_sd emits a target per network and port; one per container.
+      - regex: __meta_docker_.*
+        action: labeldrop
+    metric_relabel_configs:
+      - regex: .+
+        source_labels: [__name__]
+        action: drop
