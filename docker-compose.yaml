@@ -35,7 +35,18 @@ services:
       timeout: 5s
       retries: 10
 
+  # An identity provider, opt in:
+  #
+  #   docker compose --profile auth up -d
+  #
+  # The API serves local accounts with no IdP at all, and that is the default
+  # stack: Keycloak is a JVM and a provisioning run nobody needs to pay for on
+  # every up. Enabling the profile means enabling the OIDC_* block in .env too
+  # -- the API reads the issuer from the environment, and a profile cannot set
+  # one. Issuer set with no Keycloak behind it is a boot failure, not a
+  # degraded login, because discovery happens while the API starts.
   keycloak:
+    profiles: ["auth"]
     image: quay.io/keycloak/keycloak:26.6.3
     command: start-dev
     depends_on:
@@ -70,6 +81,7 @@ services:
       start_period: 30s
 
   keycloak-provision:
+    profiles: ["auth"]
     build:
       context: .
       dockerfile: Dockerfile.keycloak-provisioner
@@ -175,8 +187,6 @@ services:
         condition: service_healthy
       temporal:
         condition: service_healthy
-      keycloak-provision:
-        condition: service_completed_successfully
     environment:
       HTTP_ADDRESS: ":8081"
       DATABASE_URL: postgres://${APP_DB_USER:-tflive}:${APP_DB_PASSWORD:-tflive}@postgres:5432/${APP_DB_NAME:-tflive_test}?sslmode=disable
@@ -184,9 +194,15 @@ services:
       TFLIVE_ENVIRONMENT: development
       TFLIVE_TENANT_ID: ${TFLIVE_TENANT_ID:-tenant_123}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-717cb4d0fd1db07a30442806c2987599580f6d7c6e63b9bddf509bc183a086d3}
-      OIDC_ISSUER_URL: http://keycloak.localhost:8082/realms/tflive
-      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-tflive-api}
-      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-tflive-api-local-only}
+      # Empty by default: no issuer means no provider, and the API serves local
+      # accounts. The three move together -- the config rejects a client with no
+      # issuer -- and .env turns them on alongside --profile auth. Ordering is
+      # left to restart: on-failure rather than depends_on, because Compose
+      # rejects the whole project when a profile-less service depends on a
+      # profiled one.
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       TFLIVE_PUBLIC_URL: ${TFLIVE_PUBLIC_URL:-http://localhost:5173}
       SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:-b6f1d2c4a8e0937516243b8c5d7e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0}
       ARTIFACT_STORE_KIND: filesystem
@@ -246,6 +262,72 @@ services:
     restart: on-failure
     ports:
       - "5173:5173"
+
+  # Per-container resource usage, opt in:
+  #
+  #   docker compose --profile metrics up -d
+  #
+  # cAdvisor reads every container through containerd, Prometheus scrapes it,
+  # and Grafana serves a provisioned dashboard at http://localhost:3001 grouped
+  # by Compose service, so both executor replicas sum under one name.
+  #
+  # No network panels: on Docker Desktop, containerd reports PIDs from a
+  # namespace cAdvisor cannot see, so per-container network counters never
+  # appear.
+  cadvisor:
+    profiles: ["metrics"]
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    # Read containers through containerd, not the Docker socket. Docker
+    # Desktop defaults to the containerd image store, where cAdvisor's Docker
+    # handler cannot find a container's layer and silently drops it. Docker's
+    # containers live in containerd's "moby" namespace.
+    command:
+      - --containerd=/run/containerd/containerd.sock
+      - --containerd-namespace=moby
+      - --docker=unix:///nonexistent.sock
+      - --docker_only=true
+    privileged: true
+    # Docker's cgroup v2 default gives each container a private cgroup
+    # namespace, which hides every other container from cAdvisor.
+    cgroup: host
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /sys:/sys:ro
+      - /run/containerd:/run/containerd:ro
+    ports:
+      # 8080 is temporal-ui's.
+      - "8083:8080"
+
+  prometheus:
+    profiles: ["metrics"]
+    image: prom/prometheus:v3.5.0
+    # docker_sd reads the Docker socket, which only root can open.
+    user: root
+    depends_on:
+      - cadvisor
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Service discovery only: maps container IDs to Compose service names.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    profiles: ["metrics"]
+    image: grafana/grafana:12.1.0
+    depends_on:
+      - prometheus
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/containers.json
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3001:3000"
 
 volumes:
   postgres-data:
