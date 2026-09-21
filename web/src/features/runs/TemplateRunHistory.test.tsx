@@ -41,7 +41,7 @@ function seedRuns(queryClient: QueryClient, runs: TemplateRun[]) {
 function renderHistory(queryClient: QueryClient) {
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/stacks/stack_1/template"]}>
+      <MemoryRouter initialEntries={["/stacks/stack_1/templates/stpl_1/runs"]}>
         <TemplateRunHistory stackId="stack_1" stackTemplateId="stpl_1" />
       </MemoryRouter>
     </QueryClientProvider>
@@ -57,14 +57,15 @@ describe("TemplateRunHistory", () => {
   it("links every run in the history to its run detail screen", () => {
     const queryClient = testQueryClient();
     seedRuns(queryClient, [
-      run({ id: "run_apply_1", operation: "apply", status: "waiting_approval", trigger_actor: "someone_else", started_at: "2026-07-20T01:00:00Z" }),
-      run({ id: "run_plan_1", operation: "plan", status: "completed", trigger_actor: "someone_else", started_at: "2026-07-20T00:00:00Z" })
+      run({ id: "run_apply_1", run_number: 2, operation: "apply", status: "waiting_approval", trigger_actor: "someone_else", started_at: "2026-07-20T01:00:00Z" }),
+      run({ id: "run_plan_1", run_number: 1, operation: "plan", status: "completed", trigger_actor: "someone_else", started_at: "2026-07-20T00:00:00Z" })
     ]);
 
     renderHistory(queryClient);
 
-    expect(screen.getByTestId("template-run-history-run_apply_1").getAttribute("href")).toBe("/stacks/stack_1/runs/run_apply_1");
-    expect(screen.getByTestId("template-run-history-run_plan_1").getAttribute("href")).toBe("/stacks/stack_1/runs/run_plan_1");
+    // Links carry the run's number within its template, not its id.
+    expect(screen.getByTestId("template-run-history-run_apply_1").getAttribute("href")).toBe("/stacks/stack_1/templates/stpl_1/runs/2");
+    expect(screen.getByTestId("template-run-history-run_plan_1").getAttribute("href")).toBe("/stacks/stack_1/templates/stpl_1/runs/1");
   });
 
   it("describes each run by number, operation, status, actor, and start time", () => {

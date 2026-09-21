@@ -295,8 +295,8 @@ describe("TemplateRunActions", () => {
         const body = JSON.parse(String(init?.body)) as { operation: string };
         const created =
           body.operation === "apply"
-            ? run({ id: "run_apply_1", operation: "apply", status: "waiting_approval", started_at: "2026-07-20T00:05:00Z" })
-            : run({ id: "run_plan_1", operation: "plan", status: "completed", started_at: "2026-07-20T00:00:00Z" });
+            ? run({ id: "run_apply_1", run_number: 2, operation: "apply", status: "waiting_approval", started_at: "2026-07-20T00:05:00Z" })
+            : run({ id: "run_plan_1", run_number: 1, operation: "plan", status: "completed", started_at: "2026-07-20T00:00:00Z" });
         runsState = [created, ...runsState];
         return jsonResponse(created, 201);
       }
@@ -316,7 +316,7 @@ describe("TemplateRunActions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
     await waitFor(() => expect(screen.getByTestId("template-run-plan-link")).toBeTruthy());
-    expect(screen.getByTestId("template-run-plan-link").getAttribute("href")).toBe("/stacks/stack_1/runs/run_plan_1");
+    expect(screen.getByTestId("template-run-plan-link").getAttribute("href")).toBe("/stacks/stack_1/templates/stpl_1/runs/1");
 
     // A completed plan run in the history is no longer enough on its own: Apply
     // waits for the server to report that the plan still matches desired state.
@@ -326,7 +326,7 @@ describe("TemplateRunActions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Apply/ }));
     await waitFor(() => expect(screen.getByTestId("template-run-apply-link")).toBeTruthy());
-    expect(screen.getByTestId("template-run-apply-link").getAttribute("href")).toBe("/stacks/stack_1/runs/run_apply_1");
+    expect(screen.getByTestId("template-run-apply-link").getAttribute("href")).toBe("/stacks/stack_1/templates/stpl_1/runs/2");
     await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Approve/ }))).toBe(false));
     expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(false);
 

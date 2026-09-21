@@ -18,7 +18,7 @@ import {
 import { configFromVariableValues } from "./stackWorkflow";
 import VariableFields from "./VariableFields";
 
-// /stacks/:stackId/template/new — installing a template, extracted from the
+// /stacks/:stackId/templates/new — installing a template, extracted from the
 // template screen where an always-present Install button sat next to an
 // unrelated config form. The picker mirrors /templates so choosing here looks
 // like browsing the registry: one row per template, named, with the ref and
@@ -89,7 +89,7 @@ export default function AddStackTemplateScreen() {
         template_revision_id: chosenRevision.id,
         config: configFromVariableValues(variables, values)
       });
-      navigate(`/stacks/${stackId}/template?selected=${installed.id}`);
+      navigate(`/stacks/${stackId}/templates/${installed.id}`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Request failed");
     }

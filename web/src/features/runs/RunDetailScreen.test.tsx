@@ -79,13 +79,19 @@ function seedCapabilities(queryClient: QueryClient, capabilities: StackCapabilit
   queryClient.setQueryData(queryKeys.stack("tenant_123", "stack_1"), { stack: stack(capabilities), templates: [] });
 }
 
-function renderScreen(queryClient: QueryClient, auth?: AuthContextValue) {
+// The URL names the run by number; the screen finds its id in the template's
+// runs list. Every test here is about the run itself, so the list is seeded
+// with run #1 unless a test has already put something else there.
+function renderScreen(queryClient: QueryClient, auth?: AuthContextValue, runNumber = "1") {
+  if (queryClient.getQueryData(queryKeys.templateRuns("tenant_123", "stpl_1")) === undefined) {
+    queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "stpl_1"), [run()]);
+  }
   return render(
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider value={auth ?? authValue()}>
-        <MemoryRouter initialEntries={["/stacks/stack_1/runs/run_1"]}>
+        <MemoryRouter initialEntries={[`/stacks/stack_1/templates/stpl_1/runs/${runNumber}`]}>
           <Routes>
-            <Route path="/stacks/:stackId/runs/:runId" element={<RunDetailScreen />} />
+            <Route path="/stacks/:stackId/templates/:stackTemplateId/runs/:runNumber" element={<RunDetailScreen />} />
           </Routes>
         </MemoryRouter>
       </AuthContext.Provider>
@@ -106,6 +112,36 @@ describe("RunDetailScreen", () => {
     cleanup();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("finds the run by its number within the template", async () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "stpl_1"), [
+      run({ id: "run_newer", run_number: 2 }),
+      run({ id: "run_older", run_number: 1 })
+    ]);
+    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_older"), run({ id: "run_older", run_number: 1, status: "failed", error_summary: "the older one" }));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input).includes("/template-runs/run_older/logs")) {
+        return jsonResponse([]);
+      }
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    });
+
+    renderScreen(queryClient, undefined, "1");
+
+    expect(screen.getByRole("heading", { name: "Run #1" })).toBeTruthy();
+    expect(screen.getByText("the older one")).toBeTruthy();
+  });
+
+  it("says so when the template has no run with that number", () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+
+    renderScreen(queryClient, undefined, "9");
+
+    expect(screen.getByTestId("run-detail-missing").textContent).toContain("#9");
   });
 
   it("shows a loading state while the run query is pending", () => {

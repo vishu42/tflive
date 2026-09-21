@@ -7,7 +7,7 @@ interface TemplateRunHistoryProps {
   stackTemplateId: string;
 }
 
-// Every run recorded for the selected template on /stacks/:stackId/template.
+// Every run recorded for a template, on its Runs tab.
 // Read-only by design — the controls that start a run live in
 // TemplateRunActions, so this section is purely a log you consult. It shares
 // the runs query key with that component, so both render from one request.
@@ -26,7 +26,7 @@ export default function TemplateRunHistory({ stackId, stackTemplateId }: Templat
         <ul>
           {runs.map((historyRun) => (
             <li key={historyRun.id}>
-              <Link to={`/stacks/${stackId}/runs/${historyRun.id}`} data-testid={`template-run-history-${historyRun.id}`}>
+              <Link to={`/stacks/${stackId}/templates/${stackTemplateId}/runs/${historyRun.run_number}`} data-testid={`template-run-history-${historyRun.id}`}>
                 #{historyRun.run_number} - {historyRun.operation} - {historyRun.status} - {historyRun.trigger_actor} - {historyRun.started_at}
               </Link>
             </li>

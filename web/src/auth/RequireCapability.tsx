@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Outlet, useParams } from "react-router-dom";
+import { Outlet, useOutletContext, useParams } from "react-router-dom";
 import { useAuth } from "./AuthContext";
 import { useStackCapabilities } from "./useStackCapabilities";
 import type { Me } from "./types";
@@ -52,6 +52,10 @@ function useCapabilityState(capability: CapabilityKey, stackId: string | undefin
 
 export default function RequireCapability({ capability, stackId, mode = "gate", children, fallback }: RequireCapabilityProps) {
   const state = useCapabilityState(capability, stackId);
+  // A route guard sits between a layout and the page it guards, so it hands
+  // the layout's outlet context through; otherwise the guarded page would
+  // lose it just for being guarded.
+  const outletContext = useOutletContext();
 
   // Loading is a distinct outcome from "denied" in both modes — never flash
   // denied/fallback content before the underlying auth/stack query resolves.
@@ -63,7 +67,7 @@ export default function RequireCapability({ capability, stackId, mode = "gate", 
     if (state === "denied") {
       return capability === "canView" ? <NotFound /> : <AccessDenied />;
     }
-    return <Outlet />;
+    return <Outlet context={outletContext} />;
   }
 
   if (state === "denied") {

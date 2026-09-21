@@ -1,4 +1,4 @@
-import { createBrowserRouter, createMemoryRouter, redirect } from "react-router-dom";
+import { createBrowserRouter, createMemoryRouter, Navigate, redirect } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import AppShell from "./AppShell";
 import NotFound from "./NotFound";
@@ -8,7 +8,12 @@ import SessionProvider from "../auth/SessionProvider";
 import SignInScreen from "../auth/SignInScreen";
 import StacksListScreen from "../features/stacks/StacksListScreen";
 import StackDetailShell from "../features/stacks/StackDetailShell";
-import StackTemplateScreen from "../features/stacks/StackTemplateScreen";
+import StackTemplateListScreen from "../features/stacks/StackTemplateListScreen";
+import StackTemplateDetailShell from "../features/stacks/StackTemplateDetailShell";
+import TemplateRunsTab from "../features/stacks/TemplateRunsTab";
+import TemplateVariablesTab from "../features/stacks/TemplateVariablesTab";
+import TemplateCredentialsTab from "../features/stacks/TemplateCredentialsTab";
+import TemplateSettingsTab from "../features/stacks/TemplateSettingsTab";
 import AddStackTemplateScreen from "../features/stacks/AddStackTemplateScreen";
 import UpgradeStackTemplateScreen from "../features/stacks/UpgradeStackTemplateScreen";
 import EnvironmentScreen from "../features/stacks/EnvironmentScreen";
@@ -77,26 +82,41 @@ export const routeConfig: RouteObject[] = [
                 element: <StackDetailShell />,
                 children: [
                   { index: true, element: <RoutePlaceholder title="Stack overview" /> },
-                  { path: "template", element: <StackTemplateScreen /> },
+                  { path: "templates", element: <StackTemplateListScreen /> },
                   {
-                    path: "template/new",
+                    path: "templates/new",
                     element: <RequireCapability capability="canOperate" mode="route" />,
                     children: [{ index: true, element: <AddStackTemplateScreen /> }]
                   },
                   {
-                    path: "template/:stackTemplateId/upgrade",
+                    path: "templates/:stackTemplateId/upgrade",
                     element: <RequireCapability capability="canOperate" mode="route" />,
                     children: [{ index: true, element: <UpgradeStackTemplateScreen /> }]
+                  },
+                  // One page per installed template, its sections on tabs.
+                  // Run detail nests under runs/ so the Runs tab stays lit
+                  // while reading one; the index sends you to Runs.
+                  {
+                    path: "templates/:stackTemplateId",
+                    element: <StackTemplateDetailShell />,
+                    children: [
+                      { index: true, element: <Navigate to="runs" replace /> },
+                      { path: "runs", element: <TemplateRunsTab /> },
+                      { path: "runs/:runNumber", element: <RunDetailScreen /> },
+                      { path: "variables", element: <TemplateVariablesTab /> },
+                      {
+                        path: "credentials",
+                        element: <RequireCapability capability="canManageAccess" mode="route" />,
+                        children: [{ index: true, element: <TemplateCredentialsTab /> }]
+                      },
+                      { path: "settings", element: <TemplateSettingsTab /> }
+                    ]
                   },
                   {
                     path: "environment",
                     element: <RequireCapability capability="canManageAccess" mode="route" />,
                     children: [{ index: true, element: <EnvironmentScreen /> }]
                   },
-                  // Runs render inline on the template screen (issue #130);
-                  // only the run detail route remains, reached by clicking a
-                  // run in that screen's history.
-                  { path: "runs/:runId", element: <RunDetailScreen /> },
                   {
                     path: "access",
                     element: <RequireCapability capability="canManageAccess" mode="route" />,

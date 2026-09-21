@@ -72,10 +72,10 @@ function renderScreen(queryClient: QueryClient) {
   return render(
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider value={authValue()}>
-        <MemoryRouter initialEntries={["/stacks/stack_1/template/new"]}>
+        <MemoryRouter initialEntries={["/stacks/stack_1/templates/new"]}>
           <Routes>
-            <Route path="/stacks/:stackId/template/new" element={<AddStackTemplateScreen />} />
-            <Route path="/stacks/:stackId/template" element={<LocationProbe />} />
+            <Route path="/stacks/:stackId/templates/new" element={<AddStackTemplateScreen />} />
+            <Route path="/stacks/:stackId/templates/:stackTemplateId" element={<LocationProbe />} />
           </Routes>
         </MemoryRouter>
       </AuthContext.Provider>
@@ -224,7 +224,7 @@ describe("AddStackTemplateScreen", () => {
     expect(screen.getByLabelText(/region/)).toBeTruthy();
   });
 
-  it("installs the chosen revision and returns to the template screen with it selected", async () => {
+  it("installs the chosen revision and opens the installed template's page", async () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [templateRevision()]);
     queryClient.setQueryData(queryKeys.templateRevisionVariables("tenant_123", "rev_1"), [variable()]);
@@ -242,7 +242,7 @@ describe("AddStackTemplateScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: /Install/ }));
 
     await waitFor(() => expect(screen.getByTestId("location")).toBeTruthy());
-    expect(screen.getByTestId("location").textContent).toBe("/stacks/stack_1/template?selected=st_new");
+    expect(screen.getByTestId("location").textContent).toBe("/stacks/stack_1/templates/st_new");
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/v1/tenants/tenant_123/stacks/stack_1/templates");

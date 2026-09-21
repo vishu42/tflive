@@ -22,7 +22,7 @@ function latestRunFor(runs: TemplateRun[], operation: Operation): TemplateRun | 
   return runs.find((candidate) => candidate.operation === operation) ?? null;
 }
 
-// The operations header for the selected template on /stacks/:stackId/template.
+// The operations header on a template's Runs tab.
 // Run state is derived entirely from the server's run history
 // (useTemplateRunsQuery), not from local component state, so it is visible to
 // every user who can view the stack — not just the browser tab that started a
@@ -129,7 +129,7 @@ export default function TemplateRunActions({ stackId, stackTemplate }: TemplateR
         <div>
           <StatusRow label="Plan" value={planRun?.status ?? "not started"} />
           {planRun && (
-            <Link to={`/stacks/${stackId}/runs/${planRun.id}`} data-testid="template-run-plan-link">
+            <Link to={`/stacks/${stackId}/templates/${stackTemplate.id}/runs/${planRun.run_number}`} data-testid="template-run-plan-link">
               View plan run
             </Link>
           )}
@@ -137,7 +137,7 @@ export default function TemplateRunActions({ stackId, stackTemplate }: TemplateR
         <div>
           <StatusRow label="Apply" value={applyRun?.status ?? "not started"} />
           {applyRun && (
-            <Link to={`/stacks/${stackId}/runs/${applyRun.id}`} data-testid="template-run-apply-link">
+            <Link to={`/stacks/${stackId}/templates/${stackTemplate.id}/runs/${applyRun.run_number}`} data-testid="template-run-apply-link">
               View apply run
             </Link>
           )}

@@ -2,7 +2,14 @@ import { useState } from "react";
 import { CircleStop, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { isTerminalRunStatus } from "../../api/polling";
-import { useApproveRunMutation, useCancelRunMutation, useTemplateRunLogQuery, useTemplateRunLogsQuery, useTemplateRunQuery } from "../../api/queries";
+import {
+  useApproveRunMutation,
+  useCancelRunMutation,
+  useTemplateRunLogQuery,
+  useTemplateRunLogsQuery,
+  useTemplateRunQuery,
+  useTemplateRunsQuery
+} from "../../api/queries";
 import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
 import StatusRow from "../../shared/StatusRow";
@@ -10,17 +17,27 @@ import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import RunActionButton, { type RunActionButtonProps } from "./RunActionButton";
 import RunLogsPanel from "./RunLogsPanel";
 
-// /stacks/:stackId/runs/:runId — plan/apply detail with per-phase logs,
-// reached from a RunsListRow link. Reuses the existing RunLogsPanel
-// component unchanged. Phase selection is derived (not effect-synced) for
-// the same SSR-safety reason documented on StackTemplateScreen.
+// /stacks/:stackId/templates/:stackTemplateId/runs/:runNumber — plan/apply
+// detail with per-phase logs, reached from the Runs tab. The URL carries the
+// run's number within its template, which is what people see; the run's id,
+// which every run endpoint takes, comes from the template's runs list. That
+// list is the one the Runs tab already loaded, so arriving from there costs no
+// extra request. Phase selection is derived (not effect-synced) so a stale
+// choice falls back to the first phase instead of rendering nothing.
 export default function RunDetailScreen() {
-  const { stackId = "", runId = "" } = useParams<{ stackId: string; runId: string }>();
+  const {
+    stackId = "",
+    stackTemplateId = "",
+    runNumber = ""
+  } = useParams<{ stackId: string; stackTemplateId: string; runNumber: string }>();
   const [chosenPhase, setChosenPhase] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
+  const runsQuery = useTemplateRunsQuery(tenantID, stackTemplateId);
+  const runId = runsQuery.data?.find((candidate) => String(candidate.run_number) === runNumber)?.id ?? "";
+
   const runQuery = useTemplateRunQuery(tenantID, runId, { poll: true });
-  const boundary = useQueryErrorBoundary(runQuery.error);
+  const boundary = useQueryErrorBoundary(runsQuery.error ?? runQuery.error);
   const run = runQuery.data ?? null;
 
   const logsQuery = useTemplateRunLogsQuery(tenantID, runId, run?.status ?? "");
@@ -56,27 +73,42 @@ export default function RunDetailScreen() {
     });
   }
 
-  if (runQuery.status === "pending") {
+  // A cached list can predate a run that was just started, so a number it
+  // lacks only means "no such run" once a refetch has confirmed it.
+  if (runsQuery.status === "success" && !runsQuery.isFetching && runId === "") {
     return (
-      <section className="run-detail-screen" data-testid="run-detail-loading">
-        <p className="muted">
-          <Loader2 size={16} className="spin" /> Loading run…
-        </p>
+      <section className="run-detail-screen" data-testid="run-detail-missing">
+        <p className="muted">This template has no run #{runNumber}.</p>
       </section>
     );
   }
 
-  if (runQuery.status === "error") {
+  if (runsQuery.status === "error" || runQuery.status === "error") {
     if (boundary !== null) {
       return <>{boundary}</>;
     }
     return (
       <section className="run-detail-screen" data-testid="run-detail-error">
         <p className="muted">Something went wrong while loading the run.</p>
-        <button className="primary-button" type="button" data-testid="run-detail-retry" onClick={() => runQuery.refetch()}>
+        <button
+          className="primary-button"
+          type="button"
+          data-testid="run-detail-retry"
+          onClick={() => (runsQuery.status === "error" ? runsQuery.refetch() : runQuery.refetch())}
+        >
           <RefreshCw size={16} />
           Retry
         </button>
+      </section>
+    );
+  }
+
+  if (runQuery.status === "pending") {
+    return (
+      <section className="run-detail-screen" data-testid="run-detail-loading">
+        <p className="muted">
+          <Loader2 size={16} className="spin" /> Loading run…
+        </p>
       </section>
     );
   }

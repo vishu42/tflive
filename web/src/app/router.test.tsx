@@ -93,21 +93,11 @@ describe("routeConfig", () => {
       expect(markup, `expected a placeholder at ${path}`).toContain('data-testid="route-placeholder"');
     }
 
-    // Run detail is a real screen (not a reserved placeholder) — no run has
-    // been started, so it renders its own loading state. There is no runs list
-    // route to check: runs render inline on the template screen (issue #130).
-    const runDetailRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/runs/run_1"] });
-    const runDetailMarkup = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <AuthContext.Provider value={authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true, canPublishTemplate: true } } })}>
-          <RouterProvider router={runDetailRouter} />
-        </AuthContext.Provider>
-      </QueryClientProvider>
-    );
-    expect(runDetailMarkup).toContain('data-testid="run-detail-loading"');
+    // Run detail is a real screen, reached under a template's page; it is
+    // covered with the other template routes in StackDetailShell.test.tsx.
   });
 
-  it("renders the stack template screen at /stacks/:stackId/template", async () => {
+  it("renders the stack template list at /stacks/:stackId/templates", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
     const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
@@ -130,7 +120,7 @@ describe("routeConfig", () => {
     });
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), []);
 
-    const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/template"] });
+    const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/templates"] });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
         <AuthContext.Provider value={authValue()}>
@@ -139,7 +129,7 @@ describe("routeConfig", () => {
       </QueryClientProvider>
     );
 
-    expect(markup).toContain('data-testid="stack-template-screen"');
+    expect(markup).toContain('data-testid="stack-template-list-screen"');
     expect(markup).toContain('data-testid="stack-template-empty"');
     expect(markup).not.toContain('data-testid="route-placeholder"');
   });
@@ -379,7 +369,7 @@ describe("routeConfig", () => {
     expect(markup).toContain('data-testid="route-not-found"');
   });
 
-  it("renders the add template screen at /stacks/:stackId/template/new", async () => {
+  it("renders the add template screen at /stacks/:stackId/templates/new", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
     const { createMemoryRouter, RouterProvider } = await import("react-router-dom");
@@ -403,7 +393,7 @@ describe("routeConfig", () => {
     });
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), []);
 
-    const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/template/new"] });
+    const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/templates/new"] });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
         <AuthContext.Provider value={authValue()}>
@@ -415,7 +405,7 @@ describe("routeConfig", () => {
     expect(markup).toContain('data-testid="add-stack-template-none"');
   });
 
-  it("renders the upgrade screen at /stacks/:stackId/template/:stackTemplateId/upgrade", async () => {
+  it("renders the upgrade screen at /stacks/:stackId/templates/:stackTemplateId/upgrade", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
     const { createMemoryRouter, RouterProvider } = await import("react-router-dom");
@@ -440,7 +430,7 @@ describe("routeConfig", () => {
     queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), []);
 
     const testRouter = createMemoryRouter(routeConfig, {
-      initialEntries: ["/stacks/stack_1/template/st_1/upgrade"]
+      initialEntries: ["/stacks/stack_1/templates/st_1/upgrade"]
     });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
@@ -455,7 +445,7 @@ describe("routeConfig", () => {
     expect(markup).toContain('data-testid="upgrade-template-missing"');
   });
 
-  it("renders AccessDenied for /stacks/:stackId/template/new when canOperate is denied but canView is allowed", async () => {
+  it("renders AccessDenied for /stacks/:stackId/templates/new when canOperate is denied but canView is allowed", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
     const { createMemoryRouter, RouterProvider } = await import("react-router-dom");
@@ -478,7 +468,7 @@ describe("routeConfig", () => {
       templates: []
     });
 
-    const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/template/new"] });
+    const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/templates/new"] });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
         <AuthContext.Provider value={authValue()}>
@@ -490,7 +480,7 @@ describe("routeConfig", () => {
     expect(markup).toContain('data-testid="route-access-denied"');
   });
 
-  it("renders AccessDenied for /stacks/:stackId/template/:stackTemplateId/upgrade when canOperate is denied but canView is allowed", async () => {
+  it("renders AccessDenied for /stacks/:stackId/templates/:stackTemplateId/upgrade when canOperate is denied but canView is allowed", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const { routeConfig } = await import("./router");
     const { createMemoryRouter, RouterProvider } = await import("react-router-dom");
@@ -514,7 +504,7 @@ describe("routeConfig", () => {
     });
 
     const testRouter = createMemoryRouter(routeConfig, {
-      initialEntries: ["/stacks/stack_1/template/st_1/upgrade"]
+      initialEntries: ["/stacks/stack_1/templates/st_1/upgrade"]
     });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
