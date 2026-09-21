@@ -521,6 +521,15 @@
   background: var(--gradient-accent);
 }
 
+/* A light rule under the tabs; the active tab's underline sits on it. */
+.stack-detail-tabs {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.stack-detail-tabs a.active::after {
+  bottom: -1px;
+}
+
 .stack-detail-tabs a {
   display: inline-flex;
   align-items: center;
@@ -799,35 +808,36 @@
   font-weight: 400;
 }
 
+/* The stack's installed templates: one bordered list with a rule between
+   rows, like a template's runs. Each row is a link to that template's page. */
 .stack-template-items {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
   display: grid;
-  gap: var(--space-2);
+  /* Clips the hover fill of the first and last rows to the rounded corners. */
+  overflow: hidden;
 }
 
-.stack-template-items button {
+.stack-template-items a {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  width: 100%;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-3) var(--space-4);
+  /* A control-height button with 8px either side, whether or not the row
+     has one, so rows keep one height. */
+  min-height: calc(var(--control-height) + var(--space-4));
+  padding: 0 var(--space-4);
   color: var(--color-fg);
-  background: var(--color-card);
-  text-align: left;
-  cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out);
+  text-decoration: none;
+  transition: background var(--duration-fast) var(--ease-out);
 }
 
-.stack-template-items button:hover {
-  transform: translateY(-1px);
-  border-color: var(--color-accent-border);
-  box-shadow: var(--shadow-md);
+.stack-template-items a + a {
+  border-top: 1px solid var(--color-border);
 }
 
-.stack-template-items button.active {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+.stack-template-items a:hover {
+  background: var(--color-muted);
+  text-decoration: none;
 }
 
 .stack-template-items span,
@@ -847,10 +857,13 @@
   font-size: var(--text-xs);
 }
 
-/* Template names are long enough that a name and a labelled pill do not fit on
-   one row, and stacking them cost a whole second line per row for a word. The
-   row keeps just the state icon; the panel on the right names the state and
-   says what it means. */
+/* The name takes the row's slack so the state label sits at the far edge. */
+.stack-template-items .stack-template-item__name {
+  flex: 1;
+}
+
+/* The state icon; the row also names the state at its far edge, and the
+   template's own page explains what it means. */
 .stack-template-items .stack-template-item__dot {
   flex: none;
   /* Takes its colour from the shared .status-tone--* modifier so tones stay
@@ -861,7 +874,7 @@
   line-height: 1;
 }
 
-/* ---- Selected template's state, above the revision action ---- */
+/* ---- A template's state, at the top of its page ---- */
 .stack-template-state {
   display: grid;
   gap: var(--space-2);
@@ -877,11 +890,34 @@
   font-size: var(--text-sm);
 }
 
-.stack-template-right-column {
+/* A template's own page: its state, its tabs, then the tab's content. Each tab
+   stacks its sections the same way. */
+.stack-template-detail,
+.stack-template-tab {
   align-content: start;
   display: grid;
   gap: var(--space-6);
   min-width: 0;
+}
+
+/* The template's tabs, with its state at the far end of the same row. The
+   grid gap already separates the row from what follows it. */
+.stack-template-tabbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  justify-content: space-between;
+}
+
+/* The rule runs under the whole row, state included, not just the tabs. */
+.stack-template-tabbar {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.stack-template-tabbar .stack-detail-tabs {
+  border-bottom: 0;
+  margin-bottom: 0;
 }
 
 /* ---- Metadata grids ---- */
@@ -1040,31 +1076,25 @@
   margin: 0;
 }
 
-/* ---- Inline runs on the stack template screen ---- */
-/* Runs render on the template screen instead of their own tab (issue #130).
-   The column reads operate → configure → review → destroy, so these rules
-   cover the actions header, the history log, and the danger zone. */
-.template-run-states {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: var(--space-3) var(--space-6);
-  margin-bottom: var(--space-5);
-}
-
-/* .status-row draws its own top rule to separate it from the row above. As
-   the first element of a column there is nothing above it, so the rule reads
-   as a stray divider under the heading. */
-.template-run-states > div > .status-row:first-child {
-  border-top: none;
-  margin-top: 0;
-  padding-top: 0;
-}
-
+/* ---- A template's Runs tab, and its danger zone on Settings ---- */
+/* Plan and Apply sit at the right end of the panel's header, with a reason
+   (when there is one) to their left. */
 .template-run-controls {
-  align-items: flex-start;
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+.template-run-controls p {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.template-run-actions {
+  display: grid;
+  gap: var(--space-3);
 }
 
 /* .button-row's trailing margin separates it from content below it outside a
@@ -1074,23 +1104,78 @@
   margin-bottom: 0;
 }
 
-.template-run-history ul {
+/* A template's runs: run, type, status, actor and time, then the actions a
+   run still takes. Status fits the longest status there is
+   (workspace_prepared); time takes the slack. The minimum widths are the
+   fixed columns (592px, plus 288px of actions) and 160px for the time. */
+.run-table {
+  --data-table-min-width: 752px;
+}
+
+.run-table--actions {
+  --data-table-min-width: 1040px;
+}
+
+@media (max-width: 760px) {
+  /* Plan and Apply drop under the heading rather than off the screen. */
+  .template-run-actions .panel-header {
+    flex-wrap: wrap;
+  }
+}
+
+/* ---- Run detail ---- */
+/* The breadcrumb names the run; the header gives its state and operation, and
+   the actions it still takes. Facts sit in one row of label/value pairs. */
+.run-detail-screen {
   display: grid;
+  gap: var(--space-6);
+}
+
+.run-detail-header {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  justify-content: space-between;
+}
+
+.run-detail-title {
+  align-items: center;
+  display: flex;
+  gap: var(--space-3);
+}
+
+.run-detail-operation {
+  font-size: var(--text-xl);
+  letter-spacing: var(--tracking-tight);
+}
+
+.run-detail-actions {
+  display: flex;
   gap: var(--space-2);
-  list-style: none;
+}
+
+.run-detail-facts {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
   margin: 0;
-  padding: 0;
+  padding: var(--space-4);
 }
 
-.template-run-history li {
-  border-top: 1px solid var(--color-border);
+.run-detail-facts dt {
+  color: var(--color-muted-fg);
+  font-size: var(--text-xs);
+  margin-bottom: var(--space-1);
+}
+
+.run-detail-facts dd {
+  font-family: var(--font-mono);
   font-size: var(--text-sm);
-  padding-top: var(--space-2);
-}
-
-.template-run-history li:first-child {
-  border-top: none;
-  padding-top: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .danger-zone {

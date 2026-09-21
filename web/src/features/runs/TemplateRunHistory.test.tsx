@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "../../api/queryKeys";
 import type { TemplateRun } from "../../api/types";
+import { AuthContext } from "../../auth/AuthContext";
 import TemplateRunHistory from "./TemplateRunHistory";
 
 function run(overrides: Partial<TemplateRun> = {}): TemplateRun {
@@ -41,9 +42,18 @@ function seedRuns(queryClient: QueryClient, runs: TemplateRun[]) {
 function renderHistory(queryClient: QueryClient) {
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/stacks/stack_1/template"]}>
-        <TemplateRunHistory stackId="stack_1" stackTemplateId="stpl_1" />
-      </MemoryRouter>
+      <AuthContext.Provider
+        value={{
+          me: { sub: "user_1", tenantID: "tenant_123", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false, canPublishTemplate: false } },
+          status: "authenticated",
+          login: () => {},
+          logout: () => {}
+        }}
+      >
+        <MemoryRouter initialEntries={["/stacks/stack_1/templates/stpl_1/runs"]}>
+          <TemplateRunHistory stackId="stack_1" stackTemplateId="stpl_1" />
+        </MemoryRouter>
+      </AuthContext.Provider>
     </QueryClientProvider>
   );
 }
@@ -57,28 +67,44 @@ describe("TemplateRunHistory", () => {
   it("links every run in the history to its run detail screen", () => {
     const queryClient = testQueryClient();
     seedRuns(queryClient, [
-      run({ id: "run_apply_1", operation: "apply", status: "waiting_approval", trigger_actor: "someone_else", started_at: "2026-07-20T01:00:00Z" }),
-      run({ id: "run_plan_1", operation: "plan", status: "completed", trigger_actor: "someone_else", started_at: "2026-07-20T00:00:00Z" })
+      run({ id: "run_apply_1", run_number: 2, operation: "apply", status: "waiting_approval", trigger_actor: "someone_else", started_at: "2026-07-20T01:00:00Z" }),
+      run({ id: "run_plan_1", run_number: 1, operation: "plan", status: "completed", trigger_actor: "someone_else", started_at: "2026-07-20T00:00:00Z" })
     ]);
 
     renderHistory(queryClient);
 
-    expect(screen.getByTestId("template-run-history-run_apply_1").getAttribute("href")).toBe("/stacks/stack_1/runs/run_apply_1");
-    expect(screen.getByTestId("template-run-history-run_plan_1").getAttribute("href")).toBe("/stacks/stack_1/runs/run_plan_1");
+    // Links carry the run's number within its template, not its id.
+    expect(screen.getByTestId("template-run-history-run_apply_1").getAttribute("href")).toBe("/stacks/stack_1/templates/stpl_1/runs/2");
+    expect(screen.getByTestId("template-run-history-run_plan_1").getAttribute("href")).toBe("/stacks/stack_1/templates/stpl_1/runs/1");
   });
 
-  it("describes each run by number, operation, status, actor, and start time", () => {
+  it("lays each run out in run, type, status, actor, and time columns", () => {
     const queryClient = testQueryClient();
     seedRuns(queryClient, [run({ id: "run_plan_1", run_number: 12, operation: "plan", status: "completed", trigger_actor: "vishu" })]);
 
     renderHistory(queryClient);
 
-    const entry = screen.getByTestId("template-run-history-run_plan_1").textContent ?? "";
-    expect(entry.startsWith("#12")).toBe(true);
-    expect(entry).toContain("plan");
-    expect(entry).toContain("completed");
-    expect(entry).toContain("vishu");
-    expect(entry).toContain("2026-07-20T00:00:00Z");
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["Run", "Type", "Status", "Actor", "Time"]);
+    const cells = within(screen.getByTestId("template-run-row-run_plan_1")).getAllByRole("cell");
+    expect(cells).toHaveLength(5);
+    expect(cells[0].textContent).toBe("#12");
+    expect(cells[1].textContent).toBe("plan");
+    expect(cells[2].textContent).toContain("completed");
+    expect(cells[3].textContent).toBe("vishu");
+    expect(cells[4].querySelector("time")?.getAttribute("datetime")).toBe("2026-07-20T00:00:00Z");
+  });
+
+  it("adds an actions column only while some run can still be acted on", () => {
+    const queryClient = testQueryClient();
+    seedRuns(queryClient, [
+      run({ id: "run_apply_1", run_number: 2, operation: "apply", status: "queued" }),
+      run({ id: "run_plan_1", run_number: 1, operation: "plan", status: "completed" })
+    ]);
+
+    renderHistory(queryClient);
+
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["Run", "Type", "Status", "Actor", "Time", "Actions"]);
+    expect(within(screen.getByTestId("template-run-row-run_plan_1")).getAllByRole("cell")).toHaveLength(6);
   });
 
   it("shows an empty state rather than a bare heading when no run has started", () => {

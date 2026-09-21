@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import HeroGraphic from "../shared/HeroGraphic";
 import StatBand from "../shared/StatBand";
 import StatusRow from "../shared/StatusRow";
+import { statusGlyph, statusTone } from "../shared/statusTone";
 import "./styleguide.css";
 
 /**
@@ -31,6 +32,7 @@ const SECTIONS: { id: string; title: string }[] = [
   { id: "stats", title: "Stat band" },
   { id: "messaging", title: "Messaging" },
   { id: "tabs", title: "Tabs" },
+  { id: "tables", title: "Tables" },
   { id: "log", title: "Log panel" },
   { id: "showpiece", title: "Showpieces" }
 ];
@@ -385,6 +387,79 @@ export default function StyleGuide() {
               <a href="#tabs">Template</a>
               <a href="#tabs">Runs</a>
               <a href="#tabs">Access</a>
+            </div>
+          </Specimen>
+        </Section>
+
+        <Section
+          id="tables"
+          title="Tables"
+          note="Fixed layout: each column takes its width from a <col>, one column takes the slack, and cell contents never resize a column. Long values end in an ellipsis. The frame scrolls sideways; the page never does."
+        >
+          <Specimen label="data-table" hint="xs · sm · lg · md · slack · actions" stack>
+            <div className="data-table-frame">
+              <table className="data-table" style={{ ["--data-table-min-width" as string]: "1040px" }}>
+                <colgroup>
+                  <col className="data-table__col--xs" />
+                  <col className="data-table__col--sm" />
+                  <col className="data-table__col--lg" />
+                  <col className="data-table__col--md" />
+                  <col />
+                  <col className="data-table__col--actions" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th scope="col">Run</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Actor</th>
+                    <th scope="col">Time</th>
+                    <th scope="col">
+                      <span className="visually-hidden">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    { number: 3, operation: "apply", status: "waiting_approval", actor: "a.really-long-username@example.com" },
+                    { number: 2, operation: "plan", status: "completed", actor: "local_root" },
+                    { number: 1, operation: "plan", status: "failed", actor: "local_root" }
+                  ].map((row) => (
+                    <tr key={row.number}>
+                      <td>
+                        <a className="data-table__link" href="#tables">
+                          #{row.number}
+                        </a>
+                      </td>
+                      <td>{row.operation}</td>
+                      <td>
+                        <span className={`status-tone status-tone--${statusTone(row.status)}`}>
+                          <span className="status-tone__glyph" aria-hidden="true">
+                            {statusGlyph(statusTone(row.status))}
+                          </span>
+                          {row.status}
+                        </span>
+                      </td>
+                      <td className="data-table__mono" title={row.actor}>
+                        {row.actor}
+                      </td>
+                      <td className="data-table__mono">21 Sept, 10:5{row.number}</td>
+                      <td className="data-table__actions">
+                        {row.number === 3 && (
+                          <>
+                            <button className="secondary-button" type="button">
+                              Cancel
+                            </button>
+                            <button className="primary-button" type="button">
+                              Approve
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </Specimen>
         </Section>

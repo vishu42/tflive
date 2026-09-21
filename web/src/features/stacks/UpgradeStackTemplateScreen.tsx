@@ -21,7 +21,7 @@ import {
 } from "./stackWorkflow";
 import VariableFields from "./VariableFields";
 
-// /stacks/:stackId/template/:stackTemplateId/upgrade — moving an installed
+// /stacks/:stackId/templates/:stackTemplateId/upgrade — moving an installed
 // template to a different revision of the same source template. The old
 // screen hid this behind a tenant-wide revision dropdown whose effect
 // depended on an invisible source-template match; here the candidates are
@@ -104,7 +104,7 @@ export default function UpgradeStackTemplateScreen() {
           config: configFromVariableValues(targetVariables, variableValues)
         }
       });
-      navigate(`/stacks/${stackId}/template?selected=${stackTemplate.id}`);
+      navigate(`/stacks/${stackId}/templates/${stackTemplate.id}`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Request failed");
     }

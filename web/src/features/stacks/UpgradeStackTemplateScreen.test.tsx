@@ -127,10 +127,10 @@ function renderScreen(queryClient: QueryClient) {
   return render(
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider value={authValue()}>
-        <MemoryRouter initialEntries={["/stacks/stack_1/template/st_1/upgrade"]}>
+        <MemoryRouter initialEntries={["/stacks/stack_1/templates/st_1/upgrade"]}>
           <Routes>
-            <Route path="/stacks/:stackId/template/:stackTemplateId/upgrade" element={<UpgradeStackTemplateScreen />} />
-            <Route path="/stacks/:stackId/template" element={<LocationProbe />} />
+            <Route path="/stacks/:stackId/templates/:stackTemplateId/upgrade" element={<UpgradeStackTemplateScreen />} />
+            <Route path="/stacks/:stackId/templates/:stackTemplateId" element={<LocationProbe />} />
           </Routes>
         </MemoryRouter>
       </AuthContext.Provider>
@@ -217,7 +217,7 @@ describe("UpgradeStackTemplateScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: /Change revision/ }));
 
     await waitFor(() => expect(screen.getByTestId("location")).toBeTruthy());
-    expect(screen.getByTestId("location").textContent).toBe("/stacks/stack_1/template?selected=st_1");
+    expect(screen.getByTestId("location").textContent).toBe("/stacks/stack_1/templates/st_1");
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/v1/tenants/tenant_123/stack-templates/st_1/upgrade");
