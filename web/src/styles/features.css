@@ -1104,18 +1104,17 @@
   margin-bottom: 0;
 }
 
-/* A template's runs: run, type, status, actor and time, then the actions a
-   run still takes. Status fits the longest status there is
-   (workspace_prepared); time takes the slack. The minimum widths are the
-   fixed columns (592px, plus 288px of actions) and 160px for the time. */
-/* Run, type, status, changes, actor, then time takes the slack: the sum of
-   the fixed columns plus room for a time, and the actions column on top. */
+/* A template's runs: run, status, changes and actor, then time takes the
+   slack, then the actions a run still takes. Status fits the longest label
+   ("Destroy plan failed"), changes three-digit counts ("+100 ~100 -100"). The
+   minimum widths are the fixed columns (664px) plus 160px for the time, and
+   the actions column on top. */
 .run-table {
-  --data-table-min-width: 856px;
+  --data-table-min-width: 824px;
 }
 
 .run-table--actions {
-  --data-table-min-width: 1176px;
+  --data-table-min-width: 1144px;
 }
 
 /* A waiting destroy's actions, Discard and "Destroy N", are wider than the
@@ -1159,7 +1158,7 @@
   gap: var(--space-3);
 }
 
-.run-detail-operation {
+.run-detail-number {
   font-size: var(--text-xl);
   letter-spacing: var(--tracking-tight);
 }

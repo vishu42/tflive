@@ -134,7 +134,7 @@ describe("RunDetailScreen", () => {
     renderScreen(queryClient, undefined, "1");
 
     // The breadcrumb names the run; the screen shows the run it resolved.
-    expect(screen.getByTestId("run-detail-status").textContent).toContain("failed");
+    expect(screen.getByTestId("run-detail-status").textContent).toContain("Plan failed");
     expect(screen.getByText("the older one")).toBeTruthy();
   });
 
@@ -224,7 +224,7 @@ describe("RunDetailScreen", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url.endsWith("/logs")) {
-        return jsonResponse([runLog({ phase: "plan" }), runLog({ phase: "init" })]);
+        return jsonResponse([runLog({ phase: "init" }), runLog({ phase: "plan" })]);
       }
       if (url.endsWith("/logs/plan")) {
         return new Response("plan log body", { status: 200, headers: { "content-type": "text/plain" } });
@@ -238,7 +238,7 @@ describe("RunDetailScreen", () => {
     renderScreen(queryClient);
 
     expect(screen.getByTestId("run-detail-screen")).toBeTruthy();
-    expect(screen.getByTestId("run-detail-status").textContent).toContain("completed");
+    expect(screen.getByTestId("run-detail-status").textContent).toContain("No changes");
     expect(screen.getByText("main @ abcdef1")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("plan log body")).toBeTruthy());
 
@@ -290,6 +290,9 @@ describe("RunDetailScreen", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       if (init?.method === "POST") {
         return new Response(null, { status: 204 });
+      }
+      if (String(input).endsWith("/template-runs/run_1")) {
+        return jsonResponse(run({ operation: "destroy", status: "approved", plan_summary: { add: 0, change: 0, destroy: 4 } }));
       }
       return jsonResponse([]);
     });

@@ -137,7 +137,7 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient);
 
-    fireEvent.click(screen.getByRole("button", { name: /Plan destroy/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Destroy$/ }));
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
@@ -182,7 +182,7 @@ describe("TemplateDestroyPanel", () => {
     renderPanel(queryClient);
 
     expect(screen.queryByRole("checkbox", { name: /Auto Apply/ })).toBeNull();
-    expect(isDisabled(screen.getByRole("button", { name: /Plan destroy/ }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /^Destroy$/ }))).toBe(false);
   });
 
   it("keeps destroy disabled until run history has loaded", () => {
@@ -192,7 +192,7 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient);
 
-    expect(isDisabled(screen.getByRole("button", { name: /Plan destroy/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /^Destroy$/ }))).toBe(true);
   });
 
   it("disables confirmation if a run appears after an auto-approved destroy was requested", async () => {
@@ -236,10 +236,10 @@ describe("TemplateDestroyPanel", () => {
     });
 
     renderPanel(queryClient);
-    fireEvent.click(screen.getByRole("button", { name: /Plan destroy/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Destroy$/ }));
 
     await waitFor(() => expect(screen.getByText(/already in flight/)).toBeTruthy());
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Plan destroy/ }))).toBe(true));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /^Destroy$/ }))).toBe(true));
   });
 
   it("disables destroy when lifecycle is destroying", () => {
@@ -249,7 +249,7 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient, { lifecycle: "destroying" });
 
-    expect(isDisabled(screen.getByRole("button", { name: /Plan destroy/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /^Destroy$/ }))).toBe(true);
   });
 
   it("disables destroy when an active run exists", () => {
@@ -259,7 +259,7 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient);
 
-    expect(isDisabled(screen.getByRole("button", { name: /Plan destroy/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /^Destroy$/ }))).toBe(true);
   });
 
   it("disables destroy with a reason when canOperate is denied", () => {
@@ -269,7 +269,7 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient);
 
-    expect(isDisabled(screen.getByRole("button", { name: /Plan destroy/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /^Destroy$/ }))).toBe(true);
     expect(screen.getByTestId("template-destroy-disabled-reason")).toBeTruthy();
   });
 
@@ -281,7 +281,7 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient);
 
-    fireEvent.click(screen.getByRole("button", { name: /Plan destroy/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Destroy$/ }));
 
     await waitFor(() => expect(screen.getByTestId("template-destroy-error")).toBeTruthy());
   });

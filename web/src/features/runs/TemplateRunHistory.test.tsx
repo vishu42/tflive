@@ -88,15 +88,14 @@ describe("TemplateRunHistory", () => {
 
     renderHistory(queryClient);
 
-    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["Run", "Type", "Status", "Changes", "Actor", "Time"]);
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["Run", "Status", "Changes", "Actor", "Time"]);
     const cells = within(screen.getByTestId("template-run-row-run_plan_1")).getAllByRole("cell");
-    expect(cells).toHaveLength(6);
+    expect(cells).toHaveLength(5);
     expect(cells[0].textContent).toBe("#12");
-    expect(cells[1].textContent).toBe("plan");
-    expect(cells[2].textContent).toContain("completed");
-    expect(cells[3].textContent).toBe("+3 ~1 -0");
-    expect(cells[4].textContent).toBe("vishu");
-    expect(cells[5].querySelector("time")?.getAttribute("datetime")).toBe("2026-07-20T00:00:00Z");
+    expect(cells[1].textContent).toContain("Applied");
+    expect(cells[2].textContent).toBe("+3 ~1 -0");
+    expect(cells[3].textContent).toBe("vishu");
+    expect(cells[4].querySelector("time")?.getAttribute("datetime")).toBe("2026-07-20T00:00:00Z");
   });
 
   it("adds an actions column only while some run can still be acted on", () => {
@@ -108,8 +107,8 @@ describe("TemplateRunHistory", () => {
 
     renderHistory(queryClient);
 
-    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["Run", "Type", "Status", "Changes", "Actor", "Time", "Actions"]);
-    expect(within(screen.getByTestId("template-run-row-run_plan_1")).getAllByRole("cell")).toHaveLength(7);
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["Run", "Status", "Changes", "Actor", "Time", "Actions"]);
+    expect(within(screen.getByTestId("template-run-row-run_plan_1")).getAllByRole("cell")).toHaveLength(6);
   });
 
   it("shows an empty state rather than a bare heading when no run has started", () => {

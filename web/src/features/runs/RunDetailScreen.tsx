@@ -17,6 +17,7 @@ import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import { statusGlyph, statusTone } from "../../shared/statusTone";
 import { planSummaryLabel } from "../stacks/stackWorkflow";
 import RunLogsPanel from "./RunLogsPanel";
+import { runStatusLabel } from "./runStatusLabel";
 import { WaitingRunActions } from "./TemplateRunHistory";
 
 // /stacks/:stackId/templates/:stackTemplateId/runs/:runNumber — plan/apply
@@ -24,8 +25,10 @@ import { WaitingRunActions } from "./TemplateRunHistory";
 // run's number within its template, which is what people see; the run's id,
 // which every run endpoint takes, comes from the template's runs list. That
 // list is the one the Runs tab already loaded, so arriving from there costs no
-// extra request. Phase selection is derived (not effect-synced) so a stale
-// choice falls back to the first phase instead of rendering nothing.
+// extra request. Logs arrive in the order their commands ran, and the screen
+// opens on the latest: the plan, or the apply once there is one. Phase
+// selection is derived (not effect-synced) so a stale choice falls back to the
+// latest phase instead of rendering nothing.
 export default function RunDetailScreen() {
   const {
     stackId = "",
@@ -44,7 +47,7 @@ export default function RunDetailScreen() {
 
   const logsQuery = useTemplateRunLogsQuery(tenantID, runId, run?.status ?? "");
   const logs = logsQuery.data ?? [];
-  const selectedPhase = logs.find((log) => log.phase === chosenPhase)?.phase ?? logs[0]?.phase ?? "";
+  const selectedPhase = logs.find((log) => log.phase === chosenPhase)?.phase ?? logs[logs.length - 1]?.phase ?? "";
   const logQuery = useTemplateRunLogQuery(tenantID, runId, selectedPhase, run?.status ?? "");
   const logBody = logQuery.data ?? "";
 
@@ -121,13 +124,13 @@ export default function RunDetailScreen() {
         <>
           <header className="run-detail-header">
             <span className="run-detail-title">
-              <span className={`status-tone status-tone--${statusTone(run.status)}`} data-testid="run-detail-status">
+              <span className="run-detail-number">Run #{run.run_number}</span>
+              <span className={`status-tone status-tone--${statusTone(run.status)}`} title={run.status} data-testid="run-detail-status">
                 <span className="status-tone__glyph" aria-hidden="true">
                   {statusGlyph(statusTone(run.status))}
                 </span>
-                {run.status}
+                {runStatusLabel(run)}
               </span>
-              <span className="run-detail-operation">{run.operation}</span>
             </span>
             {canCancel && (
               <span className="run-detail-actions">

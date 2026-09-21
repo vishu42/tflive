@@ -19,8 +19,8 @@ interface TemplateDestroyPanelProps {
 // Destroy lives on the Settings tab, a tab away from Plan, because it is the
 // one operation that cannot be undone.
 //
-// The button here only plans the destroy: it shows what would be destroyed
-// and destroys nothing. Destroying happens when that plan is approved, on the
+// Destroy here only plans the destroy: it shows what would be destroyed and
+// destroys nothing. Destroying happens when that plan is approved, on the
 // run's row, which is why the red "Destroy N resources" confirmation lives
 // there. The exception is auto-approve, which applies the destroy as soon as
 // it is planned; then this click is the irreversible one, so it takes the
@@ -158,7 +158,7 @@ function DestroyControl({
           type="button"
         >
           {destroyBusy ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}
-          {autoApprove ? "Destroy" : "Plan destroy"}
+          Destroy
         </button>
       )}
       {disabledReason && (

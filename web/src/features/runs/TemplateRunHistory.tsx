@@ -11,6 +11,7 @@ import { tenantID } from "../../config";
 import { formatDateTime } from "../../shared/formatTimestamp";
 import { statusGlyph, statusTone } from "../../shared/statusTone";
 import { planSummaryLabel } from "../stacks/stackWorkflow";
+import { runStatusLabel } from "./runStatusLabel";
 
 interface TemplateRunHistoryProps {
   stackId: string;
@@ -18,8 +19,8 @@ interface TemplateRunHistoryProps {
 }
 
 // Every run recorded for a template, newest first, as a table: its number
-// (the link to its detail), operation, state, what its plan would change, who
-// started it and when. A run that is still going carries its own actions in a
+// (the link to its detail), where it is (which names its operation, so there is
+// no Type column), what its plan would change, who started it and when. A run that is still going carries its own actions in a
 // trailing column that only appears while some run has one: a plan waiting for
 // approval offers Apply (Destroy, on a destroy run), which applies exactly that
 // saved plan, and Discard; anything else in flight offers Cancel. Actions a
@@ -65,9 +66,8 @@ export default function TemplateRunHistory({ stackId, stackTemplateId }: Templat
           <table className={hasActions ? "data-table run-table run-table--actions" : "data-table run-table"}>
             <colgroup>
               <col className="data-table__col--xs" />
-              <col className="data-table__col--sm" />
               <col className="data-table__col--lg" />
-              <col className="data-table__col--sm" />
+              <col className="data-table__col--md" />
               <col className="data-table__col--md" />
               <col />
               {hasActions && <col className="data-table__col--actions" />}
@@ -75,7 +75,6 @@ export default function TemplateRunHistory({ stackId, stackTemplateId }: Templat
             <thead>
               <tr>
                 <th scope="col">Run</th>
-                <th scope="col">Type</th>
                 <th scope="col">Status</th>
                 <th scope="col">Changes</th>
                 <th scope="col">Actor</th>
@@ -129,13 +128,12 @@ function RunRow({ run, to, hasActions, stackId, approvingRunID, cancelingRunID, 
           #{run.run_number}
         </Link>
       </td>
-      <td>{run.operation}</td>
       <td>
-        <span className={`status-tone status-tone--${tone}`}>
+        <span className={`status-tone status-tone--${tone}`} title={run.status} data-testid={`template-run-status-${run.id}`}>
           <span className="status-tone__glyph" aria-hidden="true">
             {statusGlyph(tone)}
           </span>
-          {run.status}
+          {runStatusLabel(run)}
         </span>
       </td>
       <td className="run-table__summary" title={summary ? "To add, to change, to destroy" : undefined} data-testid={`template-run-summary-${run.id}`}>
