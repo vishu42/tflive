@@ -521,6 +521,15 @@
   background: var(--gradient-accent);
 }
 
+/* A light rule under the tabs; the active tab's underline sits on it. */
+.stack-detail-tabs {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.stack-detail-tabs a.active::after {
+  bottom: -1px;
+}
+
 .stack-detail-tabs a {
   display: inline-flex;
   align-items: center;
@@ -901,7 +910,13 @@
   justify-content: space-between;
 }
 
+/* The rule runs under the whole row, state included, not just the tabs. */
+.stack-template-tabbar {
+  border-bottom: 1px solid var(--color-border);
+}
+
 .stack-template-tabbar .stack-detail-tabs {
+  border-bottom: 0;
   margin-bottom: 0;
 }
 
