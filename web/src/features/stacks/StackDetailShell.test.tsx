@@ -126,6 +126,23 @@ describe("StackDetailShell", () => {
     expect(runDetailMarkup).toContain('data-testid="run-detail-loading"');
   });
 
+  it("titles the page with a Stacks / stack breadcrumb", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const markup = await renderStackRoute("/stacks/stack_1/template", allAllowed);
+
+    expect(markup).toMatch(/<nav class="breadcrumb" aria-label="Breadcrumb">.*href="\/stacks">Stacks<.*<h1 aria-current="page">Payments<\/h1>/);
+    expect(markup).not.toContain("breadcrumb__detail");
+  });
+
+  it("extends the breadcrumb through the template tab on a page below it", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const markup = await renderStackRoute("/stacks/stack_1/runs/run_1", allAllowed);
+
+    expect(markup).toMatch(
+      /<nav class="breadcrumb".*href="\/stacks\/stack_1">Payments<.*href="\/stacks\/stack_1\/template">Template<.*<h1 aria-current="page">Run<\/h1>/
+    );
+  });
+
   it("marks the tab matching the current route as current", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const markup = await renderStackRoute("/stacks/stack_1/template", allAllowed);

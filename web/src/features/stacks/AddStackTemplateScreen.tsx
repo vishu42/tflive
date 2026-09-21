@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeft, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useAddTemplateToStackMutation, useTemplateRevisionVariablesQuery, useTemplateRevisionsQuery } from "../../api/queries";
 import { tenantID } from "../../config";
@@ -131,14 +131,6 @@ export default function AddStackTemplateScreen() {
       data-testid="add-stack-template-screen"
       data-unsaved={hasUnsavedValues ? "true" : undefined}
     >
-      <header className="page-header">
-        <Link to={`/stacks/${stackId}/template`} className="muted back-link">
-          <ArrowLeft size={14} />
-          Back to templates
-        </Link>
-        <h1>Add a template to this stack</h1>
-      </header>
-
       {errorMessage && (
         <div className="alert" data-testid="add-stack-template-error">
           {errorMessage}

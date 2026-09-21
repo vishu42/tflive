@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Loader2, RefreshCw } from "lucide-react";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   useStackQuery,
   useTemplateRevisionVariablesQuery,
@@ -167,17 +167,9 @@ export default function UpgradeStackTemplateScreen() {
     );
   }
 
-  const backLink = (
-    <Link to={`/stacks/${stackId}/template`} className="muted back-link">
-      <ArrowLeft size={14} />
-      Back to templates
-    </Link>
-  );
-
   if (!stackTemplate) {
     return (
       <section className="upgrade-stack-template-screen" data-testid="upgrade-template-missing">
-        {backLink}
         <p className="muted">That template is not installed on this stack.</p>
       </section>
     );
@@ -192,7 +184,6 @@ export default function UpgradeStackTemplateScreen() {
   if (isDestroyingStackTemplate(stackTemplate)) {
     return (
       <section className="upgrade-stack-template-screen" data-testid="upgrade-destroying">
-        {backLink}
         <p className="muted">Destroy in progress — this template cannot change revision right now.</p>
       </section>
     );
@@ -204,10 +195,7 @@ export default function UpgradeStackTemplateScreen() {
       data-testid="upgrade-stack-template-screen"
       data-unsaved={hasUnsavedValues ? "true" : undefined}
     >
-      <header className="page-header">
-        {backLink}
-        <h1>{stackTemplateLabel(stackTemplate)}</h1>
-      </header>
+      <h2 className="section-title">{stackTemplateLabel(stackTemplate)}</h2>
 
       {errorMessage && (
         <div className="alert" data-testid="upgrade-stack-template-error">

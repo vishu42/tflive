@@ -2,6 +2,7 @@ import { Loader2, Plus, RefreshCw } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useTemplateRevisionsQuery } from "../../api/queries";
 import { tenantID } from "../../config";
+import Breadcrumb from "../../shared/Breadcrumb";
 import HeroGraphic from "../../shared/HeroGraphic";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import { statusGlyph } from "../../shared/statusTone";
@@ -46,7 +47,7 @@ export default function TemplateRegistryScreen() {
     }
     return (
       <section className="template-registry-screen" data-testid="template-registry-error">
-        <h1>Templates</h1>
+        <Breadcrumb items={[{ label: "Templates" }]} />
         <p className="muted">Something went wrong while loading templates.</p>
         <button
           className="primary-button"
@@ -66,9 +67,7 @@ export default function TemplateRegistryScreen() {
   return (
     <section className="template-registry-screen">
       <header className="templates-list-header">
-        <div className="page-header">
-          <h1>Templates</h1>
-        </div>
+        <Breadcrumb items={[{ label: "Templates" }]} />
         <Link className="primary-button" to="/templates/new" data-testid="register-template-link">
           <Plus size={16} />
           Register template

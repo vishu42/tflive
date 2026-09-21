@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useStacksQuery } from "../../api/queries";
 import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
+import Breadcrumb from "../../shared/Breadcrumb";
 import HeroGraphic from "../../shared/HeroGraphic";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import { useInView } from "../../shared/useInView";
@@ -30,7 +31,7 @@ export default function StacksListScreen() {
     }
     return (
       <section className="stacks-list-screen" data-testid="stacks-list-error">
-        <h1>Stacks</h1>
+        <Breadcrumb items={[{ label: "Stacks" }]} />
         <p className="muted">Something went wrong while loading stacks.</p>
         <button className="primary-button" type="button" data-testid="stacks-list-retry" onClick={() => refetch()}>
           <RefreshCw size={16} />
@@ -43,9 +44,7 @@ export default function StacksListScreen() {
   return (
     <section className="stacks-list-screen">
       <header className="stacks-list-header">
-        <div className="page-header">
-          <h1>Stacks</h1>
-        </div>
+        <Breadcrumb items={[{ label: "Stacks" }]} />
         <RequireCapability capability="canCreateStack">
           <Link className="primary-button" to="/stacks/new" data-testid="create-stack-link">
             <Plus size={16} />

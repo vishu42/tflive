@@ -32,12 +32,7 @@ fetch() {
 }
 
 echo "Vendoring fonts into ${DEST}"
-fetch "Archivo:wght@500"        archivo-500
-fetch "Archivo:wght@600"        archivo-600
-fetch "Inter:wght@400"          inter-400
-fetch "Inter:wght@500"          inter-500
-fetch "Inter:wght@600"          inter-600
-fetch "Inter:wght@700"          inter-700
-fetch "JetBrains+Mono:wght@400" jetbrains-mono-400
-fetch "JetBrains+Mono:wght@500" jetbrains-mono-500
+# Regular only: the console sets no bold anywhere, so no heavier cut ships.
+fetch "Geist:wght@400"      geist-400
+fetch "Geist+Mono:wght@400" geist-mono-400
 echo "Done."

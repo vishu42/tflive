@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { isTerminalRegistrationStatus } from "../../api/polling";
 import { queryKeys } from "../../api/queryKeys";
 import {
@@ -12,6 +12,7 @@ import {
 import NotFound from "../../app/NotFound";
 import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
+import Breadcrumb from "../../shared/Breadcrumb";
 import { formatTimestamp } from "../../shared/formatTimestamp";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import { statusGlyph } from "../../shared/statusTone";
@@ -140,7 +141,7 @@ export default function TemplateDetailScreen() {
     }
     return (
       <section className="template-detail-screen" data-testid="template-detail-error">
-        <h1>Template</h1>
+        <Breadcrumb items={[{ label: "Templates", to: "/templates" }, { label: "Template" }]} />
         <p className="muted">Something went wrong while loading this template.</p>
         <button
           className="primary-button"
@@ -167,17 +168,15 @@ export default function TemplateDetailScreen() {
   return (
     <section className="template-detail-screen">
       <header className="template-detail-header">
-        <div className="page-header">
-          <Link to="/templates" className="muted back-link" data-testid="template-detail-back">
-            <ArrowLeft size={14} />
-            Back to templates
-          </Link>
-          <h1>{name}</h1>
-          <p className="muted template-detail__identity" data-testid="template-detail-identity">
-            {latestRevision.repo_owner}/{latestRevision.repo_name}
-            {rootPath !== "" && <> · {rootPath}</>} · {latestRevision.source_ref}
-          </p>
-        </div>
+        <Breadcrumb
+          items={[{ label: "Templates", to: "/templates", testId: "template-detail-back" }, { label: name }]}
+          detail={
+            <span data-testid="template-detail-identity">
+              {latestRevision.repo_owner}/{latestRevision.repo_name}
+              {rootPath !== "" && <> · {rootPath}</>} · {latestRevision.source_ref}
+            </span>
+          }
+        />
 
         {/* Hidden rather than disabled without the permission: the POST would
             be a 403, so there is nothing the user could do to make it work. */}

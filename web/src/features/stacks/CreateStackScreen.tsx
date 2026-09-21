@@ -1,8 +1,9 @@
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useCreateStackMutation } from "../../api/queries";
 import { tenantID } from "../../config";
+import Breadcrumb from "../../shared/Breadcrumb";
 
 export default function CreateStackScreen() {
   const navigate = useNavigate();
@@ -38,16 +39,7 @@ export default function CreateStackScreen() {
     // half-typed stack name is never wiped out by a background sign-in
     // redirect.
     <section data-unsaved={trimmed !== "" ? "true" : undefined}>
-      {/* The title sits above the card, not inside it, matching every other
-          screen. Nested in the panel it put a 40px page heading directly on top
-          of a 14px field label. */}
-      <header className="page-header">
-        <Link to="/stacks" className="muted back-link">
-          <ArrowLeft size={14} />
-          Back to stacks
-        </Link>
-        <h1>Create stack</h1>
-      </header>
+      <Breadcrumb items={[{ label: "Stacks", to: "/stacks" }, { label: "Create stack" }]} />
 
       <section className="panel">
         {errorMessage && (
