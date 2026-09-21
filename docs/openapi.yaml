@@ -1886,11 +1886,18 @@ components:
         error_summary:
           type: string
           description: Why the run failed. Empty otherwise.
+        run_number:
+          type: integer
+          minimum: 1
+          description: |
+            Counts runs within one stack template, from 1, in the order they
+            were started. Unique per stack template, not globally; `id` is the
+            identifier every other endpoint takes.
       required:
         [id, tenant_id, stack_template_id, template_revision_id,
          source_template_id, operation, selected_ref, resolved_commit_sha,
          workspace_name, backend_type, backend_config_hash, status,
-         trigger_actor, started_at, error_summary]
+         trigger_actor, started_at, error_summary, run_number]
 
     TemplateRunStatus:
       type: string

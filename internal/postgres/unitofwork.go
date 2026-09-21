@@ -24,7 +24,7 @@ func (repo *txRepo) AppendAuditEvent(ctx context.Context, event domain.SecurityA
 	return appendAuditEvent(ctx, repo.tx, event)
 }
 
-func (repo *txRepo) CreateTemplateRun(ctx context.Context, run domain.TemplateRun) error {
+func (repo *txRepo) CreateTemplateRun(ctx context.Context, run domain.TemplateRun) (int, error) {
 	return createTemplateRun(ctx, repo.tx, run)
 }
 

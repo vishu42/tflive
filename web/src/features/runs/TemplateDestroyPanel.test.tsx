@@ -50,6 +50,7 @@ function run(overrides: Partial<TemplateRun> = {}): TemplateRun {
     trigger_actor: "user_123",
     started_at: "2026-07-20T00:00:00Z",
     error_summary: "",
+    run_number: 1,
     ...overrides
   };
 }

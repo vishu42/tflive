@@ -42,6 +42,7 @@ function run(overrides: Partial<TemplateRun> = {}): TemplateRun {
     trigger_actor: "user_123",
     started_at: "2026-07-20T00:00:00Z",
     error_summary: "",
+    run_number: 1,
     ...overrides
   };
 }
@@ -179,7 +180,7 @@ describe("RunDetailScreen", () => {
   it("renders the run summary and logs, switching phase and log body when a phase tab is clicked", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
-    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "completed" }));
+    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "completed", run_number: 4 }));
 
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
@@ -198,6 +199,7 @@ describe("RunDetailScreen", () => {
     renderScreen(queryClient);
 
     expect(screen.getByTestId("run-detail-screen")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Run #4" })).toBeTruthy();
     expect(screen.getByText("plan")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("plan log body")).toBeTruthy());
 

@@ -601,7 +601,7 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 			Status:            domain.TemplateRevisionActive,
 		},
 	}
-	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
+	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}, createdRunNumber: 7}
 	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
@@ -625,6 +625,10 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 
 	if run.ID != domain.TemplateRunID("run_123") {
 		t.Fatalf("run.ID = %q, want run_123", run.ID)
+	}
+	// The store assigns the number; the service hands it back unchanged.
+	if run.RunNumber != 7 {
+		t.Fatalf("run.RunNumber = %d, want 7", run.RunNumber)
 	}
 
 	if run.Status != domain.TemplateRunQueued {
@@ -2250,14 +2254,16 @@ type recordingTemplateRunRepository struct {
 	cancellationErr        error
 	reconciledRunID        domain.TemplateRunID
 	reconciledSummary      string
+	// createdRunNumber is what CreateTemplateRun reports it assigned.
+	createdRunNumber int
 }
 
-func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run domain.TemplateRun) error {
+func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run domain.TemplateRun) (int, error) {
 	if repository.createErr != nil {
-		return repository.createErr
+		return 0, repository.createErr
 	}
 	repository.created = run
-	return nil
+	return repository.createdRunNumber, nil
 }
 
 func (repository *recordingTemplateRunRepository) GetTemplateRun(_ context.Context, tenantID domain.TenantID, runID domain.TemplateRunID) (domain.TemplateRun, error) {
@@ -2571,9 +2577,9 @@ func (unit *recordingUnitOfWork) AppendAuditEvent(_ context.Context, event domai
 	return nil
 }
 
-func (unit *recordingUnitOfWork) CreateTemplateRun(ctx context.Context, run domain.TemplateRun) error {
+func (unit *recordingUnitOfWork) CreateTemplateRun(ctx context.Context, run domain.TemplateRun) (int, error) {
 	if unit.templateRuns == nil {
-		return nil
+		return 0, nil
 	}
 	return unit.templateRuns.CreateTemplateRun(ctx, run)
 }

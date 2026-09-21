@@ -64,7 +64,7 @@ type StackPageCursor struct {
 type TxRepo interface {
 	CreateStack(ctx context.Context, stack domain.Stack) error
 	AppendAuditEvent(ctx context.Context, event domain.SecurityAuditEvent) error
-	CreateTemplateRun(ctx context.Context, run domain.TemplateRun) error
+	CreateTemplateRun(ctx context.Context, run domain.TemplateRun) (int, error)
 	CreateTemplateRegistration(ctx context.Context, registration domain.TemplateRegistration) error
 	ApproveTemplateRun(ctx context.Context, approval domain.TemplateRunApproval) error
 	RequestTemplateRunCancellation(ctx context.Context, cancellation domain.TemplateRunCancellation) error
@@ -106,7 +106,7 @@ type CredentialEncryptor interface {
 
 // TemplateRunRepository persists TemplateRun records and run decisions.
 type TemplateRunRepository interface {
-	CreateTemplateRun(ctx context.Context, run domain.TemplateRun) error
+	CreateTemplateRun(ctx context.Context, run domain.TemplateRun) (int, error)
 	GetTemplateRun(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID) (domain.TemplateRun, error)
 	// ListTemplateRuns returns tenant-owned runs for one stack template, most recent first.
 	ListTemplateRuns(ctx context.Context, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID) ([]domain.TemplateRun, error)
@@ -780,9 +780,11 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 		return domain.TemplateRun{}, fmt.Errorf("encode start template run payload: %w", err)
 	}
 	if err := service.Work.InTx(ctx, func(ctx context.Context, repository TxRepo, enqueuer queue.Enqueuer) error {
-		if err := repository.CreateTemplateRun(ctx, run); err != nil {
+		runNumber, err := repository.CreateTemplateRun(ctx, run)
+		if err != nil {
 			return err
 		}
+		run.RunNumber = runNumber
 		return enqueuer.Enqueue(ctx, queue.Request{
 			Kind:         KindStartTemplateRun,
 			Payload:      payload,
