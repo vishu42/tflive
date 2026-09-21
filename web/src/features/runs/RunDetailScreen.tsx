@@ -84,7 +84,7 @@ export default function RunDetailScreen() {
   return (
     <section className="run-detail-screen workflow-grid" data-testid="run-detail-screen">
       <section className="panel">
-        <h2>Run</h2>
+        <h2>{run ? `Run #${run.run_number}` : "Run"}</h2>
         {errorMessage && <div className="alert">{errorMessage}</div>}
         <div className="button-row">
           <RequireCapability

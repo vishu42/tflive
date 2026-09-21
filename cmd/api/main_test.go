@@ -796,8 +796,8 @@ func (recordingStore) ListTemplateRevisions(context.Context, domain.TenantID) ([
 	return nil, nil
 }
 
-func (recordingStore) CreateTemplateRun(context.Context, domain.TemplateRun) error {
-	return nil
+func (recordingStore) CreateTemplateRun(context.Context, domain.TemplateRun) (int, error) {
+	return 0, nil
 }
 
 func (recordingStore) CreateTemplateRegistration(context.Context, domain.TemplateRegistration) error {

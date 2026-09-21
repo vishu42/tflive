@@ -1458,7 +1458,7 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 		ErrorSummary:       "previous error summary",
 	}
 
-	if err := store.CreateTemplateRun(ctx, run); err != nil {
+	if _, err := store.CreateTemplateRun(ctx, run); err != nil {
 		t.Fatalf("CreateTemplateRun returned error: %v", err)
 	}
 
@@ -1564,7 +1564,7 @@ func TestCreateTemplateRunAllowsOneNonTerminalRunPerStackTemplate(t *testing.T) 
 			stackTemplateID := domain.StackTemplateID("stack_template_" + string(status))
 			seedTemplateRun(t, ctx, pool, templateRunAt(stackTemplateID, domain.TemplateRunID("run_first_"+status), status))
 
-			err := store.CreateTemplateRun(ctx, templateRunAt(stackTemplateID, domain.TemplateRunID("run_second_"+status), domain.TemplateRunQueued))
+			_, err := store.CreateTemplateRun(ctx, templateRunAt(stackTemplateID, domain.TemplateRunID("run_second_"+status), domain.TemplateRunQueued))
 
 			if status.Terminal() {
 				if err != nil {
@@ -1591,12 +1591,12 @@ func TestCreateTemplateRunScopesTheInFlightGate(t *testing.T) {
 	seedTemplateRun(t, ctx, pool, templateRunAt("stack_template_a", "run_a_active", domain.TemplateRunApplyStarted))
 	// A different stack template, and the same template under a different
 	// tenant: the index keys on the pair, so neither is the same slot.
-	if err := store.CreateTemplateRun(ctx, templateRunAt("stack_template_b", "run_b_active", domain.TemplateRunQueued)); err != nil {
+	if _, err := store.CreateTemplateRun(ctx, templateRunAt("stack_template_b", "run_b_active", domain.TemplateRunQueued)); err != nil {
 		t.Fatalf("CreateTemplateRun on a second stack template returned error: %v", err)
 	}
 	otherTenant := templateRunAt("stack_template_a", "run_other_tenant", domain.TemplateRunQueued)
 	otherTenant.TenantID = domain.TenantID("tenant_456")
-	if err := store.CreateTemplateRun(ctx, otherTenant); err != nil {
+	if _, err := store.CreateTemplateRun(ctx, otherTenant); err != nil {
 		t.Fatalf("CreateTemplateRun for a second tenant returned error: %v", err)
 	}
 
@@ -1608,7 +1608,7 @@ func TestCreateTemplateRunScopesTheInFlightGate(t *testing.T) {
 	seedTemplateRun(t, ctx, pool, templateRunAt("stack_template_c", "run_c_1", domain.TemplateRunCompleted))
 	seedTemplateRun(t, ctx, pool, templateRunAt("stack_template_c", "run_c_2", domain.TemplateRunFailed))
 	seedTemplateRun(t, ctx, pool, templateRunAt("stack_template_c", "run_c_3", domain.TemplateRunCanceled))
-	if err := store.CreateTemplateRun(ctx, templateRunAt("stack_template_c", "run_c_4", domain.TemplateRunQueued)); err != nil {
+	if _, err := store.CreateTemplateRun(ctx, templateRunAt("stack_template_c", "run_c_4", domain.TemplateRunQueued)); err != nil {
 		t.Fatalf("CreateTemplateRun after three finished runs returned error: %v", err)
 	}
 	if err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
@@ -1620,8 +1620,70 @@ func TestCreateTemplateRunScopesTheInFlightGate(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
 	}
-	if err := store.CreateTemplateRun(ctx, templateRunAt("stack_template_c", "run_c_5", domain.TemplateRunQueued)); err != nil {
+	if _, err := store.CreateTemplateRun(ctx, templateRunAt("stack_template_c", "run_c_5", domain.TemplateRunQueued)); err != nil {
 		t.Fatalf("CreateTemplateRun after the active run failed returned error: %v", err)
+	}
+}
+
+// Run numbers count per stack template from 1, and the store hands back the
+// number it assigned so the caller can show it without a second read. A
+// neighbouring template and the same template under another tenant each keep
+// their own sequence.
+func TestCreateTemplateRunNumbersRunsPerStackTemplate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+
+	create := func(run domain.TemplateRun) int {
+		t.Helper()
+		runNumber, err := store.CreateTemplateRun(ctx, run)
+		if err != nil {
+			t.Fatalf("CreateTemplateRun(%s) returned error: %v", run.ID, err)
+		}
+		// Finish it so the in-flight gate lets the next one in.
+		if _, err := pool.Exec(ctx, `update template_runs set status = 'completed' where tenant_id = $1 and id = $2`, run.TenantID, run.ID); err != nil {
+			t.Fatalf("complete run %s: %v", run.ID, err)
+		}
+		return runNumber
+	}
+
+	for want := 1; want <= 3; want++ {
+		got := create(templateRunAt("stack_template_numbered", domain.TemplateRunID(fmt.Sprintf("run_numbered_%d", want)), domain.TemplateRunQueued))
+		if got != want {
+			t.Fatalf("run number = %d, want %d", got, want)
+		}
+	}
+	if got := create(templateRunAt("stack_template_neighbour", "run_neighbour_1", domain.TemplateRunQueued)); got != 1 {
+		t.Fatalf("first run on a second stack template got number %d, want 1", got)
+	}
+	otherTenant := templateRunAt("stack_template_numbered", "run_other_tenant_1", domain.TemplateRunQueued)
+	otherTenant.TenantID = domain.TenantID("tenant_456")
+	if got := create(otherTenant); got != 1 {
+		t.Fatalf("first run for a second tenant got number %d, want 1", got)
+	}
+
+	runs, err := store.ListTemplateRuns(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_numbered"))
+	if err != nil {
+		t.Fatalf("ListTemplateRuns returned error: %v", err)
+	}
+	numbers := map[domain.TemplateRunID]int{}
+	for _, run := range runs {
+		numbers[run.ID] = run.RunNumber
+	}
+	for want := 1; want <= 3; want++ {
+		id := domain.TemplateRunID(fmt.Sprintf("run_numbered_%d", want))
+		if numbers[id] != want {
+			t.Fatalf("listed run %s has number %d, want %d", id, numbers[id], want)
+		}
+	}
+	run, err := store.GetTemplateRun(ctx, domain.TenantID("tenant_123"), "run_numbered_2")
+	if err != nil {
+		t.Fatalf("GetTemplateRun returned error: %v", err)
+	}
+	if run.RunNumber != 2 {
+		t.Fatalf("GetTemplateRun run number = %d, want 2", run.RunNumber)
 	}
 }
 
@@ -1645,11 +1707,12 @@ func TestCreateTemplateRunAdmitsOneOfManyConcurrentRuns(t *testing.T) {
 		go func() {
 			defer waiting.Done()
 			<-start
-			errs <- store.CreateTemplateRun(ctx, templateRunAt(
+			_, err := store.CreateTemplateRun(ctx, templateRunAt(
 				"stack_template_race",
 				domain.TemplateRunID(fmt.Sprintf("run_race_%d", index)),
 				domain.TemplateRunQueued,
 			))
+			errs <- err
 		}()
 	}
 	close(start)
@@ -1708,7 +1771,7 @@ func TestUnitOfWorkTemplateWritesRollbackTogether(t *testing.T) {
 		if err := repo.CreateTemplateRegistration(ctx, domain.TemplateRegistration{ID: "registration_123", TenantID: "tenant_123", RepoOwner: "acme", RepoName: "infra", SourceRef: "main", RootPath: "modules/vpc", Status: domain.TemplateRegistrationPending, RequestedBy: "user_123", RequestedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil {
 			return err
 		}
-		if err := repo.CreateTemplateRun(ctx, domain.TemplateRun{ID: "run_created", TenantID: "tenant_123", StackTemplateID: "stack_template_123", TemplateRevisionID: "revision_123", Operation: domain.OperationPlan, SelectedRef: "main", WorkspaceName: "workspace", ConfigJSON: json.RawMessage(`{}`), Status: domain.TemplateRunQueued, TriggerActor: "user_123"}); err != nil {
+		if _, err := repo.CreateTemplateRun(ctx, domain.TemplateRun{ID: "run_created", TenantID: "tenant_123", StackTemplateID: "stack_template_123", TemplateRevisionID: "revision_123", Operation: domain.OperationPlan, SelectedRef: "main", WorkspaceName: "workspace", ConfigJSON: json.RawMessage(`{}`), Status: domain.TemplateRunQueued, TriggerActor: "user_123"}); err != nil {
 			return err
 		}
 		if err := repo.ApproveTemplateRun(ctx, domain.TemplateRunApproval{TenantID: "tenant_123", RunID: "run_approval", ApprovedBy: "user_123", ApprovedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil {
@@ -1779,6 +1842,7 @@ func TestGetTemplateRunReturnsTenantScopedRecord(t *testing.T) {
 		CompletedAt:       completedAt,
 		ConfigJSON:        json.RawMessage(`{}`),
 		ErrorSummary:      "previous error summary",
+		RunNumber:         1,
 	}
 	run.StartedAt = run.StartedAt.UTC()
 	run.CompletedAt = run.CompletedAt.UTC()
@@ -2758,6 +2822,51 @@ func TestPlannedStateMigrationBackfillsFromExistingRuns(t *testing.T) {
 	}
 }
 
+// Runs that predate run numbers get them in start order, counted per stack
+// template, so history reads #1, #2, ... from the oldest. A run with no start
+// time sorts last rather than first.
+func TestRunNumbersMigrationNumbersExistingRunsInStartOrder(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+	migrateThrough(t, ctx, pool, "0021_one_run_in_flight")
+
+	if _, err := pool.Exec(ctx, `
+		insert into template_runs (
+			id, tenant_id, stack_template_id, template_revision_id,
+			operation, selected_ref, workspace_name, config_json, status, trigger_actor,
+			started_at
+		) values
+			('run_a_second', 'tenant_123', 'stack_template_a', 'rev', 'apply', 'main', 'ws', '{}', 'completed', 'user_123', now() - interval '1 hour'),
+			('run_a_unstarted', 'tenant_123', 'stack_template_a', 'rev', 'plan', 'main', 'ws', '{}', 'failed', 'user_123', null),
+			('run_a_first', 'tenant_123', 'stack_template_a', 'rev', 'plan', 'main', 'ws', '{}', 'completed', 'user_123', now() - interval '2 hours'),
+			('run_b_first', 'tenant_123', 'stack_template_b', 'rev', 'plan', 'main', 'ws', '{}', 'completed', 'user_123', now() - interval '3 hours')
+	`); err != nil {
+		t.Fatalf("seed pre-migration runs: %v", err)
+	}
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate to head: %v", err)
+	}
+
+	want := map[string]int{
+		"run_a_first":     1,
+		"run_a_second":    2,
+		"run_a_unstarted": 3,
+		"run_b_first":     1,
+	}
+	for id, wantNumber := range want {
+		var got int
+		if err := pool.QueryRow(ctx, `select run_number from template_runs where id = $1`, id).Scan(&got); err != nil {
+			t.Fatalf("read run number for %s: %v", id, err)
+		}
+		if got != wantNumber {
+			t.Fatalf("%s run number = %d, want %d", id, got, wantNumber)
+		}
+	}
+}
+
 // A template that never ran keeps both snapshots absent through the migration.
 func TestPlannedStateMigrationLeavesUnplannedTemplatesAbsent(t *testing.T) {
 	t.Parallel()
@@ -2955,10 +3064,17 @@ func seedTemplateRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run 
 			trigger_actor,
 			started_at,
 			completed_at,
-			error_summary
+			error_summary,
+			run_number
 		) values (
 			$1, $2, $3, $4, $5, $6, $7, $8,
-			$9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17
+			$9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17,
+			(
+				select coalesce(max(run_number), 0) + 1
+				from template_runs
+				where tenant_id = $2
+					and stack_template_id = $3
+			)
 		)
 	`,
 		run.ID,

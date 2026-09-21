@@ -25,6 +25,7 @@ function run(overrides: Partial<TemplateRun> = {}): TemplateRun {
     trigger_actor: "user_123",
     started_at: "2026-07-20T00:00:00Z",
     error_summary: "",
+    run_number: 1,
     ...overrides
   };
 }
@@ -66,13 +67,14 @@ describe("TemplateRunHistory", () => {
     expect(screen.getByTestId("template-run-history-run_plan_1").getAttribute("href")).toBe("/stacks/stack_1/runs/run_plan_1");
   });
 
-  it("describes each run by operation, status, actor, and start time", () => {
+  it("describes each run by number, operation, status, actor, and start time", () => {
     const queryClient = testQueryClient();
-    seedRuns(queryClient, [run({ id: "run_plan_1", operation: "plan", status: "completed", trigger_actor: "vishu" })]);
+    seedRuns(queryClient, [run({ id: "run_plan_1", run_number: 12, operation: "plan", status: "completed", trigger_actor: "vishu" })]);
 
     renderHistory(queryClient);
 
     const entry = screen.getByTestId("template-run-history-run_plan_1").textContent ?? "";
+    expect(entry.startsWith("#12")).toBe(true);
     expect(entry).toContain("plan");
     expect(entry).toContain("completed");
     expect(entry).toContain("vishu");

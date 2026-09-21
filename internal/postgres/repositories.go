@@ -861,26 +861,31 @@ func (store *Store) UpdateStackTemplateDesiredRevision(ctx context.Context, tena
 	return stackTemplate, nil
 }
 
-func (store *Store) CreateTemplateRun(ctx context.Context, run domain.TemplateRun) error {
+func (store *Store) CreateTemplateRun(ctx context.Context, run domain.TemplateRun) (int, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin create template run: %w", err)
+		return 0, fmt.Errorf("begin create template run: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := createTemplateRun(ctx, tx, run); err != nil {
-		return err
+	runNumber, err := createTemplateRun(ctx, tx, run)
+	if err != nil {
+		return 0, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit template run: %w", err)
+		return 0, fmt.Errorf("commit template run: %w", err)
 	}
 
-	return nil
+	return runNumber, nil
 }
 
-func createTemplateRun(ctx context.Context, exec pgxExecutor, run domain.TemplateRun) error {
-	_, err := exec.Exec(ctx, `
+// createTemplateRun inserts run and returns the run number it was assigned. The
+// number is max + 1 within the stack template, computed by the insert itself;
+// see migration 0022 for why that needs no counter.
+func createTemplateRun(ctx context.Context, exec pgxExecutor, run domain.TemplateRun) (int, error) {
+	var runNumber int
+	err := exec.QueryRow(ctx, `
 		insert into template_runs (
 			id,
 			tenant_id,
@@ -898,11 +903,19 @@ func createTemplateRun(ctx context.Context, exec pgxExecutor, run domain.Templat
 			trigger_actor,
 			started_at,
 			completed_at,
-			error_summary
+			error_summary,
+			run_number
 		) values (
 			$1, $2, $3, $4, $5, $6, $7, $8,
-			$9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17
+			$9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17,
+			(
+				select coalesce(max(run_number), 0) + 1
+				from template_runs
+				where tenant_id = $2
+					and stack_template_id = $3
+			)
 		)
+		returning run_number
 	`,
 		run.ID,
 		run.TenantID,
@@ -921,18 +934,23 @@ func createTemplateRun(ctx context.Context, exec pgxExecutor, run domain.Templat
 		nullTime(run.StartedAt),
 		nullTime(run.CompletedAt),
 		run.ErrorSummary,
-	)
+	).Scan(&runNumber)
 	// The gate against concurrent runs on one stack template: the insert is the
 	// check, so there is no window between deciding and writing. See migration
 	// 0021 for why it lives here rather than in StartTemplateRun.
-	if duplicateConstraint(err, "template_runs_in_flight_idx") {
-		return app.ErrTemplateRunInFlight
+	//
+	// A losing concurrent insert computed the same run number as the winner, so
+	// it can trip the run number index before the in-flight one; which index
+	// Postgres checks first is not something to rely on. Either means another
+	// run got there first.
+	if duplicateConstraint(err, "template_runs_in_flight_idx") || duplicateConstraint(err, "template_runs_run_number_idx") {
+		return 0, app.ErrTemplateRunInFlight
 	}
 	if err != nil {
-		return fmt.Errorf("create template run: %w", err)
+		return 0, fmt.Errorf("create template run: %w", err)
 	}
 
-	return nil
+	return runNumber, nil
 }
 
 func (store *Store) GetTemplateRun(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID) (domain.TemplateRun, error) {
@@ -958,7 +976,8 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID domain.TenantID
 			trigger_actor,
 			started_at,
 			completed_at,
-			error_summary
+			error_summary,
+			run_number
 		from template_runs
 		where tenant_id = $1
 			and id = $2
@@ -980,6 +999,7 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID domain.TenantID
 		&startedAt,
 		&completedAt,
 		&run.ErrorSummary,
+		&run.RunNumber,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.TemplateRun{}, app.ErrNotFound
@@ -1017,7 +1037,8 @@ func (store *Store) ListTemplateRuns(ctx context.Context, tenantID domain.Tenant
 			trigger_actor,
 			started_at,
 			completed_at,
-			error_summary
+			error_summary,
+			run_number
 		from template_runs
 		where tenant_id = $1
 			and stack_template_id = $2
@@ -1051,6 +1072,7 @@ func (store *Store) ListTemplateRuns(ctx context.Context, tenantID domain.Tenant
 			&startedAt,
 			&completedAt,
 			&run.ErrorSummary,
+			&run.RunNumber,
 		); err != nil {
 			return nil, fmt.Errorf("scan template run: %w", err)
 		}

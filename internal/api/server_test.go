@@ -2698,13 +2698,13 @@ func (unit *apiUnitOfWork) AppendAuditEvent(_ context.Context, event domain.Secu
 	return nil
 }
 
-func (unit *apiUnitOfWork) CreateTemplateRun(ctx context.Context, run domain.TemplateRun) error {
+func (unit *apiUnitOfWork) CreateTemplateRun(ctx context.Context, run domain.TemplateRun) (int, error) {
 	if repository, ok := unit.templateRuns.(interface {
-		CreateTemplateRun(context.Context, domain.TemplateRun) error
+		CreateTemplateRun(context.Context, domain.TemplateRun) (int, error)
 	}); ok {
 		return repository.CreateTemplateRun(ctx, run)
 	}
-	return nil
+	return 0, nil
 }
 
 func (unit *apiUnitOfWork) CreateTemplateRegistration(ctx context.Context, registration domain.TemplateRegistration) error {
@@ -2876,12 +2876,12 @@ type recordingTemplateRunRepository struct {
 	cancellationErr        error
 }
 
-func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run domain.TemplateRun) error {
+func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run domain.TemplateRun) (int, error) {
 	if repository.createErr != nil {
-		return repository.createErr
+		return 0, repository.createErr
 	}
 	repository.created = run
-	return nil
+	return 1, nil
 }
 
 func (repository *recordingTemplateRunRepository) ListTemplateRuns(_ context.Context, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID) ([]domain.TemplateRun, error) {

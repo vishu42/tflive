@@ -141,6 +141,9 @@ type TemplateRun struct {
 	StartedAt          time.Time          `json:"started_at"`
 	CompletedAt        time.Time          `json:"completed_at,omitempty"`
 	ErrorSummary       string             `json:"error_summary"`
+	// RunNumber counts runs within one stack template, from 1. It is what
+	// people see and what URLs carry; ID stays the identity everywhere else.
+	RunNumber int `json:"run_number"`
 }
 
 // TemplateRunLog records the object-store location for one run phase log.

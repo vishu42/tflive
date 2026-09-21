@@ -161,6 +161,8 @@ export interface TemplateRun {
   started_at: string;
   completed_at?: string;
   error_summary: string;
+  // Counts runs within one stack template, from 1. Shown as "Run #N".
+  run_number: number;
 }
 
 export interface TemplateRunLog {
