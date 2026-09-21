@@ -891,8 +891,17 @@
   min-width: 0;
 }
 
-/* The grid gap already separates the tabs from what follows them. */
-.stack-template-detail > .stack-detail-tabs {
+/* The template's tabs, with its state at the far end of the same row. The
+   grid gap already separates the row from what follows it. */
+.stack-template-tabbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  justify-content: space-between;
+}
+
+.stack-template-tabbar .stack-detail-tabs {
   margin-bottom: 0;
 }
 
