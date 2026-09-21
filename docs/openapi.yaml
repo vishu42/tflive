@@ -1447,7 +1447,8 @@ components:
           properties:
             isPlatformAdmin: { type: boolean }
             canCreateStack: { type: boolean }
-          required: [isPlatformAdmin, canCreateStack]
+            canPublishTemplate: { type: boolean }
+          required: [isPlatformAdmin, canCreateStack, canPublishTemplate]
         tenantID:
           type: string
           description: The tenant this deployment serves. Use it in every tenant-scoped path.

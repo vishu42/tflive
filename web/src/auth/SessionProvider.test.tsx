@@ -49,7 +49,7 @@ const me = {
   displayName: "Ada",
   email: "ada@example.test",
   tenantID: "tenant_123",
-  globalCapabilities: { isPlatformAdmin: false, canCreateStack: true },
+  globalCapabilities: { isPlatformAdmin: false, canCreateStack: true, canPublishTemplate: true },
   sessionExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString()
 };
 

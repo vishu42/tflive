@@ -10,7 +10,7 @@ export default function SessionProvider() {
           displayName: "Test",
           email: "test@example.com",
           tenantID: "tenant_123",
-          globalCapabilities: { isPlatformAdmin: false, canCreateStack: true },
+          globalCapabilities: { isPlatformAdmin: false, canCreateStack: true, canPublishTemplate: true },
           sessionExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
         },
         status: "authenticated" as const,

@@ -69,6 +69,10 @@ export default function AppShell() {
             <dd data-testid="debug-is-platform-admin">{me?.globalCapabilities.isPlatformAdmin.toString() ?? "-"}</dd>
             <dt>canCreateStack</dt>
             <dd data-testid="debug-can-create-stack">{me?.globalCapabilities.canCreateStack.toString() ?? "-"}</dd>
+            <dt>canPublishTemplate</dt>
+            <dd data-testid="debug-can-publish-template">
+              {me?.globalCapabilities.canPublishTemplate.toString() ?? "-"}
+            </dd>
           </dl>
         </details>
       )}

@@ -248,7 +248,8 @@
 /* The templates list shares the stacks list's card treatment; only its row
    contents differ, so the shell rules are grouped rather than duplicated. */
 .stacks-list-header,
-.templates-list-header {
+.templates-list-header,
+.template-detail-header {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -403,6 +404,26 @@
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   overflow-wrap: anywhere;
+}
+
+/* Sync sits beside the identity it re-registers, and its outcome lines up
+   under it. The column is end-aligned so the button, not the message beneath
+   it, is what squares off against the heading block's baseline. */
+.template-detail__sync {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+/* Empty until a sync settles. An empty block has no line box, so the column
+   is no taller than the button until there is something to say. */
+.template-detail__sync-result,
+.template-detail__sync .error-text {
+  margin: 0;
+  font-size: var(--text-sm);
+  text-align: right;
 }
 
 .revisions-list {
@@ -772,6 +793,7 @@
    button sits on, because flex aligns by margin box. */
 .stacks-list-header .page-header,
 .templates-list-header .page-header,
+.template-detail-header .page-header,
 .stack-detail-header .page-header {
   margin-bottom: 0;
 }
@@ -936,9 +958,19 @@
   }
 
   .stacks-list-header,
-  .templates-list-header {
+  .templates-list-header,
+  .template-detail-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .template-detail__sync {
+    align-items: stretch;
+  }
+
+  .template-detail__sync-result,
+  .template-detail__sync .error-text {
+    text-align: left;
   }
 
   /* Row contents stack so the status never gets squeezed against the name. */
@@ -973,7 +1005,8 @@
   .form-grid > .primary-button,
   .variable-grid > .primary-button,
   .stacks-list-header .primary-button,
-  .templates-list-header .primary-button {
+  .templates-list-header .primary-button,
+  .template-detail__sync .secondary-button {
     width: 100%;
   }
 

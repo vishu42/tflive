@@ -12,6 +12,9 @@ export interface Me {
   globalCapabilities: {
     isPlatformAdmin: boolean;
     canCreateStack: boolean;
+    /** Registering a template — which is also what the detail screen's Sync
+        button posts, so it gates that button too. */
+    canPublishTemplate: boolean;
   };
   /** RFC 3339. When the session's ID token expires. */
   sessionExpiresAt?: string;

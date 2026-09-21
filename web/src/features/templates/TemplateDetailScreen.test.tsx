@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../auth/AuthContext";
 import type { AuthContextValue } from "../../auth/AuthContext";
 import TemplateDetailScreen from "./TemplateDetailScreen";
 import { queryKeys } from "../../api/queryKeys";
-import type { TemplateRevision } from "../../api/types";
+import type { TemplateRegistration, TemplateRevision } from "../../api/types";
 
 function revision(overrides: Partial<TemplateRevision> = {}): TemplateRevision {
   return {
@@ -34,13 +34,13 @@ function testQueryClient(): QueryClient {
   return new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
 }
 
-function authValue(): AuthContextValue {
+function authValue(canPublishTemplate = true): AuthContextValue {
   return {
     me: {
       sub: "user_1",
       tenantID: "tenant_123",
       displayName: "Test User",
-      globalCapabilities: { isPlatformAdmin: false, canCreateStack: false }
+      globalCapabilities: { isPlatformAdmin: false, canCreateStack: false, canPublishTemplate }
     },
     status: "authenticated",
     login: () => {},
@@ -48,10 +48,32 @@ function authValue(): AuthContextValue {
   };
 }
 
-function renderScreen(queryClient: QueryClient, initialEntry = "/templates/tpl_1") {
+function registration(overrides: Partial<TemplateRegistration> = {}): TemplateRegistration {
+  return {
+    id: "reg_1",
+    tenant_id: "tenant_123",
+    repo_owner: "hashicorp",
+    repo_name: "terraform-aws-vpc",
+    source_ref: "main",
+    root_path: "environments/dev",
+    status: "completed",
+    template_revision_id: "rev_1",
+    resolved_commit_sha: "abcdef1234567890",
+    requested_by: "user_1",
+    requested_at: "2026-07-20T00:00:00Z",
+    error_summary: "",
+    ...overrides
+  };
+}
+
+function renderScreen(
+  queryClient: QueryClient,
+  initialEntry = "/templates/tpl_1",
+  auth: AuthContextValue = authValue()
+) {
   return render(
     <QueryClientProvider client={queryClient}>
-      <AuthContext.Provider value={authValue()}>
+      <AuthContext.Provider value={auth}>
         <MemoryRouter initialEntries={[initialEntry]}>
           <Routes>
             <Route path="/templates/:sourceTemplateId" element={<TemplateDetailScreen />} />
@@ -205,5 +227,177 @@ describe("TemplateDetailScreen", () => {
     renderScreen(testQueryClient());
 
     await waitFor(() => expect(screen.getByTestId("template-detail-error")).toBeTruthy());
+  });
+
+  // ---- Sync: re-register the identity the header already states ----
+
+  it("posts the identity from the header when Sync is clicked", async () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (init?.method === "POST") {
+        return jsonResponse(registration({ status: "pending" }));
+      }
+      if (String(input).includes("/template-registrations/")) {
+        return jsonResponse(registration());
+      }
+      return jsonResponse([revision()]);
+    });
+
+    renderScreen(queryClient);
+    fireEvent.click(screen.getByTestId("template-sync"));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true));
+    const postCall = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(String(postCall?.[0])).toContain("/v1/tenants/tenant_123/template-revisions");
+    // Exactly the identity the template is keyed on, so the sync lands on this
+    // template rather than minting a second one.
+    expect(JSON.parse(String(postCall?.[1]?.body))).toEqual({
+      repo_owner: "hashicorp",
+      repo_name: "terraform-aws-vpc",
+      source_ref: "main",
+      root_path: "environments/dev"
+    });
+  });
+
+  it("disables Sync while one is in flight, so repeated clicks do not queue parallel workflows", async () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (init?.method === "POST") {
+        return jsonResponse(registration({ status: "pending" }));
+      }
+      if (String(input).includes("/template-registrations/")) {
+        // Never reaches a terminal status, so the flow stays in flight.
+        return jsonResponse(registration({ status: "running" }));
+      }
+      return jsonResponse([revision()]);
+    });
+
+    renderScreen(queryClient);
+    const button = screen.getByTestId("template-sync") as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button.disabled).toBe(true));
+    fireEvent.click(button);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  });
+
+  it("shows the new revision at the top once the sync resolves a new commit", async () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
+    const fresh = revision({ id: "rev_2", resolved_commit_sha: "f17f9834444" });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (init?.method === "POST") {
+        return jsonResponse(registration({ status: "pending" }));
+      }
+      if (String(input).includes("/template-registrations/")) {
+        return jsonResponse(registration({ template_revision_id: "rev_2" }));
+      }
+      return jsonResponse([fresh, revision()]);
+    });
+
+    renderScreen(queryClient);
+    fireEvent.click(screen.getByTestId("template-sync"));
+
+    // The one test that drives the real shape of the flow: a pending 202,
+    // then a poll that completes. That poll is POLL_INTERVAL_MS away, so the
+    // wait has to outlast it — the tests below start from a terminal
+    // registration instead, and stay fast.
+    await waitFor(() => expect(screen.getByTestId("revision-row-rev_2")).toBeTruthy(), { timeout: 3000 });
+    expect(screen.getByTestId("revision-latest").closest("li")?.getAttribute("data-testid")).toBe("revision-row-rev_2");
+    expect(screen.queryByTestId("template-sync-result")).toBeNull();
+  });
+
+  it("says the template is already up to date when the ref still resolves to a known commit", async () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
+    // The insert conflicted, so the registration names the revision the screen
+    // was already showing.
+    const unchanged = registration({ template_revision_id: "rev_1" });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) =>
+      init?.method === "POST" || String(input).includes("/template-registrations/")
+        ? jsonResponse(unchanged)
+        : jsonResponse([revision()])
+    );
+
+    renderScreen(queryClient);
+    fireEvent.click(screen.getByTestId("template-sync"));
+
+    await waitFor(() => expect(screen.getByTestId("template-sync-result").textContent).toContain("Already up to date"));
+    expect(screen.getByTestId("template-revisions").querySelectorAll("li")).toHaveLength(1);
+  });
+
+  it("shows the registration's error when the sync fails", async () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
+    const failed = registration({ status: "failed", template_revision_id: "", error_summary: "ref not found: main" });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) =>
+      init?.method === "POST" || String(input).includes("/template-registrations/")
+        ? jsonResponse(failed)
+        : jsonResponse([revision()])
+    );
+
+    renderScreen(queryClient);
+    fireEvent.click(screen.getByTestId("template-sync"));
+
+    await waitFor(() => expect(screen.getByTestId("template-sync-error").textContent).toContain("ref not found: main"));
+    // The failure is terminal, so the button is offered again.
+    expect((screen.getByTestId("template-sync") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("surfaces a rejected POST rather than leaving the button spinning", async () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (init?.method === "POST") {
+        return jsonResponse({ error: "forbidden", message: "forbidden" }, 403);
+      }
+      return jsonResponse([revision()]);
+    });
+
+    renderScreen(queryClient);
+    fireEvent.click(screen.getByTestId("template-sync"));
+
+    await waitFor(() => expect(screen.getByTestId("template-sync-error")).toBeTruthy());
+    expect((screen.getByTestId("template-sync") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("surfaces a failing registration poll rather than leaving the button spinning", async () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
+    // The POST seeds the cache with a `pending` registration; every poll after
+    // that fails, so the status never reaches a terminal value on its own.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (init?.method === "POST") {
+        return jsonResponse(registration({ status: "pending", template_revision_id: "" }));
+      }
+      if (String(input).includes("/template-registrations/")) {
+        return jsonResponse({ error: "forbidden", message: "forbidden" }, 403);
+      }
+      return jsonResponse([revision()]);
+    });
+
+    renderScreen(queryClient);
+    fireEvent.click(screen.getByTestId("template-sync"));
+
+    // The seeded `pending` data is fresh, so the first poll waits a full
+    // POLL_INTERVAL_MS — past waitFor's default timeout.
+    await waitFor(() => expect(screen.getByTestId("template-sync-error").textContent).toContain("forbidden"), {
+      timeout: 3000
+    });
+    expect((screen.getByTestId("template-sync") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("hides Sync from a user without can_publish_template", () => {
+    const queryClient = testQueryClient();
+    queryClient.setQueryData(queryKeys.templateRevisions("tenant_123"), [revision()]);
+
+    renderScreen(queryClient, "/templates/tpl_1", authValue(false));
+
+    // The POST would 403, so the action is never offered.
+    expect(screen.queryByTestId("template-sync")).toBeNull();
   });
 });

@@ -27,7 +27,7 @@ describe("useMeQuery", () => {
           sub: "user_1",
           displayName: "Alice",
           email: "alice@example.com",
-          globalCapabilities: { isPlatformAdmin: true, canCreateStack: false },
+          globalCapabilities: { isPlatformAdmin: true, canCreateStack: false, canPublishTemplate: false },
           tenantID: "tenant_123",
         }),
         { status: 200, headers: { "content-type": "application/json" } }
@@ -42,7 +42,7 @@ describe("useMeQuery", () => {
       sub: "user_1",
       displayName: "Alice",
       email: "alice@example.com",
-      globalCapabilities: { isPlatformAdmin: true, canCreateStack: false },
+      globalCapabilities: { isPlatformAdmin: true, canCreateStack: false, canPublishTemplate: false },
       tenantID: "tenant_123",
     });
   });
