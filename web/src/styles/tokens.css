@@ -35,12 +35,14 @@
   --color-danger-soft:  rgba(220, 38, 38, 0.10);
 
   /* Typefaces */
-  --font-display: Archivo, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-body:    Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+  /* Vercel's own Geist, as on vercel.com. Display and body are the same face,
+     so headings separate by size and tracking alone. */
+  --font-display: Geist, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body:    Geist, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:    "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
                   Consolas, "Liberation Mono", monospace;
 
-  /* Type scale */
+  /* Type scale. Every step is a size on Geist's own ramp. */
   --text-xs:   0.75rem;
   --text-sm:   0.875rem;
   --text-base: 1rem;
@@ -49,9 +51,9 @@
   --text-2xl:  1.5rem;
   --text-3xl:  2rem;
   --text-4xl:  2.5rem;
-  --text-5xl:  3.25rem;
+  --text-5xl:  3rem;    /* Geist heading-48 */
   --text-6xl:  4rem;
-  --text-7xl:  5.25rem;
+  --text-7xl:  4.5rem;  /* Geist heading-72 */
 
   /* Tracking. Geist tightens in three tiers as size grows, measured off their
      type ramp: >=40px is -0.06em (40px -> -2.4px, 72px -> -4.32px), 24-32px is

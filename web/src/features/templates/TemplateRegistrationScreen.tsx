@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { ArrowLeft, Loader2, Send } from "lucide-react";
+import { Loader2, Send } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { isTerminalRegistrationStatus } from "../../api/polling";
 import { queryKeys } from "../../api/queryKeys";
 import { useRegisterTemplateMutation, useTemplateRegistrationQuery } from "../../api/queries";
 import { tenantID } from "../../config";
+import Breadcrumb from "../../shared/Breadcrumb";
 import StatusRow from "../../shared/StatusRow";
 
 // /templates/new owns the register-then-poll flow. Registration is
@@ -72,14 +73,12 @@ export default function TemplateRegistrationScreen() {
 
   return (
     <section className="template-registration-screen" data-unsaved={hasUnsavedRegistration ? "true" : undefined}>
-      {/* Title above the card, not inside it — see CreateStackScreen. */}
-      <header className="page-header">
-        <Link to="/templates" className="muted back-link" data-testid="template-registration-back">
-          <ArrowLeft size={14} />
-          Back to templates
-        </Link>
-        <h1>Register template</h1>
-      </header>
+      <Breadcrumb
+        items={[
+          { label: "Templates", to: "/templates", testId: "template-registration-back" },
+          { label: "Register template" }
+        ]}
+      />
 
       <section className="panel">
         {errorMessage && (

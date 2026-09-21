@@ -14,7 +14,7 @@
   padding: 0 var(--space-6);
   font-family: var(--font-body);
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: 400;
   letter-spacing: var(--tracking-tight);
   white-space: nowrap;
   cursor: pointer;
@@ -110,7 +110,7 @@ label {
   color: var(--color-muted-fg);
   font-family: var(--font-body);
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: 400;
 }
 
 input,
@@ -208,7 +208,7 @@ textarea {
   gap: var(--space-2);
   margin: 0;
   font-family: var(--font-body);
-  font-weight: 600;
+  font-weight: 400;
   font-size: var(--text-xl);
   letter-spacing: var(--tracking-tight);
   line-height: var(--leading-snug);
@@ -253,24 +253,83 @@ textarea {
   position: relative;
 }
 
-/* ---- Page header ---- */
-.page-header {
-  margin-bottom: var(--space-8);
+/* ---- Breadcrumb ----
+   Every screen's title bar. The current crumb is the page's h1, set at crumb
+   size rather than heading size: the trail says where you are, and the
+   content below says the rest. Separators are drawn here so screen readers
+   count only real crumbs. */
+.breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+  min-height: var(--control-height);
+  align-content: center;
+  margin-bottom: var(--space-6);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
 }
 
-.page-header h1 {
-  font-family: var(--font-display);
-  font-size: var(--text-3xl);
-  letter-spacing: var(--tracking-tighter);
-  line-height: var(--leading-tight);
+.breadcrumb ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-@media (min-width: 768px) {
-  .page-header h1 {
-    font-size: var(--text-4xl);
-    /* Tracking follows size, so it tightens with the breakpoint. */
-    letter-spacing: var(--tracking-tightest);
-  }
+.breadcrumb li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.breadcrumb li + li::before {
+  content: "/";
+  color: var(--color-muted-fg);
+  opacity: 0.5;
+}
+
+.breadcrumb a {
+  color: var(--color-muted-fg);
+  font-weight: 400;
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.breadcrumb a:hover {
+  color: var(--color-fg);
+  text-decoration: none;
+}
+
+.breadcrumb h1 {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  letter-spacing: var(--tracking-normal);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+.breadcrumb__detail {
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+/* A heading inside a page whose title the breadcrumb already carries. */
+.section-title {
+  margin-bottom: var(--space-4);
+  font-family: var(--font-body);
+  font-size: var(--text-xl);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-snug);
 }
 
 /* ---- Messaging ---- */
@@ -291,7 +350,7 @@ textarea {
   margin: var(--space-3) 0 0;
   color: var(--color-danger);
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: 400;
 }
 
 /* A blocked action that is nobody's mistake — a stale plan reads as a warning,
@@ -300,7 +359,7 @@ textarea {
   margin: var(--space-3) 0 0;
   color: var(--color-warning);
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .muted {
@@ -335,7 +394,7 @@ textarea {
 .stat-band__value {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 600;
+  font-weight: 400;
   font-size: var(--text-3xl);
   line-height: var(--leading-none);
 }
@@ -451,7 +510,7 @@ textarea {
 
 .status-row strong {
   min-width: 0;
-  font-weight: 500;
+  font-weight: 400;
   text-align: right;
 }
 

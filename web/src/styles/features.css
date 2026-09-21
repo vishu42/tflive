@@ -34,7 +34,7 @@
 
 .app-wordmark {
   font-family: var(--font-display);
-  font-weight: 500;
+  font-weight: 400;
   font-size: var(--text-xl);
   line-height: 1;
 }
@@ -51,7 +51,7 @@
   padding: var(--space-2) var(--space-3);
   color: var(--color-muted-fg);
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: 400;
   text-decoration: none;
   transition: all var(--duration-fast) var(--ease-out);
 }
@@ -85,7 +85,7 @@
   color: var(--color-fg);
   background: transparent;
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: 400;
   cursor: pointer;
   transition: all var(--duration-fast) var(--ease-out);
 }
@@ -251,7 +251,7 @@
 .templates-list-header,
 .template-detail-header {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
   margin-bottom: var(--space-6);
@@ -293,7 +293,7 @@
 .templates-list__name {
   color: var(--color-fg);
   font-size: var(--text-base);
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .stacks-list li a,
@@ -330,7 +330,7 @@
   margin: 0 0 var(--space-3);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: 400;
   letter-spacing: 0.01em;
 }
 
@@ -398,13 +398,8 @@
 
 /* ---- Template detail: the revisions of one template ---- */
 /* The repository, root path and ref are fixed for every row here — they are
-   part of the template's identity and are stated once in the header. Only the
-   commit varies, so it leads. */
-.template-detail__identity {
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  overflow-wrap: anywhere;
-}
+   part of the template's identity and are stated once, beside the breadcrumb.
+   Only the commit varies, so it leads. */
 
 /* Sync sits beside the identity it re-registers, and its outcome lines up
    under it. The column is end-aligned so the button, not the message beneath
@@ -450,7 +445,7 @@
   flex: none;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .revisions-list__date {
@@ -476,13 +471,6 @@
 }
 
 /* ---- Tabs ---- */
-.stack-detail-header {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-  margin-bottom: var(--space-4);
-}
-
 .button-row,
 .phase-row,
 .stack-detail-tabs {
@@ -503,7 +491,7 @@
   background: transparent;
   font-family: var(--font-body);
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: 400;
   text-decoration: none;
   cursor: pointer;
   transition: all var(--duration-fast) var(--ease-out);
@@ -577,7 +565,7 @@
 
 .grant-row .grant-user span {
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .grant-row .grant-user small {
@@ -707,7 +695,7 @@
 
 .selected-user-card span {
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .selected-user-card button {
@@ -745,7 +733,7 @@
   color: var(--color-accent-fg);
   background: var(--gradient-accent);
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: 400;
   cursor: pointer;
 }
 
@@ -788,13 +776,11 @@
   margin-bottom: var(--space-4);
 }
 
-/* .page-header's bottom margin is page-level spacing. Inside these flex
-   header rows it would push the heading block off the baseline its sibling
-   button sits on, because flex aligns by margin box. */
-.stacks-list-header .page-header,
-.templates-list-header .page-header,
-.template-detail-header .page-header,
-.stack-detail-header .page-header {
+/* The breadcrumb's bottom margin is page-level spacing; inside these header
+   rows the row itself carries it. */
+.stacks-list-header .breadcrumb,
+.templates-list-header .breadcrumb,
+.template-detail-header .breadcrumb {
   margin-bottom: 0;
 }
 
@@ -810,7 +796,7 @@
 .stack-template-list h3 {
   margin: 0;
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .stack-template-items {
@@ -852,7 +838,7 @@
 
 .stack-template-items span {
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .stack-template-items small {
@@ -929,13 +915,6 @@
   font-size: var(--text-sm);
 }
 
-.back-link {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
-}
-
 @media (max-width: 920px) {
   .workflow-grid,
   .form-grid,
@@ -985,13 +964,6 @@
     grid-template-columns: 1fr;
   }
 
-  /* Bare h1 is included deliberately: several screens (CreateStackScreen
-     and the error states of the stacks and templates screens) render an h1
-     outside .page-header, and the pre-restyle
-     stylesheet shrank every h1 at this breakpoint. Scoping only to
-     .page-header would leave those at 2.5rem on a phone. */
-  h1,
-  .page-header h1,
   .showcase__title {
     font-size: var(--text-2xl);
   }
@@ -1247,7 +1219,7 @@
   margin: 0;
   font-family: var(--font-display);
   font-size: var(--text-2xl);
-  font-weight: 600;
+  font-weight: 400;
   letter-spacing: var(--tracking-tighter);
   line-height: var(--leading-tight);
 }

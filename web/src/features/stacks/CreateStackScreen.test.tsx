@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../auth/AuthContext";
@@ -68,10 +68,11 @@ describe("CreateStackScreen", () => {
     expect(screen.getByRole("button", { name: /create stack/i })).toBeTruthy();
   });
 
-  it("renders a link back to the stacks list", () => {
+  it("renders a breadcrumb back to the stacks list", () => {
     renderScreen();
 
-    const link = screen.getByRole("link", { name: /back/i });
+    const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
+    const link = within(breadcrumb).getByRole("link", { name: "Stacks" });
     expect(link.getAttribute("href")).toBe("/stacks");
   });
 

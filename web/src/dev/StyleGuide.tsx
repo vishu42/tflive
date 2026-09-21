@@ -195,17 +195,17 @@ export default function StyleGuide() {
         <Section
           id="type"
           title="Typography"
-          note="Archivo carries display headings, Inter carries body and UI, JetBrains Mono carries every technical signal — labels, IDs, timestamps, status and logs."
+          note="Geist carries headings, body and UI; Geist Mono carries every technical signal — labels, IDs, timestamps, status and logs."
         >
           <Specimen label="Families" stack>
-            <p style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: "var(--text-4xl)", margin: 0 }}>
-              Archivo display
+            <p style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "var(--text-4xl)", margin: 0 }}>
+              Geist display
             </p>
             <p style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-lg)", margin: "var(--space-4) 0 0" }}>
-              Inter body — the quick brown fox jumps over the lazy dog, 0123456789
+              Geist body — the quick brown fox jumps over the lazy dog, 0123456789
             </p>
             <p style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-sm)", margin: "var(--space-4) 0 0" }}>
-              JetBrains Mono — stack_1a2b3c · 2026-08-11T09:14:22Z
+              Geist Mono — stack_1a2b3c · 2026-08-11T09:14:22Z
             </p>
           </Specimen>
 
