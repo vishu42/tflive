@@ -964,6 +964,10 @@
     grid-template-columns: 1fr;
   }
 
+  /* Bare h1 is included deliberately: the auth-loop error screen renders a
+     plain h1, which would otherwise stay at 40px on a phone. The breadcrumb's
+     h1 is unaffected; .breadcrumb h1 outranks this selector. */
+  h1,
   .showcase__title {
     font-size: var(--text-2xl);
   }
