@@ -241,8 +241,9 @@ func TestRegisterControlRegistersWorkflowsAndControlActivities(t *testing.T) {
 	registerControl(worker, &recordingStore{}, nil)
 
 	wantWorkflows := map[string]bool{
-		domain.TemplateRunWorkflowName:  true,
-		domain.TemplateSyncWorkflowName: true,
+		domain.TemplateRunWorkflowName:   true,
+		domain.TemplateApplyWorkflowName: true,
+		domain.TemplateSyncWorkflowName:  true,
 	}
 	if !reflect.DeepEqual(worker.workflows, wantWorkflows) {
 		t.Fatalf("workflows = %v, want %v", worker.workflows, wantWorkflows)
@@ -252,6 +253,9 @@ func TestRegisterControlRegistersWorkflowsAndControlActivities(t *testing.T) {
 		domain.RecordTemplateRunLogActivityName:             true,
 		domain.SealRunCredentialsActivityName:               true,
 		domain.SealSourceTokenActivityName:                  true,
+		domain.SealPlanKeyActivityName:                      true,
+		domain.FinishPlanActivityName:                       true,
+		domain.BeginApplyActivityName:                       true,
 		domain.RecordTemplateRegistrationStatusActivityName: true,
 		domain.SyncTemplateActivityName:                     true,
 	}
@@ -268,7 +272,7 @@ func assertAPIQueueSpecs(t *testing.T, registry *queue.SpecRegistry) {
 	for _, kind := range []queue.Kind{
 		app.KindStartTemplateRun,
 		app.KindStartTemplateSync,
-		app.KindSignalRunApproval,
+		app.KindStartTemplateApply,
 		app.KindSignalRunCancellation,
 	} {
 		if _, ok := registry.Spec(kind); !ok {
@@ -808,6 +812,26 @@ func (recordingStore) ApproveTemplateRun(context.Context, domain.TemplateRunAppr
 	return nil
 }
 
+func (recordingStore) CancelTemplateRunBeforeApply(context.Context, domain.TemplateRunCancellation) (bool, error) {
+	return false, nil
+}
+
+func (recordingStore) CreatePlanKey(context.Context, domain.TenantID, domain.TemplateRunID) ([]byte, error) {
+	return nil, nil
+}
+
+func (recordingStore) PlanKey(context.Context, domain.TenantID, domain.TemplateRunID) ([]byte, error) {
+	return nil, nil
+}
+
+func (recordingStore) FinishTemplatePlan(context.Context, domain.FinishPlanActivityInput) (domain.PlanOutcome, error) {
+	return "", nil
+}
+
+func (recordingStore) BeginTemplateApply(context.Context, domain.TenantID, domain.TemplateRunID) (bool, error) {
+	return false, nil
+}
+
 func (recordingStore) RequestTemplateRunCancellation(context.Context, domain.TemplateRunCancellation) error {
 	return nil
 }
@@ -1054,7 +1078,7 @@ func (recordingAPIDispatcher) StartTemplateSync(context.Context, domain.Template
 	return nil
 }
 
-func (recordingAPIDispatcher) ApproveTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID, domain.ApprovalSignal) error {
+func (recordingAPIDispatcher) StartTemplateApply(context.Context, domain.TemplateRunWorkflowInput) error {
 	return nil
 }
 

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CircleStop, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { CircleStop, Loader2, RefreshCw } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { isTerminalRunStatus } from "../../api/polling";
 import {
@@ -15,7 +15,9 @@ import { tenantID } from "../../config";
 import { formatDateTime } from "../../shared/formatTimestamp";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import { statusGlyph, statusTone } from "../../shared/statusTone";
+import { planSummaryLabel } from "../stacks/stackWorkflow";
 import RunLogsPanel from "./RunLogsPanel";
+import { WaitingRunActions } from "./TemplateRunHistory";
 
 // /stacks/:stackId/templates/:stackTemplateId/runs/:runNumber — plan/apply
 // detail with per-phase logs, reached from the Runs tab. The URL carries the
@@ -127,21 +129,22 @@ export default function RunDetailScreen() {
               </span>
               <span className="run-detail-operation">{run.operation}</span>
             </span>
-            {(canApprove || canCancel) && (
+            {canCancel && (
               <span className="run-detail-actions">
-                {canCancel && (
+                {canApprove ? (
+                  <WaitingRunActions
+                    run={run}
+                    stackId={stackId}
+                    approveBusy={approveRunMutation.isPending}
+                    discardBusy={cancelRunMutation.isPending}
+                    onApprove={handleApprove}
+                    onDiscard={handleCancel}
+                  />
+                ) : (
                   <RequireCapability capability="canOperate" stackId={stackId}>
                     <button className="secondary-button" type="button" disabled={cancelRunMutation.isPending} onClick={handleCancel}>
                       {cancelRunMutation.isPending ? <Loader2 size={16} className="spin" /> : <CircleStop size={16} />}
                       Cancel
-                    </button>
-                  </RequireCapability>
-                )}
-                {canApprove && (
-                  <RequireCapability capability="canApprove" stackId={stackId}>
-                    <button className="primary-button" type="button" disabled={approveRunMutation.isPending} onClick={handleApprove}>
-                      {approveRunMutation.isPending ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
-                      Approve
                     </button>
                   </RequireCapability>
                 )}
@@ -170,6 +173,12 @@ export default function RunDetailScreen() {
                 )}
               </dd>
             </div>
+            {run.plan_summary && (
+              <div>
+                <dt>Changes</dt>
+                <dd title="To add, to change, to destroy">{planSummaryLabel(run.plan_summary)}</dd>
+              </div>
+            )}
             <div>
               <dt>Started by</dt>
               <dd>{run.trigger_actor}</dd>

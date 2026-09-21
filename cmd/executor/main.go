@@ -28,11 +28,19 @@ type executorDependencies struct {
 	// newWorker creates the Temporal worker bound to the execution task queue.
 	newWorker func(client.Client, string, temporalworker.Options) temporalWorker
 	// registerActivities attaches the execution activities to the worker.
-	registerActivities func(worker temporalWorker, runRoot string, logStore activities.TemplateRunLogStore, keys *runseal.KeyRing)
-	// newLogStore builds the artifact-backed log store used by Terraform activities.
-	newLogStore func(config.ArtifactStoreConfig) (activities.TemplateRunLogStore, error)
+	registerActivities func(worker temporalWorker, runRoot string, stores artifactStores, keys *runseal.KeyRing)
+	// newArtifactStores builds the artifact-backed stores for phase logs and
+	// saved plans.
+	newArtifactStores func(config.ArtifactStoreConfig) (artifactStores, error)
 	// interruptCh provides the shutdown signal consumed by the Temporal worker run loop.
 	interruptCh func() <-chan interface{}
+}
+
+// artifactStores are the executor's two uses of the artifact store: the log of
+// each Terraform phase, and each run's saved plan.
+type artifactStores struct {
+	logs  activities.TemplateRunLogStore
+	plans activities.PlanArtifactStore
 }
 
 func main() {
@@ -47,8 +55,8 @@ func defaultExecutorDependencies() executorDependencies {
 		newWorker: func(temporalClient client.Client, taskQueue string, options temporalworker.Options) temporalWorker {
 			return temporalworker.New(temporalClient, taskQueue, options)
 		},
-		registerActivities: func(worker temporalWorker, runRoot string, logStore activities.TemplateRunLogStore, keys *runseal.KeyRing) {
-			templateRunActivities := activities.NewTemplateRunActivities(runRoot, logStore, keys)
+		registerActivities: func(worker temporalWorker, runRoot string, stores artifactStores, keys *runseal.KeyRing) {
+			templateRunActivities := activities.NewTemplateRunActivities(runRoot, stores.logs, stores.plans, keys)
 			worker.RegisterActivityWithOptions(templateRunActivities.PrepareWorkspace, activity.RegisterOptions{
 				Name: domain.PrepareWorkspaceActivityName,
 			})
@@ -61,13 +69,22 @@ func defaultExecutorDependencies() executorDependencies {
 			worker.RegisterActivityWithOptions(templateRunActivities.ReleaseRunKey, activity.RegisterOptions{
 				Name: domain.ReleaseRunKeyActivityName,
 			})
+			worker.RegisterActivityWithOptions(templateRunActivities.CleanupWorkspace, activity.RegisterOptions{
+				Name: domain.CleanupWorkspaceActivityName,
+			})
+			worker.RegisterActivityWithOptions(templateRunActivities.UploadPlan, activity.RegisterOptions{
+				Name: domain.UploadPlanActivityName,
+			})
+			worker.RegisterActivityWithOptions(templateRunActivities.DownloadPlan, activity.RegisterOptions{
+				Name: domain.DownloadPlanActivityName,
+			})
 		},
-		newLogStore: func(cfg config.ArtifactStoreConfig) (activities.TemplateRunLogStore, error) {
+		newArtifactStores: func(cfg config.ArtifactStoreConfig) (artifactStores, error) {
 			store, err := artifacts.NewObjectStore(cfg)
 			if err != nil {
-				return nil, err
+				return artifactStores{}, err
 			}
-			return artifacts.NewLogStore(store), nil
+			return artifactStores{logs: artifacts.NewLogStore(store), plans: artifacts.NewPlanStore(store)}, nil
 		},
 		interruptCh: temporalworker.InterruptCh,
 	}
@@ -88,9 +105,9 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps e
 		return fmt.Errorf("load executor config: %w", err)
 	}
 
-	logStore, err := deps.newLogStore(cfg.ArtifactStore)
+	stores, err := deps.newArtifactStores(cfg.ArtifactStore)
 	if err != nil {
-		return fmt.Errorf("wire log store: %w", err)
+		return fmt.Errorf("wire artifact stores: %w", err)
 	}
 
 	temporalClient, err := deps.dialTemporal(ctx, temporal.Config{
@@ -105,7 +122,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps e
 	// Sessions pin a run's workspace activities, and so its sealing key, to this
 	// process.
 	worker := deps.newWorker(temporalClient, domain.ExecutionTaskQueue, temporalworker.Options{EnableSessionWorker: true})
-	deps.registerActivities(worker, cfg.RunRoot, logStore, runseal.NewKeyRing())
+	deps.registerActivities(worker, cfg.RunRoot, stores, runseal.NewKeyRing())
 	if err := worker.Run(deps.interruptCh()); err != nil {
 		return fmt.Errorf("run worker: %w", err)
 	}

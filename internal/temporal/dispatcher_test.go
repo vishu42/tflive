@@ -11,6 +11,7 @@ import (
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/domain"
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 )
 
@@ -30,7 +31,7 @@ func TestStartTemplateRunExecutesWorkflow(t *testing.T) {
 		RunID:           domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 	}
@@ -146,34 +147,72 @@ func TestStartTemplateSyncExecutesWorkflow(t *testing.T) {
 	}
 }
 
-func TestApproveTemplateRunSignalsWorkflow(t *testing.T) {
+// The apply workflow starts on the control queue under an ID derived from the
+// run's, and a redelivered start finds it running rather than starting twice.
+func TestStartTemplateApplyStartsTheApplyWorkflow(t *testing.T) {
 	t.Parallel()
 
 	workflowClient := &recordingWorkflowClient{}
+	dispatcher := newDispatcher(workflowClient, DispatcherOptions{TerraformTimeout: 20 * time.Minute})
+	input := domain.TemplateRunWorkflowInput{
+		RunID:     domain.TemplateRunID("run_123"),
+		TenantID:  domain.TenantID("tenant_123"),
+		Operation: domain.OperationPlan,
+	}
+
+	if err := dispatcher.StartTemplateApply(context.Background(), input); err != nil {
+		t.Fatalf("StartTemplateApply returned error: %v", err)
+	}
+
+	if workflowClient.executeOptions.ID != "template-run/tenant_123/run_123/apply" {
+		t.Fatalf("workflow ID = %q", workflowClient.executeOptions.ID)
+	}
+	if workflowClient.executeOptions.TaskQueue != domain.ControlTaskQueue {
+		t.Fatalf("task queue = %q", workflowClient.executeOptions.TaskQueue)
+	}
+	if workflowClient.executeOptions.WorkflowIDConflictPolicy != enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING {
+		t.Fatalf("conflict policy = %v, want use existing", workflowClient.executeOptions.WorkflowIDConflictPolicy)
+	}
+	if workflowClient.executeWorkflow != domain.TemplateApplyWorkflowName {
+		t.Fatalf("workflow = %v", workflowClient.executeWorkflow)
+	}
+	started := workflowClient.executeArgs[0].(domain.TemplateRunWorkflowInput)
+	if started.TerraformTimeout != 20*time.Minute {
+		t.Fatalf("terraform timeout = %v, want the deployment's", started.TerraformTimeout)
+	}
+}
+
+// A run's plan workflow has closed by the time its apply workflow runs, so a
+// cancel that finds no plan workflow goes on to the apply workflow.
+func TestCancelTemplateRunFallsBackToTheApplyWorkflow(t *testing.T) {
+	t.Parallel()
+
+	workflowClient := &recordingWorkflowClient{signalErrs: map[string]error{
+		"template-run/tenant_123/run_123": serviceerror.NewNotFound("workflow execution already completed"),
+	}}
 	dispatcher := newDispatcher(workflowClient)
-	signal := domain.ApprovalSignal{ApprovedBy: approverSubject}
 
-	err := dispatcher.ApproveTemplateRun(
-		context.Background(),
-		domain.TenantID("tenant_123"),
-		domain.TemplateRunID("run_123"),
-		signal,
-	)
+	err := dispatcher.CancelTemplateRun(context.Background(), "tenant_123", "run_123", domain.CancelSignal{RequestedBy: requesterSubject})
 	if err != nil {
-		t.Fatalf("ApproveTemplateRun returned error: %v", err)
+		t.Fatalf("CancelTemplateRun returned error: %v", err)
 	}
+	if workflowClient.signalWorkflowID != "template-run/tenant_123/run_123/apply" {
+		t.Fatalf("last signaled workflow = %q, want the apply workflow", workflowClient.signalWorkflowID)
+	}
+}
 
-	if workflowClient.signalWorkflowID != "template-run/tenant_123/run_123" {
-		t.Fatalf("signal workflow ID = %q", workflowClient.signalWorkflowID)
-	}
-	if workflowClient.signalRunID != "" {
-		t.Fatalf("signal run ID = %q, want empty", workflowClient.signalRunID)
-	}
-	if workflowClient.signalName != domain.ApprovalSignalName {
-		t.Fatalf("signal name = %q", workflowClient.signalName)
-	}
-	if !reflect.DeepEqual(workflowClient.signalArg, signal) {
-		t.Fatalf("signal arg = %#v, want %#v", workflowClient.signalArg, signal)
+// With neither workflow running the NotFound comes back, which is what tells
+// the cancellation handler to reconcile the run itself.
+func TestCancelTemplateRunReportsNotFoundWhenNoWorkflowIsRunning(t *testing.T) {
+	t.Parallel()
+
+	notFound := serviceerror.NewNotFound("workflow not found")
+	dispatcher := newDispatcher(&recordingWorkflowClient{signalErr: notFound})
+
+	err := dispatcher.CancelTemplateRun(context.Background(), "tenant_123", "run_123", domain.CancelSignal{RequestedBy: requesterSubject})
+	var target *serviceerror.NotFound
+	if !errors.As(err, &target) {
+		t.Fatalf("error = %v, want NotFound", err)
 	}
 }
 
@@ -247,26 +286,6 @@ func TestStartTemplateSyncWrapsClientError(t *testing.T) {
 	}
 }
 
-func TestApproveTemplateRunWrapsClientError(t *testing.T) {
-	t.Parallel()
-
-	clientErr := errors.New("temporal unavailable")
-	dispatcher := newDispatcher(&recordingWorkflowClient{signalErr: clientErr})
-
-	err := dispatcher.ApproveTemplateRun(
-		context.Background(),
-		domain.TenantID("tenant_123"),
-		domain.TemplateRunID("run_123"),
-		domain.ApprovalSignal{ApprovedBy: approverSubject},
-	)
-	if !errors.Is(err, clientErr) {
-		t.Fatalf("error = %v, want wrapped client error", err)
-	}
-	if !strings.Contains(err.Error(), "signal template run approval") {
-		t.Fatalf("error = %q, want approval context", err.Error())
-	}
-}
-
 func TestCancelTemplateRunWrapsClientError(t *testing.T) {
 	t.Parallel()
 
@@ -315,6 +334,9 @@ type recordingWorkflowClient struct {
 	signalName       string
 	signalArg        interface{}
 	signalErr        error
+	// signalErrs fails signals to particular workflow IDs; signalErr applies
+	// to every other.
+	signalErrs map[string]error
 }
 
 func (workflowClient *recordingWorkflowClient) ExecuteWorkflow(
@@ -340,5 +362,8 @@ func (workflowClient *recordingWorkflowClient) SignalWorkflow(
 	workflowClient.signalRunID = runID
 	workflowClient.signalName = signalName
 	workflowClient.signalArg = arg
+	if err, ok := workflowClient.signalErrs[workflowID]; ok {
+		return err
+	}
 	return workflowClient.signalErr
 }

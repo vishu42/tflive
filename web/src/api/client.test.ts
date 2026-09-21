@@ -161,14 +161,14 @@ describe("api client", () => {
   it("posts run operations, approvals, and cancellations", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: "run_123" }));
 
-    await startTemplateRun("tenant_123", "stack_template_123", { operation: "apply" });
+    await startTemplateRun("tenant_123", "stack_template_123", { operation: "plan", auto_approve: true });
     await approveRun("tenant_123", "run_123");
     await cancelRun("tenant_123", "run_456", { reason: "manual stop" });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs",
-      expect.objectContaining({ method: "POST" })
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ operation: "plan", auto_approve: true }) })
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
@@ -180,7 +180,7 @@ describe("api client", () => {
       "/v1/tenants/tenant_123/template-runs/run_456/cancellation",
       expect.objectContaining({ method: "POST" })
     );
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ operation: "apply" });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ operation: "plan", auto_approve: true });
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({});
     expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({ reason: "manual stop" });
   });

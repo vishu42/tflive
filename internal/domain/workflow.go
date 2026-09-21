@@ -21,11 +21,13 @@ const (
 	// queue nobody polls. Environments are separated by Temporal namespace.
 	ExecutionTaskQueue = "execution"
 
-	TemplateRunWorkflowName  = "TemplateRunWorkflow"
-	TemplateSyncWorkflowName = "TemplateSyncWorkflow"
+	// TemplateRunWorkflowName plans a run and, when the plan needs no human,
+	// applies it. TemplateApplyWorkflowName applies a plan someone approved.
+	TemplateRunWorkflowName   = "TemplateRunWorkflow"
+	TemplateApplyWorkflowName = "TemplateApplyWorkflow"
+	TemplateSyncWorkflowName  = "TemplateSyncWorkflow"
 
-	ApprovalSignalName = "approval"
-	CancelSignalName   = "cancel"
+	CancelSignalName = "cancel"
 
 	RecordTemplateRunStatusActivityName          = "RecordTemplateRunStatus"
 	RecordTemplateRunLogActivityName             = "RecordTemplateRunLog"
@@ -37,6 +39,12 @@ const (
 	SealSourceTokenActivityName                  = "SealSourceToken"
 	SealRunCredentialsActivityName               = "SealRunCredentials"
 	ReleaseRunKeyActivityName                    = "ReleaseRunKey"
+	CleanupWorkspaceActivityName                 = "CleanupWorkspace"
+	SealPlanKeyActivityName                      = "SealPlanKey"
+	UploadPlanActivityName                       = "UploadPlan"
+	DownloadPlanActivityName                     = "DownloadPlan"
+	FinishPlanActivityName                       = "FinishPlan"
+	BeginApplyActivityName                       = "BeginApply"
 
 	// TerraformCommandFailedErrorType marks a RunTerraform failure whose
 	// ApplicationError details carry the uploaded log's TemplateRunLog.
@@ -76,6 +84,8 @@ const (
 )
 
 // TemplateRunWorkflowInput starts one Terraform operation for one StackTemplate.
+// The apply workflow takes the same input: it re-fetches the same commit and
+// applies the plan saved under the same run.
 type TemplateRunWorkflowInput struct {
 	RunID           TemplateRunID
 	TenantID        TenantID
@@ -93,6 +103,9 @@ type TemplateRunWorkflowInput struct {
 	RepoName          string
 	RootPath          string
 	ConfigJSON        json.RawMessage
+	// AutoApprove applies the plan as soon as it finishes, in the same
+	// workflow, instead of waiting for approval.
+	AutoApprove bool
 	// TerraformTimeout bounds each Terraform command this run issues. It is
 	// stamped by the dispatcher from deployment configuration so the value a
 	// run was started with stays visible in its workflow history; zero means
@@ -198,6 +211,9 @@ type RunTerraformActivityInput struct {
 	WorkspaceName   string
 	Command         TerraformCommandType
 	ConfigJSON      json.RawMessage
+	// Destroy plans the destruction of everything the template manages. Only
+	// read for TerraformCommandPlan.
+	Destroy bool
 	// SealedEnvironment is the run's credentials sealed to its key.
 	SealedEnvironment []byte
 	// Environment is the opened credentials, filled in on the executor. It is
@@ -210,6 +226,82 @@ type RunTerraformActivityOutput struct {
 	// Log describes the uploaded phase log. The executor has no database, so
 	// the workflow records it through a control activity.
 	Log TemplateRunLog
+	// HasChanges and Summary describe a plan: whether it would change
+	// anything, and what. Zero for every other command.
+	HasChanges bool
+	Summary    PlanSummary
+}
+
+// CleanupWorkspaceActivityInput asks the executor to delete a run's workspace
+// before its session ends, and with DeletePlan also the run's saved plan.
+type CleanupWorkspaceActivityInput struct {
+	TenantID      TenantID
+	RunID         TemplateRunID
+	WorkspacePath string
+	DeletePlan    bool
+}
+
+// SealPlanKeyActivityInput asks the control plane for the key a run's saved
+// plan is encrypted with, sealed to the run's key on the executor now holding
+// it. Create makes the key on the plan phase; the apply phase only reads it.
+type SealPlanKeyActivityInput struct {
+	TenantID  TenantID
+	RunID     TemplateRunID
+	PublicKey []byte
+	Create    bool
+}
+
+// SealPlanKeyActivityOutput carries the sealed plan key.
+type SealPlanKeyActivityOutput struct {
+	SealedPlanKey []byte
+}
+
+// PlanArtifactActivityInput asks the executor to upload a run's saved plan
+// from TerraformPath, or to download it back there.
+type PlanArtifactActivityInput struct {
+	TenantID      TenantID
+	RunID         TemplateRunID
+	TerraformPath string
+	SealedPlanKey []byte
+}
+
+// PlanOutcome is what happens to a run once its plan has finished.
+type PlanOutcome string
+
+const (
+	// PlanOutcomeNoChanges: nothing to apply, so the run completes.
+	PlanOutcomeNoChanges PlanOutcome = "no_changes"
+	// PlanOutcomeWaiting: the plan waits for someone to approve it.
+	PlanOutcomeWaiting PlanOutcome = "waiting"
+	// PlanOutcomeApproved: the run was started with auto-approve, so the plan
+	// was approved as it finished and the same workflow goes on to apply it.
+	PlanOutcomeApproved PlanOutcome = "approved"
+	// PlanOutcomeCanceled: someone canceled the run while it planned, and
+	// finishing the plan carried the cancellation out.
+	PlanOutcomeCanceled PlanOutcome = "canceled"
+)
+
+// FinishPlanActivityInput records a finished plan and decides what follows.
+type FinishPlanActivityInput struct {
+	TenantID        TenantID
+	RunID           TemplateRunID
+	StackTemplateID StackTemplateID
+	Operation       OperationType
+	HasChanges      bool
+	Summary         PlanSummary
+	AutoApprove     bool
+}
+
+// BeginApplyActivityInput claims an approved run for its apply phase.
+type BeginApplyActivityInput struct {
+	TenantID TenantID
+	RunID    TemplateRunID
+}
+
+// BeginApplyActivityOutput reports whether the claim won. It loses when the
+// run was canceled after it was approved and before its apply began.
+type BeginApplyActivityOutput struct {
+	Claimed bool
 }
 
 // TemplateSyncWorkflowInput starts template metadata sync for a public GitHub template.
@@ -248,11 +340,6 @@ type TemplateRegistrationStatusActivityInput struct {
 	TemplateRevisionID TemplateRevisionID
 	ResolvedCommitSHA  string
 	ErrorSummary       string
-}
-
-// ApprovalSignal records an approval actor for a waiting apply run.
-type ApprovalSignal struct {
-	ApprovedBy UserID
 }
 
 // CancelSignal records a cancel actor and reason for a running workflow.

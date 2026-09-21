@@ -725,3 +725,25 @@ textarea {
   white-space: nowrap;
   width: 1px;
 }
+
+/* ---- Checkbox ---- */
+/* A checkbox and its label on one line. The field rules above size every
+   input as a full-width text box; a checkbox takes its native size instead.
+   The label is sized like a control so it lines up beside buttons. */
+.checkbox-label {
+  align-items: center;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: var(--text-sm);
+  gap: var(--space-2);
+  min-height: var(--control-height);
+}
+
+.checkbox-label input[type="checkbox"] {
+  accent-color: var(--color-accent);
+  height: var(--space-4);
+  margin: 0;
+  min-height: 0;
+  padding: 0;
+  width: var(--space-4);
+}

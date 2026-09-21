@@ -3,6 +3,7 @@ package activities
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/logsink"
+	"github.com/vishu42/tflive/internal/planbundle"
 	"github.com/vishu42/tflive/internal/runner"
 	"github.com/vishu42/tflive/internal/runseal"
 	"go.temporal.io/sdk/activity"
@@ -31,9 +33,18 @@ type StatusRecorder interface {
 // processes.
 type TerraformRunner interface {
 	// RunTerraform executes the Terraform command requested by the workflow and
-	// returns the metadata of the log it uploaded, if any. A command that fails
-	// after its log was uploaded returns both.
-	RunTerraform(context.Context, domain.RunTerraformActivityInput) (domain.TemplateRunLog, error)
+	// returns the metadata of the log it uploaded, if any, and for a plan
+	// whether it has changes. A command that fails after its log was uploaded
+	// returns both the log and the error.
+	RunTerraform(context.Context, domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error)
+}
+
+// PlanArtifactStore keeps each run's encrypted saved plan between its plan
+// phase and its apply phase.
+type PlanArtifactStore interface {
+	PutPlan(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, sealed []byte) error
+	GetPlan(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID) ([]byte, error)
+	DeletePlan(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID) error
 }
 
 // TemplateRunLogStore persists output produced by a template run.
@@ -63,6 +74,8 @@ type TemplateRunActivities struct {
 	terraformRunner TerraformRunner
 	// git clones template source repositories into run workspaces.
 	git runner.GitRunner
+	// plans keeps saved plans between a run's plan and apply phases.
+	plans PlanArtifactStore
 	// keys holds each in-flight run's private sealing key.
 	keys *runseal.KeyRing
 }
@@ -72,7 +85,7 @@ type TemplateRunActivities struct {
 // By default it wires a local OpenTofu-backed runner that uploads phase logs
 // to logStore. Tests may pass a TerraformRunner override to avoid invoking the
 // OpenTofu binary. A nil keys gets a fresh ring.
-func NewTemplateRunActivities(runRoot string, logStore TemplateRunLogStore, keys *runseal.KeyRing, terraformRunners ...TerraformRunner) *TemplateRunActivities {
+func NewTemplateRunActivities(runRoot string, logStore TemplateRunLogStore, plans PlanArtifactStore, keys *runseal.KeyRing, terraformRunners ...TerraformRunner) *TemplateRunActivities {
 	terraformRunner := TerraformRunner(localTerraformRunner{
 		runner:   runner.NewLocalProcessRunner(),
 		logStore: logStore,
@@ -88,6 +101,7 @@ func NewTemplateRunActivities(runRoot string, logStore TemplateRunLogStore, keys
 		runRoot:         runRoot,
 		terraformRunner: terraformRunner,
 		git:             runner.NewLocalGitRunner(),
+		plans:           plans,
 		keys:            keys,
 	}
 }
@@ -117,6 +131,114 @@ func (activities *TemplateRunActivities) PrepareWorkspace(ctx context.Context, i
 	}
 
 	return domain.PrepareWorkspaceActivityOutput{WorkspacePath: workspacePath, PublicKey: publicKey}, nil
+}
+
+// CleanupWorkspace deletes a run's workspace at the end of a session, and on
+// the apply phase also its saved plan, which nothing reads after the apply.
+//
+// The workspace is found from the run's identity, never from the path in the
+// input, so this can only ever remove a run workspace under the run root.
+// Both deletions are best effort from the workflow's point of view: a
+// workspace left behind costs disk, and a saved plan left behind is unreadable
+// once the run is terminal, because the control plane drops its key.
+func (activities *TemplateRunActivities) CleanupWorkspace(ctx context.Context, input domain.CleanupWorkspaceActivityInput) error {
+	workspacePath, err := logsink.RunWorkspacePath(activities.runRoot, input.TenantID, input.RunID)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	if err := os.RemoveAll(workspacePath); err != nil {
+		errs = append(errs, fmt.Errorf("remove run workspace: %w", err))
+	}
+	if input.DeletePlan && activities.plans != nil {
+		if err := activities.plans.DeletePlan(ctx, input.TenantID, input.RunID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// UploadPlan encrypts the saved plan the plan command left in TerraformPath,
+// with the lock file it was made against, and stores it for the apply phase.
+//
+// The key arrives sealed to this run's key, so it exists in plaintext only
+// here and on the control plane. The bundle is bound to the run, so a bundle
+// stored under one run's key cannot be passed off as another's.
+func (activities *TemplateRunActivities) UploadPlan(ctx context.Context, input domain.PlanArtifactActivityInput) error {
+	key, err := activities.openPlanKey(input)
+	if err != nil {
+		return err
+	}
+	bundle, err := planbundle.Pack(input.TerraformPath)
+	if err != nil {
+		return fmt.Errorf("pack saved plan: %w", err)
+	}
+	sealed, err := planbundle.Seal(key, bundle, domain.RunKeyID(input.TenantID, input.RunID))
+	if err != nil {
+		return fmt.Errorf("seal saved plan: %w", err)
+	}
+	if err := activities.requirePlans().PutPlan(ctx, input.TenantID, input.RunID, sealed); err != nil {
+		return err
+	}
+	return nil
+}
+
+// DownloadPlan puts a run's saved plan, and the lock file it was made against,
+// back into TerraformPath before init, so init installs the providers the plan
+// expects and apply finds the plan where the plan phase left it.
+func (activities *TemplateRunActivities) DownloadPlan(ctx context.Context, input domain.PlanArtifactActivityInput) error {
+	key, err := activities.openPlanKey(input)
+	if err != nil {
+		return err
+	}
+	sealed, err := activities.requirePlans().GetPlan(ctx, input.TenantID, input.RunID)
+	if err != nil {
+		return err
+	}
+	bundle, err := planbundle.Open(key, sealed, domain.RunKeyID(input.TenantID, input.RunID))
+	if err != nil {
+		return err
+	}
+	if err := planbundle.Unpack(bundle, input.TerraformPath); err != nil {
+		return fmt.Errorf("unpack saved plan: %w", err)
+	}
+	return nil
+}
+
+func (activities *TemplateRunActivities) openPlanKey(input domain.PlanArtifactActivityInput) ([]byte, error) {
+	if strings.TrimSpace(input.TerraformPath) == "" {
+		return nil, fmt.Errorf("terraform path is required")
+	}
+	var key []byte
+	if err := activities.keys.Open(domain.RunKeyID(input.TenantID, input.RunID), input.SealedPlanKey, &key); err != nil {
+		return nil, fmt.Errorf("open plan key: %w", err)
+	}
+	return key, nil
+}
+
+// requirePlans returns the plan store, or one that fails every call when none
+// was wired, so a misconfigured executor fails the run instead of panicking.
+func (activities *TemplateRunActivities) requirePlans() PlanArtifactStore {
+	if activities.plans == nil {
+		return missingPlanStore{}
+	}
+	return activities.plans
+}
+
+type missingPlanStore struct{}
+
+var errNoPlanStore = errors.New("executor has no plan store")
+
+func (missingPlanStore) PutPlan(context.Context, domain.TenantID, domain.TemplateRunID, []byte) error {
+	return errNoPlanStore
+}
+
+func (missingPlanStore) GetPlan(context.Context, domain.TenantID, domain.TemplateRunID) ([]byte, error) {
+	return nil, errNoPlanStore
+}
+
+func (missingPlanStore) DeletePlan(context.Context, domain.TenantID, domain.TemplateRunID) error {
+	return errNoPlanStore
 }
 
 // ReleaseRunKey drops a finished run's sealing key, so nothing sealed to it can
@@ -207,17 +329,17 @@ func (activities *TemplateRunActivities) RunTerraform(ctx context.Context, input
 		}
 		input.Environment = environment
 	}
-	log, err := activities.terraformRunner.RunTerraform(ctx, input)
+	output, err := activities.terraformRunner.RunTerraform(ctx, input)
 	if err != nil {
-		if log.ObjectKey == "" {
+		if output.Log.ObjectKey == "" {
 			return domain.RunTerraformActivityOutput{}, fmt.Errorf("run terraform: %w", err)
 		}
 		return domain.RunTerraformActivityOutput{}, temporal.NewApplicationErrorWithOptions("run terraform", domain.TerraformCommandFailedErrorType, temporal.ApplicationErrorOptions{
 			Cause:   err,
-			Details: []interface{}{log},
+			Details: []interface{}{output.Log},
 		})
 	}
-	return domain.RunTerraformActivityOutput{Log: log}, nil
+	return output, nil
 }
 
 // localTerraformRunner adapts the shared runner package to the activity interface.
@@ -263,23 +385,24 @@ func recordActivityHeartbeat(ctx context.Context) {
 // the same writer for now, preserving command output ordering in a single phase
 // log. The log file is closed after the command completes, and close errors are
 // surfaced only when the command itself succeeded.
-func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input domain.RunTerraformActivityInput) (domain.TemplateRunLog, error) {
+func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
 	phase, err := logsink.PhaseForTerraformCommand(input.Command)
 	if err != nil {
-		return domain.TemplateRunLog{}, err
+		return domain.RunTerraformActivityOutput{}, err
 	}
 
 	writer, err := logsink.NewFileSink(input.WorkspacePath).OpenPhase(phase)
 	if err != nil {
-		return domain.TemplateRunLog{}, fmt.Errorf("open terraform log: %w", err)
+		return domain.RunTerraformActivityOutput{}, fmt.Errorf("open terraform log: %w", err)
 	}
 
 	redactingWriter := newRedactingWriter(writer, credentialValues(input.Environment))
 	stopHeartbeat := localRunner.startHeartbeat(ctx)
-	runErr := localRunner.runner.Run(ctx, runner.TerraformCommand{
+	result, runErr := localRunner.runner.Run(ctx, runner.TerraformCommand{
 		WorkspacePath: terraformPath(input),
 		WorkspaceName: input.WorkspaceName,
 		Command:       input.Command,
+		Destroy:       input.Destroy,
 		ConfigJSON:    input.ConfigJSON,
 		Environment:   input.Environment,
 		Stdout:        redactingWriter,
@@ -288,25 +411,25 @@ func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input 
 	stopHeartbeat()
 	closeErr := redactingWriter.Close()
 	if closeErr != nil {
-		return domain.TemplateRunLog{}, fmt.Errorf("close terraform log: %w", closeErr)
+		return domain.RunTerraformActivityOutput{}, fmt.Errorf("close terraform log: %w", closeErr)
 	}
 	var log domain.TemplateRunLog
 	if localRunner.logStore != nil {
 		file, err := os.Open(filepath.Join(input.WorkspacePath, "logs", phase+".log"))
 		if err != nil {
-			return domain.TemplateRunLog{}, fmt.Errorf("open terraform log for upload: %w", err)
+			return domain.RunTerraformActivityOutput{}, fmt.Errorf("open terraform log for upload: %w", err)
 		}
 		uploaded, uploadErr := localRunner.logStore.PutTemplateRunLog(ctx, input.TenantID, input.RunID, phase, file)
 		closeErr := file.Close()
 		if uploadErr != nil {
-			return domain.TemplateRunLog{}, fmt.Errorf("upload terraform log: %w", uploadErr)
+			return domain.RunTerraformActivityOutput{}, fmt.Errorf("upload terraform log: %w", uploadErr)
 		}
 		if closeErr != nil {
-			return domain.TemplateRunLog{}, fmt.Errorf("close terraform log after upload: %w", closeErr)
+			return domain.RunTerraformActivityOutput{}, fmt.Errorf("close terraform log after upload: %w", closeErr)
 		}
 		log = uploaded
 	}
-	return log, runErr
+	return domain.RunTerraformActivityOutput{Log: log, HasChanges: result.HasChanges, Summary: result.Summary}, runErr
 }
 
 // startHeartbeat reports liveness to Temporal until the returned stop function

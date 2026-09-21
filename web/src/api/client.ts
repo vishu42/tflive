@@ -5,11 +5,11 @@ import type {
   CredentialMetadata,
   GrantView,
   ListGrantsResponse,
-  Operation,
   SearchUsersResponse,
   Stack,
   StackTemplate,
   StackView,
+  StartRunOperation,
   TemplateRegistration,
   TemplateRevision,
   TemplateRun,
@@ -58,7 +58,9 @@ interface UpgradeStackTemplateRequest {
 }
 
 interface StartRunRequest {
-  operation: Operation;
+  operation: StartRunOperation;
+  // Applies the plan as soon as it finishes. Needs approve access on the stack.
+  auto_approve?: boolean;
 }
 
 interface CredentialRequest {

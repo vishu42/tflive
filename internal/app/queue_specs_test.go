@@ -19,7 +19,7 @@ func TestQueueSpecsContainsTheFourSharedSpecs(t *testing.T) {
 	for _, spec := range specs {
 		seen[spec.Kind] = true
 	}
-	for _, kind := range []queue.Kind{KindStartTemplateRun, KindStartTemplateSync, KindSignalRunApproval, KindSignalRunCancellation} {
+	for _, kind := range []queue.Kind{KindStartTemplateRun, KindStartTemplateSync, KindStartTemplateApply, KindSignalRunCancellation} {
 		if !seen[kind] {
 			t.Fatalf("QueueSpecs() missing %q", kind)
 		}

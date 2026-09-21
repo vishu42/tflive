@@ -2,11 +2,13 @@ package temporal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/vishu42/tflive/internal/domain"
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 )
 
@@ -87,38 +89,49 @@ func (dispatcher *Dispatcher) StartTemplateSync(ctx context.Context, input domai
 	return nil
 }
 
-func (dispatcher *Dispatcher) ApproveTemplateRun(
-	ctx context.Context,
-	tenantID domain.TenantID,
-	runID domain.TemplateRunID,
-	signal domain.ApprovalSignal,
-) error {
-	if err := dispatcher.client.SignalWorkflow(
+// StartTemplateApply starts the workflow that applies an approved run's saved
+// plan. Its ID extends the run's, so a redelivered start intent finds the
+// workflow already running instead of starting a second apply.
+func (dispatcher *Dispatcher) StartTemplateApply(ctx context.Context, input domain.TemplateRunWorkflowInput) error {
+	if input.TerraformTimeout <= 0 {
+		input.TerraformTimeout = dispatcher.options.TerraformTimeout
+	}
+	_, err := dispatcher.client.ExecuteWorkflow(
 		ctx,
-		templateRunWorkflowID(tenantID, runID),
-		"",
-		domain.ApprovalSignalName,
-		signal,
-	); err != nil {
-		return fmt.Errorf("signal template run approval: %w", err)
+		client.StartWorkflowOptions{
+			ID:                       templateApplyWorkflowID(input.TenantID, input.RunID),
+			TaskQueue:                domain.ControlTaskQueue,
+			WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+			WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
+		},
+		domain.TemplateApplyWorkflowName,
+		input)
+	if err != nil {
+		return fmt.Errorf("start template apply workflow: %w", err)
 	}
 
 	return nil
 }
 
+// CancelTemplateRun signals whichever of the run's workflows is running. At
+// most one is: the plan workflow ends before its apply workflow can start,
+// unless the run was auto-approved, in which case the plan workflow goes on
+// to apply and no apply workflow is ever started. So the plan workflow is
+// tried first, and only a plan workflow that has already closed sends the
+// signal on to the apply workflow. If neither is running the NotFound comes
+// back, and the caller reconciles the run itself.
 func (dispatcher *Dispatcher) CancelTemplateRun(
 	ctx context.Context,
 	tenantID domain.TenantID,
 	runID domain.TemplateRunID,
 	signal domain.CancelSignal,
 ) error {
-	if err := dispatcher.client.SignalWorkflow(
-		ctx,
-		templateRunWorkflowID(tenantID, runID),
-		"",
-		domain.CancelSignalName,
-		signal,
-	); err != nil {
+	err := dispatcher.client.SignalWorkflow(ctx, templateRunWorkflowID(tenantID, runID), "", domain.CancelSignalName, signal)
+	var notFound *serviceerror.NotFound
+	if errors.As(err, &notFound) {
+		err = dispatcher.client.SignalWorkflow(ctx, templateApplyWorkflowID(tenantID, runID), "", domain.CancelSignalName, signal)
+	}
+	if err != nil {
 		return fmt.Errorf("signal template run cancellation: %w", err)
 	}
 
@@ -127,6 +140,10 @@ func (dispatcher *Dispatcher) CancelTemplateRun(
 
 func templateRunWorkflowID(tenantID domain.TenantID, runID domain.TemplateRunID) string {
 	return fmt.Sprintf("template-run/%s/%s", tenantID, runID)
+}
+
+func templateApplyWorkflowID(tenantID domain.TenantID, runID domain.TemplateRunID) string {
+	return templateRunWorkflowID(tenantID, runID) + "/apply"
 }
 
 func templateSyncWorkflowID(tenantID domain.TenantID, registrationID domain.TemplateRegistrationID) string {

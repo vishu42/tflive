@@ -24,7 +24,7 @@ function stackTemplate(overrides: Partial<StackTemplate> = {}): StackTemplate {
     display_name: "",
     config: {},
     last_applied_run_id: "",
-    last_planned_run_id: "",
+    pending_plan_run_id: "",
     plan_state: "none",
     live_state: "never",
     created_by: "user_123",
@@ -52,6 +52,8 @@ function run(overrides: Partial<TemplateRun> = {}): TemplateRun {
     started_at: "2026-07-20T00:00:00Z",
     error_summary: "",
     run_number: 1,
+    auto_approve: false,
+    plan_summary: null,
     ...overrides
   };
 }
@@ -129,7 +131,7 @@ describe("TemplateRunActions", () => {
     vi.restoreAllMocks();
   });
 
-  it("enables Plan, disables Apply and offers no run actions when no run has started", () => {
+  it("enables Plan and offers no run actions when no run has started", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
     seedRuns(queryClient, []);
@@ -137,12 +139,12 @@ describe("TemplateRunActions", () => {
     renderActions(queryClient);
 
     expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(false);
-    expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
-    expect(button(/Approve/)).toBeNull();
-    expect(button(/Cancel/)).toBeNull();
+    // Applying is what approving a plan does; there is no Apply to start.
+    expect(button(/^Apply$/)).toBeNull();
+    expect(button(/Cancel|Discard/)).toBeNull();
   });
 
-  it("keeps run operations disabled until run history has loaded", () => {
+  it("keeps Plan disabled until run history has loaded", () => {
     vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
@@ -150,23 +152,20 @@ describe("TemplateRunActions", () => {
     renderActions(queryClient);
 
     expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(true);
-    expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
   });
 
-  it("blocks new operations while an older run is still active, and offers Cancel on that run's row", () => {
+  it("blocks a new plan while an older run is still active, and offers Cancel on that run's row", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
     seedRuns(queryClient, [
       run({ id: "newer_completed", operation: "plan", status: "completed", started_at: "2026-07-20T01:00:00Z" }),
-      run({ id: "older_active", operation: "apply", status: "queued", started_at: "2026-07-20T00:00:00Z" })
+      run({ id: "older_active", operation: "plan", status: "queued", started_at: "2026-07-20T00:00:00Z" })
     ]);
 
     renderActions(queryClient);
 
     expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(true);
-    expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
-    const activeRow = screen.getByTestId("template-run-row-older_active");
-    expect(activeRow.querySelector("button")?.textContent).toContain("Cancel");
+    expect(screen.getByTestId("template-run-row-older_active").textContent).toContain("Cancel");
     expect(screen.getByTestId("template-run-row-newer_completed").querySelector("button")).toBeNull();
   });
 
@@ -189,10 +188,9 @@ describe("TemplateRunActions", () => {
 
     expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(false);
     expect(button(/Cancel/)).toBeNull();
-    expect(button(/Terminate/)).toBeNull();
   });
 
-  it("disables Plan and Apply with a reason, and hides Cancel, when canOperate is denied", () => {
+  it("disables Plan with a reason, and hides Cancel, when canOperate is denied", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, { ...allAllowed, canOperate: false });
     seedRuns(queryClient, [run({ id: "run_active", operation: "plan", status: "plan_started" })]);
@@ -200,60 +198,63 @@ describe("TemplateRunActions", () => {
     renderActions(queryClient);
 
     expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(true);
-    expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
     expect(screen.getByTestId("template-run-actions-disabled-reason")).toBeTruthy();
     expect(button(/Cancel/)).toBeNull();
   });
 
-  it("hides Approve when canApprove is denied", () => {
+  // Auto-approve is an approval given in advance, and so is Apply on a waiting
+  // plan: neither is offered without approve access. Discarding the plan is an
+  // operator action, so it stays.
+  it("hides Apply and auto-approve when canApprove is denied", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, { ...allAllowed, canApprove: false });
-    seedRuns(queryClient, [run({ id: "run_apply_1", operation: "apply", status: "waiting_approval" })]);
+    seedRuns(queryClient, [run({ id: "run_waiting", operation: "plan", status: "waiting_approval" })]);
 
     renderActions(queryClient);
 
-    expect(button(/Approve/)).toBeNull();
-    // Cancel is an operator action, which this user still has.
-    expect(button(/Cancel/)).toBeTruthy();
+    expect(button(/^Apply$/)).toBeNull();
+    expect(screen.queryByTestId("template-run-auto-approve")).toBeNull();
+    expect(button(/Discard/)).toBeTruthy();
   });
 
-  it("offers Approve on the row of a run awaiting approval that a different user started", () => {
+  it("offers Apply and Discard on the row of a plan waiting for approval that a different user started", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
     seedRuns(queryClient, [
-      run({ id: "run_apply_1", operation: "apply", status: "waiting_approval", trigger_actor: "someone_else", started_at: "2026-07-20T01:00:00Z" }),
-      run({ id: "run_plan_1", operation: "plan", status: "completed", trigger_actor: "someone_else", started_at: "2026-07-20T00:00:00Z" })
+      run({ id: "run_waiting", run_number: 2, operation: "plan", status: "waiting_approval", trigger_actor: "someone_else", plan_summary: { add: 1, change: 0, destroy: 0 } }),
+      run({ id: "run_done", operation: "plan", status: "completed", trigger_actor: "someone_else" })
     ]);
 
     renderActions(queryClient);
 
-    const row = screen.getByTestId("template-run-row-run_apply_1");
-    const approve = Array.from(row.querySelectorAll("button")).find((candidate) => candidate.textContent?.includes("Approve"));
-    expect(approve?.disabled).toBe(false);
+    const row = screen.getByTestId("template-run-row-run_waiting");
+    const labels = Array.from(row.querySelectorAll("button")).map((candidate) => candidate.textContent);
+    expect(labels).toEqual(["Discard", "Apply"]);
+    expect(screen.getByTestId("template-run-summary-run_waiting").textContent).toBe("+1 ~0 -0");
   });
 
-  it("enables Apply when the server reports the plan still matches desired state", () => {
+  it("starts an auto-approved plan when the box is ticked", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      if (init?.method === "POST") {
+        return jsonResponse(run({ id: "run_new", status: "queued" }), 201);
+      }
+      return jsonResponse([]);
+    });
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
-    seedRuns(queryClient, [run({ id: "run_plan_1", operation: "plan", status: "completed" })]);
+    seedRuns(queryClient, []);
 
-    renderActions(queryClient, { last_planned_run_id: "run_plan_1", plan_state: "matches" });
+    renderActions(queryClient);
 
-    expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(false);
-    expect(screen.queryByTestId("template-run-plan-stale")).toBeNull();
-  });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Apply without approval/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
 
-  it("disables Apply and explains why when config changed after the plan completed", () => {
-    const queryClient = testQueryClient();
-    seedCapabilities(queryClient, allAllowed);
-    // The completed plan is still the latest run — the old client-side check
-    // would have enabled Apply here and run something nobody reviewed.
-    seedRuns(queryClient, [run({ id: "run_plan_1", operation: "plan", status: "completed" })]);
-
-    renderActions(queryClient, { last_planned_run_id: "run_plan_1", plan_state: "stale" });
-
-    expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
-    expect(screen.getByTestId("template-run-plan-stale").textContent).toContain("re-plan before applying");
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/v1/tenants/tenant_123/stack-templates/stpl_1/runs",
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ operation: "plan", auto_approve: true }) })
+      )
+    );
   });
 
   // The server owns the "one run at a time" rule now, and a 409 means this tab's
@@ -274,7 +275,7 @@ describe("TemplateRunActions", () => {
       }
       if (url.endsWith("/stack-templates/stpl_1/runs") && method === "POST") {
         // What the server knows: someone else's run is already going.
-        runsState = [run({ id: "run_elsewhere", operation: "apply", status: "apply_started" })];
+        runsState = [run({ id: "run_elsewhere", operation: "plan", status: "apply_started" })];
         return jsonResponse({ error: "run_in_flight", message: "create template run: a run is already in flight for this stack template" }, 409);
       }
       throw new Error(`unexpected fetch: ${url} ${method}`);
@@ -292,7 +293,7 @@ describe("TemplateRunActions", () => {
     expect(screen.getByTestId("template-run-row-run_elsewhere").textContent).toContain("Cancel");
   });
 
-  it("walks plan → apply → approve using persisted history, and immediately reflects each step without a page reload", async () => {
+  it("walks plan → apply from persisted history, and reflects each step without a page reload", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
     let runsState: TemplateRun[] = [];
@@ -304,53 +305,43 @@ describe("TemplateRunActions", () => {
         return jsonResponse(runsState);
       }
       if (url.endsWith("/stack-templates/stpl_1/runs") && method === "POST") {
-        const body = JSON.parse(String(init?.body)) as { operation: string };
-        const created =
-          body.operation === "apply"
-            ? run({ id: "run_apply_1", run_number: 2, operation: "apply", status: "waiting_approval", started_at: "2026-07-20T00:05:00Z" })
-            : run({ id: "run_plan_1", run_number: 1, operation: "plan", status: "completed", started_at: "2026-07-20T00:00:00Z" });
-        runsState = [created, ...runsState];
+        // The plan runs and waits for approval with what it would change.
+        const created = run({ id: "run_plan_1", run_number: 1, operation: "plan", status: "waiting_approval", plan_summary: { add: 2, change: 0, destroy: 0 } });
+        runsState = [created];
         return jsonResponse(created, 201);
       }
-      if (url.endsWith("/template-runs/run_apply_1/approval") && method === "POST") {
-        runsState = runsState.map((existing) => (existing.id === "run_apply_1" ? { ...existing, status: "approved" } : existing));
+      if (url.endsWith("/template-runs/run_plan_1/approval") && method === "POST") {
+        runsState = runsState.map((existing) => ({ ...existing, status: "approved" }));
         return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/stacks/stack_1")) {
+        return jsonResponse(queryClient.getQueryData(queryKeys.stack("tenant_123", "stack_1")));
       }
       throw new Error(`unexpected fetch: ${url} ${method}`);
     });
 
-    const view = renderActions(queryClient);
+    renderActions(queryClient);
     // Wait for the run history to actually load (Plan enabled), not just for
     // the request to have been issued: the request settling and the button's
-    // disabled state flipping are separate ticks, and asserting only the
-    // former raced ahead of the latter and clicked a still-disabled button.
+    // disabled state flipping are separate ticks.
     await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(false));
 
     fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
     await waitFor(() => expect(screen.getByTestId("template-run-history-run_plan_1")).toBeTruthy());
     expect(screen.getByTestId("template-run-history-run_plan_1").getAttribute("href")).toBe("/stacks/stack_1/templates/stpl_1/runs/1");
+    await waitFor(() => expect(button(/^Apply$/)).toBeTruthy());
 
-    // A completed plan run in the history is no longer enough on its own: Apply
-    // waits for the server to report that the plan still matches desired state.
-    expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(true);
-    view.rerender(actionsElement(queryClient, { last_planned_run_id: "run_plan_1", plan_state: "matches" }));
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Apply/ }))).toBe(false));
-
-    fireEvent.click(screen.getByRole("button", { name: /Apply/ }));
-    await waitFor(() => expect(screen.getByTestId("template-run-history-run_apply_1")).toBeTruthy());
-    expect(screen.getByTestId("template-run-history-run_apply_1").getAttribute("href")).toBe("/stacks/stack_1/templates/stpl_1/runs/2");
-    await waitFor(() => expect(button(/Approve/)).toBeTruthy());
-    expect(button(/Cancel/)).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: /Approve/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Apply$/ }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/template-runs/run_apply_1/approval"),
+        expect.stringContaining("/template-runs/run_plan_1/approval"),
         expect.objectContaining({ method: "POST" })
       )
     );
-    // Approved, the run no longer waits: its row drops Approve and keeps Cancel.
-    await waitFor(() => expect(button(/Approve/)).toBeNull());
+    // Approved, the run no longer waits: its row drops Apply and Discard, and
+    // offers Cancel while it applies.
+    await waitFor(() => expect(button(/^Apply$/)).toBeNull());
     expect(button(/Cancel/)).toBeTruthy();
+    expect(button(/Discard/)).toBeNull();
   });
 });

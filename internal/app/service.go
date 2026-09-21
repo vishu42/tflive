@@ -67,6 +67,9 @@ type TxRepo interface {
 	CreateTemplateRun(ctx context.Context, run domain.TemplateRun) (int, error)
 	CreateTemplateRegistration(ctx context.Context, registration domain.TemplateRegistration) error
 	ApproveTemplateRun(ctx context.Context, approval domain.TemplateRunApproval) error
+	// CancelTemplateRunBeforeApply cancels a run waiting for approval, or
+	// approved but not yet claimed by its apply, and reports whether it did.
+	CancelTemplateRunBeforeApply(ctx context.Context, cancellation domain.TemplateRunCancellation) (bool, error)
 	RequestTemplateRunCancellation(ctx context.Context, cancellation domain.TemplateRunCancellation) error
 }
 
@@ -152,7 +155,9 @@ type TemplateRunLogRepository interface {
 type WorkflowDispatcher interface {
 	StartTemplateRun(ctx context.Context, input domain.TemplateRunWorkflowInput) error
 	StartTemplateSync(ctx context.Context, input domain.TemplateSyncWorkflowInput) error
-	ApproveTemplateRun(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, signal domain.ApprovalSignal) error
+	// StartTemplateApply starts the workflow that applies an approved run's
+	// saved plan.
+	StartTemplateApply(ctx context.Context, input domain.TemplateRunWorkflowInput) error
 	CancelTemplateRun(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, signal domain.CancelSignal) error
 }
 
@@ -361,6 +366,9 @@ type StartTemplateRunCommand struct {
 	TenantID        domain.TenantID
 	StackTemplateID domain.StackTemplateID
 	Operation       domain.OperationType
+	// AutoApprove applies the plan as soon as it finishes. It needs approve
+	// access as well as operate access: it is an approval given in advance.
+	AutoApprove bool
 }
 
 // CreateCredentialCommand asks the app to create one encrypted credential in a scope.
@@ -721,16 +729,12 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	}
 	desiredConfigJSON := stackTemplate.DesiredConfig()
 
-	// Reviewing a plan is the approval gate, so an apply may only run what that
-	// plan described. Saving config and changing revision both move desired
-	// without touching runs, which leaves a completed plan in place describing
-	// something else; the run below would then snapshot current desired rather
-	// than the reviewed snapshot. Requiring a matching plan also makes
-	// plan-before-apply a rule instead of a web-client convention — the API
-	// accepted an apply that had never been planned at all.
-	if command.Operation == domain.OperationApply {
-		if planState := stackTemplate.PlanState(); planState != domain.PlanMatches {
-			return domain.TemplateRun{}, fmt.Errorf("%w: plan state is %q", ErrStackTemplatePlanStale, planState)
+	// Auto-approve is an approval given before the plan exists, so it takes
+	// the same access as approving one: operate alone is not enough.
+	if command.AutoApprove {
+		if err := authorizeStack(ctx, service.Authorization, stackTemplate.StackID, authorization.RelationCanApprove, ErrForbidden); err != nil {
+			service.auditFailedAccess(ctx, actor, command.TenantID, stackTemplate.StackID)
+			return domain.TemplateRun{}, fmt.Errorf("auto-approve: %w", err)
 		}
 	}
 
@@ -760,21 +764,10 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 		Status:            domain.TemplateRunQueued,
 		TriggerActor:      actor,
 		StartedAt:         service.Clock.Now(),
+		AutoApprove:       command.AutoApprove,
 	}
 
-	input := domain.TemplateRunWorkflowInput{
-		RunID:             run.ID,
-		TenantID:          run.TenantID,
-		StackTemplateID:   run.StackTemplateID,
-		Operation:         run.Operation,
-		SelectedRef:       run.SelectedRef,
-		ResolvedCommitSHA: run.ResolvedCommitSHA,
-		WorkspaceName:     run.WorkspaceName,
-		RepoOwner:         templateRevision.RepoOwner,
-		RepoName:          templateRevision.RepoName,
-		RootPath:          templateRevision.RootPath,
-		ConfigJSON:        run.ConfigJSON,
-	}
+	input := templateRunWorkflowInput(run, templateRevision)
 	payload, err := json.Marshal(StartTemplateRunPayload(input))
 	if err != nil {
 		return domain.TemplateRun{}, fmt.Errorf("encode start template run payload: %w", err)
@@ -964,6 +957,9 @@ func (service *Service) UpdateStackTemplateConfig(ctx context.Context, command U
 	if stackTemplate.Lifecycle != domain.StackTemplateActive {
 		return domain.StackTemplate{}, fmt.Errorf("%w: lifecycle is %q", ErrStackTemplateUpgradeInvalid, stackTemplate.Lifecycle)
 	}
+	if err := service.requireNoRunInFlight(ctx, command.TenantID, command.StackTemplateID); err != nil {
+		return domain.StackTemplate{}, err
+	}
 
 	desiredTemplateRevisionID := stackTemplate.DesiredTemplateRevisionID
 	if desiredTemplateRevisionID == "" {
@@ -1001,6 +997,9 @@ func (service *Service) UpgradeStackTemplate(ctx context.Context, command Upgrad
 	}
 	if stackTemplate.Lifecycle != domain.StackTemplateActive {
 		return domain.StackTemplate{}, fmt.Errorf("%w: lifecycle is %q", ErrStackTemplateUpgradeInvalid, stackTemplate.Lifecycle)
+	}
+	if err := service.requireNoRunInFlight(ctx, command.TenantID, command.StackTemplateID); err != nil {
+		return domain.StackTemplate{}, err
 	}
 
 	targetRevision, err := service.TemplateRevisionMetadata.GetTemplateRevision(ctx, command.TenantID, command.TargetTemplateRevisionID)
@@ -1488,7 +1487,12 @@ func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStack
 	return nil
 }
 
-// ApproveRun records an approval decision and signals the waiting workflow.
+// ApproveRun approves a plan waiting for approval and starts the workflow that
+// applies it. Approval, its audit record and the start intent commit together.
+//
+// The plan has to still describe desired state. Config and revision cannot
+// change while a run is in flight, so this only refuses when something got
+// past that rule; it is the backstop, not the gate.
 func (service *Service) ApproveRun(ctx context.Context, command ApproveRunCommand) error {
 	actor, err := authenticatedActor(ctx)
 	if err != nil {
@@ -1498,9 +1502,23 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 		return err
 	}
 
-	_, err = service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authorization.RelationCanApprove, ErrForbidden)
+	run, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authorization.RelationCanApprove, ErrForbidden)
 	if err != nil {
 		return err
+	}
+	if run.Status != domain.TemplateRunWaitingApproval {
+		return fmt.Errorf("approve template run: %w", ErrRunNotApprovable)
+	}
+	stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, command.TenantID, run.StackTemplateID)
+	if err != nil {
+		return fmt.Errorf("get stack template: %w", err)
+	}
+	if stackTemplate.PendingPlanRunID != run.ID || stackTemplate.PlanState() != domain.PlanMatches {
+		return fmt.Errorf("%w: plan state is %q", ErrStackTemplatePlanStale, stackTemplate.PlanState())
+	}
+	templateRevision, err := service.TemplateRevisionMetadata.GetTemplateRevision(ctx, command.TenantID, run.TemplateRevisionID)
+	if err != nil {
+		return fmt.Errorf("get template revision metadata: %w", err)
 	}
 
 	approval := domain.TemplateRunApproval{
@@ -1509,15 +1527,9 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 		ApprovedBy: actor,
 		ApprovedAt: service.Clock.Now(),
 	}
-
-	signal := domain.ApprovalSignal{ApprovedBy: actor}
-	payload, err := json.Marshal(SignalRunApprovalPayload{
-		TenantID: command.TenantID,
-		RunID:    command.RunID,
-		Signal:   signal,
-	})
+	payload, err := json.Marshal(StartTemplateApplyPayload(templateRunWorkflowInput(run, templateRevision)))
 	if err != nil {
-		return fmt.Errorf("encode run approval payload: %w", err)
+		return fmt.Errorf("encode start template apply payload: %w", err)
 	}
 	auditEvent := domain.SecurityAuditEvent{
 		ActorSubject:  string(actor),
@@ -1534,7 +1546,7 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 			return err
 		}
 		return enqueuer.Enqueue(ctx, queue.Request{
-			Kind:         KindSignalRunApproval,
+			Kind:         KindStartTemplateApply,
 			Payload:      payload,
 			ActorSubject: string(actor),
 			TenantID:     string(command.TenantID),
@@ -1544,6 +1556,45 @@ func (service *Service) ApproveRun(ctx context.Context, command ApproveRunComman
 	}
 
 	return nil
+}
+
+// requireNoRunInFlight refuses to change a stack template's desired state while
+// one of its runs is unfinished. A run snapshots desired state when it starts,
+// and a plan waiting for approval is a promise about that snapshot: letting
+// desired move underneath it would leave the person approving it reviewing
+// one thing while the template says another. Discard or finish the run first.
+func (service *Service) requireNoRunInFlight(ctx context.Context, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID) error {
+	runs, err := service.TemplateRuns.ListTemplateRuns(ctx, tenantID, stackTemplateID)
+	if err != nil {
+		return fmt.Errorf("list template runs: %w", err)
+	}
+	for _, run := range runs {
+		if !run.Status.Terminal() {
+			return fmt.Errorf("%w: run #%d is %s", ErrTemplateRunInFlight, run.RunNumber, run.Status)
+		}
+	}
+	return nil
+}
+
+// templateRunWorkflowInput is what both of a run's workflows start from: the
+// run's own snapshot, and where its source lives. The apply workflow takes the
+// same input as the plan workflow, because it fetches the same commit again
+// and applies the plan saved under the same run.
+func templateRunWorkflowInput(run domain.TemplateRun, templateRevision domain.TemplateRevision) domain.TemplateRunWorkflowInput {
+	return domain.TemplateRunWorkflowInput{
+		RunID:             run.ID,
+		TenantID:          run.TenantID,
+		StackTemplateID:   run.StackTemplateID,
+		Operation:         run.Operation,
+		SelectedRef:       run.SelectedRef,
+		ResolvedCommitSHA: run.ResolvedCommitSHA,
+		WorkspaceName:     run.WorkspaceName,
+		RepoOwner:         templateRevision.RepoOwner,
+		RepoName:          templateRevision.RepoName,
+		RootPath:          templateRevision.RootPath,
+		ConfigJSON:        run.ConfigJSON,
+		AutoApprove:       run.AutoApprove,
+	}
 }
 
 // CancelRun records a cancellation request and signals the running workflow.
@@ -1580,6 +1631,16 @@ func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand)
 		return fmt.Errorf("encode run cancellation payload: %w", err)
 	}
 	if err := service.Work.InTx(ctx, func(ctx context.Context, repository TxRepo, enqueuer queue.Enqueuer) error {
+		// A plan waiting for approval, or approved but not yet applying, has
+		// no workflow to signal. Canceling it is only this write, which also
+		// drops its saved plan's key.
+		canceled, err := repository.CancelTemplateRunBeforeApply(ctx, cancellation)
+		if err != nil {
+			return err
+		}
+		if canceled {
+			return nil
+		}
 		if err := repository.RequestTemplateRunCancellation(ctx, cancellation); err != nil {
 			return err
 		}

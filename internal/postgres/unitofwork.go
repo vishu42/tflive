@@ -36,6 +36,10 @@ func (repo *txRepo) ApproveTemplateRun(ctx context.Context, approval domain.Temp
 	return approveTemplateRun(ctx, repo.tx, approval)
 }
 
+func (repo *txRepo) CancelTemplateRunBeforeApply(ctx context.Context, cancellation domain.TemplateRunCancellation) (bool, error) {
+	return cancelTemplateRunBeforeApply(ctx, repo.tx, cancellation)
+}
+
 func (repo *txRepo) RequestTemplateRunCancellation(ctx context.Context, cancellation domain.TemplateRunCancellation) error {
 	return requestTemplateRunCancellation(ctx, repo.tx, cancellation)
 }

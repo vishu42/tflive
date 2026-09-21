@@ -709,6 +709,7 @@ func (server *Server) handleStartTemplateRun(response http.ResponseWriter, reque
 		TenantID:        domain.TenantID(request.PathValue("tenant_id")),
 		StackTemplateID: domain.StackTemplateID(request.PathValue("stack_template_id")),
 		Operation:       domain.OperationType(body.Operation),
+		AutoApprove:     body.AutoApprove,
 	})
 	if err != nil {
 		writeAppError(response, err)
@@ -853,6 +854,9 @@ type upgradeStackTemplateRequest struct {
 
 type startTemplateRunRequest struct {
 	Operation string `json:"operation"`
+	// AutoApprove applies the plan as soon as it finishes. It takes approve
+	// access on the stack as well as operate access.
+	AutoApprove bool `json:"auto_approve"`
 }
 
 type credentialRequest struct {
@@ -907,8 +911,8 @@ type stackTemplateResponse struct {
 	Config           map[string]any `json:"config"`
 	LastAppliedRunID string         `json:"last_applied_run_id"`
 	LastAppliedAt    string         `json:"last_applied_at,omitempty"`
-	LastPlannedRunID string         `json:"last_planned_run_id"`
-	LastPlannedAt    string         `json:"last_planned_at,omitempty"`
+	PendingPlanRunID string         `json:"pending_plan_run_id"`
+	PendingPlanAt    string         `json:"pending_plan_at,omitempty"`
 	// PlanState and LiveState are the two derived comparisons. The snapshot
 	// configs they are derived from are deliberately not returned: the client
 	// re-deriving the comparison is the mistake this replaced.
@@ -997,7 +1001,7 @@ func newStackTemplateResponse(view app.StackTemplateView) stackTemplateResponse 
 		DisplayName:                   view.DisplayName,
 		Config:                        config,
 		LastAppliedRunID:              string(stackTemplate.LastAppliedRunID),
-		LastPlannedRunID:              string(stackTemplate.LastPlannedRunID),
+		PendingPlanRunID:              string(stackTemplate.PendingPlanRunID),
 		PlanState:                     string(stackTemplate.PlanState()),
 		LiveState:                     string(stackTemplate.LiveState()),
 		CreatedBy:                     string(stackTemplate.CreatedBy),
@@ -1006,8 +1010,8 @@ func newStackTemplateResponse(view app.StackTemplateView) stackTemplateResponse 
 	if !stackTemplate.LastAppliedAt.IsZero() {
 		response.LastAppliedAt = stackTemplate.LastAppliedAt.Format(time.RFC3339Nano)
 	}
-	if !stackTemplate.LastPlannedAt.IsZero() {
-		response.LastPlannedAt = stackTemplate.LastPlannedAt.Format(time.RFC3339Nano)
+	if !stackTemplate.PendingPlanAt.IsZero() {
+		response.PendingPlanAt = stackTemplate.PendingPlanAt.Format(time.RFC3339Nano)
 	}
 	return response
 }

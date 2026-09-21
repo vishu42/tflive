@@ -8,12 +8,14 @@ import (
 	"time"
 )
 
-// OperationType identifies a Terraform operation supported by the platform.
+// OperationType identifies what a run is for. Both operations plan first and
+// apply only the saved plan someone approved: a plan run applies a plan of the
+// desired state, a destroy run a plan to destroy everything. There is no
+// separate apply operation, because applying is what approving a plan does.
 type OperationType string
 
 const (
 	OperationPlan    OperationType = "plan"
-	OperationApply   OperationType = "apply"
 	OperationDestroy OperationType = "destroy"
 )
 
@@ -24,14 +26,26 @@ const (
 	TerraformCommandInit            TerraformCommandType = "init"
 	TerraformCommandSelectWorkspace TerraformCommandType = "select_workspace"
 	TerraformCommandPlan            TerraformCommandType = "plan"
-	TerraformCommandApply           TerraformCommandType = "apply"
-	TerraformCommandDestroy         TerraformCommandType = "destroy"
+	// TerraformCommandApply and TerraformCommandDestroy both apply the run's
+	// saved plan. They stay two commands so each records its own statuses:
+	// destroy_started and destroy_finished drive the stack template lifecycle.
+	TerraformCommandApply   TerraformCommandType = "apply"
+	TerraformCommandDestroy TerraformCommandType = "destroy"
 )
+
+// PlanSummary counts the resource changes in a saved plan. A replacement
+// counts once as an add and once as a destroy, as Terraform's own summary line
+// does.
+type PlanSummary struct {
+	Add     int `json:"add"`
+	Change  int `json:"change"`
+	Destroy int `json:"destroy"`
+}
 
 // Valid reports whether the operation is one of the supported operation types.
 func (operation OperationType) Valid() bool {
 	switch operation {
-	case OperationPlan, OperationApply, OperationDestroy:
+	case OperationPlan, OperationDestroy:
 		return true
 	default:
 		return false
@@ -144,6 +158,12 @@ type TemplateRun struct {
 	// RunNumber counts runs within one stack template, from 1. It is what
 	// people see and what URLs carry; ID stays the identity everywhere else.
 	RunNumber int `json:"run_number"`
+	// AutoApprove means the trigger actor asked for the plan to be applied as
+	// soon as it finishes, without waiting for anyone to approve it.
+	AutoApprove bool `json:"auto_approve"`
+	// PlanSummary is what the saved plan would change. Nil until a plan with
+	// changes has finished.
+	PlanSummary *PlanSummary `json:"plan_summary"`
 }
 
 // TemplateRunLog records the object-store location for one run phase log.

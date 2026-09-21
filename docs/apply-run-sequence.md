@@ -1,7 +1,10 @@
 # Apply run sequence
 
-How an apply run moves between the API, the control worker, Temporal, the
-executor and Postgres, from the request until the run reads `completed`.
+How a run moves between the API, the control worker, Temporal, the executors
+and Postgres, from the Plan click until the run reads `completed`. A run plans
+first and saves the plan; approving it applies exactly that saved plan, in a
+second workflow that usually lands on a different executor. The design is in
+[the saved-plan flow spec](superpowers/specs/2026-09-21-saved-plan-flow-design.md).
 Background on why the processes are split this way is in
 [the control plane split spec](superpowers/specs/2026-09-15-control-plane-split.md).
 
@@ -30,11 +33,11 @@ flowchart LR
     UI --> HTTP
     HTTP --> PG
     QL -->|claim intents| PG
-    QL -->|start workflow, signal| T
+    QL -->|start workflows, signal cancel| T
     CW -->|poll, respond| T
     CW -->|status, logs, credentials| PG
     EX -->|poll, respond| T
-    EX -->|upload logs| AS
+    EX -->|upload logs, saved plans| AS
     HTTP -->|read logs| AS
     EX --> TOFU
     TOFU --> CLOUD
@@ -57,7 +60,7 @@ through Temporal, and everything it produces goes back the same way.
   command ("schedule this activity"), Temporal hands that activity to a poller,
   the poller reports the result, and Temporal queues the next workflow task.
 
-## Part 1: from the apply request to tofu running
+## Part 1: from Plan to tofu applying the saved plan
 
 ```mermaid
 sequenceDiagram
@@ -67,9 +70,11 @@ sequenceDiagram
     participant PG as Postgres
     participant T as Temporal server
     participant CW as Control worker
-    participant EX as Executor
+    participant EX1 as Executor A
+    participant EX2 as Executor B
+    participant AS as Artifact store
 
-    UI->>API: POST /runs {operation: apply}
+    UI->>API: POST /runs {operation: plan}
     API->>PG: INSERT run (queued) + work_queue row, one transaction
     API-->>UI: 201 queued
 
@@ -77,34 +82,48 @@ sequenceDiagram
     API->>T: StartWorkflow TemplateRunWorkflow on "control"
     T-->>CW: workflow task
     CW->>T: create session on "execution"
-    T-->>EX: session created, pinned to this executor
+    T-->>EX1: session created, pinned to executor A
 
-    Note over CW,EX: PrepareWorkspace returns the run public key, then SealSourceToken, FetchSource, init, select workspace, plan. Each is a round trip, and each status write goes CW to PG.
-
-    CW->>PG: status waiting_approval (via RecordTemplateRunStatus)
-    Note over CW: workflow parks on the approval signal
+    Note over CW,EX1: PrepareWorkspace (run key A), SealSourceToken, FetchSource, init, select workspace, then plan -out=tfplan -detailed-exitcode. Exit 2 means changes; show -json counts them.
+    CW->>PG: SealPlanKey creates the run's plan key (stored encrypted), sealed to key A
+    EX1->>AS: UploadPlan: tfplan + lock file, AES-GCM under the plan key
+    Note over CW,EX1: ReleaseRunKey, CleanupWorkspace, session completed. Executor A is free.
+    CW->>PG: FinishPlan: counts, waiting_approval, template's pending plan
+    Note over CW: TemplateRunWorkflow completes. Nothing waits on a person.
 
     UI->>API: POST /approval
-    API->>PG: approval row + work_queue row, one transaction
+    API->>PG: approved + audit + work_queue row, one transaction
     Note over API: queue loop claims the row
-    API->>T: SignalWorkflow approval
-    T-->>CW: workflow task (signal arrived)
-
-    CW->>T: schedule SealRunCredentials on "control"
-    T-->>CW: activity task
-    CW->>PG: read credential rows
-    Note over CW: decrypt, seal to run public key
-    CW->>T: activity completed {sealed env}
+    API->>T: StartWorkflow TemplateApplyWorkflow ("…/apply")
     T-->>CW: workflow task
+    CW->>PG: BeginApply: approved to locked, or stop if canceled meanwhile
+    CW->>T: create session on "execution"
+    T-->>EX2: session created, usually another executor
 
+    Note over CW,EX2: PrepareWorkspace (run key B), FetchSource at the same commit
+    CW->>PG: SealPlanKey reads the same plan key, sealed to key B
+    EX2->>AS: DownloadPlan: open, put tfplan and lock file back
+    Note over CW,EX2: init installs the providers the plan was made with, select workspace, SealRunCredentials
     CW->>T: schedule RunTerraform(apply) on the session queue
-    T-->>EX: activity task {sealed env}
-    Note over EX: open with private key, run tofu apply, upload apply.log
+    T-->>EX2: activity task {sealed env}
+    Note over EX2: tofu apply tfplan, upload apply.log
 ```
 
-Credentials cross Temporal only as ciphertext sealed to a key the executor
-generated in `PrepareWorkspace`. They are sealed again before every Terraform
-command, because an apply can start up to a day after its plan.
+Credentials, the source token and the plan key cross Temporal only as
+ciphertext sealed to a key the executor generated in `PrepareWorkspace`. The
+plan phase and the apply phase each generate their own, so the control plane
+seals everything twice, once to each.
+
+An auto-approved run skips the wait: `FinishPlan` records the approval as the
+plan finishes, and `TemplateRunWorkflow` goes straight on to the apply phase,
+with a second session, rather than starting `TemplateApplyWorkflow`.
+
+A plan with no changes stops at `FinishPlan`, which records the run's snapshot
+as live, and the run completes.
+
+Canceling a plan waiting for approval, or approved but not yet claimed, is a
+single write: no workflow is running to signal. Once `BeginApply` has claimed
+the run, cancel is a signal to whichever workflow is applying it.
 
 ## Part 2: after `RunTerraform(apply)` succeeds
 
@@ -135,14 +154,6 @@ sequenceDiagram
     CW->>PG: status apply_finished + stack template last applied, one transaction
     CW->>T: activity completed
 
-    loop lock_released, then completed
-        T-->>CW: workflow task
-        CW->>T: schedule RecordTemplateRunStatus
-        T-->>CW: activity task
-        CW->>PG: UPDATE template_runs status
-        CW->>T: activity completed
-    end
-
     T-->>CW: workflow task
     CW->>T: schedule ReleaseRunKey on the session queue
     T-->>EX: activity task
@@ -150,9 +161,23 @@ sequenceDiagram
     EX->>T: activity completed
 
     T-->>CW: workflow task
+    CW->>T: schedule CleanupWorkspace {DeletePlan} on the session queue
+    T-->>EX: activity task
+    Note over EX: delete the run workspace and the saved plan
+    EX->>T: activity completed
+
+    T-->>CW: workflow task
     CW->>T: complete session
     T-->>EX: session completion task
     EX->>T: done, session slot freed
+
+    loop lock_released, then completed
+        T-->>CW: workflow task
+        CW->>T: schedule RecordTemplateRunStatus
+        T-->>CW: activity task
+        CW->>PG: UPDATE template_runs status (completed also drops the plan key)
+        CW->>T: activity completed
+    end
 
     T-->>CW: workflow task
     CW->>T: CompleteWorkflowExecution
@@ -164,8 +189,9 @@ sequenceDiagram
     API-->>UI: completed
 ```
 
-The executor's part ends at step 1, apart from releasing its key and closing
-the session. Every write after that is a workflow step on the control worker,
+The executor's part ends at step 1, apart from releasing its key, cleaning up
+and closing the session, which now happen before the final statuses so the
+session is never held a moment longer than the Terraform work needs. Every write after that is a workflow step on the control worker,
 which is what keeps them ordered: the log row cannot land after `completed`, and
 a cancel that arrives during the apply cannot be overwritten by a late
 `apply_finished`. Writing `apply_finished` also records the stack template's
@@ -210,15 +236,17 @@ sequenceDiagram
 
 The executor finished at step 1, which is why the worker that picks the run
 back up needs nothing from it except the log metadata already in history. The
-session stays open on that executor until the session completes (steps 22 to 24
-of Part 2).
+session stays open on that executor until the teardown after `apply_finished`
+completes it.
 
 ## Where this lives in code
 
 | Step | Code |
 |---|---|
 | Queue loop, control worker wiring | `cmd/api/main.go` (`startControlPlane`, `registerControl`) |
-| Workflow | `internal/workflows/template_run.go` |
+| Workflows (plan phase, apply phase) | `internal/workflows/template_run.go` |
+| Saved plan bundle and encryption | `internal/planbundle` |
+| Plan key, finish plan, apply claim | `internal/postgres/saved_plans.go` |
 | Control activities | `internal/activities/control.go` |
 | Execution activities | `internal/activities/template_run.go` |
 | Executor wiring | `cmd/executor/main.go` |

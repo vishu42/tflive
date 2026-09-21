@@ -259,6 +259,9 @@ func registerControl(worker temporalWorker, store controlStore, gitHubTokens act
 	worker.RegisterWorkflowWithOptions(workflows.TemplateRunWorkflow, workflow.RegisterOptions{
 		Name: domain.TemplateRunWorkflowName,
 	})
+	worker.RegisterWorkflowWithOptions(workflows.TemplateApplyWorkflow, workflow.RegisterOptions{
+		Name: domain.TemplateApplyWorkflowName,
+	})
 	worker.RegisterWorkflowWithOptions(workflows.TemplateSyncWorkflow, workflow.RegisterOptions{
 		Name: domain.TemplateSyncWorkflowName,
 	})
@@ -275,6 +278,15 @@ func registerControl(worker temporalWorker, store controlStore, gitHubTokens act
 	})
 	worker.RegisterActivityWithOptions(control.SealSourceToken, activity.RegisterOptions{
 		Name: domain.SealSourceTokenActivityName,
+	})
+	worker.RegisterActivityWithOptions(control.SealPlanKey, activity.RegisterOptions{
+		Name: domain.SealPlanKeyActivityName,
+	})
+	worker.RegisterActivityWithOptions(control.FinishPlan, activity.RegisterOptions{
+		Name: domain.FinishPlanActivityName,
+	})
+	worker.RegisterActivityWithOptions(control.BeginApply, activity.RegisterOptions{
+		Name: domain.BeginApplyActivityName,
 	})
 
 	sync := activities.NewTemplateSyncActivities(store, activities.WithTemplateSyncTokenSource(gitHubTokens))

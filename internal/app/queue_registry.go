@@ -15,7 +15,7 @@ func NewQueueRegistry(dispatcher WorkflowDispatcher, reconciler TemplateRunCance
 	return queue.NewRegistry(
 		NewStartTemplateRunHandler(dispatcher),
 		NewStartTemplateSyncHandler(dispatcher),
-		NewSignalRunApprovalHandler(dispatcher),
+		NewStartTemplateApplyHandler(dispatcher),
 		NewSignalRunCancellationHandler(dispatcher, reconciler),
 	)
 }

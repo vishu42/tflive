@@ -1,4 +1,4 @@
-import type { Stack, StackTemplate, TemplateRevision, TemplateVariable } from "../../api/types";
+import type { PlanSummary, Stack, StackTemplate, TemplateRevision, TemplateVariable } from "../../api/types";
 import { findSelectedID } from "../../shared/listSelection";
 import type { StatusTone } from "../../shared/statusTone";
 
@@ -115,22 +115,13 @@ export function isDestroyingStackTemplate(stackTemplate: StackTemplate | null): 
   return stackTemplate?.lifecycle === "destroying";
 }
 
-// hasFreshPlan asks the server's question — "is the completed plan still what
-// would run?" — instead of the old client-side one, "is the latest run a
-// completed plan?". Those differ whenever config was saved or the revision
-// changed after planning, and the server rejects an apply in exactly the cases
-// this returns false for.
-export function hasFreshPlan(stackTemplate: StackTemplate | null): boolean {
-  return stackTemplate?.plan_state === "matches";
-}
-
-// planStaleReason explains a disabled Apply. A gate the user cannot see the
-// reason for reads as a broken button.
-export function planStaleReason(stackTemplate: StackTemplate | null): string {
-  if (stackTemplate?.plan_state !== "stale") {
+// planSummaryLabel reads a saved plan's counts the way tofu's summary line
+// does, compressed: "+3 ~1 -0" is three to add, one to change, none to destroy.
+export function planSummaryLabel(summary: PlanSummary | null): string {
+  if (!summary) {
     return "";
   }
-  return "Config or revision changed since this plan - re-plan before applying";
+  return `+${summary.add} ~${summary.change} -${summary.destroy}`;
 }
 
 export interface StackTemplateStatus {
@@ -143,8 +134,8 @@ export interface StackTemplateStatus {
 
 // stackTemplateStatus answers "is desired state live?" for one row of the list.
 // It is deliberately a projection of live_state alone: plan_state answers a
-// different question — "can I act now?" — and the Apply button already carries
-// that, with planStaleReason putting the reason on the disabled control.
+// different question, whether the plan waiting for approval still describes
+// desired state, and the approval refuses one that does not.
 //
 // lifecycle is read first because a template being torn down keeps the
 // last_applied_* pointers of the apply that put it live, so live_state would

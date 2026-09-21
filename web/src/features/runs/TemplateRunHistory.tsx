@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleStop, Loader2, ShieldCheck } from "lucide-react";
+import { CircleStop, Loader2, Play, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { isTerminalRunStatus } from "../../api/polling";
 import { queryKeys } from "../../api/queryKeys";
@@ -10,6 +10,7 @@ import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
 import { formatDateTime } from "../../shared/formatTimestamp";
 import { statusGlyph, statusTone } from "../../shared/statusTone";
+import { planSummaryLabel } from "../stacks/stackWorkflow";
 
 interface TemplateRunHistoryProps {
   stackId: string;
@@ -17,11 +18,12 @@ interface TemplateRunHistoryProps {
 }
 
 // Every run recorded for a template, newest first, as a table: its number
-// (the link to its detail), operation, state, who started it and when. A run
-// that is still going carries its own actions — Approve while it waits for
-// approval, Cancel until it finishes — in a trailing column that only appears
-// while some run has one. Actions a viewer may not take are left out rather
-// than disabled.
+// (the link to its detail), operation, state, what its plan would change, who
+// started it and when. A run that is still going carries its own actions in a
+// trailing column that only appears while some run has one: a plan waiting for
+// approval offers Apply (Destroy, on a destroy run), which applies exactly that
+// saved plan, and Discard; anything else in flight offers Cancel. Actions a
+// viewer may not take are left out rather than disabled.
 export default function TemplateRunHistory({ stackId, stackTemplateId }: TemplateRunHistoryProps) {
   const [errorMessage, setErrorMessage] = useState("");
   const queryClient = useQueryClient();
@@ -65,6 +67,7 @@ export default function TemplateRunHistory({ stackId, stackTemplateId }: Templat
               <col className="data-table__col--xs" />
               <col className="data-table__col--sm" />
               <col className="data-table__col--lg" />
+              <col className="data-table__col--sm" />
               <col className="data-table__col--md" />
               <col />
               {hasActions && <col className="data-table__col--actions" />}
@@ -74,6 +77,7 @@ export default function TemplateRunHistory({ stackId, stackTemplateId }: Templat
                 <th scope="col">Run</th>
                 <th scope="col">Type</th>
                 <th scope="col">Status</th>
+                <th scope="col">Changes</th>
                 <th scope="col">Actor</th>
                 <th scope="col">Time</th>
                 {hasActions && (
@@ -116,6 +120,7 @@ function RunRow({ run, to, hasActions, stackId, approvingRunID, cancelingRunID, 
   const tone = statusTone(run.status);
   const showApprove = run.status === "waiting_approval";
   const showCancel = !isTerminalRunStatus(run.status);
+  const summary = planSummaryLabel(run.plan_summary);
 
   return (
     <tr data-testid={`template-run-row-${run.id}`}>
@@ -133,6 +138,9 @@ function RunRow({ run, to, hasActions, stackId, approvingRunID, cancelingRunID, 
           {run.status}
         </span>
       </td>
+      <td className="run-table__summary" title={summary ? "To add, to change, to destroy" : undefined} data-testid={`template-run-summary-${run.id}`}>
+        {summary}
+      </td>
       <td className="data-table__mono" title={run.trigger_actor}>
         {run.trigger_actor}
       </td>
@@ -143,24 +151,88 @@ function RunRow({ run, to, hasActions, stackId, approvingRunID, cancelingRunID, 
       </td>
       {hasActions && (
         <td className="data-table__actions">
-          {showCancel && (
-            <RequireCapability capability="canOperate" stackId={stackId}>
-              <button className="secondary-button" type="button" disabled={cancelingRunID === run.id} onClick={() => onCancel(run)}>
-                {cancelingRunID === run.id ? <Loader2 size={16} className="spin" /> : <CircleStop size={16} />}
-                Cancel
-              </button>
-            </RequireCapability>
-          )}
-          {showApprove && (
-            <RequireCapability capability="canApprove" stackId={stackId}>
-              <button className="primary-button" type="button" disabled={approvingRunID === run.id} onClick={() => onApprove(run)}>
-                {approvingRunID === run.id ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
-                Approve
-              </button>
-            </RequireCapability>
+          {showApprove ? (
+            <WaitingRunActions
+              run={run}
+              stackId={stackId}
+              approveBusy={approvingRunID === run.id}
+              discardBusy={cancelingRunID === run.id}
+              onApprove={() => onApprove(run)}
+              onDiscard={() => onCancel(run)}
+            />
+          ) : (
+            showCancel && (
+              <RequireCapability capability="canOperate" stackId={stackId}>
+                <button className="secondary-button" type="button" disabled={cancelingRunID === run.id} onClick={() => onCancel(run)}>
+                  {cancelingRunID === run.id ? <Loader2 size={16} className="spin" /> : <CircleStop size={16} />}
+                  Cancel
+                </button>
+              </RequireCapability>
+            )
           )}
         </td>
       )}
     </tr>
+  );
+}
+
+interface WaitingRunActionsProps {
+  run: TemplateRun;
+  stackId: string;
+  approveBusy: boolean;
+  discardBusy: boolean;
+  onApprove: () => void;
+  onDiscard: () => void;
+}
+
+// WaitingRunActions are what a plan waiting for approval offers: Discard, which
+// throws the plan away, and Apply, which applies exactly that saved plan.
+//
+// On a destroy run approving destroys what the template manages, so the
+// button is red, says how much it destroys, and takes a second click:
+// approving is the irreversible step, since the Settings button only planned
+// it. While it asks, Keep and Confirm take the place of Discard and Destroy,
+// so there are never more than two buttons.
+export function WaitingRunActions({ run, stackId, approveBusy, discardBusy, onApprove, onDiscard }: WaitingRunActionsProps) {
+  const [confirming, setConfirming] = useState(false);
+  const count = run.plan_summary?.destroy ?? 0;
+  const title = `Destroy ${count} ${count === 1 ? "resource" : "resources"}`;
+
+  if (confirming) {
+    return (
+      <RequireCapability capability="canApprove" stackId={stackId}>
+        <button className="secondary-button" type="button" disabled={approveBusy} onClick={() => setConfirming(false)}>
+          Keep
+        </button>
+        <button className="destructive-button" type="button" title={title} disabled={approveBusy} onClick={onApprove}>
+          {approveBusy ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}
+          Confirm destroy
+        </button>
+      </RequireCapability>
+    );
+  }
+
+  return (
+    <>
+      <RequireCapability capability="canOperate" stackId={stackId}>
+        <button className="secondary-button" type="button" disabled={discardBusy} onClick={onDiscard}>
+          {discardBusy ? <Loader2 size={16} className="spin" /> : <CircleStop size={16} />}
+          Discard
+        </button>
+      </RequireCapability>
+      <RequireCapability capability="canApprove" stackId={stackId}>
+        {run.operation === "destroy" ? (
+          <button className="destructive-button" type="button" title={title} disabled={approveBusy} onClick={() => setConfirming(true)}>
+            <Trash2 size={16} />
+            Destroy {count}
+          </button>
+        ) : (
+          <button className="primary-button" type="button" disabled={approveBusy} onClick={onApprove}>
+            {approveBusy ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
+            Apply
+          </button>
+        )}
+      </RequireCapability>
+    </>
   );
 }

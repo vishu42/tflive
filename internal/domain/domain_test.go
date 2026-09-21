@@ -17,7 +17,7 @@ func TestOperationTypeValid(t *testing.T) {
 		want      bool
 	}{
 		{name: "plan is valid", operation: OperationPlan, want: true},
-		{name: "apply is valid", operation: OperationApply, want: true},
+		{name: "apply is not an operation: it is what approving a plan does", operation: OperationType("apply"), want: false},
 		{name: "destroy is valid", operation: OperationDestroy, want: true},
 		{name: "empty is invalid", operation: OperationType(""), want: false},
 		{name: "unknown is invalid", operation: OperationType("refresh"), want: false},
@@ -282,7 +282,7 @@ func TestTemplateRunWorkflowInputUsesTraitTypes(t *testing.T) {
 		RunID:           TemplateRunID("run_123"),
 		TenantID:        TenantID("tenant_123"),
 		StackTemplateID: StackTemplateID("stack_template_123"),
-		Operation:       OperationApply,
+		Operation:       OperationDestroy,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 		RepoOwner:       "acme",
@@ -290,8 +290,8 @@ func TestTemplateRunWorkflowInputUsesTraitTypes(t *testing.T) {
 		RootPath:        "modules/vpc",
 	}
 
-	if input.Operation != OperationApply {
-		t.Fatalf("Operation = %q, want %q", input.Operation, OperationApply)
+	if input.Operation != OperationDestroy {
+		t.Fatalf("Operation = %q, want %q", input.Operation, OperationDestroy)
 	}
 
 	if input.WorkspaceName == "" {
@@ -329,10 +329,6 @@ func templateRegistrationID(id string) TemplateRegistrationID {
 
 func TestSignalNames(t *testing.T) {
 	t.Parallel()
-
-	if ApprovalSignalName != "approval" {
-		t.Fatalf("ApprovalSignalName = %q", ApprovalSignalName)
-	}
 
 	if CancelSignalName != "cancel" {
 		t.Fatalf("CancelSignalName = %q", CancelSignalName)

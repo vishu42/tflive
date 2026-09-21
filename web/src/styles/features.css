@@ -1108,12 +1108,26 @@
    run still takes. Status fits the longest status there is
    (workspace_prepared); time takes the slack. The minimum widths are the
    fixed columns (592px, plus 288px of actions) and 160px for the time. */
+/* Run, type, status, changes, actor, then time takes the slack: the sum of
+   the fixed columns plus room for a time, and the actions column on top. */
 .run-table {
-  --data-table-min-width: 752px;
+  --data-table-min-width: 856px;
 }
 
 .run-table--actions {
-  --data-table-min-width: 1040px;
+  --data-table-min-width: 1176px;
+}
+
+/* A waiting destroy's actions, Discard and "Destroy N", are wider than the
+   shared actions width. */
+.run-table .data-table__col--actions {
+  width: 320px;
+}
+
+/* A plan's counts, "+3 ~1 -0", in the mono face the other values use. */
+.run-table__summary {
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
 }
 
 @media (max-width: 760px) {

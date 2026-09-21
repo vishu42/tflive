@@ -1444,7 +1444,7 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 		StackTemplateID:    domain.StackTemplateID("stack_template_123"),
 		TemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
 		SourceTemplateID:   domain.SourceTemplateID("source_template_vpc"),
-		Operation:          domain.OperationApply,
+		Operation:          domain.OperationPlan,
 		SelectedRef:        "main",
 		ResolvedCommitSHA:  "abc123",
 		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
@@ -1763,8 +1763,8 @@ func TestUnitOfWorkTemplateWritesRollbackTogether(t *testing.T) {
 	// template_runs_in_flight_idx allows only one of those per stack template.
 	// What this test is about is that four unrelated writes roll back together,
 	// so which template each run belongs to does not matter to it.
-	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_approval", TenantID: "tenant_123", StackTemplateID: "stack_template_approval", Operation: domain.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunWaitingApproval, TriggerActor: "user_123"})
-	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_cancel", TenantID: "tenant_123", StackTemplateID: "stack_template_cancel", Operation: domain.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunQueued, TriggerActor: "user_123"})
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_approval", TenantID: "tenant_123", StackTemplateID: "stack_template_approval", Operation: domain.OperationPlan, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunWaitingApproval, TriggerActor: "user_123"})
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_cancel", TenantID: "tenant_123", StackTemplateID: "stack_template_cancel", Operation: domain.OperationPlan, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunQueued, TriggerActor: "user_123"})
 	sentinel := errors.New("rollback")
 
 	err = store.InTx(ctx, func(ctx context.Context, repo app.TxRepo, _ queue.Enqueuer) error {
@@ -2049,7 +2049,7 @@ func TestListTemplateRunsReturnsMostRecentFirstScopedToStackTemplate(t *testing.
 		ID:              domain.TemplateRunID("run_newer"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 		Status:          domain.TemplateRunWaitingApproval,
@@ -2117,7 +2117,7 @@ func TestApproveTemplateRunApprovesWaitingRun(t *testing.T) {
 		ID:              domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 		Status:          domain.TemplateRunWaitingApproval,
@@ -2169,7 +2169,7 @@ func TestApproveTemplateRunRejectsNonWaitingRun(t *testing.T) {
 		ID:              domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 		Status:          domain.TemplateRunQueued,
@@ -2198,7 +2198,7 @@ func TestRequestTemplateRunCancellationMarksCancelableRun(t *testing.T) {
 		ID:              domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 		Status:          domain.TemplateRunApplyStarted,
@@ -2255,7 +2255,7 @@ func TestRequestTemplateRunCancellationRejectsTerminalRun(t *testing.T) {
 		ID:              domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 		Status:          domain.TemplateRunCompleted,
@@ -2437,7 +2437,7 @@ func TestReconcileTemplateRunCancellationMarksRunFailed(t *testing.T) {
 		ID:              domain.TemplateRunID("run_reconcile"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "workspace",
 		Status:          domain.TemplateRunCancelRequested,
@@ -2480,7 +2480,7 @@ func TestReconcileTemplateRunCancellationRejectsTerminalRun(t *testing.T) {
 		ID:              domain.TemplateRunID("run_reconcile_terminal"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "workspace",
 		Status:          domain.TemplateRunCompleted,
@@ -2531,7 +2531,7 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 		StackTemplateID:    domain.StackTemplateID("stack_template_123"),
 		TemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
 		SourceTemplateID:   domain.SourceTemplateID("source_template_vpc"),
-		Operation:          domain.OperationApply,
+		Operation:          domain.OperationPlan,
 		SelectedRef:        "release-2026-07-08",
 		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
 		Status:             domain.TemplateRunApplyStarted,
@@ -2542,7 +2542,7 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 		RunID:           domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		Status:          domain.TemplateRunApplyFinished,
 	})
 	if err != nil {
@@ -2606,75 +2606,6 @@ func TestRecordTemplateRunStatusReturnsNotFoundForOtherTenant(t *testing.T) {
 	}
 }
 
-func TestRecordTemplateRunStatusUpdatesStackTemplateLastPlannedForCompletedPlan(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	pool := openMigratedTestPool(t, ctx)
-	store := NewStore(pool)
-	seedStackWithTemplate(t, ctx, store)
-	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
-		ID:                 domain.TemplateRunID("run_plan_1"),
-		TenantID:           domain.TenantID("tenant_123"),
-		StackTemplateID:    domain.StackTemplateID("stack_template_123"),
-		TemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
-		SourceTemplateID:   domain.SourceTemplateID("source_template_vpc"),
-		Operation:          domain.OperationPlan,
-		SelectedRef:        "main",
-		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
-		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-		Status:             domain.TemplateRunPlanFinished,
-		TriggerActor:       domain.UserID("user_123"),
-	})
-
-	if err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
-		RunID:           domain.TemplateRunID("run_plan_1"),
-		TenantID:        domain.TenantID("tenant_123"),
-		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationPlan,
-		Status:          domain.TemplateRunCompleted,
-	}); err != nil {
-		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
-	}
-
-	stackTemplate, err := store.GetStackTemplate(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"))
-	if err != nil {
-		t.Fatalf("GetStackTemplate returned error: %v", err)
-	}
-	if stackTemplate.LastPlannedRunID != domain.TemplateRunID("run_plan_1") {
-		t.Fatalf("LastPlannedRunID = %q, want run_plan_1", stackTemplate.LastPlannedRunID)
-	}
-	if stackTemplate.LastPlannedTemplateRevisionID != domain.TemplateRevisionID("template_rev_2") {
-		t.Fatalf("LastPlannedTemplateRevisionID = %q, want template_rev_2", stackTemplate.LastPlannedTemplateRevisionID)
-	}
-	if stackTemplate.LastPlannedAt.IsZero() {
-		t.Fatal("LastPlannedAt was not set")
-	}
-	// The point of recording it: the plan snapshot equals desired, so an apply
-	// would run exactly what this plan showed. Note the config comes back with
-	// jsonb's own key spacing, which is why the comparison parses rather than
-	// comparing bytes.
-	if stackTemplate.PlanState() != domain.PlanMatches {
-		t.Fatalf("PlanState() = %q, want matches (planned config %s, desired %s)", stackTemplate.PlanState(), stackTemplate.LastPlannedConfigJSON, stackTemplate.DesiredConfig())
-	}
-	if stackTemplate.LiveState() != domain.LiveNever {
-		t.Fatalf("LiveState() = %q, want never", stackTemplate.LiveState())
-	}
-
-	// Saving config moves desired without touching runs; the recorded plan is
-	// what makes that visible instead of leaving apply enabled.
-	if _, err := store.UpdateStackTemplateConfig(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"), json.RawMessage(`{"region":"eu-west-1"}`)); err != nil {
-		t.Fatalf("UpdateStackTemplateConfig returned error: %v", err)
-	}
-	edited, err := store.GetStackTemplate(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"))
-	if err != nil {
-		t.Fatalf("GetStackTemplate returned error: %v", err)
-	}
-	if edited.PlanState() != domain.PlanStale {
-		t.Fatalf("PlanState() after config edit = %q, want stale", edited.PlanState())
-	}
-}
-
 func TestRecordTemplateRunStatusRecordsAppliedConfigAlongsideRevision(t *testing.T) {
 	t.Parallel()
 
@@ -2688,7 +2619,7 @@ func TestRecordTemplateRunStatusRecordsAppliedConfigAlongsideRevision(t *testing
 		StackTemplateID:    domain.StackTemplateID("stack_template_123"),
 		TemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
 		SourceTemplateID:   domain.SourceTemplateID("source_template_vpc"),
-		Operation:          domain.OperationApply,
+		Operation:          domain.OperationPlan,
 		SelectedRef:        "main",
 		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
 		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
@@ -2700,7 +2631,7 @@ func TestRecordTemplateRunStatusRecordsAppliedConfigAlongsideRevision(t *testing
 		RunID:           domain.TemplateRunID("run_apply_1"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		Status:          domain.TemplateRunApplyFinished,
 	}); err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
@@ -2728,7 +2659,7 @@ func TestStackTemplateSnapshotConfigsStartAbsentRatherThanEmpty(t *testing.T) {
 
 	var plannedConfig, appliedConfig *string
 	if err := pool.QueryRow(ctx, `
-		select last_planned_config_json, last_applied_config_json
+		select pending_plan_config_json, last_applied_config_json
 		from stack_templates
 		where tenant_id = $1
 			and id = $2
@@ -2795,30 +2726,24 @@ func TestPlannedStateMigrationBackfillsFromExistingRuns(t *testing.T) {
 		t.Fatalf("seed pre-migration rows: %v", err)
 	}
 
-	// Migrate to head rather than to 0015 alone: the assertions are about the
-	// 0015 backfill, but the store reads the current schema.
-	if err := Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
+	// Stop before 0023, which renames these columns and clears them: the
+	// assertions are about what 0015 backfilled.
+	migrateThrough(t, ctx, pool, "0022_run_numbers")
 
-	store := NewStore(pool)
-	stackTemplate, err := store.GetStackTemplate(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"))
-	if err != nil {
-		t.Fatalf("GetStackTemplate returned error: %v", err)
+	var plannedRunID string
+	var plannedAt *time.Time
+	if err := pool.QueryRow(ctx, `
+		select last_planned_run_id, last_planned_at
+		from stack_templates
+		where tenant_id = 'tenant_123' and id = 'stack_template_123'
+	`).Scan(&plannedRunID, &plannedAt); err != nil {
+		t.Fatalf("read backfilled plan: %v", err)
 	}
-	if stackTemplate.LastPlannedRunID != domain.TemplateRunID("run_plan_new") {
-		t.Fatalf("LastPlannedRunID = %q, want run_plan_new", stackTemplate.LastPlannedRunID)
+	if plannedRunID != "run_plan_new" {
+		t.Fatalf("last_planned_run_id = %q, want run_plan_new", plannedRunID)
 	}
-	if stackTemplate.LastPlannedAt.IsZero() {
-		t.Fatal("LastPlannedAt was not backfilled")
-	}
-	// Both snapshots equal desired, so the template lands in steady state
-	// rather than being told to re-plan something it already applied.
-	if stackTemplate.PlanState() != domain.PlanMatches {
-		t.Fatalf("PlanState() = %q, want matches", stackTemplate.PlanState())
-	}
-	if stackTemplate.LiveState() != domain.LiveMatches {
-		t.Fatalf("LiveState() = %q, want matches", stackTemplate.LiveState())
+	if plannedAt == nil {
+		t.Fatal("last_planned_at was not backfilled")
 	}
 }
 
@@ -2903,8 +2828,8 @@ func TestPlannedStateMigrationLeavesUnplannedTemplatesAbsent(t *testing.T) {
 	}
 	// An all-optional template's config is '{}' on both sides, so absence has
 	// to be carried by the run pointers rather than by the config being empty.
-	if stackTemplate.LastPlannedConfigJSON != nil || stackTemplate.LastAppliedConfigJSON != nil {
-		t.Fatalf("snapshot configs = %s / %s, want both absent", stackTemplate.LastPlannedConfigJSON, stackTemplate.LastAppliedConfigJSON)
+	if stackTemplate.PendingPlanConfigJSON != nil || stackTemplate.LastAppliedConfigJSON != nil {
+		t.Fatalf("snapshot configs = %s / %s, want both absent", stackTemplate.PendingPlanConfigJSON, stackTemplate.LastAppliedConfigJSON)
 	}
 	if stackTemplate.PlanState() != domain.PlanNone || stackTemplate.LiveState() != domain.LiveNever {
 		t.Fatalf("states = %q / %q, want none / never", stackTemplate.PlanState(), stackTemplate.LiveState())
@@ -3396,7 +3321,7 @@ func TestRecordsStackTemplateDestroyInterrupted(t *testing.T) {
 		},
 		{
 			name:      "failed apply",
-			operation: domain.OperationApply,
+			operation: domain.OperationPlan,
 			status:    domain.TemplateRunFailed,
 			want:      false,
 		},

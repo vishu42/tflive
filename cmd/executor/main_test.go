@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vishu42/tflive/internal/activities"
 	"github.com/vishu42/tflive/internal/config"
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/runseal"
@@ -62,8 +61,11 @@ func TestRunWiresTemporalWorker(t *testing.T) {
 	if deps.artifactStoreConfig.FilesystemRoot != "/tmp/tflive-executor-artifacts" {
 		t.Fatalf("artifact store root = %q, want /tmp/tflive-executor-artifacts", deps.artifactStoreConfig.FilesystemRoot)
 	}
-	if deps.activityLogStore != deps.logStore {
+	if deps.activityStores.logs != deps.logStore {
 		t.Fatal("activity log store was not wired")
+	}
+	if deps.activityStores.plans != deps.planStore {
+		t.Fatal("activity plan store was not wired")
 	}
 	if !deps.worker.ran {
 		t.Fatal("worker was not run")
@@ -79,13 +81,16 @@ func TestDefaultExecutorDependenciesRegisterOnlyExecutionActivities(t *testing.T
 	worker := &recordingTemporalWorker{}
 	deps := defaultExecutorDependencies()
 
-	deps.registerActivities(worker, t.TempDir(), recordingWorkerLogStore{}, runseal.NewKeyRing())
+	deps.registerActivities(worker, t.TempDir(), artifactStores{logs: recordingWorkerLogStore{}, plans: recordingWorkerPlanStore{}}, runseal.NewKeyRing())
 
 	want := map[string]bool{
 		domain.PrepareWorkspaceActivityName: true,
 		domain.FetchSourceActivityName:      true,
 		domain.RunTerraformActivityName:     true,
 		domain.ReleaseRunKeyActivityName:    true,
+		domain.CleanupWorkspaceActivityName: true,
+		domain.UploadPlanActivityName:       true,
+		domain.DownloadPlanActivityName:     true,
 	}
 	if !reflect.DeepEqual(worker.registeredActivities, want) {
 		t.Fatalf("registered activities = %v, want %v", worker.registeredActivities, want)
@@ -150,9 +155,10 @@ type recordingExecutorDependencies struct {
 	workerOptions       temporalworker.Options
 	artifactStoreConfig config.ArtifactStoreConfig
 	activityRunRoot     string
-	activityLogStore    activities.TemplateRunLogStore
+	activityStores      artifactStores
 	activityKeys        *runseal.KeyRing
 	logStore            recordingWorkerLogStore
+	planStore           recordingWorkerPlanStore
 	dialErr             error
 }
 
@@ -179,17 +185,17 @@ func newRecordingExecutorDependencies(t *testing.T) *recordingExecutorDependenci
 			deps.workerOptions = options
 			return deps.worker
 		},
-		registerActivities: func(worker temporalWorker, runRoot string, logStore activities.TemplateRunLogStore, keys *runseal.KeyRing) {
+		registerActivities: func(worker temporalWorker, runRoot string, stores artifactStores, keys *runseal.KeyRing) {
 			if worker != deps.worker {
 				t.Fatalf("registerActivities worker = %p, want %p", worker, deps.worker)
 			}
 			deps.activityRunRoot = runRoot
-			deps.activityLogStore = logStore
+			deps.activityStores = stores
 			deps.activityKeys = keys
 		},
-		newLogStore: func(cfg config.ArtifactStoreConfig) (activities.TemplateRunLogStore, error) {
+		newArtifactStores: func(cfg config.ArtifactStoreConfig) (artifactStores, error) {
 			deps.artifactStoreConfig = cfg
-			return deps.logStore, nil
+			return artifactStores{logs: deps.logStore, plans: deps.planStore}, nil
 		},
 		interruptCh: func() <-chan interface{} {
 			ch := make(chan interface{})
@@ -204,6 +210,20 @@ type recordingWorkerLogStore struct{}
 
 func (recordingWorkerLogStore) PutTemplateRunLog(context.Context, domain.TenantID, domain.TemplateRunID, string, io.Reader) (domain.TemplateRunLog, error) {
 	return domain.TemplateRunLog{}, nil
+}
+
+type recordingWorkerPlanStore struct{}
+
+func (recordingWorkerPlanStore) PutPlan(context.Context, domain.TenantID, domain.TemplateRunID, []byte) error {
+	return nil
+}
+
+func (recordingWorkerPlanStore) GetPlan(context.Context, domain.TenantID, domain.TemplateRunID) ([]byte, error) {
+	return nil, nil
+}
+
+func (recordingWorkerPlanStore) DeletePlan(context.Context, domain.TenantID, domain.TemplateRunID) error {
+	return nil
 }
 
 type recordingWorkerTemporalClient struct {
