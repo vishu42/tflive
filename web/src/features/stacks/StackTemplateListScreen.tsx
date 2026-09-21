@@ -42,10 +42,10 @@ export default function StackTemplateListScreen() {
   }
 
   return (
-    <section className="stack-template-list-screen panel" data-testid="stack-template-list-screen">
+    <section className="stack-template-list-screen" data-testid="stack-template-list-screen">
       <div className="stack-template-list-content" data-testid="stack-template-list-content">
         <header className="panel-header" data-testid="stack-template-panel-header">
-          <h2>Stack templates</h2>
+          <h2 className="section-title">Stack templates</h2>
           <RequireCapability capability="canOperate">
             <Link className="primary-button" to={`/stacks/${stackId}/templates/new`} data-testid="add-stack-template-link">
               <Plus size={16} />

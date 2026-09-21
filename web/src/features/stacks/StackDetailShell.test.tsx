@@ -159,6 +159,25 @@ describe("StackDetailShell", () => {
     expect(markup).not.toContain("breadcrumb__detail");
   });
 
+  // A template's page has one row of tabs, the template's; the breadcrumb is
+  // the way back to the stack's. Its state sits beside its name.
+  it("swaps the stack tabs for the template's on a template's page", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const markup = await renderStackRoute("/stacks/stack_1/templates/st_1/settings", allAllowed, [{ ...vpc, live_state: "differs" }]);
+
+    expect(markup).toContain('aria-label="Template sections"');
+    expect(markup).not.toContain('aria-label="Stack sections"');
+    expect(markup).toMatch(/breadcrumb__detail.*data-testid="stack-template-state".*changed/);
+    expect(markup).toContain("Plan, then apply");
+  });
+
+  it("keeps the template's state off a run's page, where it would read as the run's", async () => {
+    vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
+    const markup = await renderStackRoute("/stacks/stack_1/templates/st_1/runs/1", allAllowed, [vpc]);
+
+    expect(markup).not.toContain('data-testid="stack-template-state"');
+  });
+
   it("names the template on its own page", async () => {
     vi.stubEnv("VITE_TFLIVE_TENANT_ID", "tenant_123");
     const markup = await renderStackRoute("/stacks/stack_1/templates/st_1/settings", allAllowed, [vpc]);

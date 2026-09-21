@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "../../api/queryKeys";
 import type { TemplateRun } from "../../api/types";
+import { AuthContext } from "../../auth/AuthContext";
 import TemplateRunHistory from "./TemplateRunHistory";
 
 function run(overrides: Partial<TemplateRun> = {}): TemplateRun {
@@ -41,9 +42,18 @@ function seedRuns(queryClient: QueryClient, runs: TemplateRun[]) {
 function renderHistory(queryClient: QueryClient) {
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/stacks/stack_1/templates/stpl_1/runs"]}>
-        <TemplateRunHistory stackId="stack_1" stackTemplateId="stpl_1" />
-      </MemoryRouter>
+      <AuthContext.Provider
+        value={{
+          me: { sub: "user_1", tenantID: "tenant_123", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false, canPublishTemplate: false } },
+          status: "authenticated",
+          login: () => {},
+          logout: () => {}
+        }}
+      >
+        <MemoryRouter initialEntries={["/stacks/stack_1/templates/stpl_1/runs"]}>
+          <TemplateRunHistory stackId="stack_1" stackTemplateId="stpl_1" />
+        </MemoryRouter>
+      </AuthContext.Provider>
     </QueryClientProvider>
   );
 }
@@ -74,12 +84,12 @@ describe("TemplateRunHistory", () => {
 
     renderHistory(queryClient);
 
-    const entry = screen.getByTestId("template-run-history-run_plan_1").textContent ?? "";
-    expect(entry.startsWith("#12")).toBe(true);
+    expect(screen.getByTestId("template-run-history-run_plan_1").textContent).toBe("#12 plan");
+    const entry = screen.getByTestId("template-run-row-run_plan_1").textContent ?? "";
     expect(entry).toContain("plan");
     expect(entry).toContain("completed");
     expect(entry).toContain("vishu");
-    expect(entry).toContain("2026-07-20T00:00:00Z");
+    expect(screen.getByTestId("template-run-row-run_plan_1").querySelector("time")?.getAttribute("datetime")).toBe("2026-07-20T00:00:00Z");
   });
 
   it("shows an empty state rather than a bare heading when no run has started", () => {

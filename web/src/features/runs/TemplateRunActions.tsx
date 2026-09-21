@@ -1,16 +1,13 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleStop, Loader2, Play, ShieldCheck } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Loader2, Play } from "lucide-react";
 import { isTerminalRunStatus } from "../../api/polling";
 import { queryKeys } from "../../api/queryKeys";
-import { useApproveRunMutation, useCancelRunMutation, useStartTemplateRunMutation, useTemplateRunsQuery } from "../../api/queries";
-import type { Operation, StackTemplate, TemplateRun } from "../../api/types";
+import { useStartTemplateRunMutation, useTemplateRunsQuery } from "../../api/queries";
+import type { Operation, StackTemplate } from "../../api/types";
 import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
-import StatusRow from "../../shared/StatusRow";
 import { hasFreshPlan, planStaleReason } from "../stacks/stackWorkflow";
-import RunActionButton, { type RunActionButtonProps } from "./RunActionButton";
 import { isRunInFlightError } from "./runErrors";
 
 interface TemplateRunActionsProps {
@@ -18,15 +15,15 @@ interface TemplateRunActionsProps {
   stackTemplate: StackTemplate;
 }
 
-function latestRunFor(runs: TemplateRun[], operation: Operation): TemplateRun | null {
-  return runs.find((candidate) => candidate.operation === operation) ?? null;
-}
-
-// The operations header on a template's Runs tab.
+// The header of a template's Runs panel: its title and the actions that start
+// a run. Actions on a run that already exists (approve, cancel) sit on that
+// run's row in TemplateRunHistory instead, so it is always plain which run
+// they act on. Destroy lives on the Settings tab: see TemplateDestroyPanel.
+//
 // Run state is derived entirely from the server's run history
 // (useTemplateRunsQuery), not from local component state, so it is visible to
 // every user who can view the stack — not just the browser tab that started a
-// run. Destroy deliberately lives elsewhere: see TemplateDestroyPanel.
+// run.
 export default function TemplateRunActions({ stackId, stackTemplate }: TemplateRunActionsProps) {
   const [errorMessage, setErrorMessage] = useState("");
   const queryClient = useQueryClient();
@@ -34,15 +31,10 @@ export default function TemplateRunActions({ stackId, stackTemplate }: TemplateR
   const runsQuery = useTemplateRunsQuery(tenantID, stackTemplate.id);
   const runs = runsQuery.data ?? [];
   const runsReady = runsQuery.status === "success";
-  const planRun = latestRunFor(runs, "plan");
-  const applyRun = latestRunFor(runs, "apply");
   const latestRun = runsReady ? runs[0] ?? null : null;
   const activeRun = runsReady ? runs.find((candidate) => !isTerminalRunStatus(candidate.status)) ?? null : null;
-  const approvalRun = runsReady ? runs.find((candidate) => candidate.status === "waiting_approval") ?? null : null;
 
   const startRunMutation = useStartTemplateRunMutation(tenantID);
-  const approveRunMutation = useApproveRunMutation(tenantID);
-  const cancelRunMutation = useCancelRunMutation(tenantID);
 
   const canPlan = runsReady && !activeRun;
   const canApply = runsReady && !activeRun && hasFreshPlan(stackTemplate);
@@ -50,12 +42,11 @@ export default function TemplateRunActions({ stackId, stackTemplate }: TemplateR
 
   // plan_state and live_state live on the stack template, but the thing that
   // changes them is a run finishing — and only the runs query polls. Without
-  // this the header would keep rendering the state the template had when the
-  // screen loaded: Apply disabled after a plan that has since completed.
+  // this the page would keep rendering the state the template had when it
+  // loaded: Apply disabled after a plan that has since completed.
   //
-  // This effect owns the invalidation for the whole template screen: the
-  // history and danger-zone sections read the same two queries, and this
-  // component is always rendered alongside them.
+  // This effect owns the invalidation for the whole template page: the other
+  // tabs read the same two queries, and this header is on the default tab.
   const settledRun = latestRun && isTerminalRunStatus(latestRun.status) ? `${latestRun.id}:${latestRun.status}` : "";
   useEffect(() => {
     if (settledRun === "") {
@@ -63,13 +54,11 @@ export default function TemplateRunActions({ stackId, stackTemplate }: TemplateR
     }
     void queryClient.invalidateQueries({ queryKey: queryKeys.stack(tenantID, stackId) });
   }, [settledRun, stackId, queryClient]);
-  const canApprove = Boolean(approvalRun);
-  const canCancel = Boolean(activeRun);
 
-  async function runAction(action: () => Promise<void>) {
+  async function start(operation: Operation) {
     setErrorMessage("");
     try {
-      await action();
+      await startRunMutation.mutateAsync({ stackTemplateID: stackTemplate.id, body: { operation } });
       await queryClient.invalidateQueries({ queryKey: queryKeys.templateRuns(tenantID, stackTemplate.id) });
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Request failed");
@@ -79,136 +68,73 @@ export default function TemplateRunActions({ stackId, stackTemplate }: TemplateR
     }
   }
 
-  async function handlePlan() {
-    await runAction(async () => {
-      await startRunMutation.mutateAsync({ stackTemplateID: stackTemplate.id, body: { operation: "plan" } });
-    });
-  }
-
-  async function handleApply() {
-    await runAction(async () => {
-      await startRunMutation.mutateAsync({ stackTemplateID: stackTemplate.id, body: { operation: "apply" } });
-    });
-  }
-
-  async function handleApprove() {
-    if (!approvalRun) {
-      return;
-    }
-    await runAction(async () => {
-      await approveRunMutation.mutateAsync(approvalRun.id);
-    });
-  }
-
-  async function handleCancel() {
-    if (!activeRun) {
-      return;
-    }
-    await runAction(async () => {
-      await cancelRunMutation.mutateAsync({ runID: activeRun.id, body: { reason: "canceled from template screen" } });
-    });
-  }
-
+  const busyOperation = startRunMutation.isPending ? startRunMutation.variables?.body.operation : undefined;
   const controlsProps = {
     canPlan,
-    onPlan: handlePlan,
-    planBusy: startRunMutation.isPending && startRunMutation.variables?.body.operation === "plan",
     canApply,
-    onApply: handleApply,
-    applyBusy: startRunMutation.isPending && startRunMutation.variables?.body.operation === "apply",
-    canCancel,
-    onCancel: handleCancel,
-    cancelBusy: cancelRunMutation.isPending
+    busyOperation,
+    onStart: (operation: Operation) => void start(operation)
   };
 
   return (
-    <section className="panel template-run-actions" data-testid="template-run-actions">
-      <h2>Runs</h2>
-      {errorMessage && <p className="error-text">{errorMessage}</p>}
-      <div className="template-run-states">
-        <div>
-          <StatusRow label="Plan" value={planRun?.status ?? "not started"} />
-          {planRun && (
-            <Link to={`/stacks/${stackId}/templates/${stackTemplate.id}/runs/${planRun.run_number}`} data-testid="template-run-plan-link">
-              View plan run
-            </Link>
-          )}
-        </div>
-        <div>
-          <StatusRow label="Apply" value={applyRun?.status ?? "not started"} />
-          {applyRun && (
-            <Link to={`/stacks/${stackId}/templates/${stackTemplate.id}/runs/${applyRun.run_number}`} data-testid="template-run-apply-link">
-              View apply run
-            </Link>
-          )}
-        </div>
-      </div>
-      {staleReason && (
-        <p className="hint-text" data-testid="template-run-plan-stale">
-          {staleReason}
-        </p>
-      )}
-      {/* Operate and approve are separate capabilities, so they are separate
-          gates — the wrapper only keeps their buttons on one line. */}
-      <div className="template-run-controls">
+    <div className="template-run-actions" data-testid="template-run-actions">
+      <header className="panel-header">
+        <h2 className="section-title">Runs</h2>
         <RequireCapability
           capability="canOperate"
           stackId={stackId}
-          fallback={<RunControls {...controlsProps} disabledReason="Plan, apply, and cancel require operator access" />}
+          fallback={<RunControls {...controlsProps} disabledReason="Starting a run requires operator access" />}
         >
           <RunControls {...controlsProps} />
         </RequireCapability>
-        <RequireCapability
-          capability="canApprove"
-          stackId={stackId}
-          fallback={<ApproveButton enabled={false} onClick={handleApprove} busy={approveRunMutation.isPending} disabledReason="Approving requires approver access" />}
-        >
-          <ApproveButton enabled={canApprove} onClick={handleApprove} busy={approveRunMutation.isPending} />
-        </RequireCapability>
-      </div>
-    </section>
-  );
-}
-
-interface RunControlsProps {
-  canPlan: boolean;
-  onPlan: () => void;
-  planBusy: boolean;
-  canApply: boolean;
-  onApply: () => void;
-  applyBusy: boolean;
-  canCancel: boolean;
-  onCancel: () => void;
-  cancelBusy: boolean;
-  disabledReason?: string;
-}
-
-function RunControls({ canPlan, onPlan, planBusy, canApply, onApply, applyBusy, canCancel, onCancel, cancelBusy, disabledReason }: RunControlsProps) {
-  const locked = Boolean(disabledReason);
-  return (
-    <div className="button-row">
-      <button className="primary-button" disabled={locked || !canPlan || planBusy} onClick={onPlan} type="button">
-        {planBusy ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
-        Plan
-      </button>
-      <button className="primary-button" disabled={locked || !canApply || applyBusy} onClick={onApply} type="button">
-        {applyBusy ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
-        Apply
-      </button>
-      <button className="secondary-button" disabled={locked || !canCancel || cancelBusy} onClick={onCancel} type="button">
-        {cancelBusy ? <Loader2 size={16} className="spin" /> : <CircleStop size={16} />}
-        Cancel
-      </button>
-      {disabledReason && (
-        <p className="muted" data-testid="template-run-actions-disabled-reason">
-          {disabledReason}
+      </header>
+      {errorMessage && <p className="error-text">{errorMessage}</p>}
+      {staleReason && (
+        <p className="hint-text" data-testid="template-run-plan-stale">
+          {staleReason}
         </p>
       )}
     </div>
   );
 }
 
-// This screen's approve action, bound to its own reason test id.
-function ApproveButton(props: Omit<RunActionButtonProps, "label" | "icon" | "reasonTestID">) {
-  return <RunActionButton {...props} label="Approve" icon={<ShieldCheck size={16} />} reasonTestID="template-run-approve-disabled-reason" />;
+interface RunControlsProps {
+  canPlan: boolean;
+  canApply: boolean;
+  busyOperation?: Operation;
+  onStart: (operation: Operation) => void;
+  disabledReason?: string;
+}
+
+// Plan is the primary action; Apply is secondary to it because it only ever
+// follows a plan.
+function RunControls({ canPlan, canApply, busyOperation, onStart, disabledReason }: RunControlsProps) {
+  const locked = Boolean(disabledReason);
+  return (
+    <div className="template-run-controls">
+      {disabledReason && (
+        <p className="muted" data-testid="template-run-actions-disabled-reason">
+          {disabledReason}
+        </p>
+      )}
+      <button
+        className="secondary-button"
+        disabled={locked || !canApply || busyOperation === "apply"}
+        onClick={() => onStart("apply")}
+        type="button"
+      >
+        {busyOperation === "apply" ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
+        Apply
+      </button>
+      <button
+        className="primary-button"
+        disabled={locked || !canPlan || busyOperation === "plan"}
+        onClick={() => onStart("plan")}
+        type="button"
+      >
+        {busyOperation === "plan" ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
+        Plan
+      </button>
+    </div>
+  );
 }

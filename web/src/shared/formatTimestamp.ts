@@ -19,3 +19,22 @@ export function formatTimestamp(isoTimestamp: string): string {
   }
   return FORMATTER.format(parsed);
 }
+
+const DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23"
+});
+
+// Day, month and time without the year, for events that are usually recent,
+// such as runs: "21 Sep, 05:21". In the viewer's time zone; render it inside a
+// <time dateTime> so the exact instant is still there to read.
+export function formatDateTime(isoTimestamp: string): string {
+  const parsed = new Date(isoTimestamp);
+  if (Number.isNaN(parsed.getTime())) {
+    return isoTimestamp;
+  }
+  return DATE_TIME_FORMATTER.format(parsed);
+}

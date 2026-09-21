@@ -799,32 +799,36 @@
   font-weight: 400;
 }
 
+/* The stack's installed templates: one bordered list with a rule between
+   rows, like a template's runs. Each row is a link to that template's page. */
 .stack-template-items {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
   display: grid;
-  gap: var(--space-2);
+  /* Clips the hover fill of the first and last rows to the rounded corners. */
+  overflow: hidden;
 }
 
 .stack-template-items a {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  width: 100%;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-3) var(--space-4);
+  /* A control-height button with 8px either side, whether or not the row
+     has one, so rows keep one height. */
+  min-height: calc(var(--control-height) + var(--space-4));
+  padding: 0 var(--space-4);
   color: var(--color-fg);
-  background: var(--color-card);
-  text-align: left;
   text-decoration: none;
-  cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.stack-template-items a + a {
+  border-top: 1px solid var(--color-border);
 }
 
 .stack-template-items a:hover {
+  background: var(--color-muted);
   text-decoration: none;
-  transform: translateY(-1px);
-  border-color: var(--color-accent-border);
-  box-shadow: var(--shadow-md);
 }
 
 .stack-template-items span,
@@ -1048,28 +1052,25 @@
   margin: 0;
 }
 
-/* ---- Runs on a template's Runs tab, and its danger zone on Settings ---- */
-.template-run-states {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: var(--space-3) var(--space-6);
-  margin-bottom: var(--space-5);
-}
-
-/* .status-row draws its own top rule to separate it from the row above. As
-   the first element of a column there is nothing above it, so the rule reads
-   as a stray divider under the heading. */
-.template-run-states > div > .status-row:first-child {
-  border-top: none;
-  margin-top: 0;
-  padding-top: 0;
-}
-
+/* ---- A template's Runs tab, and its danger zone on Settings ---- */
+/* Plan and Apply sit at the right end of the panel's header, with a reason
+   (when there is one) to their left. */
 .template-run-controls {
-  align-items: flex-start;
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+.template-run-controls p {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.template-run-actions {
+  display: grid;
+  gap: var(--space-3);
 }
 
 /* .button-row's trailing margin separates it from content below it outside a
@@ -1079,23 +1080,146 @@
   margin-bottom: 0;
 }
 
-.template-run-history ul {
+/* A template's runs: one bordered list with a rule between rows, the way a
+   deployments list reads. Columns are state, number and operation (the link),
+   who and when, then any actions the run still takes. The list owns the
+   columns and each row is a subgrid of them, so every column lines up down the
+   list whether or not a row has actions. */
+.run-list {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
   display: grid;
-  gap: var(--space-2);
+  grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.template-run-history li {
-  border-top: 1px solid var(--color-border);
+.run-list__row {
+  align-items: center;
+  column-gap: var(--space-4);
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  /* A control-height button with 8px either side, whether or not the row
+     has one, so rows keep one height. */
+  min-height: calc(var(--control-height) + var(--space-4));
+  padding: 0 var(--space-4);
   font-size: var(--text-sm);
-  padding-top: var(--space-2);
 }
 
-.template-run-history li:first-child {
-  border-top: none;
-  padding-top: 0;
+.run-list__row + .run-list__row {
+  border-top: 1px solid var(--color-border);
+}
+
+.run-list__status {
+  justify-self: start;
+}
+
+.run-list__name {
+  color: var(--color-fg);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.run-list__name:hover {
+  text-decoration: underline;
+}
+
+.run-list__number {
+  font-family: var(--font-mono);
+}
+
+.run-list__meta {
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.run-list__actions {
+  display: flex;
+  gap: var(--space-2);
+  grid-column: 4;
+  justify-content: flex-end;
+}
+
+/* On a phone a row stacks: state and name, then who and when, then actions. */
+@media (max-width: 760px) {
+  .run-list {
+    grid-template-columns: max-content minmax(0, 1fr);
+  }
+
+  .run-list__row {
+    padding: var(--space-3) var(--space-4);
+    row-gap: var(--space-2);
+  }
+
+  .run-list__meta,
+  .run-list__actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  /* Plan and Apply drop under the heading rather than off the screen. */
+  .template-run-actions .panel-header {
+    flex-wrap: wrap;
+  }
+}
+
+/* ---- Run detail ---- */
+/* The breadcrumb names the run; the header gives its state and operation, and
+   the actions it still takes. Facts sit in one row of label/value pairs. */
+.run-detail-screen {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.run-detail-header {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  justify-content: space-between;
+}
+
+.run-detail-title {
+  align-items: center;
+  display: flex;
+  gap: var(--space-3);
+}
+
+.run-detail-operation {
+  font-size: var(--text-xl);
+  letter-spacing: var(--tracking-tight);
+}
+
+.run-detail-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.run-detail-facts {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  margin: 0;
+  padding: var(--space-4);
+}
+
+.run-detail-facts dt {
+  color: var(--color-muted-fg);
+  font-size: var(--text-xs);
+  margin-bottom: var(--space-1);
+}
+
+.run-detail-facts dd {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .danger-zone {

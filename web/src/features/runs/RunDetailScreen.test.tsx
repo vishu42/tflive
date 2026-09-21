@@ -131,7 +131,8 @@ describe("RunDetailScreen", () => {
 
     renderScreen(queryClient, undefined, "1");
 
-    expect(screen.getByRole("heading", { name: "Run #1" })).toBeTruthy();
+    // The breadcrumb names the run; the screen shows the run it resolved.
+    expect(screen.getByTestId("run-detail-status").textContent).toContain("failed");
     expect(screen.getByText("the older one")).toBeTruthy();
   });
 
@@ -235,8 +236,8 @@ describe("RunDetailScreen", () => {
     renderScreen(queryClient);
 
     expect(screen.getByTestId("run-detail-screen")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Run #4" })).toBeTruthy();
-    expect(screen.getByText("plan")).toBeTruthy();
+    expect(screen.getByTestId("run-detail-status").textContent).toContain("completed");
+    expect(screen.getByText("main @ abcdef1")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("plan log body")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "init" }));
@@ -255,7 +256,8 @@ describe("RunDetailScreen", () => {
     renderScreen(queryClient);
 
     expect(screen.getByText("template run activity failed: log upload failed")).toBeTruthy();
-    expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(true);
+    // A finished run takes no actions, so none are offered.
+    expect(screen.queryByRole("button", { name: /Cancel/ })).toBeNull();
   });
 
   it("enables Approve only for a waiting_approval apply run, gated by canApprove", async () => {
@@ -269,7 +271,7 @@ describe("RunDetailScreen", () => {
     expect(isDisabled(screen.getByRole("button", { name: /Approve/ }))).toBe(false);
   });
 
-  it("disables Approve with a reason when canApprove is denied", async () => {
+  it("hides Approve when canApprove is denied", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, { ...allAllowed, canApprove: false });
     queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ operation: "apply", status: "waiting_approval" }));
@@ -277,8 +279,7 @@ describe("RunDetailScreen", () => {
 
     renderScreen(queryClient);
 
-    expect(isDisabled(screen.getByRole("button", { name: /Approve/ }))).toBe(true);
-    expect(screen.getByTestId("run-detail-approve-disabled-reason")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Approve/ })).toBeNull();
   });
 
   it("enables Cancel for a non-terminal run and calls the cancellation endpoint, gated by canOperate", async () => {
@@ -309,7 +310,7 @@ describe("RunDetailScreen", () => {
     );
   });
 
-  it("disables Cancel with a reason when canOperate is denied", async () => {
+  it("hides Cancel when canOperate is denied", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, { ...allAllowed, canOperate: false });
     queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "plan_finished" }));
@@ -317,7 +318,6 @@ describe("RunDetailScreen", () => {
 
     renderScreen(queryClient);
 
-    expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(true);
-    expect(screen.getByTestId("run-detail-cancel-disabled-reason")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Cancel/ })).toBeNull();
   });
 });

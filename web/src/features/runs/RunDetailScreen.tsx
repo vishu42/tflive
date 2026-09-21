@@ -12,9 +12,9 @@ import {
 } from "../../api/queries";
 import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
-import StatusRow from "../../shared/StatusRow";
+import { formatDateTime } from "../../shared/formatTimestamp";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
-import RunActionButton, { type RunActionButtonProps } from "./RunActionButton";
+import { statusGlyph, statusTone } from "../../shared/statusTone";
 import RunLogsPanel from "./RunLogsPanel";
 
 // /stacks/:stackId/templates/:stackTemplateId/runs/:runNumber — plan/apply
@@ -114,45 +114,82 @@ export default function RunDetailScreen() {
   }
 
   return (
-    <section className="run-detail-screen workflow-grid" data-testid="run-detail-screen">
-      <section className="panel">
-        <h2>{run ? `Run #${run.run_number}` : "Run"}</h2>
-        {errorMessage && <div className="alert">{errorMessage}</div>}
-        <div className="button-row">
-          <RequireCapability
-            capability="canApprove"
-            stackId={stackId}
-            fallback={<ApproveButton enabled={false} onClick={handleApprove} busy={approveRunMutation.isPending} disabledReason="Approving requires approver access" />}
-          >
-            <ApproveButton enabled={canApprove} onClick={handleApprove} busy={approveRunMutation.isPending} />
-          </RequireCapability>
-          <RequireCapability
-            capability="canOperate"
-            stackId={stackId}
-            fallback={<CancelButton enabled={false} onClick={handleCancel} busy={cancelRunMutation.isPending} disabledReason="Canceling requires operator access" />}
-          >
-            <CancelButton enabled={canCancel} onClick={handleCancel} busy={cancelRunMutation.isPending} />
-          </RequireCapability>
-        </div>
-        <StatusRow label="Operation" value={run?.operation ?? ""} />
-        <StatusRow label="Status" value={run?.status ?? ""} />
-        <StatusRow label="Started" value={run?.started_at ?? ""} />
-        <StatusRow label="Completed" value={run?.completed_at ?? "not completed"} />
-        {run?.error_summary && <p className="error-text">{run.error_summary}</p>}
-      </section>
+    <section className="run-detail-screen" data-testid="run-detail-screen">
+      {run && (
+        <>
+          <header className="run-detail-header">
+            <span className="run-detail-title">
+              <span className={`status-tone status-tone--${statusTone(run.status)}`} data-testid="run-detail-status">
+                <span className="status-tone__glyph" aria-hidden="true">
+                  {statusGlyph(statusTone(run.status))}
+                </span>
+                {run.status}
+              </span>
+              <span className="run-detail-operation">{run.operation}</span>
+            </span>
+            {(canApprove || canCancel) && (
+              <span className="run-detail-actions">
+                {canCancel && (
+                  <RequireCapability capability="canOperate" stackId={stackId}>
+                    <button className="secondary-button" type="button" disabled={cancelRunMutation.isPending} onClick={handleCancel}>
+                      {cancelRunMutation.isPending ? <Loader2 size={16} className="spin" /> : <CircleStop size={16} />}
+                      Cancel
+                    </button>
+                  </RequireCapability>
+                )}
+                {canApprove && (
+                  <RequireCapability capability="canApprove" stackId={stackId}>
+                    <button className="primary-button" type="button" disabled={approveRunMutation.isPending} onClick={handleApprove}>
+                      {approveRunMutation.isPending ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
+                      Approve
+                    </button>
+                  </RequireCapability>
+                )}
+              </span>
+            )}
+          </header>
+          {errorMessage && <div className="alert">{errorMessage}</div>}
+          <dl className="run-detail-facts">
+            <div>
+              <dt>Started</dt>
+              <dd>
+                <time dateTime={run.started_at} title={run.started_at}>
+                  {formatDateTime(run.started_at)}
+                </time>
+              </dd>
+            </div>
+            <div>
+              <dt>Completed</dt>
+              <dd>
+                {hasCompleted(run.completed_at) ? (
+                  <time dateTime={run.completed_at} title={run.completed_at}>
+                    {formatDateTime(run.completed_at ?? "")}
+                  </time>
+                ) : (
+                  "—"
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>Started by</dt>
+              <dd>{run.trigger_actor}</dd>
+            </div>
+            <div>
+              <dt>Source</dt>
+              <dd>
+                {run.selected_ref} @ {run.resolved_commit_sha.slice(0, 7)}
+              </dd>
+            </div>
+          </dl>
+          {run.error_summary && <p className="error-text">{run.error_summary}</p>}
+        </>
+      )}
       <RunLogsPanel logs={logs} selectedPhase={selectedPhase} onSelectPhase={setChosenPhase} logBody={logBody} />
     </section>
   );
 }
 
-// This screen's two actions, bound to its own reason test ids. Everything else
-// about them is RunActionButton's.
-type ScreenAction = Omit<RunActionButtonProps, "label" | "icon" | "reasonTestID">;
-
-function ApproveButton(props: ScreenAction) {
-  return <RunActionButton {...props} label="Approve" icon={<ShieldCheck size={16} />} reasonTestID="run-detail-approve-disabled-reason" />;
-}
-
-function CancelButton(props: ScreenAction) {
-  return <RunActionButton {...props} label="Cancel" icon={<CircleStop size={16} />} reasonTestID="run-detail-cancel-disabled-reason" />;
+// completed_at always arrives: an unfinished run reads as the zero time.
+function hasCompleted(completedAt: string | undefined): boolean {
+  return Boolean(completedAt) && !completedAt!.startsWith("0001-");
 }

@@ -283,21 +283,6 @@ describe("StackTemplateDetailShell", () => {
     expect(screen.getByRole("link", { name: "Runs" }).className).toContain("active");
   });
 
-  it("names and explains the template's state above the tabs", () => {
-    const queryClient = testQueryClient();
-    seedDefaultData(queryClient);
-    queryClient.setQueryData(
-      queryKeys.stack("tenant_123", "stack_1"),
-      stackView(allAllowed, [stackTemplate({ id: "st_1", live_state: "differs" })])
-    );
-
-    renderAt(queryClient, "/stacks/stack_1/templates/st_1/runs");
-
-    const panel = screen.getByTestId("stack-template-state");
-    expect(panel.textContent).toContain("changed");
-    expect(panel.textContent).toContain("Plan, then apply");
-  });
-
   it("says so when the template in the URL is not installed on the stack", () => {
     const queryClient = testQueryClient();
     seedDefaultData(queryClient);
@@ -328,7 +313,7 @@ describe("StackTemplateDetailShell", () => {
 
     renderAt(queryClient, "/stacks/stack_1/templates/st_1/runs/3");
 
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Run #3" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("run-detail-status")).toBeTruthy());
     expect(screen.getByRole("link", { name: "Runs" }).className).toContain("active");
   });
 });

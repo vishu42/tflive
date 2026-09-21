@@ -5,8 +5,7 @@ import type { StackTemplate } from "../../api/types";
 import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
-import { statusGlyph } from "../../shared/statusTone";
-import { findSelectedStackTemplate, stackTemplateStatus } from "./stackWorkflow";
+import { findSelectedStackTemplate } from "./stackWorkflow";
 
 export interface StackTemplateOutletContext {
   stackId: string;
@@ -21,8 +20,9 @@ export function useStackTemplateOutlet(): StackTemplateOutletContext {
 }
 
 // Layout route for /stacks/:stackId/templates/:stackTemplateId. Resolves the
-// template from the stack query the stack's route guard has already cached,
-// shows its state, and hands it to the tab routes rendered into <Outlet />.
+// template from the stack query the stack's route guard has already cached and
+// hands it to the tab routes rendered into <Outlet />. Its state sits beside
+// its name in the breadcrumb, which StackDetailShell draws.
 //
 // Runs is the first tab and the index redirects to it: operating the template
 // is what people come here for. Run detail nests under runs/, so the Runs tab
@@ -66,20 +66,10 @@ export default function StackTemplateDetailShell() {
     );
   }
 
-  const status = stackTemplateStatus(stackTemplate);
   const context: StackTemplateOutletContext = { stackId, stackTemplate };
 
   return (
     <section className="stack-template-detail" data-testid="stack-template-detail">
-      <section className="stack-template-state" data-testid="stack-template-state">
-        <span className={`status-tone status-tone--${status.tone}`}>
-          <span className="status-tone__glyph" aria-hidden="true">
-            {statusGlyph(status.tone)}
-          </span>
-          {status.label}
-        </span>
-        <p className="muted">{status.description}</p>
-      </section>
       <nav className="stack-detail-tabs" aria-label="Template sections">
         <NavLink to="runs">Runs</NavLink>
         <NavLink to="variables">Variables</NavLink>
