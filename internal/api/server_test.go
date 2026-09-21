@@ -3170,16 +3170,18 @@ func TestMeReturnsIdentityWithGlobalCapabilities(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		tier       string
-		wantAdmin  bool
-		wantCreate bool
+		name        string
+		tier        string
+		wantAdmin   bool
+		wantCreate  bool
+		wantPublish bool
 	}{
-		// An administrator holds can_create_stack too: the model derives it
-		// from can_edit, which can_administer satisfies.
-		{name: "platform admin", tier: "admin", wantAdmin: true, wantCreate: true},
-		{name: "editor", tier: "editor", wantAdmin: false, wantCreate: true},
-		{name: "no tier", tier: "", wantAdmin: false, wantCreate: false},
+		// An administrator holds can_create_stack and can_publish_template
+		// too: the model derives both from can_edit, which can_administer
+		// satisfies.
+		{name: "platform admin", tier: "admin", wantAdmin: true, wantCreate: true, wantPublish: true},
+		{name: "editor", tier: "editor", wantAdmin: false, wantCreate: true, wantPublish: true},
+		{name: "no tier", tier: "", wantAdmin: false, wantCreate: false, wantPublish: false},
 	}
 
 	for _, test := range tests {
@@ -3210,8 +3212,9 @@ func TestMeReturnsIdentityWithGlobalCapabilities(t *testing.T) {
 				DisplayName        string `json:"displayName"`
 				Email              string `json:"email"`
 				GlobalCapabilities struct {
-					IsPlatformAdmin bool `json:"isPlatformAdmin"`
-					CanCreateStack  bool `json:"canCreateStack"`
+					IsPlatformAdmin    bool `json:"isPlatformAdmin"`
+					CanCreateStack     bool `json:"canCreateStack"`
+					CanPublishTemplate bool `json:"canPublishTemplate"`
 				} `json:"globalCapabilities"`
 				TenantID string `json:"tenantID"`
 			}
@@ -3233,6 +3236,11 @@ func TestMeReturnsIdentityWithGlobalCapabilities(t *testing.T) {
 			}
 			if body.GlobalCapabilities.CanCreateStack != test.wantCreate {
 				t.Errorf("canCreateStack = %t, want %t", body.GlobalCapabilities.CanCreateStack, test.wantCreate)
+			}
+			// The Sync button on the template detail screen is gated on this,
+			// and RegisterTemplate is the route it would call.
+			if body.GlobalCapabilities.CanPublishTemplate != test.wantPublish {
+				t.Errorf("canPublishTemplate = %t, want %t", body.GlobalCapabilities.CanPublishTemplate, test.wantPublish)
 			}
 			if body.TenantID != string(configuredTenantID) {
 				t.Errorf("tenantID = %q, want %q", body.TenantID, string(configuredTenantID))

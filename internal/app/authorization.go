@@ -233,8 +233,9 @@ func (service *Service) operableStackTemplate(
 // field names keep the wire contract the web client already reads; what
 // changed is where the answers come from.
 type PlatformCapabilities struct {
-	IsPlatformAdmin bool
-	CanCreateStack  bool
+	IsPlatformAdmin    bool
+	CanCreateStack     bool
+	CanPublishTemplate bool
 }
 
 // platformCapabilityRelations is the order a platform BatchCheck is built in,
@@ -244,16 +245,18 @@ type PlatformCapabilities struct {
 var platformCapabilityRelations = []authorization.Relation{
 	authorization.RelationCanAdminister,
 	authorization.RelationCanCreateStack,
+	authorization.RelationCanPublishTemplate,
 }
 
 func platformCapabilitiesFrom(results []bool) PlatformCapabilities {
 	return PlatformCapabilities{
-		IsPlatformAdmin: results[0],
-		CanCreateStack:  results[1],
+		IsPlatformAdmin:    results[0],
+		CanCreateStack:     results[1],
+		CanPublishTemplate: results[2],
 	}
 }
 
-// ResolvePlatformCapabilities answers both global questions in one BatchCheck.
+// ResolvePlatformCapabilities answers every global question in one BatchCheck.
 // An unauthenticated or unconfigured caller is not an error here: /v1/me is
 // reachable before any tuple exists, and a principal that holds nothing is a
 // legitimate answer rather than a failure.

@@ -28,6 +28,10 @@ type MeResponse struct {
 type GlobalCapabilities struct {
 	IsPlatformAdmin bool `json:"isPlatformAdmin"`
 	CanCreateStack  bool `json:"canCreateStack"`
+	// CanPublishTemplate gates registering a template, which is also what the
+	// template detail screen's Sync button posts — so the button is hidden
+	// rather than left to earn a 403.
+	CanPublishTemplate bool `json:"canPublishTemplate"`
 }
 
 // MeFromPrincipal maps the authenticated principal and its resolved platform

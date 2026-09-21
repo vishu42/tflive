@@ -32,7 +32,7 @@ function testQueryClient(): QueryClient {
 
 function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
   return {
-    me: { sub: "user_1", tenantID: "tenant_123", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } },
+    me: { sub: "user_1", tenantID: "tenant_123", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: true, canPublishTemplate: true } },
     status: "authenticated",
     login: () => {},
     logout: () => {},
@@ -169,7 +169,7 @@ describe("StacksListScreen", () => {
     const queryClient = testQueryClient();
     queryClient.setQueryData(queryKeys.stacks("tenant_123"), [stack()]);
 
-    renderScreen(queryClient, authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: false } } }));
+    renderScreen(queryClient, authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: false, canPublishTemplate: false } } }));
 
     expect(screen.getByTestId("stacks-list")).toBeTruthy();
     expect(screen.queryByTestId("create-stack-link")).toBeNull();

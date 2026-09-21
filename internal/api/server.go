@@ -268,8 +268,9 @@ func (server *Server) handleMe(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	writeJSON(response, http.StatusOK, auth.MeFromPrincipal(principal, server.tenantID, auth.GlobalCapabilities{
-		IsPlatformAdmin: capabilities.IsPlatformAdmin,
-		CanCreateStack:  capabilities.CanCreateStack,
+		IsPlatformAdmin:    capabilities.IsPlatformAdmin,
+		CanCreateStack:     capabilities.CanCreateStack,
+		CanPublishTemplate: capabilities.CanPublishTemplate,
 	}))
 }
 

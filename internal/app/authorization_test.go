@@ -34,7 +34,7 @@ func TestGetStackDenialReturnsNotFound(t *testing.T) {
 
 	service := NewService(Service{
 		Authorization: newTestAuthorization(t),
-		Stacks:     &recordingStackRepository{},
+		Stacks:        &recordingStackRepository{},
 	})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
 
@@ -107,7 +107,7 @@ func TestListStacksRejectsNonAdvancingPage(t *testing.T) {
 	}
 	service := NewService(Service{
 		Authorization: newTestAuthorization(t),
-		Stacks:     &pagedStackRepository{stacks: all, repeatPage: true},
+		Stacks:        &pagedStackRepository{stacks: all, repeatPage: true},
 	})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
 
@@ -185,7 +185,7 @@ func TestStartTemplateRunDenialReturnsForbiddenBeforeMutation(t *testing.T) {
 		StackID:  "stack_123",
 	}}
 	service := NewService(Service{
-		Authorization:     newTestAuthorization(t),
+		Authorization:  newTestAuthorization(t),
 		StackTemplates: templates,
 	})
 	ctx := authn.ContextWithPrincipal(context.Background(), authn.Principal{Subject: "user_123"})
@@ -316,11 +316,15 @@ func TestResolvePlatformCapabilitiesMapsEachRelationPositionally(t *testing.T) {
 		role authorization.Relation
 		want PlatformCapabilities
 	}{
-		// viewer reaches neither capability; editor reaches can_create_stack
-		// through can_edit; admin reaches both through can_administer.
+		// viewer reaches no capability; editor reaches can_create_stack and
+		// can_publish_template through can_edit; admin reaches all three
+		// through can_administer.
 		{authorization.RelationViewer, PlatformCapabilities{}},
-		{authorization.RelationEditor, PlatformCapabilities{CanCreateStack: true}},
-		{authorization.RelationAdmin, PlatformCapabilities{IsPlatformAdmin: true, CanCreateStack: true}},
+		{authorization.RelationEditor, PlatformCapabilities{CanCreateStack: true, CanPublishTemplate: true}},
+		{
+			authorization.RelationAdmin,
+			PlatformCapabilities{IsPlatformAdmin: true, CanCreateStack: true, CanPublishTemplate: true},
+		},
 	}
 
 	for _, testCase := range cases {

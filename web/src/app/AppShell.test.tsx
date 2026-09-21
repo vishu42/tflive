@@ -12,7 +12,7 @@ function authValue(): AuthContextValue {
       sub: "user_1",
       tenantID: "tenant_123",
       displayName: "Otto Operator",
-      globalCapabilities: { isPlatformAdmin: false, canCreateStack: true },
+      globalCapabilities: { isPlatformAdmin: false, canCreateStack: true, canPublishTemplate: true },
     },
     status: "authenticated",
     login: () => {},

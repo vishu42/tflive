@@ -15,7 +15,7 @@ function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue 
       sub: "user_1",
       tenantID: "tenant_123",
       displayName: "Test User",
-      globalCapabilities: { isPlatformAdmin: false, canCreateStack: false }
+      globalCapabilities: { isPlatformAdmin: false, canCreateStack: false, canPublishTemplate: false }
     },
     status: "authenticated",
     login: () => {},
@@ -73,7 +73,7 @@ describe("RequireCapability — gate mode (component-level)", () => {
       <RequireCapability capability="canCreateStack">
         <span data-testid="protected">shown</span>
       </RequireCapability>,
-      { auth: authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } } }) }
+      { auth: authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true, canPublishTemplate: true } } }) }
     );
 
     expect(markup).toContain('data-testid="protected"');

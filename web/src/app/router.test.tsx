@@ -9,7 +9,7 @@ vi.mock("../auth/SessionProvider");
 
 function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
   return {
-    me: { sub: "user_1", tenantID: "tenant_123", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false } },
+    me: { sub: "user_1", tenantID: "tenant_123", displayName: "Test User", globalCapabilities: { isPlatformAdmin: false, canCreateStack: false, canPublishTemplate: false } },
     status: "authenticated",
     login: () => {},
     logout: () => {},
@@ -51,7 +51,7 @@ describe("routeConfig", () => {
       const testRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/new"] });
       const markup = renderToStaticMarkup(
         <QueryClientProvider client={new QueryClient()}>
-          <AuthContext.Provider value={authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } } })}>
+          <AuthContext.Provider value={authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true, canPublishTemplate: true } } })}>
             <RouterProvider router={testRouter} />
           </AuthContext.Provider>
         </QueryClientProvider>
@@ -85,7 +85,7 @@ describe("routeConfig", () => {
       const testRouter = createMemoryRouter(routeConfig, { initialEntries: [path] });
       const markup = renderToStaticMarkup(
         <QueryClientProvider client={queryClient}>
-          <AuthContext.Provider value={authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } } })}>
+          <AuthContext.Provider value={authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true, canPublishTemplate: true } } })}>
             <RouterProvider router={testRouter} />
           </AuthContext.Provider>
         </QueryClientProvider>
@@ -99,7 +99,7 @@ describe("routeConfig", () => {
     const runDetailRouter = createMemoryRouter(routeConfig, { initialEntries: ["/stacks/stack_1/runs/run_1"] });
     const runDetailMarkup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
-        <AuthContext.Provider value={authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true } } })}>
+        <AuthContext.Provider value={authValue({ me: { ...authValue().me!, globalCapabilities: { isPlatformAdmin: false, canCreateStack: true, canPublishTemplate: true } } })}>
           <RouterProvider router={runDetailRouter} />
         </AuthContext.Provider>
       </QueryClientProvider>

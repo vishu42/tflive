@@ -11,7 +11,11 @@ type GlobalCapabilityKey = keyof Me["globalCapabilities"];
 type StackCapabilityKey = keyof StackCapabilities;
 export type CapabilityKey = GlobalCapabilityKey | StackCapabilityKey;
 
-const GLOBAL_CAPABILITY_KEYS: readonly GlobalCapabilityKey[] = ["isPlatformAdmin", "canCreateStack"];
+const GLOBAL_CAPABILITY_KEYS: readonly GlobalCapabilityKey[] = [
+  "isPlatformAdmin",
+  "canCreateStack",
+  "canPublishTemplate"
+];
 
 function isGlobalCapability(capability: CapabilityKey): capability is GlobalCapabilityKey {
   return (GLOBAL_CAPABILITY_KEYS as readonly string[]).includes(capability);
