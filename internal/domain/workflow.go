@@ -210,7 +210,11 @@ type RunTerraformActivityInput struct {
 	TerraformPath   string
 	WorkspaceName   string
 	Command         TerraformCommandType
-	ConfigJSON      json.RawMessage
+	// LogCommand names the log the output joins: the apply phase's setup logs
+	// into its apply or destroy log, so the plan phase's init and workspace
+	// logs survive. Empty means Command's own log.
+	LogCommand TerraformCommandType
+	ConfigJSON json.RawMessage
 	// Destroy plans the destruction of everything the template manages. Only
 	// read for TerraformCommandPlan.
 	Destroy bool

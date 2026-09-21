@@ -380,13 +380,19 @@ func recordActivityHeartbeat(ctx context.Context) {
 
 // RunTerraform writes command output to the workspace log file and runs OpenTofu.
 //
-// The log phase is derived from the Terraform command so each phase writes to a
-// predictable file under the workspace logs directory. Stdout and stderr share
+// The log phase is derived from the Terraform command (or LogCommand, when
+// set) so each phase writes to a predictable file under the workspace logs
+// directory. The file is opened for append, so commands sharing a phase leave
+// their output in the order they ran. Stdout and stderr share
 // the same writer for now, preserving command output ordering in a single phase
 // log. The log file is closed after the command completes, and close errors are
 // surfaced only when the command itself succeeded.
 func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
-	phase, err := logsink.PhaseForTerraformCommand(input.Command)
+	logCommand := input.LogCommand
+	if logCommand == "" {
+		logCommand = input.Command
+	}
+	phase, err := logsink.PhaseForTerraformCommand(logCommand)
 	if err != nil {
 		return domain.RunTerraformActivityOutput{}, err
 	}

@@ -1922,7 +1922,9 @@ func TestRecordTemplateRunLogUpsertsTenantScopedMetadata(t *testing.T) {
 	}
 }
 
-func TestListTemplateRunLogsReturnsTenantScopedMetadataOrderedByPhase(t *testing.T) {
+// Logs come back in the order their commands ran, which is not alphabetical:
+// workspace selection runs between init and plan.
+func TestListTemplateRunLogsReturnsTenantScopedMetadataInUploadOrder(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -1969,6 +1971,15 @@ func TestListTemplateRunLogsReturnsTenantScopedMetadataOrderedByPhase(t *testing
 			UploadedAt:  uploadedAt.Add(-time.Minute),
 		},
 		{
+			TenantID:    domain.TenantID("tenant_123"),
+			RunID:       domain.TemplateRunID("run_123"),
+			Phase:       "workspace",
+			ObjectKey:   "tenants/tenant_123/runs/run_123/logs/workspace.log",
+			ContentType: "text/plain; charset=utf-8",
+			SizeBytes:   9,
+			UploadedAt:  uploadedAt.Add(-time.Second),
+		},
+		{
 			TenantID:    domain.TenantID("tenant_456"),
 			RunID:       domain.TemplateRunID("run_456"),
 			Phase:       "plan",
@@ -1988,11 +1999,12 @@ func TestListTemplateRunLogsReturnsTenantScopedMetadataOrderedByPhase(t *testing
 		t.Fatalf("ListTemplateRunLogs returned error: %v", err)
 	}
 
-	if len(logs) != 2 {
-		t.Fatalf("len(logs) = %d, want 2", len(logs))
+	phases := make([]string, 0, len(logs))
+	for _, log := range logs {
+		phases = append(phases, log.Phase)
 	}
-	if logs[0].Phase != "init" || logs[1].Phase != "plan" {
-		t.Fatalf("phases = %q, %q; want init, plan", logs[0].Phase, logs[1].Phase)
+	if want := []string{"init", "workspace", "plan"}; !reflect.DeepEqual(phases, want) {
+		t.Fatalf("phases = %q, want %q", phases, want)
 	}
 }
 

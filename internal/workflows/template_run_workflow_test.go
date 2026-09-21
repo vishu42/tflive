@@ -599,7 +599,8 @@ func TestTemplateRunWorkflowSavesAPlanWithChangesAndEnds(t *testing.T) {
 
 // The apply workflow puts the saved plan back before init, applies it, and
 // deletes it along with the workspace. Setup steps the plan phase already
-// recorded are not recorded again.
+// recorded are not recorded again, and they log into the apply's own log so
+// the plan phase's init and workspace logs are not replaced.
 func TestTemplateApplyWorkflowAppliesTheSavedPlan(t *testing.T) {
 	t.Parallel()
 
@@ -624,6 +625,9 @@ func TestTemplateApplyWorkflowAppliesTheSavedPlan(t *testing.T) {
 			env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
 				Return(func(_ context.Context, activityInput domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
 					events = append(events, "terraform:"+string(activityInput.Command))
+					if activityInput.LogCommand != testCase.command {
+						t.Errorf("%s logs into %q, want %q", activityInput.Command, activityInput.LogCommand, testCase.command)
+					}
 					return domain.RunTerraformActivityOutput{}, nil
 				})
 			env.OnActivity(domain.SealPlanKeyActivityName, mock.Anything, mock.Anything).

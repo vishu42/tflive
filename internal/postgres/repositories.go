@@ -1209,7 +1209,7 @@ func (store *Store) ListTemplateRunLogs(ctx context.Context, tenantID domain.Ten
 		from template_run_logs
 		where tenant_id = $1
 			and run_id = $2
-		order by phase
+		order by uploaded_at, phase
 	`, tenantID, runID)
 	if err != nil {
 		return nil, fmt.Errorf("list template run logs: %w", err)

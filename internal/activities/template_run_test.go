@@ -400,6 +400,41 @@ func TestLocalTerraformRunnerUploadsCommandLogFile(t *testing.T) {
 	}
 }
 
+// The apply phase's setup logs into its apply log: each command appends, and
+// each upload carries everything the phase has logged so far.
+func TestLocalTerraformRunnerAppendsToTheLogCommandsLog(t *testing.T) {
+	t.Parallel()
+
+	workspacePath := t.TempDir()
+	logStore := &recordingTemplateRunLogStore{}
+	for _, command := range []domain.TerraformCommandType{domain.TerraformCommandInit, domain.TerraformCommandApply} {
+		terraformRunner := localTerraformRunner{
+			runner:   gitrunner.NewLocalProcessRunnerWithExecutor(&recordingCommandExecutor{stdout: string(command) + " stdout\n"}),
+			logStore: logStore,
+		}
+		if _, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+			RunID:         domain.TemplateRunID("run_123"),
+			TenantID:      domain.TenantID("tenant_123"),
+			WorkspacePath: workspacePath,
+			WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+			Command:       command,
+			LogCommand:    domain.TerraformCommandApply,
+		}); err != nil {
+			t.Fatalf("RunTerraform(%s) returned error: %v", command, err)
+		}
+		if logStore.phase != "apply" {
+			t.Fatalf("%s uploaded phase %q, want apply", command, logStore.phase)
+		}
+	}
+
+	if logStore.content != "init stdout\napply stdout\n" {
+		t.Fatalf("uploaded content = %q", logStore.content)
+	}
+	if _, err := os.Stat(filepath.Join(workspacePath, "logs", "init.log")); !os.IsNotExist(err) {
+		t.Fatalf("init wrote its own log: %v", err)
+	}
+}
+
 func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
 	t.Parallel()
 

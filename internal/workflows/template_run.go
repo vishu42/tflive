@@ -97,6 +97,10 @@ type templateRunWorkflow struct {
 	// init, select) repeat the plan phase's and are not recorded again: the
 	// timeline reads approved, locked, apply_started, apply_finished.
 	applying bool
+	// applyCommand is the apply phase's command, apply or destroy. Its init and
+	// workspace selection log into that command's log rather than their own,
+	// which the plan phase already wrote and would otherwise be replaced.
+	applyCommand domain.TerraformCommandType
 }
 
 // validateOperation rejects an unsupported operation before any session or
@@ -198,6 +202,7 @@ func (run *templateRunWorkflow) applyPhase() error {
 	if run.input.Operation == domain.OperationDestroy {
 		command = domain.TerraformCommandDestroy
 	}
+	run.applyCommand = command
 	err := run.withSession(applySessionCreationTimeout, true, func() error {
 		restorePlan := func() error {
 			sealedPlanKey, err := run.sealPlanKey(false)
@@ -497,8 +502,10 @@ var terraformCommandStatusTable = map[domain.TerraformCommandType]terraformComma
 // phase already recorded once, so they run without statuses.
 func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType) (domain.RunTerraformActivityOutput, error) {
 	statuses := terraformCommandStatusTable[command]
+	logCommand := command
 	if run.applying && (command == domain.TerraformCommandInit || command == domain.TerraformCommandSelectWorkspace) {
 		statuses = terraformCommandStatuses{}
+		logCommand = run.applyCommand
 	}
 	if statuses.before != "" {
 		if err := run.recordStatus(statuses.before); err != nil {
@@ -529,6 +536,7 @@ func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType
 		TerraformPath:     run.terraformPath,
 		WorkspaceName:     run.input.WorkspaceName,
 		Command:           command,
+		LogCommand:        logCommand,
 		ConfigJSON:        run.input.ConfigJSON,
 		Destroy:           run.input.Operation == domain.OperationDestroy,
 		SealedEnvironment: credentials.SealedEnvironment,
