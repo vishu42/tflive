@@ -160,7 +160,7 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient);
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /Destroy without approval/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Auto Apply/ }));
     fireEvent.click(screen.getByRole("button", { name: /^Destroy$/ }));
     expect(fetchMock).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: /Keep/ })).toBeTruthy();
@@ -181,7 +181,7 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient);
 
-    expect(screen.queryByRole("checkbox", { name: /Destroy without approval/ })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /Auto Apply/ })).toBeNull();
     expect(isDisabled(screen.getByRole("button", { name: /Plan destroy/ }))).toBe(false);
   });
 
@@ -203,7 +203,7 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient);
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /Destroy without approval/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Auto Apply/ }));
     fireEvent.click(screen.getByRole("button", { name: /^Destroy$/ }));
     queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "stpl_1"), [run({ status: "queued" })]);
 

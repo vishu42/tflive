@@ -56,7 +56,7 @@ After this work:
    - There is no lookup-by-number endpoint: run detail finds the id in the template's runs list, which the Runs tab has already loaded.
 8. **Approve sits on the run row and on run detail.** PR 2 already put Cancel and Approve on the run's own row and in the run detail header, shown only when the run can take them and the viewer may. PR 3 renames Approve to "Apply", or "Destroy N" on a destroy run, and Cancel to "Discard" on a waiting plan, and adds a Changes column like "+3 ~1 -0" from `tofu show -json`.
 9. **Destroy lives in the template's Settings tab**, in a danger zone next to upgrade, away from the Plan button. Clicking it runs a destroy **plan**, so the irreversible step becomes approving that plan:
-   - The Settings button reads "Plan destroy" and is one click: it destroys nothing. It then opens the Runs tab. An auto-approve checkbox ("Destroy without approval") is shown only to users with `canApprove`; ticking it makes the click irreversible, so then it takes a second click.
+   - The Settings button reads "Plan destroy" and is one click: it destroys nothing. It then opens the Runs tab. An "Auto Apply" checkbox is shown only to users with `canApprove`; ticking it makes the click irreversible, so then it takes a second click.
    - Approving a destroy run uses a red "Destroy N" button (the full "Destroy N resources" is its title) with a two-step confirm, on the row and on run detail. Approving is the irreversible action, so the confirm moved there.
 
 10. **State matrix: P becomes "the waiting plan", and the D~P gate moves to approval.**

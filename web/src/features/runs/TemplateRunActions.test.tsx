@@ -246,7 +246,7 @@ describe("TemplateRunActions", () => {
 
     renderActions(queryClient);
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /Apply without approval/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Auto Apply/ }));
     fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
 
     await waitFor(() =>

@@ -91,7 +91,7 @@ export default function TemplateRunActions({ stackId, stackTemplate }: TemplateR
           <RequireCapability capability="canApprove" stackId={stackId}>
             <label className="checkbox-label" data-testid="template-run-auto-approve">
               <input type="checkbox" checked={autoApprove} onChange={(event) => setAutoApprove(event.target.checked)} />
-              Apply without approval
+              Auto Apply
             </label>
           </RequireCapability>
           <RequireCapability capability="canOperate" stackId={stackId} fallback={planButton("Starting a run requires operator access")}>

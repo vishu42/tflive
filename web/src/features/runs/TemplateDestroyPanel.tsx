@@ -100,7 +100,7 @@ export default function TemplateDestroyPanel({ stackId, stackTemplate }: Templat
               setConfirmDestroy(false);
             }}
           />
-          Destroy without approval
+          Auto Apply
         </label>
       </RequireCapability>
       <RequireCapability
