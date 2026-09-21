@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "../../api/queryKeys";
@@ -78,18 +78,33 @@ describe("TemplateRunHistory", () => {
     expect(screen.getByTestId("template-run-history-run_plan_1").getAttribute("href")).toBe("/stacks/stack_1/templates/stpl_1/runs/1");
   });
 
-  it("describes each run by number, operation, status, actor, and start time", () => {
+  it("lays each run out in run, type, status, actor, and time columns", () => {
     const queryClient = testQueryClient();
     seedRuns(queryClient, [run({ id: "run_plan_1", run_number: 12, operation: "plan", status: "completed", trigger_actor: "vishu" })]);
 
     renderHistory(queryClient);
 
-    expect(screen.getByTestId("template-run-history-run_plan_1").textContent).toBe("#12 plan");
-    const entry = screen.getByTestId("template-run-row-run_plan_1").textContent ?? "";
-    expect(entry).toContain("plan");
-    expect(entry).toContain("completed");
-    expect(entry).toContain("vishu");
-    expect(screen.getByTestId("template-run-row-run_plan_1").querySelector("time")?.getAttribute("datetime")).toBe("2026-07-20T00:00:00Z");
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["Run", "Type", "Status", "Actor", "Time"]);
+    const cells = within(screen.getByTestId("template-run-row-run_plan_1")).getAllByRole("cell");
+    expect(cells).toHaveLength(5);
+    expect(cells[0].textContent).toBe("#12");
+    expect(cells[1].textContent).toBe("plan");
+    expect(cells[2].textContent).toContain("completed");
+    expect(cells[3].textContent).toBe("vishu");
+    expect(cells[4].querySelector("time")?.getAttribute("datetime")).toBe("2026-07-20T00:00:00Z");
+  });
+
+  it("adds an actions column only while some run can still be acted on", () => {
+    const queryClient = testQueryClient();
+    seedRuns(queryClient, [
+      run({ id: "run_apply_1", run_number: 2, operation: "apply", status: "queued" }),
+      run({ id: "run_plan_1", run_number: 1, operation: "plan", status: "completed" })
+    ]);
+
+    renderHistory(queryClient);
+
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["Run", "Type", "Status", "Actor", "Time", "Actions"]);
+    expect(within(screen.getByTestId("template-run-row-run_plan_1")).getAllByRole("cell")).toHaveLength(6);
   });
 
   it("shows an empty state rather than a bare heading when no run has started", () => {

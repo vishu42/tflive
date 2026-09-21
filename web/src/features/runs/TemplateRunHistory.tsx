@@ -16,11 +16,12 @@ interface TemplateRunHistoryProps {
   stackTemplateId: string;
 }
 
-// Every run recorded for a template, newest first, one row each: its state,
-// its number and operation (the link to its detail), who started it and when.
-// A run that is still going carries its own actions — Approve while it waits
-// for approval, Cancel until it finishes — so what they act on is the row they
-// sit on. Actions a viewer may not take are left out rather than disabled.
+// Every run recorded for a template, newest first, as a table: its number
+// (the link to its detail), operation, state, who started it and when. A run
+// that is still going carries its own actions — Approve while it waits for
+// approval, Cancel until it finishes — in a trailing column that only appears
+// while some run has one. Actions a viewer may not take are left out rather
+// than disabled.
 export default function TemplateRunHistory({ stackId, stackTemplateId }: TemplateRunHistoryProps) {
   const [errorMessage, setErrorMessage] = useState("");
   const queryClient = useQueryClient();
@@ -40,6 +41,7 @@ export default function TemplateRunHistory({ stackId, stackTemplateId }: Templat
     await queryClient.invalidateQueries({ queryKey: queryKeys.templateRuns(tenantID, stackTemplateId) });
   }
 
+  const hasActions = runs.some((run) => !isTerminalRunStatus(run.status));
   const rowActions = {
     stackId,
     approvingRunID: approveRunMutation.isPending ? approveRunMutation.variables : undefined,
@@ -57,11 +59,43 @@ export default function TemplateRunHistory({ stackId, stackTemplateId }: Templat
           No runs yet. Plan to see what this template would change.
         </p>
       ) : (
-        <ul className="run-list">
-          {runs.map((run) => (
-            <RunRow key={run.id} run={run} to={`/stacks/${stackId}/templates/${stackTemplateId}/runs/${run.run_number}`} {...rowActions} />
-          ))}
-        </ul>
+        <div className="data-table-frame">
+          <table className={hasActions ? "data-table run-table run-table--actions" : "data-table run-table"}>
+            <colgroup>
+              <col className="data-table__col--xs" />
+              <col className="data-table__col--sm" />
+              <col className="data-table__col--lg" />
+              <col className="data-table__col--md" />
+              <col />
+              {hasActions && <col className="data-table__col--actions" />}
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">Run</th>
+                <th scope="col">Type</th>
+                <th scope="col">Status</th>
+                <th scope="col">Actor</th>
+                <th scope="col">Time</th>
+                {hasActions && (
+                  <th scope="col">
+                    <span className="visually-hidden">Actions</span>
+                  </th>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map((run) => (
+                <RunRow
+                  key={run.id}
+                  run={run}
+                  to={`/stacks/${stackId}/templates/${stackTemplateId}/runs/${run.run_number}`}
+                  hasActions={hasActions}
+                  {...rowActions}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
@@ -70,6 +104,7 @@ export default function TemplateRunHistory({ stackId, stackTemplateId }: Templat
 interface RunRowProps {
   run: TemplateRun;
   to: string;
+  hasActions: boolean;
   stackId: string;
   approvingRunID?: string;
   cancelingRunID?: string;
@@ -77,30 +112,37 @@ interface RunRowProps {
   onCancel: (run: TemplateRun) => void;
 }
 
-function RunRow({ run, to, stackId, approvingRunID, cancelingRunID, onApprove, onCancel }: RunRowProps) {
+function RunRow({ run, to, hasActions, stackId, approvingRunID, cancelingRunID, onApprove, onCancel }: RunRowProps) {
   const tone = statusTone(run.status);
   const showApprove = run.status === "waiting_approval";
   const showCancel = !isTerminalRunStatus(run.status);
 
   return (
-    <li className="run-list__row" data-testid={`template-run-row-${run.id}`}>
-      <span className={`status-tone status-tone--${tone} run-list__status`}>
-        <span className="status-tone__glyph" aria-hidden="true">
-          {statusGlyph(tone)}
+    <tr data-testid={`template-run-row-${run.id}`}>
+      <td>
+        <Link className="data-table__link" to={to} data-testid={`template-run-history-${run.id}`}>
+          #{run.run_number}
+        </Link>
+      </td>
+      <td>{run.operation}</td>
+      <td>
+        <span className={`status-tone status-tone--${tone}`}>
+          <span className="status-tone__glyph" aria-hidden="true">
+            {statusGlyph(tone)}
+          </span>
+          {run.status}
         </span>
-        {run.status}
-      </span>
-      <Link className="run-list__name" to={to} data-testid={`template-run-history-${run.id}`}>
-        <span className="run-list__number">#{run.run_number}</span> {run.operation}
-      </Link>
-      <span className="run-list__meta">
-        {run.trigger_actor} ·{" "}
+      </td>
+      <td className="data-table__mono" title={run.trigger_actor}>
+        {run.trigger_actor}
+      </td>
+      <td className="data-table__mono">
         <time dateTime={run.started_at} title={run.started_at}>
           {formatDateTime(run.started_at)}
         </time>
-      </span>
-      {(showApprove || showCancel) && (
-        <span className="run-list__actions">
+      </td>
+      {hasActions && (
+        <td className="data-table__actions">
           {showCancel && (
             <RequireCapability capability="canOperate" stackId={stackId}>
               <button className="secondary-button" type="button" disabled={cancelingRunID === run.id} onClick={() => onCancel(run)}>
@@ -117,8 +159,8 @@ function RunRow({ run, to, stackId, approvingRunID, cancelingRunID, onApprove, o
               </button>
             </RequireCapability>
           )}
-        </span>
+        </td>
       )}
-    </li>
+    </tr>
   );
 }

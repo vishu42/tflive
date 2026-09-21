@@ -603,3 +603,125 @@ textarea {
   color: var(--color-muted-fg);
   background: var(--color-muted);
 }
+
+/* ---- Data tables ----
+   Every table uses these, so they all behave the same:
+
+     <div class="data-table-frame">
+       <table class="data-table">
+         <colgroup>
+           <col class="data-table__col--xs" />   a width from the scale
+           <col />                               no class: takes the slack
+         </colgroup>
+         ...
+
+   Fixed layout: a column's width comes from its <col>, never from what its
+   cells hold, so a value that changes (a status going from queued to
+   waiting_approval) moves nothing. Give every column a width from the scale
+   except one, which absorbs the rest; make it the last column before any
+   actions, so the columns before it stay put when later ones come and go.
+   Text too long for its column is cut with an ellipsis, so put the full value
+   in a title. The frame owns the border and scrolls sideways, so the page
+   never does; set --data-table-min-width on the table to the sum of its
+   column widths plus room for the flexible one, or on a phone that column
+   collapses to nothing. */
+.data-table-frame {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow-x: auto;
+}
+
+.data-table {
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  min-width: var(--data-table-min-width, 0);
+  table-layout: fixed;
+  width: 100%;
+}
+
+.data-table th,
+.data-table td {
+  overflow: hidden;
+  padding: 0 var(--space-4);
+  text-align: left;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.data-table th {
+  background: var(--color-muted);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-muted-fg);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  height: 40px;
+}
+
+/* A control-height button with 8px either side, whether or not the row has
+   one, so rows keep one height. */
+.data-table td {
+  height: calc(var(--control-height) + var(--space-4));
+}
+
+.data-table tbody tr + tr td {
+  border-top: 1px solid var(--color-border);
+}
+
+/* Column widths. The scale is small on purpose: pick the step that fits the
+   longest value the column can hold. actions fits two buttons side by side. */
+.data-table__col--xs {
+  width: 80px;
+}
+
+.data-table__col--sm {
+  width: 104px;
+}
+
+.data-table__col--md {
+  width: 176px;
+}
+
+.data-table__col--lg {
+  width: 232px;
+}
+
+.data-table__col--actions {
+  width: 288px;
+}
+
+/* The cell that names the row and links to it. */
+.data-table__link {
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  text-decoration: none;
+}
+
+.data-table__link:hover {
+  text-decoration: underline;
+}
+
+/* Secondary facts: who, when, identifiers. */
+.data-table__mono {
+  color: var(--color-muted-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.data-table__actions {
+  text-align: right;
+}
+
+.data-table__actions > * + * {
+  margin-left: var(--space-2);
+}
+
+/* For a column header that has no visible label, like the actions column. */
+.visually-hidden {
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
