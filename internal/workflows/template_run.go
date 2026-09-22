@@ -10,8 +10,6 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-var errTemplateRunCanceled = errors.New("template run canceled")
-
 // defaultRunRetryPolicy is the retry policy applied to activities in the
 // template-run workflow when no activity-specific override is set.
 // MaximumAttempts is temporarily pinned to 1 (no automatic retries) — in
@@ -38,10 +36,7 @@ var defaultRunRetryPolicy = &temporal.RetryPolicy{
 // A plan with no changes completes the run. An auto-approved apply run never
 // comes here: it starts TemplateApplyWorkflow directly.
 //
-// Cancellation is not a workflow failure. A cancel signal already drove the run
-// through its canceled status transitions before errTemplateRunCanceled bubbled
-// up, so it is swallowed here and the workflow completes successfully; anything
-// else marks the run failed before returning.
+// Any error marks the run failed before the workflow returns it.
 func TemplatePlanWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowInput) error {
 	run := newTemplateRunWorkflow(ctx, input)
 	return run.finish(run.planPhase())
@@ -79,7 +74,7 @@ func newTemplateRunWorkflow(ctx workflow.Context, input domain.TemplateRunWorkfl
 // both errors are surfaced: the original wrapped with %w to stay matchable by
 // callers, the persistence error appended as context.
 func (run *templateRunWorkflow) finish(err error) error {
-	if err == nil || errors.Is(err, errTemplateRunCanceled) {
+	if err == nil {
 		return nil
 	}
 	if failureErr := run.recordFailure(err); failureErr != nil {
@@ -195,7 +190,7 @@ func (run *templateRunWorkflow) planPhase() error {
 		return run.complete()
 	case domain.PlanOutcomePlanned:
 		return run.complete()
-	case domain.PlanOutcomeWaiting, domain.PlanOutcomeCanceled:
+	case domain.PlanOutcomeWaiting:
 		return nil
 	default:
 		return fmt.Errorf("unknown plan outcome %q", outcome)
@@ -206,8 +201,8 @@ func (run *templateRunWorkflow) planPhase() error {
 // apply run, applies without one.
 //
 // It begins by claiming the run: approved (or, auto-approved, queued) becomes
-// locked, or nothing happens because the run was canceled first. A lost claim
-// is not a failure, since the cancellation already recorded the run's end.
+// locked, or nothing happens because the plan was discarded first. A lost
+// claim is not a failure, since the discard already recorded the run's end.
 func (run *templateRunWorkflow) applyPhase() error {
 	if err := run.validateOperation(true); err != nil {
 		return err
@@ -471,14 +466,6 @@ func (run *templateRunWorkflow) fetchSource() error {
 	return nil
 }
 
-// cancel records the run as canceled. CancelRequested is already persisted by
-// CancelRun before the workflow ever sees the cancel signal, and Canceling and
-// LockReleased have no reader and no work happening before the next write
-// overwrites them, so only the terminal status is recorded here.
-func (run *templateRunWorkflow) cancel() error {
-	return run.recordStatus(domain.TemplateRunCanceled)
-}
-
 func (run *templateRunWorkflow) complete() error {
 	if err := run.recordStatus(domain.TemplateRunLockReleased); err != nil {
 		return err
@@ -582,9 +569,6 @@ func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType
 		SealedEnvironment: credentials.SealedEnvironment,
 	}
 
-	activityCtx, cancelActivity := workflow.WithCancel(run.sessionCtx)
-	defer cancelActivity()
-
 	// Every Terraform command gets the configured budget and the more generous
 	// retry policy, including init and workspace selection: init downloads
 	// providers and modules over the network, which is no more predictable
@@ -593,42 +577,19 @@ func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType
 	// The heartbeat timeout is what distinguishes a command that is working
 	// from one whose executor is gone: without it, a dead executor is
 	// indistinguishable from a slow apply until the whole Terraform timeout
-	// expires, and a cancel signal has no path to the running process.
-	terraformCtx := workflow.WithActivityOptions(activityCtx, workflow.ActivityOptions{
+	// expires.
+	terraformCtx := workflow.WithActivityOptions(run.sessionCtx, workflow.ActivityOptions{
 		StartToCloseTimeout: run.terraformTimeout(),
 		HeartbeatTimeout:    domain.TerraformHeartbeatTimeout,
 		RetryPolicy:         terraformRetryPolicy,
 	})
 
-	future := workflow.ExecuteActivity(
+	var output domain.RunTerraformActivityOutput
+	if activityErr := workflow.ExecuteActivity(
 		terraformCtx,
 		domain.RunTerraformActivityName,
 		input,
-	)
-	cancelCh := workflow.GetSignalChannel(run.ctx, domain.CancelSignalName)
-	selector := workflow.NewSelector(run.ctx)
-
-	var output domain.RunTerraformActivityOutput
-	var activityErr error
-	var canceled bool
-	selector.AddFuture(future, func(f workflow.Future) {
-		activityErr = f.Get(run.ctx, &output)
-	})
-	selector.AddReceive(cancelCh, func(channel workflow.ReceiveChannel, _ bool) {
-		var signal domain.CancelSignal
-		channel.Receive(run.ctx, &signal)
-		cancelActivity()
-		canceled = true
-	})
-	selector.Select(run.ctx)
-
-	if canceled {
-		if err := run.cancel(); err != nil {
-			return domain.RunTerraformActivityOutput{}, err
-		}
-		return domain.RunTerraformActivityOutput{}, errTemplateRunCanceled
-	}
-	if activityErr != nil {
+	).Get(run.ctx, &output); activityErr != nil {
 		// A failed command's log is what explains the failure, so it is recorded
 		// before the error propagates.
 		if log, ok := failedCommandLog(activityErr); ok {

@@ -8,7 +8,7 @@ import {
   runRefetchInterval,
   useAddTemplateToStackMutation,
   useApproveRunMutation,
-  useCancelRunMutation,
+  useDiscardRunMutation,
   useCreateStackMutation,
   useRegisterTemplateMutation,
   useStacksQuery,
@@ -319,11 +319,11 @@ describe("mutation hooks", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.templateRun("tenant_123", "run_1") });
   });
 
-  it("cancels a run and invalidates that run's query", async () => {
+  it("discards a run and invalidates that run's query", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
     const queryClient = testQueryClient();
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
-    const { result } = renderHook(() => useCancelRunMutation("tenant_123"), { wrapper: wrapper(queryClient) });
+    const { result } = renderHook(() => useDiscardRunMutation("tenant_123"), { wrapper: wrapper(queryClient) });
 
     await act(async () => {
       await result.current.mutateAsync({ runID: "run_1", body: { reason: "manual stop" } });

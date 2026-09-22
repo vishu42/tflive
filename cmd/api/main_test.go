@@ -273,7 +273,6 @@ func assertAPIQueueSpecs(t *testing.T, registry *queue.SpecRegistry) {
 		app.KindStartTemplateRun,
 		app.KindStartTemplateSync,
 		app.KindStartTemplateApply,
-		app.KindSignalRunCancellation,
 	} {
 		if _, ok := registry.Spec(kind); !ok {
 			t.Fatalf("queue spec registry missing %q", kind)
@@ -812,7 +811,7 @@ func (recordingStore) ApproveTemplateRun(context.Context, domain.TemplateRunAppr
 	return nil
 }
 
-func (recordingStore) CancelTemplateRunBeforeApply(context.Context, domain.TemplateRunCancellation) (bool, error) {
+func (recordingStore) DiscardTemplateRun(context.Context, domain.TemplateRunDiscard) (bool, error) {
 	return false, nil
 }
 
@@ -832,10 +831,6 @@ func (recordingStore) BeginTemplateApply(context.Context, domain.TenantID, domai
 	return false, nil
 }
 
-func (recordingStore) RequestTemplateRunCancellation(context.Context, domain.TemplateRunCancellation) error {
-	return nil
-}
-
 func (recordingStore) GetTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID) (domain.TemplateRun, error) {
 	return domain.TemplateRun{}, nil
 }
@@ -850,10 +845,6 @@ func (recordingStore) GetTemplateRunLog(context.Context, domain.TenantID, domain
 
 func (recordingStore) ListTemplateRunLogs(context.Context, domain.TenantID, domain.TemplateRunID) ([]domain.TemplateRunLog, error) {
 	return nil, nil
-}
-
-func (recordingStore) ReconcileTemplateRunCancellation(context.Context, domain.TenantID, domain.TemplateRunID, string) error {
-	return nil
 }
 
 func (recordingStore) GetTemplateRegistration(context.Context, domain.TenantID, domain.TemplateRegistrationID) (domain.TemplateRegistration, error) {
@@ -1079,10 +1070,6 @@ func (recordingAPIDispatcher) StartTemplateSync(context.Context, domain.Template
 }
 
 func (recordingAPIDispatcher) StartTemplateApply(context.Context, domain.TemplateRunWorkflowInput) error {
-	return nil
-}
-
-func (recordingAPIDispatcher) CancelTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID, domain.CancelSignal) error {
 	return nil
 }
 

@@ -326,11 +326,3 @@ func TestTemplateSyncWorkflowInputUsesRegistrationSource(t *testing.T) {
 func templateRegistrationID(id string) TemplateRegistrationID {
 	return TemplateRegistrationID(id)
 }
-
-func TestSignalNames(t *testing.T) {
-	t.Parallel()
-
-	if CancelSignalName != "cancel" {
-		t.Fatalf("CancelSignalName = %q", CancelSignalName)
-	}
-}

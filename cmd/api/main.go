@@ -64,7 +64,6 @@ type controlStore interface {
 	queue.Enqueuer
 	activities.ControlStore
 	activities.TemplateSyncStore
-	app.TemplateRunCancellationReconciler
 }
 
 type temporalWorker interface {
@@ -245,7 +244,7 @@ func defaultAPIDependencies() apiDependencies {
 			return temporal.NewDispatcher(temporalClient, options)
 		},
 		newQueueController: func(store controlStore, dispatcher app.WorkflowDispatcher) (queueController, error) {
-			registry, err := app.NewQueueRegistry(dispatcher, store)
+			registry, err := app.NewQueueRegistry(dispatcher)
 			if err != nil {
 				return nil, err
 			}

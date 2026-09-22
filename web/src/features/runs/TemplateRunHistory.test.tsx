@@ -98,10 +98,12 @@ describe("TemplateRunHistory", () => {
     expect(cells[4].querySelector("time")?.getAttribute("datetime")).toBe("2026-07-20T00:00:00Z");
   });
 
-  it("adds an actions column only while some run can still be acted on", () => {
+  // Only a plan waiting for approval can be acted on; a run in flight cannot
+  // be stopped, so it adds no column.
+  it("adds an actions column only while some plan waits for approval", () => {
     const queryClient = testQueryClient();
     seedRuns(queryClient, [
-      run({ id: "run_apply_1", run_number: 2, operation: "apply", status: "queued" }),
+      run({ id: "run_apply_1", run_number: 2, operation: "apply", status: "waiting_approval" }),
       run({ id: "run_plan_1", run_number: 1, operation: "plan", status: "completed" })
     ]);
 
@@ -109,6 +111,15 @@ describe("TemplateRunHistory", () => {
 
     expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["Run", "Status", "Changes", "Actor", "Time", "Actions"]);
     expect(within(screen.getByTestId("template-run-row-run_plan_1")).getAllByRole("cell")).toHaveLength(6);
+  });
+
+  it("adds no actions column for a run in flight", () => {
+    const queryClient = testQueryClient();
+    seedRuns(queryClient, [run({ id: "run_apply_1", run_number: 1, operation: "apply", status: "apply_started" })]);
+
+    renderHistory(queryClient);
+
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["Run", "Status", "Changes", "Actor", "Time"]);
   });
 
   it("shows an empty state rather than a bare heading when no run has started", () => {

@@ -6,6 +6,9 @@ import type { TemplateRun } from "../../api/types";
 // only place either screen names the operation. The raw status is still what
 // the tone and glyph come from.
 //
+// A saved plan that someone discarded ends canceled, and reads as discarded;
+// nothing else ends canceled, since a running run cannot be stopped.
+//
 // A plan run only ever plans, so it reads as planning until it ends. An
 // auto-approved apply run never plans on its own, so it reads as applying
 // throughout. Any other run has plan counts only once a plan with changes has
@@ -38,10 +41,7 @@ export function runStatusLabel(run: Pick<TemplateRun, "operation" | "status" | "
       }
       return destroy ? "Destroy failed" : "Apply failed";
     case "canceled":
-      return destroy ? "Destroy canceled" : "Canceled";
-    case "cancel_requested":
-    case "canceling":
-      return destroy ? "Canceling destroy" : "Canceling";
+      return destroy ? "Destroy discarded" : "Discarded";
     default:
       if (!planned) {
         return destroy ? "Planning destroy" : "Planning";
@@ -58,9 +58,6 @@ function planRunStatusLabel(run: Pick<TemplateRun, "status" | "plan_summary">): 
       return "Plan failed";
     case "canceled":
       return "Canceled";
-    case "cancel_requested":
-    case "canceling":
-      return "Canceling";
     default:
       return "Planning";
   }
@@ -74,9 +71,6 @@ function autoApprovedRunStatusLabel(run: Pick<TemplateRun, "status">): string {
       return "Apply failed";
     case "canceled":
       return "Canceled";
-    case "cancel_requested":
-    case "canceling":
-      return "Canceling";
     default:
       return "Applying";
   }

@@ -117,7 +117,7 @@ func TestTenantScopedRoutesRejectOtherTenantBeforeHandler(t *testing.T) {
 		{name: "list run logs", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-runs/run_123/logs"},
 		{name: "get run log artifact", method: http.MethodGet, path: "/v1/tenants/tenant_other/template-runs/run_123/logs/plan"},
 		{name: "approve run", method: http.MethodPost, path: "/v1/tenants/tenant_other/template-runs/run_123/approval"},
-		{name: "cancel run", method: http.MethodPost, path: "/v1/tenants/tenant_other/template-runs/run_123/cancellation"},
+		{name: "discard run", method: http.MethodPost, path: "/v1/tenants/tenant_other/template-runs/run_123/discard"},
 		{name: "search users", method: http.MethodGet, path: "/v1/tenants/tenant_other/users/search?q=test"},
 	}
 
@@ -1552,7 +1552,7 @@ func TestApproveRunAllowsSelfApproval(t *testing.T) {
 	}
 }
 
-func TestCancelRunCallsService(t *testing.T) {
+func TestDiscardRunCallsService(t *testing.T) {
 	t.Parallel()
 
 	deps := newAPITestDependencies(t)
@@ -1560,7 +1560,7 @@ func TestCancelRunCallsService(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(
 		http.MethodPost,
-		"/v1/tenants/tenant_123/template-runs/run_123/cancellation",
+		"/v1/tenants/tenant_123/template-runs/run_123/discard",
 		strings.NewReader(`{"reason":"testing"}`),
 	)
 
@@ -1569,20 +1569,20 @@ func TestCancelRunCallsService(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNoContent, response.Body.String())
 	}
-	if deps.templateRuns.cancellation.TenantID != domain.TenantID("tenant_123") {
-		t.Fatalf("tenant id = %q", deps.templateRuns.cancellation.TenantID)
+	if deps.templateRuns.discarded.TenantID != domain.TenantID("tenant_123") {
+		t.Fatalf("tenant id = %q", deps.templateRuns.discarded.TenantID)
 	}
-	if deps.templateRuns.cancellation.RunID != domain.TemplateRunID("run_123") {
-		t.Fatalf("run id = %q", deps.templateRuns.cancellation.RunID)
+	if deps.templateRuns.discarded.RunID != domain.TemplateRunID("run_123") {
+		t.Fatalf("run id = %q", deps.templateRuns.discarded.RunID)
 	}
-	if deps.templateRuns.cancellation.RequestedBy != domain.UserID(apiKeycloakSubject) {
-		t.Fatalf("requested by = %q, want %q", deps.templateRuns.cancellation.RequestedBy, apiKeycloakSubject)
+	if deps.templateRuns.discarded.RequestedBy != domain.UserID(apiKeycloakSubject) {
+		t.Fatalf("requested by = %q, want %q", deps.templateRuns.discarded.RequestedBy, apiKeycloakSubject)
 	}
-	if deps.templateRuns.cancellation.Reason != "testing" {
-		t.Fatalf("reason = %q", deps.templateRuns.cancellation.Reason)
+	if deps.templateRuns.discarded.Reason != "testing" {
+		t.Fatalf("reason = %q", deps.templateRuns.discarded.Reason)
 	}
-	if len(deps.work.requests) != 1 || deps.work.requests[0].Kind != app.KindSignalRunCancellation {
-		t.Fatalf("queued requests = %#v, want one cancellation signal", deps.work.requests)
+	if len(deps.work.requests) != 0 {
+		t.Fatalf("queued requests = %#v, want none", deps.work.requests)
 	}
 }
 
@@ -1608,15 +1608,12 @@ func TestRunDecisionRequestsRejectTopLevelNull(t *testing.T) {
 			},
 		},
 		{
-			name: "cancellation",
-			path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation",
+			name: "discard",
+			path: "/v1/tenants/tenant_123/template-runs/run_123/discard",
 			assertNoEffects: func(t *testing.T, deps *apiTestDependencies) {
 				t.Helper()
-				if deps.templateRuns.cancellation.RunID != "" {
-					t.Errorf("cancellation run ID = %q, want no cancellation", deps.templateRuns.cancellation.RunID)
-				}
-				if deps.workflows.cancelRunID != "" {
-					t.Errorf("workflow cancellation run ID = %q, want no signal", deps.workflows.cancelRunID)
+				if deps.templateRuns.discarded.RunID != "" {
+					t.Errorf("discarded run ID = %q, want no discard", deps.templateRuns.discarded.RunID)
 				}
 			},
 		},
@@ -1661,11 +1658,11 @@ func TestRunDecisionConflictErrorsReturnConflict(t *testing.T) {
 			statusCode: http.StatusConflict,
 		},
 		{
-			name: "cancellation",
-			path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation",
+			name: "discard",
+			path: "/v1/tenants/tenant_123/template-runs/run_123/discard",
 			body: `{}`,
 			configure: func(deps *apiTestDependencies) {
-				deps.templateRuns.cancellationErr = app.ErrRunNotCancelable
+				deps.templateRuns.notDiscardable = true
 			},
 			statusCode: http.StatusConflict,
 		},
@@ -1941,7 +1938,7 @@ func TestStackRoleRoutesUseInheritedPermissions(t *testing.T) {
 		{name: "operator upgrades template", role: authorization.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusOK, permission: authorization.RelationCanOperate},
 		{name: "operator starts run", role: authorization.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusCreated, permission: authorization.RelationCanOperate},
 		{name: "approver approves run", role: authorization.RelationApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusNoContent, permission: authorization.RelationCanApprove},
-		{name: "owner cancels run", role: authorization.RelationOwner, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusNoContent, permission: authorization.RelationCanOperate},
+		{name: "owner discards run", role: authorization.RelationOwner, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/discard", body: `{}`, status: http.StatusNoContent, permission: authorization.RelationCanOperate},
 		{name: "viewer reads run", role: authorization.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusOK, permission: authorization.RelationCanView},
 		{name: "approver lists run logs", role: authorization.RelationApprover, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusOK, permission: authorization.RelationCanView},
 		{name: "viewer reads run log", role: authorization.RelationViewer, method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusOK, permission: authorization.RelationCanView},
@@ -1991,7 +1988,7 @@ func TestStackRoleRoutesDenyInsufficientRoles(t *testing.T) {
 		{name: "viewer cannot upgrade template", role: authorization.RelationViewer, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/upgrade", body: `{"target_template_revision_id":"revision_123"}`, status: http.StatusForbidden, permission: authorization.RelationCanOperate},
 		{name: "approver cannot start run", role: authorization.RelationApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusForbidden, permission: authorization.RelationCanOperate},
 		{name: "operator cannot approve run", role: authorization.RelationOperator, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusForbidden, permission: authorization.RelationCanApprove},
-		{name: "approver cannot cancel run", role: authorization.RelationApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusForbidden, permission: authorization.RelationCanOperate},
+		{name: "approver cannot discard run", role: authorization.RelationApprover, method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/discard", body: `{}`, status: http.StatusForbidden, permission: authorization.RelationCanOperate},
 		{name: "unassigned cannot read run", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusNotFound, permission: authorization.RelationCanView},
 		{name: "unassigned cannot list logs", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusNotFound, permission: authorization.RelationCanView},
 		{name: "unassigned cannot read log", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusNotFound, permission: authorization.RelationCanView},
@@ -2018,10 +2015,10 @@ func TestStackRoleRoutesDenyInsufficientRoles(t *testing.T) {
 			// which relation was asked for added nothing the outcome does not
 			// already prove, and it could only ever confirm the test's own
 			// expectation back to itself.
-			if deps.stackTemplateInstaller.created.ID != "" || deps.templateRuns.created.ID != "" || deps.templateRuns.approval.RunID != "" || deps.templateRuns.cancellation.RunID != "" {
+			if deps.stackTemplateInstaller.created.ID != "" || deps.templateRuns.created.ID != "" || deps.templateRuns.approval.RunID != "" || deps.templateRuns.discarded.RunID != "" {
 				t.Fatal("denied mutation had side effects")
 			}
-			if len(deps.stackTemplates.gotConfigJSON) != 0 || deps.stackTemplates.gotDesiredTemplateRevisionID != "" || deps.workflows.approvalRunID != "" || deps.workflows.cancelRunID != "" {
+			if len(deps.stackTemplates.gotConfigJSON) != 0 || deps.stackTemplates.gotDesiredTemplateRevisionID != "" || deps.workflows.approvalRunID != "" {
 				t.Fatal("denied mutation updated state or signaled a workflow")
 			}
 			if test.name == "unassigned list is empty" {
@@ -2107,7 +2104,7 @@ func TestInheritedRouteMissingAndDeniedStatusesMatch(t *testing.T) {
 		{name: "start run", method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`, status: http.StatusForbidden, resource: "stack-template"},
 		{name: "run detail", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123", status: http.StatusNotFound},
 		{name: "approval", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`, status: http.StatusForbidden},
-		{name: "cancellation", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`, status: http.StatusForbidden},
+		{name: "discard", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/discard", body: `{}`, status: http.StatusForbidden},
 		{name: "log list", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs", status: http.StatusNotFound},
 		{name: "log body", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan", status: http.StatusNotFound},
 		{name: "run history", method: http.MethodGet, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", status: http.StatusNotFound, resource: "stack-template"},
@@ -2134,7 +2131,7 @@ func TestInheritedRouteMissingAndDeniedStatusesMatch(t *testing.T) {
 				request := ordinaryAuthenticatedRequest(test.method, test.path, strings.NewReader(test.body))
 				server.ServeHTTP(response, request)
 				statuses = append(statuses, response.Code)
-				if deps.stackTemplateInstaller.created.ID != "" || len(deps.stackTemplates.gotConfigJSON) != 0 || deps.stackTemplates.gotDesiredTemplateRevisionID != "" || deps.templateRuns.created.ID != "" || deps.templateRuns.approval.RunID != "" || deps.templateRuns.cancellation.RunID != "" || deps.workflows.approvalRunID != "" || deps.workflows.cancelRunID != "" {
+				if deps.stackTemplateInstaller.created.ID != "" || len(deps.stackTemplates.gotConfigJSON) != 0 || deps.stackTemplates.gotDesiredTemplateRevisionID != "" || deps.templateRuns.created.ID != "" || deps.templateRuns.approval.RunID != "" || deps.templateRuns.discarded.RunID != "" || deps.workflows.approvalRunID != "" {
 					t.Fatal("protected missing or denied request had side effects")
 				}
 			}
@@ -2273,7 +2270,7 @@ func TestPlatformAdminCannotBypassMissingAuthorizer(t *testing.T) {
 		{name: "start run", method: http.MethodPost, path: "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs", body: `{"operation":"plan"}`},
 		{name: "inherited read", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123"},
 		{name: "approval", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/approval", body: `{}`},
-		{name: "cancellation", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/cancellation", body: `{}`},
+		{name: "discard", method: http.MethodPost, path: "/v1/tenants/tenant_123/template-runs/run_123/discard", body: `{}`},
 		{name: "log list", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs"},
 		{name: "log body", method: http.MethodGet, path: "/v1/tenants/tenant_123/template-runs/run_123/logs/plan"},
 	}
@@ -2294,7 +2291,7 @@ func TestPlatformAdminCannotBypassMissingAuthorizer(t *testing.T) {
 			if response.Code != http.StatusInternalServerError {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusInternalServerError, response.Body.String())
 			}
-			if stacks.gotStackID != "" || stacks.gotListTenantID != "" || stacks.created.ID != "" || runs.gotGetRunID != "" || runs.created.ID != "" || runs.approval.RunID != "" || runs.cancellation.RunID != "" || installer.created.ID != "" {
+			if stacks.gotStackID != "" || stacks.gotListTenantID != "" || stacks.created.ID != "" || runs.gotGetRunID != "" || runs.created.ID != "" || runs.approval.RunID != "" || runs.discarded.RunID != "" || installer.created.ID != "" {
 				t.Fatal("missing authorizer allowed repository access or mutation")
 			}
 		})
@@ -2777,22 +2774,13 @@ func (unit *apiUnitOfWork) ApproveTemplateRun(ctx context.Context, approval doma
 	return nil
 }
 
-func (unit *apiUnitOfWork) CancelTemplateRunBeforeApply(ctx context.Context, cancellation domain.TemplateRunCancellation) (bool, error) {
+func (unit *apiUnitOfWork) DiscardTemplateRun(ctx context.Context, discard domain.TemplateRunDiscard) (bool, error) {
 	if repository, ok := unit.templateRuns.(interface {
-		CancelTemplateRunBeforeApply(context.Context, domain.TemplateRunCancellation) (bool, error)
+		DiscardTemplateRun(context.Context, domain.TemplateRunDiscard) (bool, error)
 	}); ok {
-		return repository.CancelTemplateRunBeforeApply(ctx, cancellation)
+		return repository.DiscardTemplateRun(ctx, discard)
 	}
 	return false, nil
-}
-
-func (unit *apiUnitOfWork) RequestTemplateRunCancellation(ctx context.Context, cancellation domain.TemplateRunCancellation) error {
-	if repository, ok := unit.templateRuns.(interface {
-		RequestTemplateRunCancellation(context.Context, domain.TemplateRunCancellation) error
-	}); ok {
-		return repository.RequestTemplateRunCancellation(ctx, cancellation)
-	}
-	return nil
 }
 
 func (unit *apiUnitOfWork) Enqueue(_ context.Context, requests ...queue.Request) error {
@@ -2926,7 +2914,7 @@ type recordingTemplateRunRepository struct {
 	run                    domain.TemplateRun
 	list                   []domain.TemplateRun
 	approval               domain.TemplateRunApproval
-	cancellation           domain.TemplateRunCancellation
+	discarded              domain.TemplateRunDiscard
 	gotGetTenantID         domain.TenantID
 	gotGetRunID            domain.TemplateRunID
 	gotListTenantID        domain.TenantID
@@ -2934,7 +2922,8 @@ type recordingTemplateRunRepository struct {
 	getErr                 error
 	createErr              error
 	approvalErr            error
-	cancellationErr        error
+	// notDiscardable makes DiscardTemplateRun find no plan to discard.
+	notDiscardable bool
 }
 
 func (repository *recordingTemplateRunRepository) CreateTemplateRun(_ context.Context, run domain.TemplateRun) (int, error) {
@@ -2968,16 +2957,12 @@ func (repository *recordingTemplateRunRepository) ApproveTemplateRun(_ context.C
 	return nil
 }
 
-func (repository *recordingTemplateRunRepository) RequestTemplateRunCancellation(_ context.Context, cancellation domain.TemplateRunCancellation) error {
-	if repository.cancellationErr != nil {
-		return repository.cancellationErr
+func (repository *recordingTemplateRunRepository) DiscardTemplateRun(_ context.Context, discard domain.TemplateRunDiscard) (bool, error) {
+	if repository.notDiscardable {
+		return false, nil
 	}
-	repository.cancellation = cancellation
-	return nil
-}
-
-func (repository *recordingTemplateRunRepository) ReconcileTemplateRunCancellation(_ context.Context, _ domain.TenantID, _ domain.TemplateRunID, _ string) error {
-	return nil
+	repository.discarded = discard
+	return true, nil
 }
 
 type recordingTemplateRunLogReader struct {
@@ -3124,8 +3109,6 @@ type recordingWorkflowDispatcher struct {
 	input         domain.TemplateRunWorkflowInput
 	syncInput     domain.TemplateSyncWorkflowInput
 	approvalRunID domain.TemplateRunID
-	cancelRunID   domain.TemplateRunID
-	cancelSignal  domain.CancelSignal
 }
 
 func (dispatcher *recordingWorkflowDispatcher) StartTemplateRun(_ context.Context, input domain.TemplateRunWorkflowInput) error {
@@ -3140,12 +3123,6 @@ func (dispatcher *recordingWorkflowDispatcher) StartTemplateSync(_ context.Conte
 
 func (dispatcher *recordingWorkflowDispatcher) StartTemplateApply(_ context.Context, input domain.TemplateRunWorkflowInput) error {
 	dispatcher.approvalRunID = input.RunID
-	return nil
-}
-
-func (dispatcher *recordingWorkflowDispatcher) CancelTemplateRun(_ context.Context, _ domain.TenantID, runID domain.TemplateRunID, signal domain.CancelSignal) error {
-	dispatcher.cancelRunID = runID
-	dispatcher.cancelSignal = signal
 	return nil
 }
 

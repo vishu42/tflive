@@ -2,19 +2,16 @@ package temporal
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/vishu42/tflive/internal/domain"
 	enumspb "go.temporal.io/api/enums/v1"
-	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 )
 
 type workflowClient interface {
 	ExecuteWorkflow(context.Context, client.StartWorkflowOptions, interface{}, ...interface{}) (client.WorkflowRun, error)
-	SignalWorkflow(context.Context, string, string, string, interface{}) error
 }
 
 type Dispatcher struct {
@@ -108,30 +105,6 @@ func (dispatcher *Dispatcher) StartTemplateApply(ctx context.Context, input doma
 		input)
 	if err != nil {
 		return fmt.Errorf("start template apply workflow: %w", err)
-	}
-
-	return nil
-}
-
-// CancelTemplateRun signals whichever of the run's workflows is running. At
-// most one is: the plan workflow ends before its apply workflow can start,
-// and an auto-approved apply run has no plan workflow at all. So the plan
-// workflow is tried first, and only a plan workflow that is closed or was
-// never started sends the signal on to the apply workflow. If neither is
-// running the NotFound comes back, and the caller reconciles the run itself.
-func (dispatcher *Dispatcher) CancelTemplateRun(
-	ctx context.Context,
-	tenantID domain.TenantID,
-	runID domain.TemplateRunID,
-	signal domain.CancelSignal,
-) error {
-	err := dispatcher.client.SignalWorkflow(ctx, templateRunWorkflowID(tenantID, runID), "", domain.CancelSignalName, signal)
-	var notFound *serviceerror.NotFound
-	if errors.As(err, &notFound) {
-		err = dispatcher.client.SignalWorkflow(ctx, templateApplyWorkflowID(tenantID, runID), "", domain.CancelSignalName, signal)
-	}
-	if err != nil {
-		return fmt.Errorf("signal template run cancellation: %w", err)
 	}
 
 	return nil

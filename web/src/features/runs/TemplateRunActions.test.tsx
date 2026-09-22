@@ -153,7 +153,9 @@ describe("TemplateRunActions", () => {
     expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(true);
   });
 
-  it("blocks a new plan while an older run is still active, and offers Cancel on that run's row", () => {
+  // A run in flight cannot be stopped, so its row offers nothing; the header
+  // waits for it.
+  it("blocks a new plan while an older run is still active, and offers no action on that run's row", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
     seedRuns(queryClient, [
@@ -164,7 +166,7 @@ describe("TemplateRunActions", () => {
     renderActions(queryClient);
 
     expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(true);
-    expect(screen.getByTestId("template-run-row-older_active").textContent).toContain("Cancel");
+    expect(screen.getByTestId("template-run-row-older_active").querySelector("button")).toBeNull();
     expect(screen.getByTestId("template-run-row-newer_completed").querySelector("button")).toBeNull();
   });
 
@@ -299,9 +301,9 @@ describe("TemplateRunActions", () => {
 
     await waitFor(() => expect(screen.getByText(/already in flight/)).toBeTruthy());
     // The refetch is what puts the buttons back in the state the server already
-    // believes they are in: Plan refused, Cancel offered on the run that won.
+    // believes they are in: Plan refused, and the run that won listed.
     await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(true));
-    expect(screen.getByTestId("template-run-row-run_elsewhere").textContent).toContain("Cancel");
+    expect(screen.getByTestId("template-run-row-run_elsewhere")).toBeTruthy();
   });
 
   it("walks apply → approve from persisted history, and reflects each step without a page reload", async () => {
@@ -349,10 +351,9 @@ describe("TemplateRunActions", () => {
         expect.objectContaining({ method: "POST" })
       )
     );
-    // Approved, the run no longer waits: its row drops Approve and Discard, and
-    // offers Cancel while it applies.
+    // Approved, the run no longer waits: its row drops Approve and Discard,
+    // and offers nothing while it applies.
     await waitFor(() => expect(button(/^Approve$/)).toBeNull());
-    expect(button(/Cancel/)).toBeTruthy();
     expect(button(/Discard/)).toBeNull();
   });
 });

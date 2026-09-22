@@ -36,12 +36,8 @@ func (repo *txRepo) ApproveTemplateRun(ctx context.Context, approval domain.Temp
 	return approveTemplateRun(ctx, repo.tx, approval)
 }
 
-func (repo *txRepo) CancelTemplateRunBeforeApply(ctx context.Context, cancellation domain.TemplateRunCancellation) (bool, error) {
-	return cancelTemplateRunBeforeApply(ctx, repo.tx, cancellation)
-}
-
-func (repo *txRepo) RequestTemplateRunCancellation(ctx context.Context, cancellation domain.TemplateRunCancellation) error {
-	return requestTemplateRunCancellation(ctx, repo.tx, cancellation)
+func (repo *txRepo) DiscardTemplateRun(ctx context.Context, discard domain.TemplateRunDiscard) (bool, error) {
+	return discardTemplateRun(ctx, repo.tx, discard)
 }
 
 // txEnqueuer enqueues inside the caller's transaction. This is the entire

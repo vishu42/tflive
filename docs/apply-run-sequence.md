@@ -35,7 +35,7 @@ flowchart LR
     UI --> HTTP
     HTTP --> PG
     QL -->|claim intents| PG
-    QL -->|start workflows, signal cancel| T
+    QL -->|start workflows| T
     CW -->|poll, respond| T
     CW -->|status, logs, credentials| PG
     EX -->|poll, respond| T
@@ -98,7 +98,7 @@ sequenceDiagram
     Note over API: queue loop claims the row
     API->>T: StartWorkflow TemplateApplyWorkflow ("…/apply")
     T-->>CW: workflow task
-    CW->>PG: BeginApply: approved to locked, or stop if canceled meanwhile
+    CW->>PG: BeginApply: approved to locked, or stop if discarded meanwhile
     CW->>T: create session on "execution"
     T-->>EX2: session created, usually another executor
 
@@ -132,11 +132,11 @@ The counts come from the apply's "Apply complete!" line and are recorded with
 A plan with no changes stops at `FinishPlan`, which records the run's snapshot
 as live, and the run completes. That includes a plan run.
 
-Canceling a plan waiting for approval, or approved but not yet claimed, is a
-single write: no workflow is running to signal. Once `BeginApply` has claimed
-the run, cancel is a signal to whichever workflow is applying it. A cancel that
-reaches an auto-approved apply before its claim leaves the run
-`cancel_requested`, and the claim carries it out.
+Discarding a plan waiting for approval, or approved but not yet claimed, is a
+single write that ends the run `canceled`: no workflow is running then. The
+claim and the discard make conditional updates on the same row, so exactly one
+wins. Once `BeginApply` has claimed the run there is nothing left to discard,
+and a run planning or applying cannot be stopped.
 
 ## Part 2: after `RunTerraform(apply)` succeeds
 
@@ -205,9 +205,8 @@ sequenceDiagram
 The executor's part ends at step 1, apart from releasing its key, cleaning up
 and closing the session, which now happen before the final statuses so the
 session is never held a moment longer than the Terraform work needs. Every write after that is a workflow step on the control worker,
-which is what keeps them ordered: the log row cannot land after `completed`, and
-a cancel that arrives during the apply cannot be overwritten by a late
-`apply_finished`. Writing `apply_finished` also records the stack template's
+which is what keeps them ordered: the log row cannot land after `completed`.
+Writing `apply_finished` also records the stack template's
 last applied revision in the same transaction
 (`recordsStackTemplateLastApplied`, `internal/postgres/repositories.go`).
 

@@ -83,8 +83,6 @@ func (store *Store) PlanKey(ctx context.Context, tenantID domain.TenantID, runID
 // FinishTemplatePlan records a finished plan and decides what follows it, in
 // one transaction with the run row locked:
 //
-//   - A run someone canceled while it planned is canceled here, since no
-//     workflow step is left to notice the request.
 //   - No changes: the run's snapshot is what is live already, so it becomes
 //     the stack template's last applied state, and the run completes. That
 //     holds for a plan run too: nothing was applied, but nothing needed to
@@ -118,18 +116,6 @@ func (store *Store) FinishTemplatePlan(ctx context.Context, input domain.FinishP
 
 	var outcome domain.PlanOutcome
 	switch {
-	case status == domain.TemplateRunCancelRequested:
-		if _, err := tx.Exec(ctx, `
-			update template_runs
-			set status = $1, completed_at = coalesce(completed_at, now())
-			where tenant_id = $2 and id = $3
-		`, domain.TemplateRunCanceled, input.TenantID, input.RunID); err != nil {
-			return "", fmt.Errorf("cancel finished plan: %w", err)
-		}
-		if err := releaseRunPlan(ctx, tx, input.TenantID, input.RunID); err != nil {
-			return "", err
-		}
-		outcome = domain.PlanOutcomeCanceled
 	case !input.HasChanges:
 		if input.Operation != domain.OperationDestroy {
 			if _, err := tx.Exec(ctx, `
@@ -192,60 +178,31 @@ func (store *Store) FinishTemplatePlan(ctx context.Context, input domain.FinishP
 
 // BeginTemplateApply claims a run for its apply phase by moving it to locked:
 // from approved, or, for an auto-approved apply run that never had a plan to
-// approve, from queued. Losing the claim means the run was canceled first; the
-// conditional update is what makes that race safe, because the cancel paths
-// make the same kind of update from the other side.
+// approve, from queued. Losing the claim means the plan was discarded first;
+// the conditional update is what makes that race safe, because
+// discardTemplateRun makes the same kind of update from the other side.
 func (store *Store) BeginTemplateApply(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, autoApprove bool) (bool, error) {
+	from := domain.TemplateRunApproved
 	if autoApprove {
-		return beginAutoApprovedApply(ctx, store.pool, tenantID, runID)
+		from = domain.TemplateRunQueued
 	}
 	commandTag, err := store.pool.Exec(ctx, `
 		update template_runs
 		set status = $1
-		where tenant_id = $2 and id = $3 and status = $4 and not auto_approve
-	`, domain.TemplateRunLocked, tenantID, runID, domain.TemplateRunApproved)
+		where tenant_id = $2 and id = $3 and status = $4 and auto_approve = $5
+	`, domain.TemplateRunLocked, tenantID, runID, from, autoApprove)
 	if err != nil {
 		return false, fmt.Errorf("claim run for apply: %w", err)
 	}
 	return commandTag.RowsAffected() == 1, nil
 }
 
-// beginAutoApprovedApply claims a queued auto-approved apply run. A cancel
-// that arrived before the claim left the run cancel_requested, and signaled a
-// workflow that is about to end here without reaching any step that would
-// notice, so the claim carries the cancellation out instead.
-func beginAutoApprovedApply(ctx context.Context, exec pgxExecutor, tenantID domain.TenantID, runID domain.TemplateRunID) (bool, error) {
-	var status domain.TemplateRunStatus
-	err := exec.QueryRow(ctx, `
-		update template_runs
-		set
-			status = case when status = $1 then $2 else $3 end,
-			completed_at = case when status = $1 then completed_at else coalesce(completed_at, now()) end
-		where tenant_id = $4 and id = $5 and status in ($1, $6) and auto_approve
-		returning status
-	`,
-		domain.TemplateRunQueued,
-		domain.TemplateRunLocked,
-		domain.TemplateRunCanceled,
-		tenantID,
-		runID,
-		domain.TemplateRunCancelRequested,
-	).Scan(&status)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("claim auto-approved run for apply: %w", err)
-	}
-	return status == domain.TemplateRunLocked, nil
-}
-
-// cancelTemplateRunBeforeApply cancels a run whose plan is waiting for
-// approval, or approved but not yet claimed by its apply. Neither has a
-// workflow to signal: the plan workflow ended when the plan did, and the apply
-// workflow has not begun. It reports whether it canceled; false means the run
-// is past that point, and has to be canceled through its workflow.
-func cancelTemplateRunBeforeApply(ctx context.Context, exec pgxExecutor, cancellation domain.TemplateRunCancellation) (bool, error) {
+// discardTemplateRun discards a run whose plan is waiting for approval, or
+// approved but not yet claimed by its apply, ending it canceled. Neither has a
+// workflow running: the plan workflow ended when the plan did, and the apply
+// workflow has not begun. It reports whether it discarded; false means the run
+// has no plan left to discard.
+func discardTemplateRun(ctx context.Context, exec pgxExecutor, discard domain.TemplateRunDiscard) (bool, error) {
 	commandTag, err := exec.Exec(ctx, `
 		update template_runs
 		set
@@ -259,21 +216,21 @@ func cancelTemplateRunBeforeApply(ctx context.Context, exec pgxExecutor, cancell
 			and status in ($7, $8)
 	`,
 		domain.TemplateRunCanceled,
-		cancellation.RequestedBy,
-		cancellation.Reason,
-		cancellation.RequestedAt,
-		cancellation.TenantID,
-		cancellation.RunID,
+		discard.RequestedBy,
+		discard.Reason,
+		discard.RequestedAt,
+		discard.TenantID,
+		discard.RunID,
 		domain.TemplateRunWaitingApproval,
 		domain.TemplateRunApproved,
 	)
 	if err != nil {
-		return false, fmt.Errorf("cancel run before apply: %w", err)
+		return false, fmt.Errorf("discard run: %w", err)
 	}
 	if commandTag.RowsAffected() == 0 {
 		return false, nil
 	}
-	if err := releaseRunPlan(ctx, exec, cancellation.TenantID, cancellation.RunID); err != nil {
+	if err := releaseRunPlan(ctx, exec, discard.TenantID, discard.RunID); err != nil {
 		return false, err
 	}
 	return true, nil

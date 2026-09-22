@@ -11,11 +11,10 @@ import (
 // flipping a stack to ready used to be queued because a tuple write could not
 // commit with the domain write that caused it; it can now, so all three happen
 // in the API's transaction.
-func NewQueueRegistry(dispatcher WorkflowDispatcher, reconciler TemplateRunCancellationReconciler) (*queue.Registry, error) {
+func NewQueueRegistry(dispatcher WorkflowDispatcher) (*queue.Registry, error) {
 	return queue.NewRegistry(
 		NewStartTemplateRunHandler(dispatcher),
 		NewStartTemplateSyncHandler(dispatcher),
 		NewStartTemplateApplyHandler(dispatcher),
-		NewSignalRunCancellationHandler(dispatcher, reconciler),
 	)
 }

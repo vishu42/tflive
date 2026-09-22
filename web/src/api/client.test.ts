@@ -5,7 +5,7 @@ import {
   ApiRequestError,
   approveRun,
   authMethods,
-  cancelRun,
+  discardRun,
   createStack,
   getTemplateRunLog,
   listStacks,
@@ -158,17 +158,17 @@ describe("api client", () => {
     );
   });
 
-  it("posts run operations, approvals, and cancellations", async () => {
+  it("posts run operations, approvals, and discards", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: "run_123" }));
 
-    await startTemplateRun("tenant_123", "stack_template_123", { operation: "plan", auto_approve: true });
+    await startTemplateRun("tenant_123", "stack_template_123", { operation: "apply", auto_approve: true });
     await approveRun("tenant_123", "run_123");
-    await cancelRun("tenant_123", "run_456", { reason: "manual stop" });
+    await discardRun("tenant_123", "run_456", { reason: "manual stop" });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/v1/tenants/tenant_123/stack-templates/stack_template_123/runs",
-      expect.objectContaining({ method: "POST", body: JSON.stringify({ operation: "plan", auto_approve: true }) })
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ operation: "apply", auto_approve: true }) })
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
@@ -177,10 +177,10 @@ describe("api client", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
-      "/v1/tenants/tenant_123/template-runs/run_456/cancellation",
+      "/v1/tenants/tenant_123/template-runs/run_456/discard",
       expect.objectContaining({ method: "POST" })
     );
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ operation: "plan", auto_approve: true });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ operation: "apply", auto_approve: true });
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({});
     expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({ reason: "manual stop" });
   });
@@ -230,7 +230,7 @@ describe("api client", () => {
     await upgradeStackTemplate("tenant_123", "st_1", { target_template_revision_id: "rev_2" });
     await startTemplateRun("tenant_123", "st_1", { operation: "plan" });
     await approveRun("tenant_123", "run_1");
-    await cancelRun("tenant_123", "run_2", { reason: "stop" });
+    await discardRun("tenant_123", "run_2", { reason: "stop" });
 
     for (const call of fetchMock.mock.calls) {
       const init = call[1] as RequestInit | undefined;

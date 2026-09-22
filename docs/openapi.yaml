@@ -84,7 +84,7 @@ tags:
   - name: Credentials
     description: Write-only cloud credentials, injected only while Terraform runs.
   - name: Runs
-    description: Starting, watching, approving and cancelling Terraform operations.
+    description: Starting, watching, approving and discarding Terraform operations.
   - name: Access
     description: Per-stack role grants.
   - name: Users
@@ -994,7 +994,7 @@ paths:
         One component runs one operation at a time, and a plan waiting for
         approval counts. Starting a second while one is in flight returns `409
         run_in_flight` — the competing run is visible through the list
-        endpoint, so a client can wait for it, approve it, or cancel it.
+        endpoint, so a client can wait for it, or approve or discard it.
       operationId: startTemplateRun
       requestBody:
         required: true
@@ -1177,33 +1177,34 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
         "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
 
-  /v1/tenants/{tenant_id}/template-runs/{run_id}/cancellation:
+  /v1/tenants/{tenant_id}/template-runs/{run_id}/discard:
     parameters:
       - $ref: "#/components/parameters/TenantID"
       - $ref: "#/components/parameters/RunID"
     post:
       tags: [Runs]
-      summary: Request cancellation of a run
+      summary: Discard a plan waiting for approval
       description: |
-        A request, not an instruction: the run moves to `cancel_requested`,
-        then `canceling`, then `canceled` once the orchestrator has unwound it.
-        Poll the run to see it land.
-      operationId: cancelRun
+        Throws away a run's saved plan while it waits for approval (or is
+        approved and not yet applying). The run ends `canceled` straight away
+        and its plan can never be applied. A run that is planning or applying
+        cannot be stopped.
+      operationId: discardRun
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/CancelRunRequest" }
+            schema: { $ref: "#/components/schemas/DiscardRunRequest" }
             example: { reason: superseded by a newer plan }
       responses:
         "204":
-          description: Cancellation requested.
+          description: The plan was discarded.
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
-          description: The run is already finished, or otherwise not cancelable (`conflict`).
+          description: The run has no plan waiting to discard (`conflict`).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1872,13 +1873,13 @@ components:
         `auto_approve` applies without one. `destroy` saves a plan to destroy
         everything, to approve.
 
-    CancelRunRequest:
+    DiscardRunRequest:
       type: object
       additionalProperties: false
       properties:
         reason:
           type: string
-          description: Recorded with the cancellation. Optional.
+          description: Recorded with the discard. Optional.
 
     TemplateRun:
       type: object
@@ -1952,7 +1953,8 @@ components:
       type: string
       description: |
         A run's progress. Terminal states are `completed`, `failed` and
-        `canceled`; everything else means the run is still in flight.
+        `canceled`, which is how a discarded plan ends; everything else means
+        the run is still in flight.
 
         `waiting_approval` is the one that needs a person — post to the run's
         approval endpoint to release it.
@@ -1972,8 +1974,6 @@ components:
         - apply_finished
         - destroy_started
         - destroy_finished
-        - cancel_requested
-        - canceling
         - canceled
         - lock_released
         - completed

@@ -58,8 +58,8 @@ func TestActorMutationsRejectMissingPrincipal(t *testing.T) {
 		{name: "approve run", call: func() error {
 			return service.ApproveRun(context.Background(), ApproveRunCommand{})
 		}},
-		{name: "cancel run", call: func() error {
-			return service.CancelRun(context.Background(), CancelRunCommand{})
+		{name: "discard run", call: func() error {
+			return service.DiscardRun(context.Background(), DiscardRunCommand{})
 		}},
 	}
 
@@ -1101,8 +1101,8 @@ func TestConfigAndRevisionChangesWaitForTheRunInFlight(t *testing.T) {
 }
 
 // A plan waiting for approval, or approved but not yet applying, has no
-// workflow to signal, so canceling it is only the write.
-func TestCancelRunCancelsAWaitingPlanDirectly(t *testing.T) {
+// workflow running, so discarding it is only the write.
+func TestDiscardRunDiscardsAWaitingPlan(t *testing.T) {
 	t.Parallel()
 
 	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Status: domain.TemplateRunWaitingApproval}}
@@ -1114,14 +1114,14 @@ func TestCancelRunCancelsAWaitingPlanDirectly(t *testing.T) {
 		StackTemplates: approvableStackTemplates(),
 	})
 
-	if err := service.CancelRun(authenticatedContext(), CancelRunCommand{TenantID: "tenant_123", RunID: "run_123", Reason: "discard"}); err != nil {
-		t.Fatalf("CancelRun returned error: %v", err)
+	if err := service.DiscardRun(authenticatedContext(), DiscardRunCommand{TenantID: "tenant_123", RunID: "run_123", Reason: "discard"}); err != nil {
+		t.Fatalf("DiscardRun returned error: %v", err)
 	}
-	if runs.canceledBeforeApply.RunID != "run_123" {
-		t.Fatalf("canceled before apply = %#v, want run_123", runs.canceledBeforeApply)
+	if runs.discarded.RunID != "run_123" || runs.discarded.RequestedBy != domain.UserID(keycloakSubject) {
+		t.Fatalf("discarded = %#v, want run_123 by the caller", runs.discarded)
 	}
-	if runs.cancellation.RunID != "" || len(work.requests) != 0 {
-		t.Fatalf("cancellation request = %#v, queued = %#v; want no signal path", runs.cancellation, work.requests)
+	if len(work.requests) != 0 {
+		t.Fatalf("queued = %#v, want nothing queued", work.requests)
 	}
 }
 
@@ -1640,77 +1640,12 @@ func TestApproveRunAuditsSuccessfulApproval(t *testing.T) {
 	}
 }
 
-func TestCancelRunRecordsCancellationAndQueuesSignal(t *testing.T) {
+// A run with no plan waiting, such as one still planning or applying, has
+// nothing to discard, and running runs cannot be stopped.
+func TestDiscardRunRefusesARunWithNoPlanWaiting(t *testing.T) {
 	t.Parallel()
 
-	ctx := authenticatedContext()
-	now := time.Date(2026, 7, 2, 10, 45, 0, 0, time.UTC)
-	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
-	work := &recordingUnitOfWork{templateRuns: runs}
-
-	service := NewService(Service{
-		Authorization:  testPlatformAuthorizer(t),
-		Work:           work,
-		TemplateRuns:   runs,
-		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", StackID: "stack_123"}},
-		Clock:          fixedClock{now: now},
-	})
-
-	err := service.CancelRun(ctx, CancelRunCommand{
-		TenantID: domain.TenantID("tenant_123"),
-		RunID:    domain.TemplateRunID("run_123"),
-		Reason:   "superseded by a newer run",
-	})
-	if err != nil {
-		t.Fatalf("CancelRun returned error: %v", err)
-	}
-
-	if runs.cancellation.RunID != domain.TemplateRunID("run_123") {
-		t.Fatalf("cancellation run ID = %q, want run_123", runs.cancellation.RunID)
-	}
-
-	if runs.cancellation.RequestedBy != domain.UserID(keycloakSubject) {
-		t.Fatalf("cancellation actor = %q, want %q", runs.cancellation.RequestedBy, keycloakSubject)
-	}
-
-	if runs.cancellation.Reason != "superseded by a newer run" {
-		t.Fatalf("cancellation reason = %q", runs.cancellation.Reason)
-	}
-
-	if !runs.cancellation.RequestedAt.Equal(now) {
-		t.Fatalf("cancellation time = %v, want %v", runs.cancellation.RequestedAt, now)
-	}
-
-	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunCancellation {
-		t.Fatalf("queued requests = %#v, want one cancellation signal", work.requests)
-	}
-}
-
-func TestCancelRunDoesNotReconcileWorkflowInline(t *testing.T) {
-	t.Parallel()
-
-	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
-	work := &recordingUnitOfWork{templateRuns: runs}
-	service := NewService(Service{
-		Authorization:  testPlatformAuthorizer(t),
-		Work:           work,
-		TemplateRuns:   runs,
-		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Clock:          fixedClock{now: time.Now()},
-	})
-
-	if err := service.CancelRun(authenticatedContext(), CancelRunCommand{TenantID: "tenant_123", RunID: "run_123"}); err != nil {
-		t.Fatalf("CancelRun returned error: %v", err)
-	}
-	if runs.reconciledRunID != "" {
-		t.Fatalf("reconciled run ID = %q, want no inline reconciliation", runs.reconciledRunID)
-	}
-}
-
-func TestCancelRunDoesNotSignalWhenRunIsNotCancelable(t *testing.T) {
-	t.Parallel()
-
-	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}, cancellationErr: ErrRunNotCancelable}
+	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Status: domain.TemplateRunApplyStarted}}
 	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
@@ -1721,12 +1656,15 @@ func TestCancelRunDoesNotSignalWhenRunIsNotCancelable(t *testing.T) {
 		Clock:          fixedClock{now: time.Now()},
 	})
 
-	err := service.CancelRun(authenticatedContext(), CancelRunCommand{
+	err := service.DiscardRun(authenticatedContext(), DiscardRunCommand{
 		TenantID: domain.TenantID("tenant_123"),
 		RunID:    domain.TemplateRunID("run_123"),
 	})
-	if !errors.Is(err, ErrRunNotCancelable) {
-		t.Fatalf("error = %v, want ErrRunNotCancelable", err)
+	if !errors.Is(err, ErrRunNotDiscardable) {
+		t.Fatalf("error = %v, want ErrRunNotDiscardable", err)
+	}
+	if runs.discarded.RunID != "" {
+		t.Fatalf("discarded = %#v, want nothing", runs.discarded)
 	}
 
 	if len(work.requests) != 0 {
@@ -2403,7 +2341,6 @@ type recordingTemplateRunRepository struct {
 	run                    domain.TemplateRun
 	list                   []domain.TemplateRun
 	approval               domain.TemplateRunApproval
-	cancellation           domain.TemplateRunCancellation
 	gotGetTenantID         domain.TenantID
 	gotGetRunID            domain.TemplateRunID
 	gotListTenantID        domain.TenantID
@@ -2411,10 +2348,7 @@ type recordingTemplateRunRepository struct {
 	getErr                 error
 	createErr              error
 	approvalErr            error
-	cancellationErr        error
-	canceledBeforeApply    domain.TemplateRunCancellation
-	reconciledRunID        domain.TemplateRunID
-	reconciledSummary      string
+	discarded              domain.TemplateRunDiscard
 	// createdRunNumber is what CreateTemplateRun reports it assigned.
 	createdRunNumber int
 }
@@ -2450,28 +2384,14 @@ func (repository *recordingTemplateRunRepository) ApproveTemplateRun(_ context.C
 	return nil
 }
 
-// CancelTemplateRunBeforeApply cancels directly when the run is waiting for
-// approval or approved, as the real store does.
-func (repository *recordingTemplateRunRepository) CancelTemplateRunBeforeApply(_ context.Context, cancellation domain.TemplateRunCancellation) (bool, error) {
+// DiscardTemplateRun discards only a run waiting for approval or approved, as
+// the real store does.
+func (repository *recordingTemplateRunRepository) DiscardTemplateRun(_ context.Context, discard domain.TemplateRunDiscard) (bool, error) {
 	if repository.run.Status != domain.TemplateRunWaitingApproval && repository.run.Status != domain.TemplateRunApproved {
 		return false, nil
 	}
-	repository.canceledBeforeApply = cancellation
+	repository.discarded = discard
 	return true, nil
-}
-
-func (repository *recordingTemplateRunRepository) RequestTemplateRunCancellation(_ context.Context, cancellation domain.TemplateRunCancellation) error {
-	if repository.cancellationErr != nil {
-		return repository.cancellationErr
-	}
-	repository.cancellation = cancellation
-	return nil
-}
-
-func (repository *recordingTemplateRunRepository) ReconcileTemplateRunCancellation(_ context.Context, _ domain.TenantID, runID domain.TemplateRunID, errorSummary string) error {
-	repository.reconciledRunID = runID
-	repository.reconciledSummary = errorSummary
-	return nil
 }
 
 type recordingTemplateRunLogReader struct {
@@ -2634,9 +2554,6 @@ type recordingWorkflowDispatcher struct {
 	startTemplateRunCalls int
 	syncInput             domain.TemplateSyncWorkflowInput
 	approvalRunID         domain.TemplateRunID
-	cancelRunID           domain.TemplateRunID
-	cancelSignal          domain.CancelSignal
-	cancelErr             error
 }
 
 func (dispatcher *recordingWorkflowDispatcher) StartTemplateRun(_ context.Context, input domain.TemplateRunWorkflowInput) error {
@@ -2667,15 +2584,6 @@ func (dispatcher *recordingWorkflowDispatcher) StartTemplateSync(_ context.Conte
 // approval queues the start instead, in the approval's transaction.
 func (dispatcher *recordingWorkflowDispatcher) StartTemplateApply(_ context.Context, input domain.TemplateRunWorkflowInput) error {
 	dispatcher.approvalRunID = input.RunID
-	return nil
-}
-
-func (dispatcher *recordingWorkflowDispatcher) CancelTemplateRun(_ context.Context, _ domain.TenantID, runID domain.TemplateRunID, signal domain.CancelSignal) error {
-	if dispatcher.cancelErr != nil {
-		return dispatcher.cancelErr
-	}
-	dispatcher.cancelRunID = runID
-	dispatcher.cancelSignal = signal
 	return nil
 }
 
@@ -2782,21 +2690,14 @@ func (unit *recordingUnitOfWork) ApproveTemplateRun(ctx context.Context, approva
 	return unit.templateRuns.ApproveTemplateRun(ctx, approval)
 }
 
-func (unit *recordingUnitOfWork) CancelTemplateRunBeforeApply(ctx context.Context, cancellation domain.TemplateRunCancellation) (bool, error) {
-	canceler, ok := unit.templateRuns.(interface {
-		CancelTemplateRunBeforeApply(context.Context, domain.TemplateRunCancellation) (bool, error)
+func (unit *recordingUnitOfWork) DiscardTemplateRun(ctx context.Context, discard domain.TemplateRunDiscard) (bool, error) {
+	discarder, ok := unit.templateRuns.(interface {
+		DiscardTemplateRun(context.Context, domain.TemplateRunDiscard) (bool, error)
 	})
 	if !ok {
 		return false, nil
 	}
-	return canceler.CancelTemplateRunBeforeApply(ctx, cancellation)
-}
-
-func (unit *recordingUnitOfWork) RequestTemplateRunCancellation(ctx context.Context, cancellation domain.TemplateRunCancellation) error {
-	if unit.templateRuns == nil {
-		return nil
-	}
-	return unit.templateRuns.RequestTemplateRunCancellation(ctx, cancellation)
+	return discarder.DiscardTemplateRun(ctx, discard)
 }
 
 func (unit *recordingUnitOfWork) Enqueue(_ context.Context, requests ...queue.Request) error {
@@ -2912,39 +2813,6 @@ func TestApproveRunPairsApprovalAuditAndApplyIntentInTransaction(t *testing.T) {
 	}
 	if payload.TenantID != "tenant_123" || payload.RunID != "run_123" {
 		t.Fatalf("apply payload = %#v", payload)
-	}
-}
-
-func TestCancelRunPairsCancellationWithSignalIntentInTransaction(t *testing.T) {
-	t.Parallel()
-
-	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
-	work := &recordingUnitOfWork{templateRuns: runs}
-	workflows := &recordingWorkflowDispatcher{}
-	service := NewService(Service{
-		Work:           work,
-		Authorization:  testPlatformAuthorizer(t),
-		TemplateRuns:   runs,
-		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Workflows:      workflows,
-		Clock:          fixedClock{now: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)},
-	})
-
-	if err := service.CancelRun(authenticatedContext(), CancelRunCommand{TenantID: "tenant_123", RunID: "run_123", Reason: "superseded"}); err != nil {
-		t.Fatalf("CancelRun returned error: %v", err)
-	}
-	if work.inTxCalls != 1 || runs.cancellation.RunID != "run_123" {
-		t.Fatalf("transaction calls = %d, cancellation = %#v", work.inTxCalls, runs.cancellation)
-	}
-	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunCancellation || work.requests[0].ActorSubject != keycloakSubject || work.requests[0].TenantID != "tenant_123" || workflows.cancelRunID != "" {
-		t.Fatalf("requests = %#v, direct cancellation = %q", work.requests, workflows.cancelRunID)
-	}
-	var payload SignalRunCancellationPayload
-	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
-		t.Fatalf("decode cancellation intent: %v", err)
-	}
-	if payload.TenantID != "tenant_123" || payload.RunID != "run_123" || payload.Signal.RequestedBy != keycloakSubject || payload.Signal.Reason != "superseded" {
-		t.Fatalf("cancellation payload = %#v", payload)
 	}
 }
 

@@ -2,9 +2,8 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, CircleStop, Loader2, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
-import { isTerminalRunStatus } from "../../api/polling";
 import { queryKeys } from "../../api/queryKeys";
-import { useApproveRunMutation, useCancelRunMutation, useTemplateRunsQuery } from "../../api/queries";
+import { useApproveRunMutation, useDiscardRunMutation, useTemplateRunsQuery } from "../../api/queries";
 import type { TemplateRun } from "../../api/types";
 import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
@@ -20,11 +19,12 @@ interface TemplateRunHistoryProps {
 
 // Every run recorded for a template, newest first, as a table: its number
 // (the link to its detail), where it is (which names its operation, so there is
-// no Type column), what its plan would change, who started it and when. A run that is still going carries its own actions in a
-// trailing column that only appears while some run has one: a plan waiting for
-// approval offers Approve (Destroy, on a destroy run), which applies exactly that
-// saved plan, and Discard; anything else in flight offers Cancel. Actions a
-// viewer may not take are left out rather than disabled.
+// no Type column), what its plan would change, who started it and when. A plan
+// waiting for approval carries its own actions in a trailing column that only
+// appears while some run has one: Approve (Destroy, on a destroy run), which
+// applies exactly that saved plan, and Discard. A run planning or applying
+// cannot be stopped, so it offers nothing. Actions a viewer may not take are
+// left out rather than disabled.
 export default function TemplateRunHistory({ stackId, stackTemplateId }: TemplateRunHistoryProps) {
   const [errorMessage, setErrorMessage] = useState("");
   const queryClient = useQueryClient();
@@ -32,7 +32,7 @@ export default function TemplateRunHistory({ stackId, stackTemplateId }: Templat
   const runs = runsQuery.data ?? [];
 
   const approveRunMutation = useApproveRunMutation(tenantID);
-  const cancelRunMutation = useCancelRunMutation(tenantID);
+  const discardRunMutation = useDiscardRunMutation(tenantID);
 
   async function runAction(action: () => Promise<void>) {
     setErrorMessage("");
@@ -44,14 +44,14 @@ export default function TemplateRunHistory({ stackId, stackTemplateId }: Templat
     await queryClient.invalidateQueries({ queryKey: queryKeys.templateRuns(tenantID, stackTemplateId) });
   }
 
-  const hasActions = runs.some((run) => !isTerminalRunStatus(run.status));
+  const hasActions = runs.some((run) => run.status === "waiting_approval");
   const rowActions = {
     stackId,
     approvingRunID: approveRunMutation.isPending ? approveRunMutation.variables : undefined,
-    cancelingRunID: cancelRunMutation.isPending ? cancelRunMutation.variables?.runID : undefined,
+    discardingRunID: discardRunMutation.isPending ? discardRunMutation.variables?.runID : undefined,
     onApprove: (run: TemplateRun) => void runAction(() => approveRunMutation.mutateAsync(run.id)),
-    onCancel: (run: TemplateRun) =>
-      void runAction(() => cancelRunMutation.mutateAsync({ runID: run.id, body: { reason: "canceled from the runs list" } }))
+    onDiscard: (run: TemplateRun) =>
+      void runAction(() => discardRunMutation.mutateAsync({ runID: run.id, body: { reason: "discarded from the runs list" } }))
   };
 
   return (
@@ -110,15 +110,14 @@ interface RunRowProps {
   hasActions: boolean;
   stackId: string;
   approvingRunID?: string;
-  cancelingRunID?: string;
+  discardingRunID?: string;
   onApprove: (run: TemplateRun) => void;
-  onCancel: (run: TemplateRun) => void;
+  onDiscard: (run: TemplateRun) => void;
 }
 
-function RunRow({ run, to, hasActions, stackId, approvingRunID, cancelingRunID, onApprove, onCancel }: RunRowProps) {
+function RunRow({ run, to, hasActions, stackId, approvingRunID, discardingRunID, onApprove, onDiscard }: RunRowProps) {
   const tone = statusTone(run.status);
   const showApprove = run.status === "waiting_approval";
-  const showCancel = !isTerminalRunStatus(run.status);
   const summary = planSummaryLabel(run.plan_summary);
 
   return (
@@ -149,24 +148,15 @@ function RunRow({ run, to, hasActions, stackId, approvingRunID, cancelingRunID, 
       </td>
       {hasActions && (
         <td className="data-table__actions">
-          {showApprove ? (
+          {showApprove && (
             <WaitingRunActions
               run={run}
               stackId={stackId}
               approveBusy={approvingRunID === run.id}
-              discardBusy={cancelingRunID === run.id}
+              discardBusy={discardingRunID === run.id}
               onApprove={() => onApprove(run)}
-              onDiscard={() => onCancel(run)}
+              onDiscard={() => onDiscard(run)}
             />
-          ) : (
-            showCancel && (
-              <RequireCapability capability="canOperate" stackId={stackId}>
-                <button className="secondary-button" type="button" disabled={cancelingRunID === run.id} onClick={() => onCancel(run)}>
-                  {cancelingRunID === run.id ? <Loader2 size={16} className="spin" /> : <CircleStop size={16} />}
-                  Cancel
-                </button>
-              </RequireCapability>
-            )
           )}
         </td>
       )}

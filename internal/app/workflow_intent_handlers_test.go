@@ -7,8 +7,6 @@ import (
 	"reflect"
 	"testing"
 
-	"go.temporal.io/api/serviceerror"
-
 	"github.com/vishu42/tflive/internal/domain"
 	"github.com/vishu42/tflive/internal/queue"
 )
@@ -17,11 +15,9 @@ type recordingWorkflowIntentDispatcher struct {
 	startRunInput  domain.TemplateRunWorkflowInput
 	startSyncInput domain.TemplateSyncWorkflowInput
 	startApply     domain.TemplateRunWorkflowInput
-	cancellation   domain.CancelSignal
 	startRunErr    error
 	startSyncErr   error
 	startApplyErr  error
-	cancelErr      error
 }
 
 func (d *recordingWorkflowIntentDispatcher) StartTemplateRun(_ context.Context, input domain.TemplateRunWorkflowInput) error {
@@ -37,23 +33,6 @@ func (d *recordingWorkflowIntentDispatcher) StartTemplateSync(_ context.Context,
 func (d *recordingWorkflowIntentDispatcher) StartTemplateApply(_ context.Context, input domain.TemplateRunWorkflowInput) error {
 	d.startApply = input
 	return d.startApplyErr
-}
-
-func (d *recordingWorkflowIntentDispatcher) CancelTemplateRun(_ context.Context, _ domain.TenantID, _ domain.TemplateRunID, signal domain.CancelSignal) error {
-	d.cancellation = signal
-	return d.cancelErr
-}
-
-type recordingCancellationReconciler struct {
-	err     error
-	runID   domain.TemplateRunID
-	summary string
-}
-
-func (r *recordingCancellationReconciler) ReconcileTemplateRunCancellation(_ context.Context, _ domain.TenantID, runID domain.TemplateRunID, summary string) error {
-	r.runID = runID
-	r.summary = summary
-	return r.err
 }
 
 func TestStartTemplateApplyHandlerDeliversCompleteInput(t *testing.T) {
@@ -107,37 +86,7 @@ func TestStartTemplateAndSignalRunHandlersPropagateDispatcherErrors(t *testing.T
 	}
 }
 
-func TestSignalRunCancellationHandlerReconcilesNotFound(t *testing.T) {
-	dispatcher := &recordingWorkflowIntentDispatcher{cancelErr: serviceerror.NewNotFound("closed")}
-	reconciler := &recordingCancellationReconciler{}
-	handler := NewSignalRunCancellationHandler(dispatcher, reconciler)
-	payload := SignalRunCancellationPayload{TenantID: "tenant_1", RunID: "run_1", Signal: domain.CancelSignal{RequestedBy: "user_1", Reason: "stop"}}
-
-	followUps, err := handler.Deliver(context.Background(), queue.Item{Payload: marshalWorkflowIntentPayload(t, payload)})
-	if err != nil {
-		t.Fatalf("Deliver() error = %v", err)
-	}
-	if len(followUps) != 0 || reconciler.runID != "run_1" || reconciler.summary == "" {
-		t.Fatalf("follow-ups = %+v, reconciliation = %+v, want no follow-ups and reconciliation", followUps, reconciler)
-	}
-}
-
-func TestSignalRunCancellationHandlerReturnsNonNotFoundAndReconciliationErrors(t *testing.T) {
-	dispatcherErr := errors.New("dispatcher unavailable")
-	handler := NewSignalRunCancellationHandler(&recordingWorkflowIntentDispatcher{cancelErr: dispatcherErr}, &recordingCancellationReconciler{})
-	payload := marshalWorkflowIntentPayload(t, SignalRunCancellationPayload{})
-	if _, err := handler.Deliver(context.Background(), queue.Item{Payload: payload}); !errors.Is(err, dispatcherErr) {
-		t.Fatalf("Deliver() error = %v, want dispatcher error", err)
-	}
-
-	reconcileErr := errors.New("postgres unavailable")
-	handler = NewSignalRunCancellationHandler(&recordingWorkflowIntentDispatcher{cancelErr: serviceerror.NewNotFound("closed")}, &recordingCancellationReconciler{err: reconcileErr})
-	if _, err := handler.Deliver(context.Background(), queue.Item{Payload: payload}); !errors.Is(err, reconcileErr) {
-		t.Fatalf("Deliver() error = %v, want reconciliation error", err)
-	}
-}
-
-func TestStartTemplateAndSignalRunSpecsUseFrozenKeysAndRejectMalformedPayloads(t *testing.T) {
+func TestStartTemplateSpecsUseFrozenKeysAndRejectMalformedPayloads(t *testing.T) {
 	tests := []struct {
 		spec    queue.Spec
 		payload any
@@ -146,7 +95,6 @@ func TestStartTemplateAndSignalRunSpecsUseFrozenKeysAndRejectMalformedPayloads(t
 		{StartTemplateRunSpec, StartTemplateRunPayload{TenantID: "tenant_1", RunID: "run_1"}, "run:tenant_1/run_1"},
 		{StartTemplateSyncSpec, StartTemplateSyncPayload{TenantID: "tenant_1", RegistrationID: "registration_1"}, "registration:tenant_1/registration_1"},
 		{StartTemplateApplySpec, StartTemplateApplyPayload{TenantID: "tenant_1", RunID: "run_1"}, "run:tenant_1/run_1"},
-		{SignalRunCancellationSpec, SignalRunCancellationPayload{TenantID: "tenant_1", RunID: "run_1"}, "run:tenant_1/run_1"},
 	}
 	for _, tt := range tests {
 		key, err := tt.spec.Key(marshalWorkflowIntentPayload(t, tt.payload))

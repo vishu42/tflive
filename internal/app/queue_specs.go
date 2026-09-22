@@ -16,6 +16,5 @@ func QueueSpecs() []queue.Spec {
 		StartTemplateRunSpec,
 		StartTemplateSyncSpec,
 		StartTemplateApplySpec,
-		SignalRunCancellationSpec,
 	}
 }

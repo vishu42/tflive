@@ -33,7 +33,7 @@ var (
 	ErrStackTemplatePlanStale             = errors.New("stack template plan does not match desired state")
 	ErrTemplateRunInFlight                = errors.New("a run is already in flight for this stack template")
 	ErrRunNotApprovable                   = errors.New("run is not approvable")
-	ErrRunNotCancelable                   = errors.New("run is not cancelable")
+	ErrRunNotDiscardable                  = errors.New("run has no plan waiting to discard")
 	ErrSelfApprovalForbidden              = errors.New("self-approval forbidden")
 	ErrLastOwner                          = errors.New("cannot remove the last stack owner")
 	ErrCredentialNameInvalid              = errors.New("credential name is invalid")
@@ -67,10 +67,9 @@ type TxRepo interface {
 	CreateTemplateRun(ctx context.Context, run domain.TemplateRun) (int, error)
 	CreateTemplateRegistration(ctx context.Context, registration domain.TemplateRegistration) error
 	ApproveTemplateRun(ctx context.Context, approval domain.TemplateRunApproval) error
-	// CancelTemplateRunBeforeApply cancels a run waiting for approval, or
-	// approved but not yet claimed by its apply, and reports whether it did.
-	CancelTemplateRunBeforeApply(ctx context.Context, cancellation domain.TemplateRunCancellation) (bool, error)
-	RequestTemplateRunCancellation(ctx context.Context, cancellation domain.TemplateRunCancellation) error
+	// DiscardTemplateRun discards a run waiting for approval, or approved but
+	// not yet claimed by its apply, and reports whether it did.
+	DiscardTemplateRun(ctx context.Context, discard domain.TemplateRunDiscard) (bool, error)
 }
 
 // UnitOfWork commits a domain write and a queued intent atomically. This is
@@ -115,10 +114,6 @@ type TemplateRunRepository interface {
 	ListTemplateRuns(ctx context.Context, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID) ([]domain.TemplateRun, error)
 	// ApproveTemplateRun records approval only when the tenant-owned run is waiting for approval.
 	ApproveTemplateRun(ctx context.Context, approval domain.TemplateRunApproval) error
-	// RequestTemplateRunCancellation records cancellation only when the tenant-owned run can still stop.
-	RequestTemplateRunCancellation(ctx context.Context, cancellation domain.TemplateRunCancellation) error
-	// ReconcileTemplateRunCancellation marks a persisted cancellation request failed when its workflow is closed.
-	ReconcileTemplateRunCancellation(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, errorSummary string) error
 }
 
 // TemplateRegistrationRepository persists template registration attempts.
@@ -158,7 +153,6 @@ type WorkflowDispatcher interface {
 	// StartTemplateApply starts the workflow that applies an approved run's
 	// saved plan.
 	StartTemplateApply(ctx context.Context, input domain.TemplateRunWorkflowInput) error
-	CancelTemplateRun(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, signal domain.CancelSignal) error
 }
 
 // AuditRepository appends security audit events. It exposes no update or
@@ -429,8 +423,8 @@ type ApproveRunCommand struct {
 	RunID    domain.TemplateRunID
 }
 
-// CancelRunCommand asks the app to cancel a running run.
-type CancelRunCommand struct {
+// DiscardRunCommand asks the app to discard a plan waiting for approval.
+type DiscardRunCommand struct {
 	TenantID domain.TenantID
 	RunID    domain.TemplateRunID
 	Reason   string
@@ -1617,61 +1611,41 @@ func templateRunWorkflowInput(run domain.TemplateRun, templateRevision domain.Te
 	}
 }
 
-// CancelRun records a cancellation request and signals the running workflow.
-func (service *Service) CancelRun(ctx context.Context, command CancelRunCommand) error {
+// DiscardRun throws away a plan waiting for approval, or approved but not yet
+// claimed by its apply. Neither has a workflow running: the plan workflow ended
+// with the plan, and the apply workflow has not begun. So discarding is one
+// write, which also drops the saved plan's key; a run past that point has
+// nothing left to discard and is refused.
+func (service *Service) DiscardRun(ctx context.Context, command DiscardRunCommand) error {
 	actor, err := authenticatedActor(ctx)
 	if err != nil {
 		return err
 	}
-	if err := validateCancelRunCommand(command); err != nil {
+	if err := validateDiscardRunCommand(command); err != nil {
 		return err
 	}
 
 	if _, err := service.authorizedTemplateRun(ctx, command.TenantID, command.RunID, authorization.RelationCanOperate, ErrForbidden); err != nil {
 		return err
 	}
-	cancellation := domain.TemplateRunCancellation{
+	discard := domain.TemplateRunDiscard{
 		RunID:       command.RunID,
 		TenantID:    command.TenantID,
 		RequestedBy: actor,
 		Reason:      command.Reason,
 		RequestedAt: service.Clock.Now(),
 	}
-
-	signal := domain.CancelSignal{
-		RequestedBy: actor,
-		Reason:      command.Reason,
-	}
-	payload, err := json.Marshal(SignalRunCancellationPayload{
-		TenantID: command.TenantID,
-		RunID:    command.RunID,
-		Signal:   signal,
-	})
-	if err != nil {
-		return fmt.Errorf("encode run cancellation payload: %w", err)
-	}
-	if err := service.Work.InTx(ctx, func(ctx context.Context, repository TxRepo, enqueuer queue.Enqueuer) error {
-		// A plan waiting for approval, or approved but not yet applying, has
-		// no workflow to signal. Canceling it is only this write, which also
-		// drops its saved plan's key.
-		canceled, err := repository.CancelTemplateRunBeforeApply(ctx, cancellation)
+	if err := service.Work.InTx(ctx, func(ctx context.Context, repository TxRepo, _ queue.Enqueuer) error {
+		discarded, err := repository.DiscardTemplateRun(ctx, discard)
 		if err != nil {
 			return err
 		}
-		if canceled {
-			return nil
+		if !discarded {
+			return ErrRunNotDiscardable
 		}
-		if err := repository.RequestTemplateRunCancellation(ctx, cancellation); err != nil {
-			return err
-		}
-		return enqueuer.Enqueue(ctx, queue.Request{
-			Kind:         KindSignalRunCancellation,
-			Payload:      payload,
-			ActorSubject: string(actor),
-			TenantID:     string(command.TenantID),
-		})
+		return nil
 	}); err != nil {
-		return fmt.Errorf("request template run cancellation: %w", err)
+		return fmt.Errorf("discard template run: %w", err)
 	}
 
 	return nil
@@ -1925,7 +1899,7 @@ func validateApproveRunCommand(command ApproveRunCommand) error {
 	}
 }
 
-func validateCancelRunCommand(command CancelRunCommand) error {
+func validateDiscardRunCommand(command DiscardRunCommand) error {
 	switch {
 	case command.TenantID == "":
 		return fmt.Errorf("%w: tenant id is required", ErrInvalidCommand)

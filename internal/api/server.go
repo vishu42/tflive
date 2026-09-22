@@ -227,8 +227,8 @@ func NewServer(service *app.Service, tenantID domain.TenantID, options ...Server
 	// Template run decision routes.
 	// Records approval for a waiting template run.
 	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/approval", server.handleApproveRun)
-	// Requests cancellation for a running template run.
-	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/cancellation", server.handleCancelRun)
+	// Discards a template run's plan waiting for approval.
+	server.handleTenantRoute("POST /v1/tenants/{tenant_id}/template-runs/{run_id}/discard", server.handleDiscardRun)
 	server.handler = server.mux
 	return server
 }
@@ -792,13 +792,13 @@ func (server *Server) handleApproveRun(response http.ResponseWriter, request *ht
 	response.WriteHeader(http.StatusNoContent)
 }
 
-func (server *Server) handleCancelRun(response http.ResponseWriter, request *http.Request) {
-	var body cancelRunRequest
+func (server *Server) handleDiscardRun(response http.ResponseWriter, request *http.Request) {
+	var body discardRunRequest
 	if !decodeRequestBody(response, request, &body) {
 		return
 	}
 
-	err := server.service.CancelRun(request.Context(), app.CancelRunCommand{
+	err := server.service.DiscardRun(request.Context(), app.DiscardRunCommand{
 		TenantID: domain.TenantID(request.PathValue("tenant_id")),
 		RunID:    domain.TemplateRunID(request.PathValue("run_id")),
 		Reason:   body.Reason,
@@ -868,7 +868,7 @@ type credentialRequest struct {
 
 type approveRunRequest struct{}
 
-type cancelRunRequest struct {
+type discardRunRequest struct {
 	Reason string `json:"reason"`
 }
 
@@ -1096,13 +1096,13 @@ func writeAppError(response http.ResponseWriter, err error) {
 	case errors.Is(err, app.ErrStackTemplatePlanStale):
 		writeError(response, http.StatusConflict, "plan_stale", err.Error())
 	// Its own code, because the client can act on this one too: the run it is
-	// competing with is visible, so it can wait for it or cancel it. It also tells
+	// competing with is visible, so it can wait for it or discard it. It also tells
 	// the client its view of the run history is stale and worth refetching.
 	case errors.Is(err, app.ErrTemplateRunInFlight):
 		writeError(response, http.StatusConflict, "run_in_flight", err.Error())
 	case errors.Is(err, app.ErrStackTemplateNotRunnable),
 		errors.Is(err, app.ErrRunNotApprovable),
-		errors.Is(err, app.ErrRunNotCancelable),
+		errors.Is(err, app.ErrRunNotDiscardable),
 		errors.Is(err, app.ErrDuplicateStackSlug),
 		errors.Is(err, app.ErrTemplateNotInstallable),
 		errors.Is(err, app.ErrStackTemplateConfigInvalid),

@@ -27,8 +27,6 @@ const (
 	TemplateApplyWorkflowName = "TemplateApplyWorkflow"
 	TemplateSyncWorkflowName  = "TemplateSyncWorkflow"
 
-	CancelSignalName = "cancel"
-
 	RecordTemplateRunStatusActivityName          = "RecordTemplateRunStatus"
 	RecordTemplateRunLogActivityName             = "RecordTemplateRunLog"
 	RecordTemplateRegistrationStatusActivityName = "RecordTemplateRegistrationStatus"
@@ -69,10 +67,7 @@ const (
 	// waits for the next report before failing the activity.
 	//
 	// The pair is the only thing that makes a lost executor visible before the
-	// full Terraform timeout expires, and the only channel by which a cancel
-	// signal reaches a running command: Temporal delivers activity
-	// cancellation on the heartbeat response, so an activity that never
-	// heartbeats can never be canceled.
+	// full Terraform timeout expires.
 	//
 	// The slack between them is deliberately wide -- six intervals. Terraform
 	// commands are not retried, so a heartbeat lost to a GC pause or a blip in
@@ -289,9 +284,6 @@ const (
 	// PlanOutcomePlanned: a plan run's plan had changes. A plan run only
 	// plans, so the run completes with the changes recorded.
 	PlanOutcomePlanned PlanOutcome = "planned"
-	// PlanOutcomeCanceled: someone canceled the run while it planned, and
-	// finishing the plan carried the cancellation out.
-	PlanOutcomeCanceled PlanOutcome = "canceled"
 )
 
 // FinishPlanActivityInput records a finished plan and decides what follows.
@@ -313,7 +305,7 @@ type BeginApplyActivityInput struct {
 }
 
 // BeginApplyActivityOutput reports whether the claim won. It loses when the
-// run was canceled after it was approved and before its apply began.
+// plan was discarded after it was approved and before its apply began.
 type BeginApplyActivityOutput struct {
 	Claimed bool
 }
@@ -354,10 +346,4 @@ type TemplateRegistrationStatusActivityInput struct {
 	TemplateRevisionID TemplateRevisionID
 	ResolvedCommitSHA  string
 	ErrorSummary       string
-}
-
-// CancelSignal records a cancel actor and reason for a running workflow.
-type CancelSignal struct {
-	RequestedBy UserID
-	Reason      string
 }

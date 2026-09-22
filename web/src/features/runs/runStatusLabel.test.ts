@@ -26,10 +26,8 @@ describe("runStatusLabel", () => {
     ["destroy", "failed", false, "Destroy plan failed"],
     ["apply", "failed", true, "Apply failed"],
     ["destroy", "failed", true, "Destroy failed"],
-    ["apply", "canceling", true, "Canceling"],
-    ["destroy", "canceling", true, "Canceling destroy"],
-    ["apply", "canceled", true, "Canceled"],
-    ["destroy", "canceled", false, "Destroy canceled"]
+    ["apply", "canceled", true, "Discarded"],
+    ["destroy", "canceled", true, "Destroy discarded"]
   ] as const)("%s %s (planned: %s) reads %s", (operation, status, planned, expected) => {
     expect(label(operation, status, planned)).toBe(expected);
   });
@@ -41,9 +39,7 @@ describe("runStatusLabel", () => {
     ["plan_finished", true, "Planning"],
     ["completed", true, "Plan finished"],
     ["completed", false, "No changes"],
-    ["failed", true, "Plan failed"],
-    ["canceling", false, "Canceling"],
-    ["canceled", false, "Canceled"]
+    ["failed", true, "Plan failed"]
   ] as const)("plan run %s (planned: %s) reads %s", (status, planned, expected) => {
     expect(label("plan", status, planned)).toBe(expected);
   });

@@ -318,42 +318,43 @@ describe("RunDetailScreen", () => {
     expect(screen.queryByRole("button", { name: /^Approve$/ })).toBeNull();
   });
 
-  it("enables Cancel for a non-terminal run and calls the cancellation endpoint, gated by canOperate", async () => {
+  // A run planning or applying cannot be stopped, so it offers no action,
+  // whatever the viewer may do.
+  it.each(["plan_started", "plan_finished", "apply_started"] as const)("offers nothing on a run that is %s", (status) => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
-    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "plan_finished" }));
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = String(input);
-      if (url.endsWith("/logs")) {
-        return jsonResponse([]);
-      }
-      if (init?.method === "POST" && url.endsWith("/template-runs/run_1/cancellation")) {
-        return new Response(null, { status: 204 });
-      }
-      throw new Error(`unexpected fetch: ${url} ${init?.method ?? "GET"}`);
-    });
-
-    renderScreen(queryClient);
-
-    expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: /Cancel/ }));
-
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/template-runs/run_1/cancellation"),
-        expect.objectContaining({ method: "POST" })
-      )
-    );
-  });
-
-  it("hides Cancel when canOperate is denied", async () => {
-    const queryClient = testQueryClient();
-    seedCapabilities(queryClient, { ...allAllowed, canOperate: false });
-    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "plan_finished" }));
+    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status }));
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([]));
 
     renderScreen(queryClient);
 
-    expect(screen.queryByRole("button", { name: /Cancel/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Cancel|Discard|Approve/ })).toBeNull();
+  });
+
+  it("discards a plan waiting for approval", async () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "waiting_approval", operation: "apply" }));
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (init?.method === "POST" && url.endsWith("/template-runs/run_1/discard")) {
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/template-runs/run_1")) {
+        return jsonResponse(run({ status: "canceled", operation: "apply" }));
+      }
+      return jsonResponse([]);
+    });
+
+    renderScreen(queryClient);
+
+    fireEvent.click(screen.getByRole("button", { name: /Discard/ }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/template-runs/run_1/discard"),
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ reason: "discarded from run detail" }) })
+      )
+    );
   });
 });

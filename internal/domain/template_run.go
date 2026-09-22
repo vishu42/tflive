@@ -75,8 +75,6 @@ const (
 	TemplateRunWorkspaceSelected TemplateRunStatus = "workspace_selected"
 	TemplateRunWaitingApproval   TemplateRunStatus = "waiting_approval"
 	TemplateRunApproved          TemplateRunStatus = "approved"
-	TemplateRunCancelRequested   TemplateRunStatus = "cancel_requested"
-	TemplateRunCanceling         TemplateRunStatus = "canceling"
 	TemplateRunCanceled          TemplateRunStatus = "canceled"
 	TemplateRunLockReleased      TemplateRunStatus = "lock_released"
 	TemplateRunCompleted         TemplateRunStatus = "completed"
@@ -117,8 +115,6 @@ var AllTemplateRunStatuses = []TemplateRunStatus{
 	TemplateRunWorkspaceSelected,
 	TemplateRunWaitingApproval,
 	TemplateRunApproved,
-	TemplateRunCancelRequested,
-	TemplateRunCanceling,
 	TemplateRunCanceled,
 	TemplateRunLockReleased,
 	TemplateRunCompleted,
@@ -198,9 +194,9 @@ type TemplateRunApproval struct {
 	ApprovedAt time.Time
 }
 
-// TemplateRunCancellation records who requested a run cancellation.
-// TemplateRunCancellation records who requested a run cancellation.
-type TemplateRunCancellation struct {
+// TemplateRunDiscard records who threw away a plan waiting for approval, and
+// why. A discarded run ends canceled.
+type TemplateRunDiscard struct {
 	RunID       TemplateRunID
 	TenantID    TenantID
 	RequestedBy UserID

@@ -214,32 +214,10 @@ func TestFinishTemplatePlanWithoutChangesRecordsTheSnapshotAsLive(t *testing.T) 
 	}
 }
 
-// A cancel that arrives while the plan runs is carried out when it finishes:
-// no workflow step is left to notice it.
-func TestFinishTemplatePlanCarriesOutACancelRequestedWhilePlanning(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	pool := openMigratedTestPool(t, ctx)
-	store := savedPlanStore(t, pool)
-	seedStackWithTemplate(t, ctx, store)
-	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunCancelRequested)
-
-	outcome, err := store.FinishTemplatePlan(ctx, domain.FinishPlanActivityInput{
-		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply, HasChanges: true,
-	})
-	if err != nil {
-		t.Fatalf("FinishTemplatePlan returned error: %v", err)
-	}
-	if outcome != domain.PlanOutcomeCanceled || runStatus(t, ctx, pool, "run_123") != domain.TemplateRunCanceled {
-		t.Fatalf("outcome = %q, status = %q; want canceled", outcome, runStatus(t, ctx, pool, "run_123"))
-	}
-}
-
-// The apply claims its run by moving it from approved to locked, and a canceled
-// run cannot be claimed. Canceling before the claim takes the same row the
-// other way, so exactly one of them wins.
-func TestApplyClaimAndCancelBeforeApplyExcludeEachOther(t *testing.T) {
+// The apply claims its run by moving it from approved to locked, and a
+// discarded run cannot be claimed. Discarding before the claim takes the same
+// row the other way, so exactly one of them wins.
+func TestApplyClaimAndDiscardExcludeEachOther(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -247,7 +225,7 @@ func TestApplyClaimAndCancelBeforeApplyExcludeEachOther(t *testing.T) {
 	store := savedPlanStore(t, pool)
 	seedStackWithTemplate(t, ctx, store)
 
-	// Claimed first: the cancel falls through to the signal path.
+	// Claimed first: there is no plan left to discard.
 	seedPlanRun(t, ctx, pool, "run_claimed", domain.OperationApply, domain.TemplateRunApproved)
 	claimed, err := store.BeginTemplateApply(ctx, "tenant_123", "run_claimed", false)
 	if err != nil || !claimed {
@@ -256,32 +234,32 @@ func TestApplyClaimAndCancelBeforeApplyExcludeEachOther(t *testing.T) {
 	if runStatus(t, ctx, pool, "run_claimed") != domain.TemplateRunLocked {
 		t.Fatalf("status = %q, want locked", runStatus(t, ctx, pool, "run_claimed"))
 	}
-	canceled, err := cancelTemplateRunBeforeApply(ctx, pool, domain.TemplateRunCancellation{TenantID: "tenant_123", RunID: "run_claimed", RequestedBy: "user_123"})
-	if err != nil || canceled {
-		t.Fatalf("cancel after claim = %v, %v; want not canceled here", canceled, err)
+	discarded, err := discardTemplateRun(ctx, pool, domain.TemplateRunDiscard{TenantID: "tenant_123", RunID: "run_claimed", RequestedBy: "user_123"})
+	if err != nil || discarded {
+		t.Fatalf("discard after claim = %v, %v; want nothing discarded", discarded, err)
 	}
 	if _, err := pool.Exec(ctx, `update template_runs set status = 'completed' where id = 'run_claimed'`); err != nil {
 		t.Fatal(err)
 	}
 
-	// Canceled first: the claim loses.
+	// Discarded first: the claim loses.
 	seedPlanRun(t, ctx, pool, "run_canceled", domain.OperationApply, domain.TemplateRunApproved)
 	if _, err := store.CreatePlanKey(ctx, "tenant_123", "run_canceled"); err != nil {
 		t.Fatal(err)
 	}
-	canceled, err = cancelTemplateRunBeforeApply(ctx, pool, domain.TemplateRunCancellation{TenantID: "tenant_123", RunID: "run_canceled", RequestedBy: "user_123", Reason: "changed my mind"})
-	if err != nil || !canceled {
-		t.Fatalf("cancel before claim = %v, %v; want canceled", canceled, err)
+	discarded, err = discardTemplateRun(ctx, pool, domain.TemplateRunDiscard{TenantID: "tenant_123", RunID: "run_canceled", RequestedBy: "user_123", Reason: "changed my mind"})
+	if err != nil || !discarded {
+		t.Fatalf("discard before claim = %v, %v; want discarded", discarded, err)
 	}
 	claimed, err = store.BeginTemplateApply(ctx, "tenant_123", "run_canceled", false)
 	if err != nil || claimed {
-		t.Fatalf("BeginTemplateApply after cancel = %v, %v; want not claimed", claimed, err)
+		t.Fatalf("BeginTemplateApply after discard = %v, %v; want not claimed", claimed, err)
 	}
 	if runStatus(t, ctx, pool, "run_canceled") != domain.TemplateRunCanceled {
 		t.Fatalf("status = %q, want canceled", runStatus(t, ctx, pool, "run_canceled"))
 	}
 	if !planKeyIsNull(t, ctx, pool, "run_canceled") {
-		t.Fatal("canceled run kept its plan key")
+		t.Fatal("discarded run kept its plan key")
 	}
 }
 
@@ -332,31 +310,6 @@ func TestAutoApprovedApplyIsClaimedFromQueued(t *testing.T) {
 	seedPlanRun(t, ctx, pool, "run_approved", domain.OperationApply, domain.TemplateRunApproved)
 	if claimed, err := store.BeginTemplateApply(ctx, "tenant_123", "run_approved", true); err != nil || claimed {
 		t.Fatalf("auto-approved claim of an approved run = %v, %v; want not claimed", claimed, err)
-	}
-}
-
-// A cancel that reaches an auto-approved apply before its claim leaves the run
-// cancel_requested, and the workflow ends at the lost claim without any step
-// that would notice. The claim carries the cancellation out.
-func TestAutoApprovedApplyClaimCarriesOutAnEarlierCancel(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	pool := openMigratedTestPool(t, ctx)
-	store := savedPlanStore(t, pool)
-	seedStackWithTemplate(t, ctx, store)
-	seedAutoApprovedRun(t, ctx, pool, "run_auto", domain.TemplateRunCancelRequested)
-
-	claimed, err := store.BeginTemplateApply(ctx, "tenant_123", "run_auto", true)
-	if err != nil || claimed {
-		t.Fatalf("BeginTemplateApply = %v, %v; want not claimed", claimed, err)
-	}
-	run, err := store.GetTemplateRun(ctx, "tenant_123", "run_auto")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if run.Status != domain.TemplateRunCanceled || run.CompletedAt.IsZero() {
-		t.Fatalf("status = %q, completed at = %v; want canceled and completed", run.Status, run.CompletedAt)
 	}
 }
 

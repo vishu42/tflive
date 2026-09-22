@@ -1,16 +1,14 @@
 import { useState } from "react";
-import { CircleStop, Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import { useParams } from "react-router-dom";
-import { isTerminalRunStatus } from "../../api/polling";
 import {
   useApproveRunMutation,
-  useCancelRunMutation,
+  useDiscardRunMutation,
   useTemplateRunLogQuery,
   useTemplateRunLogsQuery,
   useTemplateRunQuery,
   useTemplateRunsQuery
 } from "../../api/queries";
-import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
 import { formatDateTime } from "../../shared/formatTimestamp";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
@@ -52,10 +50,11 @@ export default function RunDetailScreen() {
   const logBody = logQuery.data ?? "";
 
   const approveRunMutation = useApproveRunMutation(tenantID);
-  const cancelRunMutation = useCancelRunMutation(tenantID);
+  const discardRunMutation = useDiscardRunMutation(tenantID);
 
+  // Only a plan waiting for approval can be acted on: a run planning or
+  // applying cannot be stopped.
   const canApprove = Boolean(run && run.status === "waiting_approval");
-  const canCancel = Boolean(run && !isTerminalRunStatus(run.status));
 
   async function runAction(action: () => Promise<void>) {
     setErrorMessage("");
@@ -72,9 +71,9 @@ export default function RunDetailScreen() {
     });
   }
 
-  async function handleCancel() {
+  async function handleDiscard() {
     await runAction(async () => {
-      await cancelRunMutation.mutateAsync({ runID: runId, body: { reason: "canceled from run detail" } });
+      await discardRunMutation.mutateAsync({ runID: runId, body: { reason: "discarded from run detail" } });
     });
   }
 
@@ -132,25 +131,16 @@ export default function RunDetailScreen() {
                 {runStatusLabel(run)}
               </span>
             </span>
-            {canCancel && (
+            {canApprove && (
               <span className="run-detail-actions">
-                {canApprove ? (
-                  <WaitingRunActions
-                    run={run}
-                    stackId={stackId}
-                    approveBusy={approveRunMutation.isPending}
-                    discardBusy={cancelRunMutation.isPending}
-                    onApprove={handleApprove}
-                    onDiscard={handleCancel}
-                  />
-                ) : (
-                  <RequireCapability capability="canOperate" stackId={stackId}>
-                    <button className="secondary-button" type="button" disabled={cancelRunMutation.isPending} onClick={handleCancel}>
-                      {cancelRunMutation.isPending ? <Loader2 size={16} className="spin" /> : <CircleStop size={16} />}
-                      Cancel
-                    </button>
-                  </RequireCapability>
-                )}
+                <WaitingRunActions
+                  run={run}
+                  stackId={stackId}
+                  approveBusy={approveRunMutation.isPending}
+                  discardBusy={discardRunMutation.isPending}
+                  onApprove={handleApprove}
+                  onDiscard={handleDiscard}
+                />
               </span>
             )}
           </header>

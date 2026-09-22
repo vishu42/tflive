@@ -11,7 +11,6 @@ import (
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/domain"
 	enumspb "go.temporal.io/api/enums/v1"
-	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 )
 
@@ -182,74 +181,6 @@ func TestStartTemplateApplyStartsTheApplyWorkflow(t *testing.T) {
 	}
 }
 
-// A run's plan workflow has closed by the time its apply workflow runs, so a
-// cancel that finds no plan workflow goes on to the apply workflow.
-func TestCancelTemplateRunFallsBackToTheApplyWorkflow(t *testing.T) {
-	t.Parallel()
-
-	workflowClient := &recordingWorkflowClient{signalErrs: map[string]error{
-		"template-run/tenant_123/run_123": serviceerror.NewNotFound("workflow execution already completed"),
-	}}
-	dispatcher := newDispatcher(workflowClient)
-
-	err := dispatcher.CancelTemplateRun(context.Background(), "tenant_123", "run_123", domain.CancelSignal{RequestedBy: requesterSubject})
-	if err != nil {
-		t.Fatalf("CancelTemplateRun returned error: %v", err)
-	}
-	if workflowClient.signalWorkflowID != "template-run/tenant_123/run_123/apply" {
-		t.Fatalf("last signaled workflow = %q, want the apply workflow", workflowClient.signalWorkflowID)
-	}
-}
-
-// With neither workflow running the NotFound comes back, which is what tells
-// the cancellation handler to reconcile the run itself.
-func TestCancelTemplateRunReportsNotFoundWhenNoWorkflowIsRunning(t *testing.T) {
-	t.Parallel()
-
-	notFound := serviceerror.NewNotFound("workflow not found")
-	dispatcher := newDispatcher(&recordingWorkflowClient{signalErr: notFound})
-
-	err := dispatcher.CancelTemplateRun(context.Background(), "tenant_123", "run_123", domain.CancelSignal{RequestedBy: requesterSubject})
-	var target *serviceerror.NotFound
-	if !errors.As(err, &target) {
-		t.Fatalf("error = %v, want NotFound", err)
-	}
-}
-
-func TestCancelTemplateRunSignalsWorkflow(t *testing.T) {
-	t.Parallel()
-
-	workflowClient := &recordingWorkflowClient{}
-	dispatcher := newDispatcher(workflowClient)
-	signal := domain.CancelSignal{
-		RequestedBy: requesterSubject,
-		Reason:      "superseded by a newer run",
-	}
-
-	err := dispatcher.CancelTemplateRun(
-		context.Background(),
-		domain.TenantID("tenant_123"),
-		domain.TemplateRunID("run_123"),
-		signal,
-	)
-	if err != nil {
-		t.Fatalf("CancelTemplateRun returned error: %v", err)
-	}
-
-	if workflowClient.signalWorkflowID != "template-run/tenant_123/run_123" {
-		t.Fatalf("signal workflow ID = %q", workflowClient.signalWorkflowID)
-	}
-	if workflowClient.signalRunID != "" {
-		t.Fatalf("signal run ID = %q, want empty", workflowClient.signalRunID)
-	}
-	if workflowClient.signalName != domain.CancelSignalName {
-		t.Fatalf("signal name = %q", workflowClient.signalName)
-	}
-	if !reflect.DeepEqual(workflowClient.signalArg, signal) {
-		t.Fatalf("signal arg = %#v, want %#v", workflowClient.signalArg, signal)
-	}
-}
-
 func TestStartTemplateRunWrapsClientError(t *testing.T) {
 	t.Parallel()
 
@@ -286,26 +217,6 @@ func TestStartTemplateSyncWrapsClientError(t *testing.T) {
 	}
 }
 
-func TestCancelTemplateRunWrapsClientError(t *testing.T) {
-	t.Parallel()
-
-	clientErr := errors.New("temporal unavailable")
-	dispatcher := newDispatcher(&recordingWorkflowClient{signalErr: clientErr})
-
-	err := dispatcher.CancelTemplateRun(
-		context.Background(),
-		domain.TenantID("tenant_123"),
-		domain.TemplateRunID("run_123"),
-		domain.CancelSignal{RequestedBy: requesterSubject},
-	)
-	if !errors.Is(err, clientErr) {
-		t.Fatalf("error = %v, want wrapped client error", err)
-	}
-	if !strings.Contains(err.Error(), "signal template run cancellation") {
-		t.Fatalf("error = %q, want cancellation context", err.Error())
-	}
-}
-
 func TestTemplatePlanWorkflowID(t *testing.T) {
 	t.Parallel()
 
@@ -325,18 +236,10 @@ func TestTemplateSyncWorkflowID(t *testing.T) {
 }
 
 type recordingWorkflowClient struct {
-	executeOptions   client.StartWorkflowOptions
-	executeWorkflow  interface{}
-	executeArgs      []interface{}
-	executeErr       error
-	signalWorkflowID string
-	signalRunID      string
-	signalName       string
-	signalArg        interface{}
-	signalErr        error
-	// signalErrs fails signals to particular workflow IDs; signalErr applies
-	// to every other.
-	signalErrs map[string]error
+	executeOptions  client.StartWorkflowOptions
+	executeWorkflow interface{}
+	executeArgs     []interface{}
+	executeErr      error
 }
 
 func (workflowClient *recordingWorkflowClient) ExecuteWorkflow(
@@ -349,21 +252,4 @@ func (workflowClient *recordingWorkflowClient) ExecuteWorkflow(
 	workflowClient.executeWorkflow = workflow
 	workflowClient.executeArgs = args
 	return nil, workflowClient.executeErr
-}
-
-func (workflowClient *recordingWorkflowClient) SignalWorkflow(
-	_ context.Context,
-	workflowID string,
-	runID string,
-	signalName string,
-	arg interface{},
-) error {
-	workflowClient.signalWorkflowID = workflowID
-	workflowClient.signalRunID = runID
-	workflowClient.signalName = signalName
-	workflowClient.signalArg = arg
-	if err, ok := workflowClient.signalErrs[workflowID]; ok {
-		return err
-	}
-	return workflowClient.signalErr
 }

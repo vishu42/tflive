@@ -673,8 +673,8 @@ func TestTemplateApplyWorkflowAppliesTheSavedPlan(t *testing.T) {
 	}
 }
 
-// An apply that loses its claim finds its run canceled since it was approved.
-// The cancellation already recorded the run's end, so it opens no session and
+// An apply that loses its claim finds its plan discarded since it was
+// approved. The discard already recorded the run's end, so it opens no session and
 // writes nothing.
 func TestTemplateApplyWorkflowStopsWhenItLosesTheClaim(t *testing.T) {
 	t.Parallel()
@@ -890,44 +890,6 @@ func TestTemplatePlanWorkflowFinishesADestroyWithNothingToDestroy(t *testing.T) 
 		if command == domain.TerraformCommandDestroy || command == domain.TerraformCommandApply {
 			t.Fatalf("commands = %#v, want nothing applied", commands)
 		}
-	}
-}
-
-func TestTemplatePlanWorkflowCancelsPlanWhenSignalArrivesDuringTerraform(t *testing.T) {
-	t.Parallel()
-
-	env := newTemplateRunWorkflowTestEnvironment(t)
-	input := templateRunWorkflowInput(domain.OperationPlan)
-	var statuses []domain.TemplateRunStatus
-	var commands []domain.TerraformCommandType
-	mockPrepareWorkspace(t, env)
-	mockFetchSource(t, env)
-	mockRunTerraform(t, env, &commands)
-	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, activityInput domain.TemplateRunStatusActivityInput) error {
-			statuses = append(statuses, activityInput.Status)
-			return nil
-		})
-	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow(domain.CancelSignalName, domain.CancelSignal{
-			RequestedBy: requesterSubject,
-			Reason:      "stop retries",
-		})
-	}, 0)
-
-	env.ExecuteWorkflow(TemplatePlanWorkflow, input)
-
-	assertWorkflowCompleted(t, env)
-	if len(statuses) == 0 || statuses[len(statuses)-1] != domain.TemplateRunCanceled {
-		t.Fatalf("final status = %#v, want canceled", statuses)
-	}
-	for _, status := range statuses {
-		if status == domain.TemplateRunPlanFinished || status == domain.TemplateRunCompleted {
-			t.Fatalf("statuses = %#v, canceled plan should not become planned or completed", statuses)
-		}
-	}
-	if len(commands) > 1 {
-		t.Fatalf("commands = %#v, cancel should stop before later terraform phases", commands)
 	}
 }
 

@@ -202,11 +202,11 @@ export function useApproveRunMutation(tenantID: string) {
   });
 }
 
-export function useCancelRunMutation(tenantID: string) {
+export function useDiscardRunMutation(tenantID: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (variables: { runID: string; body: Parameters<typeof client.cancelRun>[2] }) =>
-      client.cancelRun(tenantID, variables.runID, variables.body),
+    mutationFn: (variables: { runID: string; body: Parameters<typeof client.discardRun>[2] }) =>
+      client.discardRun(tenantID, variables.runID, variables.body),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.templateRun(tenantID, variables.runID) });
     }

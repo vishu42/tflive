@@ -21,8 +21,6 @@ export type TemplateRunStatus =
   | "workspace_selected"
   | "waiting_approval"
   | "approved"
-  | "cancel_requested"
-  | "canceling"
   | "canceled"
   | "lock_released"
   | "completed"
