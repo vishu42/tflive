@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/domain"
+	"github.com/vishu42/tflive/internal/logsink"
 	"github.com/vishu42/tflive/internal/queue"
 )
 
@@ -1922,6 +1923,55 @@ func TestRecordTemplateRunLogUpsertsTenantScopedMetadata(t *testing.T) {
 	}
 }
 
+// Every log name the executor can upload under must be one the table accepts:
+// a refused name fails the run at the command that logged it.
+func TestRecordTemplateRunLogAcceptsEveryTerraformLogName(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          domain.TemplateRunQueued,
+		TriggerActor:    domain.UserID("user_123"),
+	})
+
+	commands := []domain.TerraformCommandType{
+		domain.TerraformCommandInit,
+		domain.TerraformCommandSelectWorkspace,
+		domain.TerraformCommandPlan,
+		domain.TerraformCommandPlanDestroy,
+		domain.TerraformCommandApply,
+		domain.TerraformCommandDestroy,
+		domain.TerraformCommandApplyAutoApprove,
+	}
+	for _, runPhase := range []domain.RunPhase{domain.RunPhasePlan, domain.RunPhaseApply} {
+		for _, command := range commands {
+			fileName, err := logsink.FileNameForTerraformCommand(command, runPhase)
+			if err != nil {
+				t.Fatalf("FileNameForTerraformCommand(%q, %q) returned error: %v", command, runPhase, err)
+			}
+			phase := strings.TrimSuffix(fileName, logsink.LogFileExtension)
+			if err := store.RecordTemplateRunLog(ctx, domain.TemplateRunLog{
+				TenantID:    domain.TenantID("tenant_123"),
+				RunID:       domain.TemplateRunID("run_123"),
+				Phase:       phase,
+				ObjectKey:   "tenants/tenant_123/runs/run_123/logs/" + fileName,
+				ContentType: "text/plain; charset=utf-8",
+				UploadedAt:  time.Now(),
+			}); err != nil {
+				t.Fatalf("RecordTemplateRunLog(%q) returned error: %v", phase, err)
+			}
+		}
+	}
+}
+
 // Logs come back in the order their commands ran, which is not alphabetical:
 // workspace selection runs between init and plan.
 func TestListTemplateRunLogsReturnsTenantScopedMetadataInUploadOrder(t *testing.T) {
@@ -1964,8 +2014,8 @@ func TestListTemplateRunLogsReturnsTenantScopedMetadataInUploadOrder(t *testing.
 		{
 			TenantID:    domain.TenantID("tenant_123"),
 			RunID:       domain.TemplateRunID("run_123"),
-			Phase:       "init",
-			ObjectKey:   "tenants/tenant_123/runs/run_123/logs/init.log",
+			Phase:       "plan-init",
+			ObjectKey:   "tenants/tenant_123/runs/run_123/logs/plan-init.log",
 			ContentType: "text/plain; charset=utf-8",
 			SizeBytes:   12,
 			UploadedAt:  uploadedAt.Add(-time.Minute),
@@ -1973,8 +2023,8 @@ func TestListTemplateRunLogsReturnsTenantScopedMetadataInUploadOrder(t *testing.
 		{
 			TenantID:    domain.TenantID("tenant_123"),
 			RunID:       domain.TemplateRunID("run_123"),
-			Phase:       "workspace",
-			ObjectKey:   "tenants/tenant_123/runs/run_123/logs/workspace.log",
+			Phase:       "plan-workspace",
+			ObjectKey:   "tenants/tenant_123/runs/run_123/logs/plan-workspace.log",
 			ContentType: "text/plain; charset=utf-8",
 			SizeBytes:   9,
 			UploadedAt:  uploadedAt.Add(-time.Second),
@@ -2003,7 +2053,7 @@ func TestListTemplateRunLogsReturnsTenantScopedMetadataInUploadOrder(t *testing.
 	for _, log := range logs {
 		phases = append(phases, log.Phase)
 	}
-	if want := []string{"init", "workspace", "plan"}; !reflect.DeepEqual(phases, want) {
+	if want := []string{"plan-init", "plan-workspace", "plan"}; !reflect.DeepEqual(phases, want) {
 		t.Fatalf("phases = %q, want %q", phases, want)
 	}
 }
@@ -2543,7 +2593,7 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 		StackTemplateID:    domain.StackTemplateID("stack_template_123"),
 		TemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
 		SourceTemplateID:   domain.SourceTemplateID("source_template_vpc"),
-		Operation:          domain.OperationPlan,
+		Operation:          domain.OperationApply,
 		SelectedRef:        "release-2026-07-08",
 		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
 		Status:             domain.TemplateRunApplyStarted,
@@ -2554,7 +2604,7 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 		RunID:           domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationPlan,
+		Operation:       domain.OperationApply,
 		Status:          domain.TemplateRunApplyFinished,
 	})
 	if err != nil {
@@ -2586,6 +2636,56 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 	}
 	if lastAppliedAt.IsZero() {
 		t.Fatal("LastAppliedAt was not set")
+	}
+}
+
+// An auto-approved apply has no plan to count, so the counts it reports come
+// with its finished status; a status without counts leaves them alone.
+func TestRecordTemplateRunStatusRecordsCountsItCarries(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          domain.TemplateRunApplyStarted,
+		TriggerActor:    domain.UserID("user_123"),
+		AutoApprove:     true,
+	})
+	status := domain.TemplateRunStatusActivityInput{
+		RunID:           domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
+		Status:          domain.TemplateRunApplyStarted,
+	}
+	if err := store.RecordTemplateRunStatus(ctx, status); err != nil {
+		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+	}
+	run, err := store.GetTemplateRun(ctx, "tenant_123", "run_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.PlanSummary != nil {
+		t.Fatalf("plan summary = %#v, want none before the apply reports it", run.PlanSummary)
+	}
+
+	status.Summary = &domain.PlanSummary{Add: 2, Change: 1}
+	if err := store.RecordTemplateRunStatus(ctx, status); err != nil {
+		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+	}
+	run, err = store.GetTemplateRun(ctx, "tenant_123", "run_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.PlanSummary == nil || *run.PlanSummary != (domain.PlanSummary{Add: 2, Change: 1}) {
+		t.Fatalf("plan summary = %#v, want the counts the status carried", run.PlanSummary)
 	}
 }
 
@@ -2631,7 +2731,7 @@ func TestRecordTemplateRunStatusRecordsAppliedConfigAlongsideRevision(t *testing
 		StackTemplateID:    domain.StackTemplateID("stack_template_123"),
 		TemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
 		SourceTemplateID:   domain.SourceTemplateID("source_template_vpc"),
-		Operation:          domain.OperationPlan,
+		Operation:          domain.OperationApply,
 		SelectedRef:        "main",
 		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
 		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
@@ -2643,7 +2743,7 @@ func TestRecordTemplateRunStatusRecordsAppliedConfigAlongsideRevision(t *testing
 		RunID:           domain.TemplateRunID("run_apply_1"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationPlan,
+		Operation:       domain.OperationApply,
 		Status:          domain.TemplateRunApplyFinished,
 	}); err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
@@ -3002,10 +3102,11 @@ func seedTemplateRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run 
 			started_at,
 			completed_at,
 			error_summary,
+			auto_approve,
 			run_number
 		) values (
 			$1, $2, $3, $4, $5, $6, $7, $8,
-			$9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17,
+			$9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18,
 			(
 				select coalesce(max(run_number), 0) + 1
 				from template_runs
@@ -3031,6 +3132,7 @@ func seedTemplateRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run 
 		nullTime(run.StartedAt),
 		nullTime(run.CompletedAt),
 		run.ErrorSummary,
+		run.AutoApprove,
 	)
 	if err != nil {
 		t.Fatalf("seed template run: %v", err)
@@ -3649,5 +3751,62 @@ func TestWorkQueueMigrationBackfillsPendingAuthorizationOutbox(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("backfilled rows = %+v, want %+v", got, want)
+	}
+}
+
+// Logs recorded before init and workspace selection were named for their
+// phase were all written by a plan phase, so migration 0024 renames them
+// rather than dropping them, and the renamed rows satisfy the new constraint.
+func TestMigrationRenamesPlanPhaseSetupLogs(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+	// Stop the first migration short of 0024 by marking it applied.
+	if _, err := pool.Exec(ctx, `
+		create table schema_migrations (version text primary key, applied_at timestamptz not null default now());
+		insert into schema_migrations (version) values ('0024_run_phase_log_names');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate to 0023: %v", err)
+	}
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          domain.TemplateRunCompleted,
+		TriggerActor:    domain.UserID("user_123"),
+	})
+	if _, err := pool.Exec(ctx, `
+		insert into template_run_logs (tenant_id, run_id, phase, object_key, content_type, size_bytes, uploaded_at)
+		values
+			('tenant_123', 'run_123', 'init', 'logs/init.log', 'text/plain', 1, now()),
+			('tenant_123', 'run_123', 'workspace', 'logs/workspace.log', 'text/plain', 1, now()),
+			('tenant_123', 'run_123', 'plan', 'logs/plan.log', 'text/plain', 1, now());
+		delete from schema_migrations where version = '0024_run_phase_log_names';
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate 0024 over existing logs: %v", err)
+	}
+
+	logs, err := NewStore(pool).ListTemplateRunLogs(ctx, "tenant_123", "run_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]string{}
+	for _, log := range logs {
+		keys[log.Phase] = log.ObjectKey
+	}
+	want := map[string]string{"plan-init": "logs/init.log", "plan-workspace": "logs/workspace.log", "plan": "logs/plan.log"}
+	if !reflect.DeepEqual(keys, want) {
+		t.Fatalf("logs = %#v, want %#v", keys, want)
 	}
 }

@@ -1,9 +1,11 @@
 # Apply run sequence
 
-How a run moves between the API, the control worker, Temporal, the executors
-and Postgres, from the Plan click until the run reads `completed`. A run plans
-first and saves the plan; approving it applies exactly that saved plan, in a
-second workflow that usually lands on a different executor. The design is in
+How an apply run moves between the API, the control worker, Temporal, the
+executors and Postgres, from the Apply click until the run reads `completed`.
+An apply run plans first and saves the plan; approving it applies exactly that
+saved plan, in a second workflow that usually lands on a different executor.
+A destroy run goes the same way with a plan to destroy. A plan run stops after
+the plan, and an auto-approved apply run skips it (both below). The design is in
 [the saved-plan flow spec](superpowers/specs/2026-09-21-saved-plan-flow-design.md).
 Background on why the processes are split this way is in
 [the control plane split spec](superpowers/specs/2026-09-15-control-plane-split.md).
@@ -60,7 +62,7 @@ through Temporal, and everything it produces goes back the same way.
   command ("schedule this activity"), Temporal hands that activity to a poller,
   the poller reports the result, and Temporal queues the next workflow task.
 
-## Part 1: from Plan to tofu applying the saved plan
+## Part 1: from Apply to tofu applying the saved plan
 
 ```mermaid
 sequenceDiagram
@@ -74,22 +76,22 @@ sequenceDiagram
     participant EX2 as Executor B
     participant AS as Artifact store
 
-    UI->>API: POST /runs {operation: plan}
+    UI->>API: POST /runs {operation: apply}
     API->>PG: INSERT run (queued) + work_queue row, one transaction
     API-->>UI: 201 queued
 
     Note over API: queue loop claims the row
-    API->>T: StartWorkflow TemplateRunWorkflow on "control"
+    API->>T: StartWorkflow TemplatePlanWorkflow on "control"
     T-->>CW: workflow task
     CW->>T: create session on "execution"
     T-->>EX1: session created, pinned to executor A
 
-    Note over CW,EX1: PrepareWorkspace (run key A), SealSourceToken, FetchSource, init, select workspace, then plan -out=tfplan -detailed-exitcode. Exit 2 means changes; show -json counts them.
+    Note over CW,EX1: PrepareWorkspace (run key A), SealSourceToken, FetchSource, init, select workspace, then plan -out=tfplan -detailed-exitcode. Exit 2 means changes, and show -json counts them.
     CW->>PG: SealPlanKey creates the run's plan key (stored encrypted), sealed to key A
     EX1->>AS: UploadPlan: tfplan + lock file, AES-GCM under the plan key
     Note over CW,EX1: ReleaseRunKey, CleanupWorkspace, session completed. Executor A is free.
     CW->>PG: FinishPlan: counts, waiting_approval, template's pending plan
-    Note over CW: TemplateRunWorkflow completes. Nothing waits on a person.
+    Note over CW: TemplatePlanWorkflow completes. Nothing waits on a person.
 
     UI->>API: POST /approval
     API->>PG: approved + audit + work_queue row, one transaction
@@ -114,16 +116,27 @@ ciphertext sealed to a key the executor generated in `PrepareWorkspace`. The
 plan phase and the apply phase each generate their own, so the control plane
 seals everything twice, once to each.
 
-An auto-approved run skips the wait: `FinishPlan` records the approval as the
-plan finishes, and `TemplateRunWorkflow` goes straight on to the apply phase,
-with a second session, rather than starting `TemplateApplyWorkflow`.
+A plan run (`{operation: plan}`) takes the same plan phase but keeps nothing:
+no `SealPlanKey`, no `UploadPlan`. `FinishPlan` records its counts without
+making it the template's pending plan, and the run completes. Nothing waits for
+approval.
+
+An auto-approved apply run (`{operation: apply, auto_approve: true}`) has no
+plan phase. `StartTemplateRun` records the approval's audit event and queues
+`TemplateApplyWorkflow` directly. `BeginApply` claims the run from `queued`,
+the apply phase records its setup statuses the way a plan phase would, skips
+`DownloadPlan`, and runs `tofu apply -auto-approve` with the run's variables.
+The counts come from the apply's "Apply complete!" line and are recorded with
+`apply_finished`. A destroy is never auto-approved.
 
 A plan with no changes stops at `FinishPlan`, which records the run's snapshot
-as live, and the run completes.
+as live, and the run completes. That includes a plan run.
 
 Canceling a plan waiting for approval, or approved but not yet claimed, is a
 single write: no workflow is running to signal. Once `BeginApply` has claimed
-the run, cancel is a signal to whichever workflow is applying it.
+the run, cancel is a signal to whichever workflow is applying it. A cancel that
+reaches an auto-approved apply before its claim leaves the run
+`cancel_requested`, and the claim carries it out.
 
 ## Part 2: after `RunTerraform(apply)` succeeds
 

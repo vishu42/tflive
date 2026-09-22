@@ -249,6 +249,7 @@ func TestRunTerraformDelegatesToRunner(t *testing.T) {
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 		Command:       domain.TerraformCommandPlan,
+		RunPhase:      domain.RunPhasePlan,
 	}
 
 	output, err := activities.RunTerraform(context.Background(), input)
@@ -335,6 +336,7 @@ func TestLocalTerraformRunnerWritesCommandLogFile(t *testing.T) {
 		WorkspacePath: workspacePath,
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 		Command:       domain.TerraformCommandPlan,
+		RunPhase:      domain.RunPhasePlan,
 		ConfigJSON:    []byte(`{"region":"us-east-1"}`),
 	})
 	log := runOutput.Log
@@ -377,6 +379,7 @@ func TestLocalTerraformRunnerUploadsCommandLogFile(t *testing.T) {
 		WorkspacePath: workspacePath,
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 		Command:       domain.TerraformCommandPlan,
+		RunPhase:      domain.RunPhasePlan,
 	})
 	log := runOutput.Log
 	if err != nil {
@@ -400,16 +403,22 @@ func TestLocalTerraformRunnerUploadsCommandLogFile(t *testing.T) {
 	}
 }
 
-// The apply phase's setup logs into its apply log: each command appends, and
-// each upload carries everything the phase has logged so far.
-func TestLocalTerraformRunnerAppendsToTheLogCommandsLog(t *testing.T) {
+// The apply phase's init logs under its own phase, so its upload cannot
+// replace the plan phase's init log.
+func TestLocalTerraformRunnerLogsInitUnderItsRunPhase(t *testing.T) {
 	t.Parallel()
 
-	workspacePath := t.TempDir()
-	logStore := &recordingTemplateRunLogStore{}
-	for _, command := range []domain.TerraformCommandType{domain.TerraformCommandInit, domain.TerraformCommandApply} {
+	for _, tt := range []struct {
+		runPhase domain.RunPhase
+		want     string
+	}{
+		{runPhase: domain.RunPhasePlan, want: "plan-init"},
+		{runPhase: domain.RunPhaseApply, want: "apply-init"},
+	} {
+		workspacePath := t.TempDir()
+		logStore := &recordingTemplateRunLogStore{}
 		terraformRunner := localTerraformRunner{
-			runner:   gitrunner.NewLocalProcessRunnerWithExecutor(&recordingCommandExecutor{stdout: string(command) + " stdout\n"}),
+			runner:   gitrunner.NewLocalProcessRunnerWithExecutor(&recordingCommandExecutor{stdout: "init stdout\n"}),
 			logStore: logStore,
 		}
 		if _, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
@@ -417,21 +426,17 @@ func TestLocalTerraformRunnerAppendsToTheLogCommandsLog(t *testing.T) {
 			TenantID:      domain.TenantID("tenant_123"),
 			WorkspacePath: workspacePath,
 			WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
-			Command:       command,
-			LogCommand:    domain.TerraformCommandApply,
+			Command:       domain.TerraformCommandInit,
+			RunPhase:      tt.runPhase,
 		}); err != nil {
-			t.Fatalf("RunTerraform(%s) returned error: %v", command, err)
+			t.Fatalf("RunTerraform(%s) returned error: %v", tt.runPhase, err)
 		}
-		if logStore.phase != "apply" {
-			t.Fatalf("%s uploaded phase %q, want apply", command, logStore.phase)
+		if logStore.phase != tt.want {
+			t.Fatalf("%s init uploaded phase %q, want %q", tt.runPhase, logStore.phase, tt.want)
 		}
-	}
-
-	if logStore.content != "init stdout\napply stdout\n" {
-		t.Fatalf("uploaded content = %q", logStore.content)
-	}
-	if _, err := os.Stat(filepath.Join(workspacePath, "logs", "init.log")); !os.IsNotExist(err) {
-		t.Fatalf("init wrote its own log: %v", err)
+		if logStore.content != "init stdout\n" {
+			t.Fatalf("uploaded content = %q", logStore.content)
+		}
 	}
 }
 
@@ -456,6 +461,7 @@ func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
 		WorkspacePath: workspacePath,
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 		Command:       domain.TerraformCommandPlan,
+		RunPhase:      domain.RunPhasePlan,
 	})
 	log := runOutput.Log
 	if !errors.Is(err, runnerErr) {
@@ -505,6 +511,7 @@ func TestLocalTerraformRunnerHeartbeatsWhileTheCommandRuns(t *testing.T) {
 					WorkspacePath: t.TempDir(),
 					WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 					Command:       domain.TerraformCommandPlan,
+					RunPhase:      domain.RunPhasePlan,
 				})
 				done <- err
 			}()
@@ -545,6 +552,7 @@ func TestLocalTerraformRunnerStopsHeartbeatingWhenTheCommandEnds(t *testing.T) {
 		WorkspacePath: t.TempDir(),
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 		Command:       domain.TerraformCommandPlan,
+		RunPhase:      domain.RunPhasePlan,
 	}); err != nil {
 		t.Fatalf("RunTerraform returned error: %v", err)
 	}
@@ -910,6 +918,7 @@ func TestRunCredentialsRoundTripThroughTheRunKey(t *testing.T) {
 		TenantID:          "tenant_123",
 		RunID:             "run_123",
 		Command:           domain.TerraformCommandPlan,
+		RunPhase:          domain.RunPhasePlan,
 		SealedEnvironment: sealed.SealedEnvironment,
 	}); err != nil {
 		t.Fatalf("RunTerraform returned error: %v", err)
@@ -926,6 +935,7 @@ func TestRunCredentialsRoundTripThroughTheRunKey(t *testing.T) {
 		TenantID:          "tenant_123",
 		RunID:             "run_123",
 		Command:           domain.TerraformCommandPlan,
+		RunPhase:          domain.RunPhasePlan,
 		SealedEnvironment: sealed.SealedEnvironment,
 	})
 	if !errors.Is(err, runseal.ErrNoKey) {
@@ -1005,6 +1015,6 @@ func (store *controlStoreStub) FinishTemplatePlan(_ context.Context, input domai
 	return store.outcome, nil
 }
 
-func (store *controlStoreStub) BeginTemplateApply(context.Context, domain.TenantID, domain.TemplateRunID) (bool, error) {
+func (store *controlStoreStub) BeginTemplateApply(context.Context, domain.TenantID, domain.TemplateRunID, bool) (bool, error) {
 	return store.claimed, nil
 }

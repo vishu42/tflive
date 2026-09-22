@@ -142,41 +142,17 @@ describe("TemplateDestroyPanel", () => {
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "/v1/tenants/tenant_123/stack-templates/stpl_1/runs",
-        expect.objectContaining({ method: "POST", body: JSON.stringify({ operation: "destroy", auto_approve: false }) })
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ operation: "destroy" }) })
       )
     );
     await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/stacks/stack_1/templates/stpl_1/runs"));
   });
 
-  // With auto-approve the plan is applied as soon as it is made, so this click
-  // is the one that destroys, and it takes a second.
-  it("asks for confirmation before an auto-approved destroy", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse(run({ id: "destroy_1", operation: "destroy", status: "queued" }), 201)
-    );
+  // A destroy always waits for someone to approve its plan, so the panel
+  // offers no auto-approve, even to someone who could approve.
+  it("never offers auto-approve on a destroy", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
-    seedRuns(queryClient, []);
-
-    renderPanel(queryClient);
-
-    fireEvent.click(screen.getByRole("checkbox", { name: /Auto Apply/ }));
-    fireEvent.click(screen.getByRole("button", { name: /^Destroy$/ }));
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: /Keep/ })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /Confirm destroy/ }));
-
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/v1/tenants/tenant_123/stack-templates/stpl_1/runs",
-        expect.objectContaining({ body: JSON.stringify({ operation: "destroy", auto_approve: true }) })
-      )
-    );
-  });
-
-  it("offers auto-approve only to someone who could approve", () => {
-    const queryClient = testQueryClient();
-    seedCapabilities(queryClient, { ...allAllowed, canApprove: false });
     seedRuns(queryClient, []);
 
     renderPanel(queryClient);
@@ -193,23 +169,6 @@ describe("TemplateDestroyPanel", () => {
     renderPanel(queryClient);
 
     expect(isDisabled(screen.getByRole("button", { name: /^Destroy$/ }))).toBe(true);
-  });
-
-  it("disables confirmation if a run appears after an auto-approved destroy was requested", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(run({ id: "unexpected" }), 201));
-    const queryClient = testQueryClient();
-    seedCapabilities(queryClient, allAllowed);
-    seedRuns(queryClient, []);
-
-    renderPanel(queryClient);
-
-    fireEvent.click(screen.getByRole("checkbox", { name: /Auto Apply/ }));
-    fireEvent.click(screen.getByRole("button", { name: /^Destroy$/ }));
-    queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "stpl_1"), [run({ status: "queued" })]);
-
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Confirm destroy/ }))).toBe(true));
-    fireEvent.click(screen.getByRole("button", { name: /Confirm destroy/ }));
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   // The panel re-reads the runs cache at submit time, which closes the window

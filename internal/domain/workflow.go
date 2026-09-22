@@ -21,9 +21,9 @@ const (
 	// queue nobody polls. Environments are separated by Temporal namespace.
 	ExecutionTaskQueue = "execution"
 
-	// TemplateRunWorkflowName plans a run and, when the plan needs no human,
-	// applies it. TemplateApplyWorkflowName applies a plan someone approved.
-	TemplateRunWorkflowName   = "TemplateRunWorkflow"
+	// TemplatePlanWorkflowName plans a run. TemplateApplyWorkflowName applies a
+	// plan someone approved, or applies an auto-approved run with no plan.
+	TemplatePlanWorkflowName  = "TemplatePlanWorkflow"
 	TemplateApplyWorkflowName = "TemplateApplyWorkflow"
 	TemplateSyncWorkflowName  = "TemplateSyncWorkflow"
 
@@ -103,8 +103,8 @@ type TemplateRunWorkflowInput struct {
 	RepoName          string
 	RootPath          string
 	ConfigJSON        json.RawMessage
-	// AutoApprove applies the plan as soon as it finishes, in the same
-	// workflow, instead of waiting for approval.
+	// AutoApprove makes an apply run apply straight away, with no saved plan
+	// and no approval. Only an apply run takes it.
 	AutoApprove bool
 	// TerraformTimeout bounds each Terraform command this run issues. It is
 	// stamped by the dispatcher from deployment configuration so the value a
@@ -121,6 +121,10 @@ type TemplateRunStatusActivityInput struct {
 	Operation       OperationType
 	Status          TemplateRunStatus
 	ErrorSummary    string
+	// Summary, when set, records the run's change counts along with the
+	// status. An auto-approved apply has no plan to count, so it records what
+	// the apply itself reported.
+	Summary *PlanSummary
 }
 
 // PrepareWorkspaceActivityInput asks the executor to create a local run workspace.
@@ -201,6 +205,16 @@ type FetchSourceActivityOutput struct {
 	TerraformPath string
 }
 
+// RunPhase is the phase of a run a Terraform command belongs to. An approved
+// run has both, and both run init and workspace selection, so it keeps their
+// logs apart.
+type RunPhase string
+
+const (
+	RunPhasePlan  RunPhase = "plan"
+	RunPhaseApply RunPhase = "apply"
+)
+
 // RunTerraformActivityInput asks the executor to run one Terraform subprocess command.
 type RunTerraformActivityInput struct {
 	RunID           TemplateRunID
@@ -210,14 +224,9 @@ type RunTerraformActivityInput struct {
 	TerraformPath   string
 	WorkspaceName   string
 	Command         TerraformCommandType
-	// LogCommand names the log the output joins: the apply phase's setup logs
-	// into its apply or destroy log, so the plan phase's init and workspace
-	// logs survive. Empty means Command's own log.
-	LogCommand TerraformCommandType
+	// RunPhase names the phase Command runs in, which picks its log.
+	RunPhase   RunPhase
 	ConfigJSON json.RawMessage
-	// Destroy plans the destruction of everything the template manages. Only
-	// read for TerraformCommandPlan.
-	Destroy bool
 	// SealedEnvironment is the run's credentials sealed to its key.
 	SealedEnvironment []byte
 	// Environment is the opened credentials, filled in on the executor. It is
@@ -277,9 +286,9 @@ const (
 	PlanOutcomeNoChanges PlanOutcome = "no_changes"
 	// PlanOutcomeWaiting: the plan waits for someone to approve it.
 	PlanOutcomeWaiting PlanOutcome = "waiting"
-	// PlanOutcomeApproved: the run was started with auto-approve, so the plan
-	// was approved as it finished and the same workflow goes on to apply it.
-	PlanOutcomeApproved PlanOutcome = "approved"
+	// PlanOutcomePlanned: a plan run's plan had changes. A plan run only
+	// plans, so the run completes with the changes recorded.
+	PlanOutcomePlanned PlanOutcome = "planned"
 	// PlanOutcomeCanceled: someone canceled the run while it planned, and
 	// finishing the plan carried the cancellation out.
 	PlanOutcomeCanceled PlanOutcome = "canceled"
@@ -293,13 +302,14 @@ type FinishPlanActivityInput struct {
 	Operation       OperationType
 	HasChanges      bool
 	Summary         PlanSummary
-	AutoApprove     bool
 }
 
-// BeginApplyActivityInput claims an approved run for its apply phase.
+// BeginApplyActivityInput claims a run for its apply phase: an approved run,
+// or, with AutoApprove, a queued one that never had a plan to approve.
 type BeginApplyActivityInput struct {
-	TenantID TenantID
-	RunID    TemplateRunID
+	TenantID    TenantID
+	RunID       TemplateRunID
+	AutoApprove bool
 }
 
 // BeginApplyActivityOutput reports whether the claim won. It loses when the

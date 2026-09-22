@@ -349,7 +349,7 @@ func TestStartTemplateRunPassesAutoApproveThrough(t *testing.T) {
 	request := authenticatedRequest(
 		http.MethodPost,
 		"/v1/tenants/tenant_123/stack-templates/stack_template_123/runs",
-		strings.NewReader(`{"operation":"plan","auto_approve":true}`),
+		strings.NewReader(`{"operation":"apply","auto_approve":true}`),
 	)
 
 	server.ServeHTTP(response, request)

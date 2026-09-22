@@ -4,33 +4,59 @@ import { runStatusLabel } from "./runStatusLabel";
 
 const counts = { add: 1, change: 0, destroy: 0 };
 
-function label(operation: TemplateRun["operation"], status: TemplateRun["status"], planned: boolean): string {
-  return runStatusLabel({ operation, status, plan_summary: planned ? counts : null });
+function label(operation: TemplateRun["operation"], status: TemplateRun["status"], planned: boolean, autoApprove = false): string {
+  return runStatusLabel({ operation, status, plan_summary: planned ? counts : null, auto_approve: autoApprove });
 }
 
 describe("runStatusLabel", () => {
   it.each([
-    ["plan", "plan_started", false, "Planning"],
+    ["apply", "plan_started", false, "Planning"],
     ["destroy", "queued", false, "Planning destroy"],
-    ["plan", "waiting_approval", true, "Planned"],
+    ["apply", "waiting_approval", true, "Planned"],
     ["destroy", "waiting_approval", true, "Destroy planned"],
-    ["plan", "approved", true, "Approved"],
+    ["apply", "approved", true, "Approved"],
     ["destroy", "approved", true, "Destroy approved"],
-    ["plan", "apply_started", true, "Applying"],
+    ["apply", "apply_started", true, "Applying"],
     ["destroy", "locked", true, "Destroying"],
-    ["plan", "completed", false, "No changes"],
+    ["apply", "completed", false, "No changes"],
     ["destroy", "completed", false, "Nothing to destroy"],
-    ["plan", "completed", true, "Applied"],
+    ["apply", "completed", true, "Applied"],
     ["destroy", "completed", true, "Destroyed"],
-    ["plan", "failed", false, "Plan failed"],
+    ["apply", "failed", false, "Plan failed"],
     ["destroy", "failed", false, "Destroy plan failed"],
-    ["plan", "failed", true, "Apply failed"],
+    ["apply", "failed", true, "Apply failed"],
     ["destroy", "failed", true, "Destroy failed"],
-    ["plan", "canceling", true, "Canceling"],
+    ["apply", "canceling", true, "Canceling"],
     ["destroy", "canceling", true, "Canceling destroy"],
-    ["plan", "canceled", true, "Canceled"],
+    ["apply", "canceled", true, "Canceled"],
     ["destroy", "canceled", false, "Destroy canceled"]
   ] as const)("%s %s (planned: %s) reads %s", (operation, status, planned, expected) => {
     expect(label(operation, status, planned)).toBe(expected);
+  });
+
+  // A plan run applies nothing, so no label of its says it did, even once
+  // its plan has counts.
+  it.each([
+    ["queued", false, "Planning"],
+    ["plan_finished", true, "Planning"],
+    ["completed", true, "Plan finished"],
+    ["completed", false, "No changes"],
+    ["failed", true, "Plan failed"],
+    ["canceling", false, "Canceling"],
+    ["canceled", false, "Canceled"]
+  ] as const)("plan run %s (planned: %s) reads %s", (status, planned, expected) => {
+    expect(label("plan", status, planned)).toBe(expected);
+  });
+
+  // An auto-approved apply never plans on its own, so it is applying from the
+  // start, before it has any counts.
+  it.each([
+    ["queued", false, "Applying"],
+    ["init_started", false, "Applying"],
+    ["completed", true, "Applied"],
+    ["failed", false, "Apply failed"],
+    ["canceled", false, "Canceled"]
+  ] as const)("auto-approved apply %s (counts: %s) reads %s", (status, planned, expected) => {
+    expect(label("apply", status, planned, true)).toBe(expected);
   });
 });

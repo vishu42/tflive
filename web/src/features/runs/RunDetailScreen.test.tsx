@@ -262,7 +262,7 @@ describe("RunDetailScreen", () => {
     expect(screen.queryByRole("button", { name: /Cancel/ })).toBeNull();
   });
 
-  it("offers Apply and Discard for a plan waiting for approval, and shows what it would change", async () => {
+  it("offers Approve and Discard for a plan waiting for approval, and shows what it would change", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
     queryClient.setQueryData(
@@ -273,7 +273,7 @@ describe("RunDetailScreen", () => {
 
     renderScreen(queryClient);
 
-    expect(isDisabled(screen.getByRole("button", { name: /^Apply$/ }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /^Approve$/ }))).toBe(false);
     expect(screen.getByRole("button", { name: /Discard/ })).toBeTruthy();
     expect(screen.getByText("+2 ~0 -1")).toBeTruthy();
   });
@@ -307,7 +307,7 @@ describe("RunDetailScreen", () => {
     );
   });
 
-  it("hides Apply when canApprove is denied", async () => {
+  it("hides Approve when canApprove is denied", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, { ...allAllowed, canApprove: false });
     queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "waiting_approval" }));
@@ -315,7 +315,7 @@ describe("RunDetailScreen", () => {
 
     renderScreen(queryClient);
 
-    expect(screen.queryByRole("button", { name: /^Apply$/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Approve$/ })).toBeNull();
   });
 
   it("enables Cancel for a non-terminal run and calls the cancellation endpoint, gated by canOperate", async () => {

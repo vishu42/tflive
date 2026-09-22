@@ -86,17 +86,15 @@ func (store *Store) PlanKey(ctx context.Context, tenantID domain.TenantID, runID
 //   - A run someone canceled while it planned is canceled here, since no
 //     workflow step is left to notice the request.
 //   - No changes: the run's snapshot is what is live already, so it becomes
-//     the stack template's last applied state, and the run completes. (A
-//     destroy with nothing left to destroy completes the same way; the
+//     the stack template's last applied state, and the run completes. That
+//     holds for a plan run too: nothing was applied, but nothing needed to
+//     be. (A destroy with nothing left to destroy completes the same way; the
 //     workflow records destroy_finished for it, which is what moves the
 //     template's lifecycle.)
-//   - Changes: the counts are stored and the run waits for approval as the
-//     template's pending plan.
-//   - Changes on an auto-approved run: approved on the spot, by the person
-//     who started it, with the same audit record a manual approval leaves.
-//
-// Auto-approval needs no check that the plan still matches desired state:
-// config and revision cannot change while a run is in flight.
+//   - Changes on a plan run: the counts are stored and the run completes. A
+//     plan run saved no plan, so there is nothing to approve.
+//   - Changes on an apply or destroy run: the counts are stored and the run
+//     waits for approval as the template's pending plan.
 func (store *Store) FinishTemplatePlan(ctx context.Context, input domain.FinishPlanActivityInput) (domain.PlanOutcome, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
@@ -105,13 +103,12 @@ func (store *Store) FinishTemplatePlan(ctx context.Context, input domain.FinishP
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var status domain.TemplateRunStatus
-	var triggerActor domain.UserID
 	err = tx.QueryRow(ctx, `
-		select status, trigger_actor
+		select status
 		from template_runs
 		where tenant_id = $1 and id = $2 and stack_template_id = $3 and operation = $4
 		for update
-	`, input.TenantID, input.RunID, input.StackTemplateID, input.Operation).Scan(&status, &triggerActor)
+	`, input.TenantID, input.RunID, input.StackTemplateID, input.Operation).Scan(&status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrNotFound
 	}
@@ -134,7 +131,7 @@ func (store *Store) FinishTemplatePlan(ctx context.Context, input domain.FinishP
 		}
 		outcome = domain.PlanOutcomeCanceled
 	case !input.HasChanges:
-		if input.Operation == domain.OperationPlan {
+		if input.Operation != domain.OperationDestroy {
 			if _, err := tx.Exec(ctx, `
 				update stack_templates
 				set
@@ -152,18 +149,22 @@ func (store *Store) FinishTemplatePlan(ctx context.Context, input domain.FinishP
 			}
 		}
 		outcome = domain.PlanOutcomeNoChanges
-	default:
-		next := domain.TemplateRunWaitingApproval
-		outcome = domain.PlanOutcomeWaiting
-		if input.AutoApprove {
-			next = domain.TemplateRunApproved
-			outcome = domain.PlanOutcomeApproved
+	case input.Operation == domain.OperationPlan:
+		if _, err := tx.Exec(ctx, `
+			update template_runs
+			set plan_add = $1, plan_change = $2, plan_destroy = $3
+			where tenant_id = $4 and id = $5
+		`, input.Summary.Add, input.Summary.Change, input.Summary.Destroy, input.TenantID, input.RunID); err != nil {
+			return "", fmt.Errorf("record plan with changes: %w", err)
 		}
+		outcome = domain.PlanOutcomePlanned
+	default:
+		outcome = domain.PlanOutcomeWaiting
 		if _, err := tx.Exec(ctx, `
 			update template_runs
 			set status = $1, plan_add = $2, plan_change = $3, plan_destroy = $4
 			where tenant_id = $5 and id = $6
-		`, next, input.Summary.Add, input.Summary.Change, input.Summary.Destroy, input.TenantID, input.RunID); err != nil {
+		`, domain.TemplateRunWaitingApproval, input.Summary.Add, input.Summary.Change, input.Summary.Destroy, input.TenantID, input.RunID); err != nil {
 			return "", fmt.Errorf("record plan with changes: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
@@ -181,16 +182,6 @@ func (store *Store) FinishTemplatePlan(ctx context.Context, input domain.FinishP
 		`, input.TenantID, input.RunID); err != nil {
 			return "", fmt.Errorf("record pending plan: %w", err)
 		}
-		if input.AutoApprove {
-			if err := appendAuditEvent(ctx, tx, domain.SecurityAuditEvent{
-				ActorSubject: string(triggerActor),
-				Action:       domain.AuditActionApprovalGranted,
-				TenantID:     input.TenantID,
-				Outcome:      domain.AuditOutcomeSuccess,
-			}); err != nil {
-				return "", fmt.Errorf("audit auto-approval: %w", err)
-			}
-		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -199,21 +190,54 @@ func (store *Store) FinishTemplatePlan(ctx context.Context, input domain.FinishP
 	return outcome, nil
 }
 
-// BeginTemplateApply claims an approved run for its apply phase by moving it
-// from approved to locked. Losing the claim means the run was canceled between
-// approval and now; the conditional update is what makes that race safe,
-// because cancelTemplateRunBeforeApply makes the same kind of update from the
-// other side.
-func (store *Store) BeginTemplateApply(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID) (bool, error) {
+// BeginTemplateApply claims a run for its apply phase by moving it to locked:
+// from approved, or, for an auto-approved apply run that never had a plan to
+// approve, from queued. Losing the claim means the run was canceled first; the
+// conditional update is what makes that race safe, because the cancel paths
+// make the same kind of update from the other side.
+func (store *Store) BeginTemplateApply(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, autoApprove bool) (bool, error) {
+	if autoApprove {
+		return beginAutoApprovedApply(ctx, store.pool, tenantID, runID)
+	}
 	commandTag, err := store.pool.Exec(ctx, `
 		update template_runs
 		set status = $1
-		where tenant_id = $2 and id = $3 and status = $4
+		where tenant_id = $2 and id = $3 and status = $4 and not auto_approve
 	`, domain.TemplateRunLocked, tenantID, runID, domain.TemplateRunApproved)
 	if err != nil {
 		return false, fmt.Errorf("claim run for apply: %w", err)
 	}
 	return commandTag.RowsAffected() == 1, nil
+}
+
+// beginAutoApprovedApply claims a queued auto-approved apply run. A cancel
+// that arrived before the claim left the run cancel_requested, and signaled a
+// workflow that is about to end here without reaching any step that would
+// notice, so the claim carries the cancellation out instead.
+func beginAutoApprovedApply(ctx context.Context, exec pgxExecutor, tenantID domain.TenantID, runID domain.TemplateRunID) (bool, error) {
+	var status domain.TemplateRunStatus
+	err := exec.QueryRow(ctx, `
+		update template_runs
+		set
+			status = case when status = $1 then $2 else $3 end,
+			completed_at = case when status = $1 then completed_at else coalesce(completed_at, now()) end
+		where tenant_id = $4 and id = $5 and status in ($1, $6) and auto_approve
+		returning status
+	`,
+		domain.TemplateRunQueued,
+		domain.TemplateRunLocked,
+		domain.TemplateRunCanceled,
+		tenantID,
+		runID,
+		domain.TemplateRunCancelRequested,
+	).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("claim auto-approved run for apply: %w", err)
+	}
+	return status == domain.TemplateRunLocked, nil
 }
 
 // cancelTemplateRunBeforeApply cancels a run whose plan is waiting for

@@ -256,8 +256,8 @@ func defaultAPIDependencies() apiDependencies {
 }
 
 func registerControl(worker temporalWorker, store controlStore, gitHubTokens activities.GitHubTokenSource) {
-	worker.RegisterWorkflowWithOptions(workflows.TemplateRunWorkflow, workflow.RegisterOptions{
-		Name: domain.TemplateRunWorkflowName,
+	worker.RegisterWorkflowWithOptions(workflows.TemplatePlanWorkflow, workflow.RegisterOptions{
+		Name: domain.TemplatePlanWorkflowName,
 	})
 	worker.RegisterWorkflowWithOptions(workflows.TemplateApplyWorkflow, workflow.RegisterOptions{
 		Name: domain.TemplateApplyWorkflowName,

@@ -66,7 +66,7 @@ func TestPlanKeyIsCreatedOnceAndStoredEncrypted(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := savedPlanStore(t, pool)
 	seedStackWithTemplate(t, ctx, store)
-	seedPlanRun(t, ctx, pool, "run_123", domain.OperationPlan, domain.TemplateRunPlanStarted)
+	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunPlanStarted)
 
 	if _, err := store.PlanKey(ctx, "tenant_123", "run_123"); err == nil {
 		t.Fatal("PlanKey returned a key for a run that has none")
@@ -104,10 +104,10 @@ func TestFinishTemplatePlanWithChangesWaitsForApproval(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := savedPlanStore(t, pool)
 	seedStackWithTemplate(t, ctx, store)
-	seedPlanRun(t, ctx, pool, "run_123", domain.OperationPlan, domain.TemplateRunPlanFinished)
+	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunPlanFinished)
 
 	outcome, err := store.FinishTemplatePlan(ctx, domain.FinishPlanActivityInput{
-		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationPlan,
+		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply,
 		HasChanges: true, Summary: domain.PlanSummary{Add: 3, Change: 1},
 	})
 	if err != nil {
@@ -135,9 +135,9 @@ func TestFinishTemplatePlanWithChangesWaitsForApproval(t *testing.T) {
 	}
 }
 
-// An auto-approved run is approved as its plan finishes, by the person who
-// started it, with the audit record a manual approval would leave.
-func TestFinishTemplatePlanApprovesAnAutoApprovedRun(t *testing.T) {
+// A plan run with changes records what it would do and completes. It saved
+// no plan, so it is nobody's pending plan and there is nothing to approve.
+func TestFinishTemplatePlanCompletesAPlanRunWithChanges(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -148,54 +148,69 @@ func TestFinishTemplatePlanApprovesAnAutoApprovedRun(t *testing.T) {
 
 	outcome, err := store.FinishTemplatePlan(ctx, domain.FinishPlanActivityInput{
 		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationPlan,
-		HasChanges: true, Summary: domain.PlanSummary{Add: 1}, AutoApprove: true,
+		HasChanges: true, Summary: domain.PlanSummary{Add: 1, Destroy: 2},
 	})
 	if err != nil {
 		t.Fatalf("FinishTemplatePlan returned error: %v", err)
 	}
-	if outcome != domain.PlanOutcomeApproved || runStatus(t, ctx, pool, "run_123") != domain.TemplateRunApproved {
-		t.Fatalf("outcome = %q, status = %q; want approved", outcome, runStatus(t, ctx, pool, "run_123"))
+	if outcome != domain.PlanOutcomePlanned {
+		t.Fatalf("outcome = %q, want planned", outcome)
 	}
-	var audits int
-	if err := pool.QueryRow(ctx, `
-		select count(*) from security_audit_log where actor_subject = 'user_123' and action = $1
-	`, domain.AuditActionApprovalGranted).Scan(&audits); err != nil {
+	run, err := store.GetTemplateRun(ctx, "tenant_123", "run_123")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if audits != 1 {
-		t.Fatalf("approval audit events = %d, want 1", audits)
+	if run.Status != domain.TemplateRunPlanFinished {
+		t.Fatalf("status = %q, want plan_finished", run.Status)
 	}
-}
-
-// A plan with no changes means the infrastructure already is the run's
-// snapshot, so that snapshot becomes what is live, and nothing waits.
-func TestFinishTemplatePlanWithoutChangesRecordsTheSnapshotAsLive(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	pool := openMigratedTestPool(t, ctx)
-	store := savedPlanStore(t, pool)
-	seedStackWithTemplate(t, ctx, store)
-	seedPlanRun(t, ctx, pool, "run_123", domain.OperationPlan, domain.TemplateRunPlanFinished)
-
-	outcome, err := store.FinishTemplatePlan(ctx, domain.FinishPlanActivityInput{
-		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationPlan,
-	})
-	if err != nil {
-		t.Fatalf("FinishTemplatePlan returned error: %v", err)
-	}
-	if outcome != domain.PlanOutcomeNoChanges {
-		t.Fatalf("outcome = %q, want no_changes", outcome)
+	if run.PlanSummary == nil || *run.PlanSummary != (domain.PlanSummary{Add: 1, Destroy: 2}) {
+		t.Fatalf("plan summary = %#v", run.PlanSummary)
 	}
 	stackTemplate, err := store.GetStackTemplate(ctx, "tenant_123", "stack_template_123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stackTemplate.LastAppliedRunID != "run_123" || stackTemplate.LiveState() != domain.LiveMatches {
-		t.Fatalf("last applied = %q, live state = %q; want run_123 matching", stackTemplate.LastAppliedRunID, stackTemplate.LiveState())
+	if stackTemplate.PendingPlanRunID != "" || stackTemplate.LastAppliedRunID != "" {
+		t.Fatalf("pending plan = %q, last applied = %q; want neither", stackTemplate.PendingPlanRunID, stackTemplate.LastAppliedRunID)
 	}
-	if stackTemplate.PendingPlanRunID != "" {
-		t.Fatalf("pending plan = %q, want none", stackTemplate.PendingPlanRunID)
+}
+
+// A plan with no changes means the infrastructure already is the run's
+// snapshot, so that snapshot becomes what is live, and nothing waits. That
+// holds for a plan run as much as for an apply run.
+func TestFinishTemplatePlanWithoutChangesRecordsTheSnapshotAsLive(t *testing.T) {
+	t.Parallel()
+
+	for _, operation := range []domain.OperationType{domain.OperationPlan, domain.OperationApply} {
+		t.Run(string(operation), func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			pool := openMigratedTestPool(t, ctx)
+			store := savedPlanStore(t, pool)
+			seedStackWithTemplate(t, ctx, store)
+			seedPlanRun(t, ctx, pool, "run_123", operation, domain.TemplateRunPlanFinished)
+
+			outcome, err := store.FinishTemplatePlan(ctx, domain.FinishPlanActivityInput{
+				TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: operation,
+			})
+			if err != nil {
+				t.Fatalf("FinishTemplatePlan returned error: %v", err)
+			}
+			if outcome != domain.PlanOutcomeNoChanges {
+				t.Fatalf("outcome = %q, want no_changes", outcome)
+			}
+			stackTemplate, err := store.GetStackTemplate(ctx, "tenant_123", "stack_template_123")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stackTemplate.LastAppliedRunID != "run_123" || stackTemplate.LiveState() != domain.LiveMatches {
+				t.Fatalf("last applied = %q, live state = %q; want run_123 matching", stackTemplate.LastAppliedRunID, stackTemplate.LiveState())
+			}
+			if stackTemplate.PendingPlanRunID != "" {
+				t.Fatalf("pending plan = %q, want none", stackTemplate.PendingPlanRunID)
+			}
+		})
 	}
 }
 
@@ -208,10 +223,10 @@ func TestFinishTemplatePlanCarriesOutACancelRequestedWhilePlanning(t *testing.T)
 	pool := openMigratedTestPool(t, ctx)
 	store := savedPlanStore(t, pool)
 	seedStackWithTemplate(t, ctx, store)
-	seedPlanRun(t, ctx, pool, "run_123", domain.OperationPlan, domain.TemplateRunCancelRequested)
+	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunCancelRequested)
 
 	outcome, err := store.FinishTemplatePlan(ctx, domain.FinishPlanActivityInput{
-		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationPlan, HasChanges: true,
+		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply, HasChanges: true,
 	})
 	if err != nil {
 		t.Fatalf("FinishTemplatePlan returned error: %v", err)
@@ -233,8 +248,8 @@ func TestApplyClaimAndCancelBeforeApplyExcludeEachOther(t *testing.T) {
 	seedStackWithTemplate(t, ctx, store)
 
 	// Claimed first: the cancel falls through to the signal path.
-	seedPlanRun(t, ctx, pool, "run_claimed", domain.OperationPlan, domain.TemplateRunApproved)
-	claimed, err := store.BeginTemplateApply(ctx, "tenant_123", "run_claimed")
+	seedPlanRun(t, ctx, pool, "run_claimed", domain.OperationApply, domain.TemplateRunApproved)
+	claimed, err := store.BeginTemplateApply(ctx, "tenant_123", "run_claimed", false)
 	if err != nil || !claimed {
 		t.Fatalf("BeginTemplateApply = %v, %v; want claimed", claimed, err)
 	}
@@ -250,7 +265,7 @@ func TestApplyClaimAndCancelBeforeApplyExcludeEachOther(t *testing.T) {
 	}
 
 	// Canceled first: the claim loses.
-	seedPlanRun(t, ctx, pool, "run_canceled", domain.OperationPlan, domain.TemplateRunApproved)
+	seedPlanRun(t, ctx, pool, "run_canceled", domain.OperationApply, domain.TemplateRunApproved)
 	if _, err := store.CreatePlanKey(ctx, "tenant_123", "run_canceled"); err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +273,7 @@ func TestApplyClaimAndCancelBeforeApplyExcludeEachOther(t *testing.T) {
 	if err != nil || !canceled {
 		t.Fatalf("cancel before claim = %v, %v; want canceled", canceled, err)
 	}
-	claimed, err = store.BeginTemplateApply(ctx, "tenant_123", "run_canceled")
+	claimed, err = store.BeginTemplateApply(ctx, "tenant_123", "run_canceled", false)
 	if err != nil || claimed {
 		t.Fatalf("BeginTemplateApply after cancel = %v, %v; want not claimed", claimed, err)
 	}
@@ -267,6 +282,81 @@ func TestApplyClaimAndCancelBeforeApplyExcludeEachOther(t *testing.T) {
 	}
 	if !planKeyIsNull(t, ctx, pool, "run_canceled") {
 		t.Fatal("canceled run kept its plan key")
+	}
+}
+
+// seedAutoApprovedRun seeds an auto-approved apply run of the fixture stack
+// template in status.
+func seedAutoApprovedRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id domain.TemplateRunID, status domain.TemplateRunStatus) {
+	t.Helper()
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:                 id,
+		TenantID:           "tenant_123",
+		StackTemplateID:    "stack_template_123",
+		TemplateRevisionID: "template_rev_2",
+		SourceTemplateID:   "source_template_vpc",
+		Operation:          domain.OperationApply,
+		SelectedRef:        "main",
+		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
+		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+		Status:             status,
+		TriggerActor:       "user_123",
+		AutoApprove:        true,
+	})
+}
+
+// An auto-approved apply run has no plan to approve, so its claim takes it
+// straight from queued. Each kind of claim takes only its own kind of run.
+func TestAutoApprovedApplyIsClaimedFromQueued(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := savedPlanStore(t, pool)
+	seedStackWithTemplate(t, ctx, store)
+
+	seedAutoApprovedRun(t, ctx, pool, "run_auto", domain.TemplateRunQueued)
+	if claimed, err := store.BeginTemplateApply(ctx, "tenant_123", "run_auto", false); err != nil || claimed {
+		t.Fatalf("approved claim of an auto-approved run = %v, %v; want not claimed", claimed, err)
+	}
+	if claimed, err := store.BeginTemplateApply(ctx, "tenant_123", "run_auto", true); err != nil || !claimed {
+		t.Fatalf("BeginTemplateApply = %v, %v; want claimed", claimed, err)
+	}
+	if runStatus(t, ctx, pool, "run_auto") != domain.TemplateRunLocked {
+		t.Fatalf("status = %q, want locked", runStatus(t, ctx, pool, "run_auto"))
+	}
+	if _, err := pool.Exec(ctx, `update template_runs set status = 'completed' where id = 'run_auto'`); err != nil {
+		t.Fatal(err)
+	}
+
+	seedPlanRun(t, ctx, pool, "run_approved", domain.OperationApply, domain.TemplateRunApproved)
+	if claimed, err := store.BeginTemplateApply(ctx, "tenant_123", "run_approved", true); err != nil || claimed {
+		t.Fatalf("auto-approved claim of an approved run = %v, %v; want not claimed", claimed, err)
+	}
+}
+
+// A cancel that reaches an auto-approved apply before its claim leaves the run
+// cancel_requested, and the workflow ends at the lost claim without any step
+// that would notice. The claim carries the cancellation out.
+func TestAutoApprovedApplyClaimCarriesOutAnEarlierCancel(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := savedPlanStore(t, pool)
+	seedStackWithTemplate(t, ctx, store)
+	seedAutoApprovedRun(t, ctx, pool, "run_auto", domain.TemplateRunCancelRequested)
+
+	claimed, err := store.BeginTemplateApply(ctx, "tenant_123", "run_auto", true)
+	if err != nil || claimed {
+		t.Fatalf("BeginTemplateApply = %v, %v; want not claimed", claimed, err)
+	}
+	run, err := store.GetTemplateRun(ctx, "tenant_123", "run_auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != domain.TemplateRunCanceled || run.CompletedAt.IsZero() {
+		t.Fatalf("status = %q, completed at = %v; want canceled and completed", run.Status, run.CompletedAt)
 	}
 }
 
@@ -279,18 +369,18 @@ func TestTerminalRunsDropTheirPlanKeyAndPendingPlan(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := savedPlanStore(t, pool)
 	seedStackWithTemplate(t, ctx, store)
-	seedPlanRun(t, ctx, pool, "run_123", domain.OperationPlan, domain.TemplateRunPlanFinished)
+	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunPlanFinished)
 	if _, err := store.CreatePlanKey(ctx, "tenant_123", "run_123"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.FinishTemplatePlan(ctx, domain.FinishPlanActivityInput{
-		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationPlan, HasChanges: true,
+		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply, HasChanges: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
-		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationPlan, Status: domain.TemplateRunFailed,
+		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply, Status: domain.TemplateRunFailed,
 	}); err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
 	}
@@ -314,10 +404,10 @@ func TestApplyFinishedOnAPlanRunRecordsLastApplied(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := savedPlanStore(t, pool)
 	seedStackWithTemplate(t, ctx, store)
-	seedPlanRun(t, ctx, pool, "run_123", domain.OperationPlan, domain.TemplateRunApplyStarted)
+	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunApplyStarted)
 
 	if err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
-		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationPlan, Status: domain.TemplateRunApplyFinished,
+		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply, Status: domain.TemplateRunApplyFinished,
 	}); err != nil {
 		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
 	}

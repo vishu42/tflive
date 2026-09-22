@@ -366,8 +366,9 @@ type StartTemplateRunCommand struct {
 	TenantID        domain.TenantID
 	StackTemplateID domain.StackTemplateID
 	Operation       domain.OperationType
-	// AutoApprove applies the plan as soon as it finishes. It needs approve
-	// access as well as operate access: it is an approval given in advance.
+	// AutoApprove applies straight away, with no saved plan and no approval.
+	// Only an apply run takes it. It needs approve access as well as operate
+	// access: it is an approval given in advance.
 	AutoApprove bool
 }
 
@@ -705,6 +706,10 @@ func (service *Service) AddTemplateToStack(ctx context.Context, command AddTempl
 
 // StartTemplateRun creates a queued run. The repository persists its workflow
 // dispatch intent atomically for an asynchronous dispatcher to process.
+//
+// A run starts in the plan workflow, except an auto-approved apply run, which
+// has no plan and starts in the apply workflow. Its approval is given here, so
+// its audit record is written here too.
 func (service *Service) StartTemplateRun(ctx context.Context, command StartTemplateRunCommand) (domain.TemplateRun, error) {
 	actor, err := authenticatedActor(ctx)
 	if err != nil {
@@ -729,8 +734,8 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	}
 	desiredConfigJSON := stackTemplate.DesiredConfig()
 
-	// Auto-approve is an approval given before the plan exists, so it takes
-	// the same access as approving one: operate alone is not enough.
+	// Auto-approve is an approval given in advance, so it takes the same
+	// access as approving a plan: operate alone is not enough.
 	if command.AutoApprove {
 		if err := authorizeStack(ctx, service.Authorization, stackTemplate.StackID, authorization.RelationCanApprove, ErrForbidden); err != nil {
 			service.auditFailedAccess(ctx, actor, command.TenantID, stackTemplate.StackID)
@@ -768,7 +773,12 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 	}
 
 	input := templateRunWorkflowInput(run, templateRevision)
+	kind := KindStartTemplateRun
 	payload, err := json.Marshal(StartTemplateRunPayload(input))
+	if command.AutoApprove {
+		kind = KindStartTemplateApply
+		payload, err = json.Marshal(StartTemplateApplyPayload(input))
+	}
 	if err != nil {
 		return domain.TemplateRun{}, fmt.Errorf("encode start template run payload: %w", err)
 	}
@@ -778,8 +788,18 @@ func (service *Service) StartTemplateRun(ctx context.Context, command StartTempl
 			return err
 		}
 		run.RunNumber = runNumber
+		if command.AutoApprove {
+			if err := repository.AppendAuditEvent(ctx, domain.SecurityAuditEvent{
+				ActorSubject: string(actor),
+				Action:       domain.AuditActionApprovalGranted,
+				TenantID:     command.TenantID,
+				Outcome:      domain.AuditOutcomeSuccess,
+			}); err != nil {
+				return err
+			}
+		}
 		return enqueuer.Enqueue(ctx, queue.Request{
-			Kind:         KindStartTemplateRun,
+			Kind:         kind,
 			Payload:      payload,
 			ActorSubject: string(actor),
 			TenantID:     string(run.TenantID),
@@ -1844,6 +1864,8 @@ func validateStartTemplateRunCommand(command StartTemplateRunCommand) error {
 		return fmt.Errorf("%w: stack template id is required", ErrInvalidCommand)
 	case !command.Operation.Valid():
 		return fmt.Errorf("%w: operation is unsupported", ErrInvalidCommand)
+	case command.AutoApprove && command.Operation != domain.OperationApply:
+		return fmt.Errorf("%w: only an apply run can be auto-approved", ErrInvalidCommand)
 	default:
 		return nil
 	}
@@ -1973,7 +1995,7 @@ func validateGetTemplateRunLogCommand(command GetTemplateRunLogCommand) error {
 
 func validLogPhase(phase string) bool {
 	switch phase {
-	case "clone", "init", "workspace", "plan", "apply", "destroy":
+	case "clone", "plan-init", "plan-workspace", "plan", "apply-init", "apply-workspace", "apply", "destroy":
 		return true
 	default:
 		return false

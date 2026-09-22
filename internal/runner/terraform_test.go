@@ -136,15 +136,15 @@ func TestLocalProcessRunnerRunsTerraformDestroy(t *testing.T) {
 	}
 }
 
-// Variables go to the plan and nowhere after it: a saved plan carries the
-// values it was made with, and applying it must not be able to change them.
-func TestLocalProcessRunnerSetsTerraformVariablesOnlyForPlans(t *testing.T) {
+// Variables go to whatever plans and nowhere after it: a saved plan carries
+// the values it was made with, and applying it must not be able to change
+// them. An auto-approved apply plans as it applies, so it takes them.
+func TestLocalProcessRunnerSetsTerraformVariablesOnlyWhenPlanning(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name    string
 		command domain.TerraformCommandType
-		destroy bool
 		args    []string
 		env     []string
 	}{
@@ -156,8 +156,7 @@ func TestLocalProcessRunnerSetsTerraformVariablesOnlyForPlans(t *testing.T) {
 		},
 		{
 			name:    "destroy plan",
-			command: domain.TerraformCommandPlan,
-			destroy: true,
+			command: domain.TerraformCommandPlanDestroy,
 			args:    []string{"plan", "-input=false", "-no-color", "-detailed-exitcode", "-out=tfplan", "-destroy"},
 			env:     []string{"TF_VAR_enabled=true", "TF_VAR_region=us-east-1", "TF_VAR_replicas=3", "TF_VAR_tags={\"env\":\"prod\"}", "TF_VAR_zones=[\"us-east-1a\",\"us-east-1b\"]"},
 		},
@@ -170,6 +169,12 @@ func TestLocalProcessRunnerSetsTerraformVariablesOnlyForPlans(t *testing.T) {
 			name:    "destroy",
 			command: domain.TerraformCommandDestroy,
 			args:    []string{"apply", "-input=false", "-auto-approve", "-no-color", "tfplan"},
+		},
+		{
+			name:    "auto-approved apply",
+			command: domain.TerraformCommandApplyAutoApprove,
+			args:    []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+			env:     []string{"TF_VAR_enabled=true", "TF_VAR_region=us-east-1", "TF_VAR_replicas=3", "TF_VAR_tags={\"env\":\"prod\"}", "TF_VAR_zones=[\"us-east-1a\",\"us-east-1b\"]"},
 		},
 	}
 
@@ -185,7 +190,6 @@ func TestLocalProcessRunnerSetsTerraformVariablesOnlyForPlans(t *testing.T) {
 				WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 				WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 				Command:       tt.command,
-				Destroy:       tt.destroy,
 				ConfigJSON:    []byte(`{"enabled":true,"region":"us-east-1","replicas":3,"tags":{"env":"prod"},"zones":["us-east-1a","us-east-1b"]}`),
 			})
 			if err != nil {
@@ -204,6 +208,53 @@ func TestLocalProcessRunnerSetsTerraformVariablesOnlyForPlans(t *testing.T) {
 				t.Fatalf("commands = %#v, want %#v", executor.commands, want)
 			}
 		})
+	}
+}
+
+// An auto-approved apply has no saved plan to count, so its counts come from
+// the "Apply complete!" line, and its output still reaches the log.
+func TestLocalProcessRunnerCountsAnAutoApprovedApplyFromItsOutput(t *testing.T) {
+	t.Parallel()
+
+	executor := &recordingCommandExecutor{stdout: "aws_s3_bucket.logs: Creating...\n\nApply complete! Resources: 1 imported, 2 added, 1 changed, 3 destroyed.\n"}
+	runner := NewLocalProcessRunnerWithExecutor(executor)
+	var log bytes.Buffer
+
+	result, err := runner.Run(context.Background(), TerraformCommand{
+		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
+		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+		Command:       domain.TerraformCommandApplyAutoApprove,
+		Stdout:        &log,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	want := Result{HasChanges: true, Summary: domain.PlanSummary{Add: 2, Change: 1, Destroy: 3}}
+	if result != want {
+		t.Fatalf("result = %#v, want %#v", result, want)
+	}
+	if log.String() != executor.stdout {
+		t.Fatalf("log = %q, want the apply output", log.String())
+	}
+}
+
+func TestSummarizeApplyOutput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		output string
+		want   domain.PlanSummary
+	}{
+		{name: "changes", output: "Apply complete! Resources: 2 added, 1 changed, 0 destroyed.\n", want: domain.PlanSummary{Add: 2, Change: 1}},
+		{name: "no changes", output: "No changes.\n\nApply complete! Resources: 0 added, 0 changed, 0 destroyed.\n"},
+		{name: "no summary line", output: "Error: something\n"},
+		{name: "counts after the line are not its", output: "Apply complete! Resources: 0 added, 0 changed, 0 destroyed.\nOutputs:\nx = \"5 added\"\n"},
+	}
+	for _, tt := range tests {
+		if got := summarizeApplyOutput(tt.output); got != tt.want {
+			t.Fatalf("%s: summarizeApplyOutput = %#v, want %#v", tt.name, got, tt.want)
+		}
 	}
 }
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleStop, Loader2, Play, Trash2 } from "lucide-react";
+import { Check, CircleStop, Loader2, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { isTerminalRunStatus } from "../../api/polling";
 import { queryKeys } from "../../api/queryKeys";
@@ -22,7 +22,7 @@ interface TemplateRunHistoryProps {
 // (the link to its detail), where it is (which names its operation, so there is
 // no Type column), what its plan would change, who started it and when. A run that is still going carries its own actions in a
 // trailing column that only appears while some run has one: a plan waiting for
-// approval offers Apply (Destroy, on a destroy run), which applies exactly that
+// approval offers Approve (Destroy, on a destroy run), which applies exactly that
 // saved plan, and Discard; anything else in flight offers Cancel. Actions a
 // viewer may not take are left out rather than disabled.
 export default function TemplateRunHistory({ stackId, stackTemplateId }: TemplateRunHistoryProps) {
@@ -184,7 +184,7 @@ interface WaitingRunActionsProps {
 }
 
 // WaitingRunActions are what a plan waiting for approval offers: Discard, which
-// throws the plan away, and Apply, which applies exactly that saved plan.
+// throws the plan away, and Approve, which applies exactly that saved plan.
 //
 // On a destroy run approving destroys what the template manages, so the
 // button is red, says how much it destroys, and takes a second click:
@@ -226,8 +226,8 @@ export function WaitingRunActions({ run, stackId, approveBusy, discardBusy, onAp
           </button>
         ) : (
           <button className="primary-button" type="button" disabled={approveBusy} onClick={onApprove}>
-            {approveBusy ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
-            Apply
+            {approveBusy ? <Loader2 size={16} className="spin" /> : <Check size={16} />}
+            Approve
           </button>
         )}
       </RequireCapability>

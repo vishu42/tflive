@@ -232,7 +232,7 @@ Package ownership:
 - `internal/postgres`: Postgres repositories, transactions, SQL queries, persistence models, workflow-outbox operations, and migration helper code.
 - `internal/dispatch`: broker-free Postgres-to-Temporal dispatch loop. It leases pending workflow-start intents, invokes the narrow workflow starter interface, marks successful entries complete, and schedules failed entries for retry.
 - `internal/temporal`: Temporal client adapter that implements `app` workflow-dispatch interfaces and is wired in `cmd`. API and app code should depend on interfaces, not on this adapter package directly.
-- `internal/workflows`: deterministic Temporal workflow definitions such as `TemplateRunWorkflow`, `TemplateSyncWorkflow`, and future `StackRunWorkflow`.
+- `internal/workflows`: deterministic Temporal workflow definitions such as `TemplatePlanWorkflow`, `TemplateSyncWorkflow`, and future `StackRunWorkflow`.
 - `internal/activities`: Temporal activities that perform side effects such as cloning repositories, parsing templates, acquiring locks, running the OpenTofu CLI for Terraform-compatible operations, persisting logs, and writing activity events.
 - `internal/runner`: Terraform-compatible runner interface and runner implementations, including the MVP OpenTofu-backed `LocalProcessRunner`.
 - `internal/terraform`: Terraform-specific helpers for HCL variable parsing, tfvars rendering, backend metadata extraction, plan summary parsing, and workspace command modeling.
@@ -586,9 +586,9 @@ Dispatchers poll Postgres for eligible rows, claim with `FOR UPDATE SKIP LOCKED`
 
 Migration `0007_workflow_outbox.sql` also backfills existing queued template runs. Replaying a run that was already submitted to Temporal is safe because it targets the same deterministic workflow ID.
 
-## TemplateRun Workflow
+## TemplatePlanWorkflow
 
-`TemplateRunWorkflow` is the main execution workflow.
+`TemplatePlanWorkflow` is the main execution workflow.
 
 Plan-only flow:
 
@@ -715,12 +715,17 @@ Example phases:
 
 ```text
 clone.log
-init.log
-workspace.log
+plan-init.log
+plan-workspace.log
 plan.log
+apply-init.log
+apply-workspace.log
 apply.log
 destroy.log
 ```
+
+Init and workspace selection run again before an apply, so their logs are
+named for the phase that ran them.
 
 Postgres stores log metadata, not large log bodies.
 

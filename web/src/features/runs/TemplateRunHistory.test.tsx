@@ -83,7 +83,7 @@ describe("TemplateRunHistory", () => {
   it("lays each run out in run, type, status, changes, actor, and time columns", () => {
     const queryClient = testQueryClient();
     seedRuns(queryClient, [
-      run({ id: "run_plan_1", run_number: 12, operation: "plan", status: "completed", trigger_actor: "vishu", plan_summary: { add: 3, change: 1, destroy: 0 } })
+      run({ id: "run_plan_1", run_number: 12, operation: "apply", status: "completed", trigger_actor: "vishu", plan_summary: { add: 3, change: 1, destroy: 0 } })
     ]);
 
     renderHistory(queryClient);

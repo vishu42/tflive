@@ -52,7 +52,7 @@ func TestStartTemplateRunExecutesWorkflow(t *testing.T) {
 	if workflowClient.executeOptions.WorkflowIDConflictPolicy != enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING {
 		t.Fatalf("workflow ID conflict policy = %v, want use existing", workflowClient.executeOptions.WorkflowIDConflictPolicy)
 	}
-	if workflowClient.executeWorkflow != domain.TemplateRunWorkflowName {
+	if workflowClient.executeWorkflow != domain.TemplatePlanWorkflowName {
 		t.Fatalf("workflow name = %#v", workflowClient.executeWorkflow)
 	}
 	if len(workflowClient.executeArgs) != 1 {
@@ -306,7 +306,7 @@ func TestCancelTemplateRunWrapsClientError(t *testing.T) {
 	}
 }
 
-func TestTemplateRunWorkflowID(t *testing.T) {
+func TestTemplatePlanWorkflowID(t *testing.T) {
 	t.Parallel()
 
 	got := templateRunWorkflowID(domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"))

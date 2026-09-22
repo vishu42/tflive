@@ -978,13 +978,18 @@ paths:
         Runs are durably orchestrated: a plan or apply survives a process
         restart rather than being lost halfway.
 
-        Every run plans first and saves the plan. `plan` plans the desired
-        config; `destroy` plans the destruction of everything the component
-        manages. A plan with no changes completes the run. A plan with changes
-        waits in `waiting_approval`, and approving it applies exactly that
-        saved plan (see the approval endpoint). With `auto_approve` the plan is
-        applied as soon as it is saved, which takes approve permission on the
-        stack as well as operate permission.
+        Operations work the way the Terraform CLI's do. `plan` only plans the
+        desired config: the run records what would change and completes,
+        keeping no plan. `apply` plans the desired config and saves the plan;
+        `destroy` plans the destruction of everything the component manages
+        and saves that. For either, a plan with no changes completes the run,
+        and a plan with changes waits in `waiting_approval`, where approving it
+        applies exactly that saved plan (see the approval endpoint).
+
+        `auto_approve` is allowed on `apply` only. The run then applies
+        straight away, with no saved plan and nothing to approve, and records
+        the counts the apply reports. It takes approve permission on the stack
+        as well as operate permission.
 
         One component runs one operation at a time, and a plan waiting for
         approval counts. Starting a second while one is in flight returns `409
@@ -996,7 +1001,7 @@ paths:
         content:
           application/json:
             schema: { $ref: "#/components/schemas/StartTemplateRunRequest" }
-            example: { operation: plan, auto_approve: false }
+            example: { operation: apply, auto_approve: false }
       responses:
         "201":
           description: The run was created and queued.
@@ -1850,14 +1855,12 @@ components:
       type: object
       additionalProperties: false
       properties:
-        operation:
-          type: string
-          enum: [plan, destroy]
+        operation: { $ref: "#/components/schemas/OperationType" }
         auto_approve:
           type: boolean
           description: |
-            Apply the plan as soon as it is saved instead of waiting for
-            approval. Needs approve permission on the stack as well as
+            Apply straight away, with no saved plan and no approval. Allowed
+            on `apply` only. Needs approve permission on the stack as well as
             operate permission.
       required: [operation]
 
@@ -1865,8 +1868,9 @@ components:
       type: string
       enum: [plan, apply, destroy]
       description: |
-        `plan` and `destroy` are the operations a run is started as. `apply`
-        appears only on runs from before saved plans.
+        `plan` only plans. `apply` saves a plan to approve, or with
+        `auto_approve` applies without one. `destroy` saves a plan to destroy
+        everything, to approve.
 
     CancelRunRequest:
       type: object
@@ -1923,13 +1927,15 @@ components:
             identifier every other endpoint takes.
         auto_approve:
           type: boolean
-          description: The plan is applied as soon as it is saved.
+          description: An `apply` run that applied straight away, with no saved plan.
         plan_summary:
           type: [object, "null"]
           description: |
-            What the saved plan would change, counted the way tofu's own
-            summary line counts: a replacement is one add and one destroy.
-            Null until a plan with changes has been saved.
+            What the plan would change, counted the way tofu's own summary
+            line counts: a replacement is one add and one destroy. Null until
+            a plan with changes has finished. For an auto-approved `apply`,
+            what the apply changed, read from its "Apply complete!" line, and
+            null until it finishes.
           properties:
             add: { type: integer, minimum: 0 }
             change: { type: integer, minimum: 0 }

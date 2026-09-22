@@ -22,13 +22,10 @@ interface TemplateDestroyPanelProps {
 // Destroy here only plans the destroy: it shows what would be destroyed and
 // destroys nothing. Destroying happens when that plan is approved, on the
 // run's row, which is why the red "Destroy N resources" confirmation lives
-// there. The exception is auto-approve, which applies the destroy as soon as
-// it is planned; then this click is the irreversible one, so it takes the
-// second click instead.
+// there. A destroy is never auto-approved, so that confirmation is always the
+// irreversible click.
 export default function TemplateDestroyPanel({ stackId, stackTemplate }: TemplateDestroyPanelProps) {
   const [errorMessage, setErrorMessage] = useState("");
-  const [autoApprove, setAutoApprove] = useState(false);
-  const [confirmDestroy, setConfirmDestroy] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
@@ -49,13 +46,11 @@ export default function TemplateDestroyPanel({ stackId, stackTemplate }: Templat
     const currentRuns = queryClient.getQueryData<TemplateRun[]>(queryKeys.templateRuns(tenantID, stackTemplate.id));
     const currentRunActive = currentRuns?.some((candidate) => !isTerminalRunStatus(candidate.status)) ?? true;
     if (!canDestroy || currentRunActive) {
-      setConfirmDestroy(false);
       return;
     }
     setErrorMessage("");
     try {
-      await startRunMutation.mutateAsync({ stackTemplateID: stackTemplate.id, body: { operation: "destroy", auto_approve: autoApprove } });
-      setConfirmDestroy(false);
+      await startRunMutation.mutateAsync({ stackTemplateID: stackTemplate.id, body: { operation: "destroy" } });
       await queryClient.invalidateQueries({ queryKey: queryKeys.templateRuns(tenantID, stackTemplate.id) });
       // The plan, and the button that destroys, are on the Runs tab.
       navigate(`/stacks/${stackId}/templates/${stackTemplate.id}/runs`);
@@ -67,16 +62,7 @@ export default function TemplateDestroyPanel({ stackId, stackTemplate }: Templat
     }
   }
 
-  const controlProps = {
-    canDestroy,
-    destroying,
-    autoApprove,
-    onDestroy: handleDestroy,
-    destroyBusy,
-    confirmDestroy,
-    onConfirmDestroy: () => setConfirmDestroy(true),
-    onCancelConfirm: () => setConfirmDestroy(false)
-  };
+  const controlProps = { canDestroy, destroying, onDestroy: handleDestroy, destroyBusy };
 
   return (
     <section className="panel danger-zone" data-testid="template-destroy-panel">
@@ -90,19 +76,6 @@ export default function TemplateDestroyPanel({ stackId, stackTemplate }: Templat
           {errorMessage}
         </p>
       )}
-      <RequireCapability capability="canApprove" stackId={stackId}>
-        <label className="checkbox-label" data-testid="template-destroy-auto-approve">
-          <input
-            type="checkbox"
-            checked={autoApprove}
-            onChange={(event) => {
-              setAutoApprove(event.target.checked);
-              setConfirmDestroy(false);
-            }}
-          />
-          Auto Apply
-        </label>
-      </RequireCapability>
       <RequireCapability
         capability="canOperate"
         stackId={stackId}
@@ -117,50 +90,19 @@ export default function TemplateDestroyPanel({ stackId, stackTemplate }: Templat
 interface DestroyControlProps {
   canDestroy: boolean;
   destroying: boolean;
-  autoApprove: boolean;
   onDestroy: () => void;
   destroyBusy: boolean;
-  confirmDestroy: boolean;
-  onConfirmDestroy: () => void;
-  onCancelConfirm: () => void;
   disabledReason?: string;
 }
 
-function DestroyControl({
-  canDestroy,
-  destroying,
-  autoApprove,
-  onDestroy,
-  destroyBusy,
-  confirmDestroy,
-  onConfirmDestroy,
-  onCancelConfirm,
-  disabledReason
-}: DestroyControlProps) {
+function DestroyControl({ canDestroy, destroying, onDestroy, destroyBusy, disabledReason }: DestroyControlProps) {
   const disabled = Boolean(disabledReason) || destroying || !canDestroy || destroyBusy;
   return (
     <div className="button-row">
-      {confirmDestroy ? (
-        <>
-          <button className="destructive-button" disabled={disabled} onClick={onDestroy} type="button">
-            {destroyBusy ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}
-            Confirm destroy
-          </button>
-          <button className="secondary-button" disabled={destroyBusy} onClick={onCancelConfirm} type="button">
-            Keep
-          </button>
-        </>
-      ) : (
-        <button
-          className="destructive-button"
-          disabled={disabled}
-          onClick={autoApprove ? onConfirmDestroy : onDestroy}
-          type="button"
-        >
-          {destroyBusy ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}
-          Destroy
-        </button>
-      )}
+      <button className="destructive-button" disabled={disabled} onClick={onDestroy} type="button">
+        {destroyBusy ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}
+        Destroy
+      </button>
       {disabledReason && (
         <p className="muted" data-testid="template-destroy-disabled-reason">
           {disabledReason}

@@ -241,7 +241,7 @@ func TestRegisterControlRegistersWorkflowsAndControlActivities(t *testing.T) {
 	registerControl(worker, &recordingStore{}, nil)
 
 	wantWorkflows := map[string]bool{
-		domain.TemplateRunWorkflowName:   true,
+		domain.TemplatePlanWorkflowName:  true,
 		domain.TemplateApplyWorkflowName: true,
 		domain.TemplateSyncWorkflowName:  true,
 	}
@@ -828,7 +828,7 @@ func (recordingStore) FinishTemplatePlan(context.Context, domain.FinishPlanActiv
 	return "", nil
 }
 
-func (recordingStore) BeginTemplateApply(context.Context, domain.TenantID, domain.TemplateRunID) (bool, error) {
+func (recordingStore) BeginTemplateApply(context.Context, domain.TenantID, domain.TemplateRunID, bool) (bool, error) {
 	return false, nil
 }
 

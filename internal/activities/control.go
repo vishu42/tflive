@@ -31,9 +31,10 @@ type PlanKeyStore interface {
 type PlanRecorder interface {
 	// FinishTemplatePlan records a finished plan and decides what follows it.
 	FinishTemplatePlan(ctx context.Context, input domain.FinishPlanActivityInput) (domain.PlanOutcome, error)
-	// BeginTemplateApply claims an approved run for its apply phase. It
-	// reports false when the run is no longer approved.
-	BeginTemplateApply(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID) (bool, error)
+	// BeginTemplateApply claims a run for its apply phase: an approved run, or
+	// with autoApprove a queued one. It reports false when the run is no longer
+	// in that state.
+	BeginTemplateApply(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, autoApprove bool) (bool, error)
 }
 
 // LogMetadataRecorder persists the metadata row for an uploaded phase log.
@@ -147,9 +148,9 @@ func (activities *ControlActivities) FinishPlan(ctx context.Context, input domai
 	return outcome, nil
 }
 
-// BeginApply claims an approved run for its apply phase.
+// BeginApply claims a run for its apply phase.
 func (activities *ControlActivities) BeginApply(ctx context.Context, input domain.BeginApplyActivityInput) (domain.BeginApplyActivityOutput, error) {
-	claimed, err := activities.store.BeginTemplateApply(ctx, input.TenantID, input.RunID)
+	claimed, err := activities.store.BeginTemplateApply(ctx, input.TenantID, input.RunID, input.AutoApprove)
 	if err != nil {
 		return domain.BeginApplyActivityOutput{}, fmt.Errorf("begin apply: %w", err)
 	}

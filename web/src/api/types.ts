@@ -39,7 +39,6 @@ export type TemplateRunStatus =
 // "apply" survives only on runs from before saved plans; a run is started as a
 // plan or a destroy, and approving its plan is what applies it.
 export type Operation = "plan" | "apply" | "destroy";
-export type StartRunOperation = "plan" | "destroy";
 
 export interface ApiErrorBody {
   error: string;
@@ -172,9 +171,11 @@ export interface TemplateRun {
   error_summary: string;
   // Counts runs within one stack template, from 1. Shown as "Run #N".
   run_number: number;
-  // Applies the plan as soon as it finishes, without waiting for approval.
+  // An apply run that applies straight away, with no saved plan and no
+  // approval.
   auto_approve: boolean;
-  // What the saved plan would change. Null until a plan with changes finishes.
+  // What the plan would change, or, for an auto-approved apply, what it
+  // changed. Null until a plan with changes, or the apply, finishes.
   plan_summary: PlanSummary | null;
 }
 

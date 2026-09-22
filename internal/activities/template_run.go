@@ -310,7 +310,7 @@ func (activities *TemplateRunActivities) FetchSource(ctx context.Context, input 
 	return domain.FetchSourceActivityOutput{TerraformPath: terraformPath}, nil
 }
 
-// RunTerraform executes one Terraform phase requested by TemplateRunWorkflow.
+// RunTerraform executes one Terraform phase requested by TemplatePlanWorkflow.
 //
 // It opens the credentials the control plane sealed to this run's key, then
 // delegates command selection, log handling, and subprocess execution to the
@@ -380,24 +380,21 @@ func recordActivityHeartbeat(ctx context.Context) {
 
 // RunTerraform writes command output to the workspace log file and runs OpenTofu.
 //
-// The log phase is derived from the Terraform command (or LogCommand, when
-// set) so each phase writes to a predictable file under the workspace logs
+// The log phase is derived from the Terraform command and the run phase it belongs to
+// so each phase writes to a predictable file under the workspace logs
 // directory. The file is opened for append, so commands sharing a phase leave
 // their output in the order they ran. Stdout and stderr share
 // the same writer for now, preserving command output ordering in a single phase
 // log. The log file is closed after the command completes, and close errors are
 // surfaced only when the command itself succeeded.
 func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
-	logCommand := input.LogCommand
-	if logCommand == "" {
-		logCommand = input.Command
-	}
-	phase, err := logsink.PhaseForTerraformCommand(logCommand)
+	fileName, err := logsink.FileNameForTerraformCommand(input.Command, input.RunPhase)
 	if err != nil {
 		return domain.RunTerraformActivityOutput{}, err
 	}
+	phase := strings.TrimSuffix(fileName, logsink.LogFileExtension)
 
-	writer, err := logsink.NewFileSink(input.WorkspacePath).OpenPhase(phase)
+	writer, err := logsink.NewFileSink(input.WorkspacePath).Open(fileName)
 	if err != nil {
 		return domain.RunTerraformActivityOutput{}, fmt.Errorf("open terraform log: %w", err)
 	}
@@ -408,7 +405,6 @@ func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input 
 		WorkspacePath: terraformPath(input),
 		WorkspaceName: input.WorkspaceName,
 		Command:       input.Command,
-		Destroy:       input.Destroy,
 		ConfigJSON:    input.ConfigJSON,
 		Environment:   input.Environment,
 		Stdout:        redactingWriter,
@@ -421,7 +417,7 @@ func (localRunner localTerraformRunner) RunTerraform(ctx context.Context, input 
 	}
 	var log domain.TemplateRunLog
 	if localRunner.logStore != nil {
-		file, err := os.Open(filepath.Join(input.WorkspacePath, "logs", phase+".log"))
+		file, err := os.Open(filepath.Join(input.WorkspacePath, "logs", fileName))
 		if err != nil {
 			return domain.RunTerraformActivityOutput{}, fmt.Errorf("open terraform log for upload: %w", err)
 		}

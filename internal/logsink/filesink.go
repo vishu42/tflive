@@ -40,13 +40,17 @@ func RunWorkspacePath(runRoot string, tenantID domain.TenantID, runID domain.Tem
 	return filepath.Join(runRoot, string(tenantID), string(runID)), nil
 }
 
-// OpenPhase opens an append-only log file for a single run phase.
-func (sink FileSink) OpenPhase(phase string) (io.WriteCloser, error) {
+// LogFileExtension ends every log file name. A log's phase, the name it is
+// stored and read under, is its file name without it.
+const LogFileExtension = ".log"
+
+// Open opens the append-only log file with this name, such as plan-init.log.
+func (sink FileSink) Open(fileName string) (io.WriteCloser, error) {
 	if strings.TrimSpace(sink.workspacePath) == "" {
 		return nil, fmt.Errorf("workspace path is required")
 	}
-	if !safePathComponent(phase) {
-		return nil, fmt.Errorf("phase must be a safe path component")
+	if !safePathComponent(fileName) {
+		return nil, fmt.Errorf("log file name must be a safe path component")
 	}
 
 	logsPath := filepath.Join(sink.workspacePath, "logs")
@@ -54,7 +58,7 @@ func (sink FileSink) OpenPhase(phase string) (io.WriteCloser, error) {
 		return nil, fmt.Errorf("create log directory: %w", err)
 	}
 
-	path := filepath.Join(logsPath, phase+".log")
+	path := filepath.Join(logsPath, fileName)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open phase log: %w", err)
@@ -62,19 +66,24 @@ func (sink FileSink) OpenPhase(phase string) (io.WriteCloser, error) {
 	return file, nil
 }
 
-// PhaseForTerraformCommand maps a Terraform subprocess command to its log phase.
-func PhaseForTerraformCommand(command domain.TerraformCommandType) (string, error) {
+// FileNameForTerraformCommand maps a Terraform subprocess command to its log
+// file name. Init and workspace selection run in both the plan and the apply
+// phase, so their logs are named for the phase: plan-init.log, apply-init.log.
+func FileNameForTerraformCommand(command domain.TerraformCommandType, runPhase domain.RunPhase) (string, error) {
+	if runPhase != domain.RunPhasePlan && runPhase != domain.RunPhaseApply {
+		return "", fmt.Errorf("unsupported run phase %q", runPhase)
+	}
 	switch command {
 	case domain.TerraformCommandInit:
-		return "init", nil
+		return string(runPhase) + "-init" + LogFileExtension, nil
 	case domain.TerraformCommandSelectWorkspace:
-		return "workspace", nil
-	case domain.TerraformCommandPlan:
-		return "plan", nil
-	case domain.TerraformCommandApply:
-		return "apply", nil
+		return string(runPhase) + "-workspace" + LogFileExtension, nil
+	case domain.TerraformCommandPlan, domain.TerraformCommandPlanDestroy:
+		return "plan" + LogFileExtension, nil
+	case domain.TerraformCommandApply, domain.TerraformCommandApplyAutoApprove:
+		return "apply" + LogFileExtension, nil
 	case domain.TerraformCommandDestroy:
-		return "destroy", nil
+		return "destroy" + LogFileExtension, nil
 	default:
 		return "", fmt.Errorf("unsupported terraform command %q", command)
 	}
@@ -90,7 +99,7 @@ func (reader LocalReader) ReadTemplateRunLog(_ context.Context, tenantID domain.
 		return nil, fmt.Errorf("phase must be a safe path component")
 	}
 
-	path := filepath.Join(workspacePath, "logs", phase+".log")
+	path := filepath.Join(workspacePath, "logs", phase+LogFileExtension)
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read phase log: %w", err)

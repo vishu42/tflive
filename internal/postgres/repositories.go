@@ -1496,9 +1496,18 @@ func recordTemplateRunStatus(ctx context.Context, writer templateRunStatusWriter
 			input.Operation,
 		).Scan(&updatedRunID)
 	} else {
+		// A status that carries a summary records the run's counts with it.
+		var add, change, destroy *int
+		if input.Summary != nil {
+			add, change, destroy = &input.Summary.Add, &input.Summary.Change, &input.Summary.Destroy
+		}
 		err = writer.QueryRow(ctx, `
 			update template_runs
-			set status = $1
+			set
+				status = $1,
+				plan_add = coalesce($6, plan_add),
+				plan_change = coalesce($7, plan_change),
+				plan_destroy = coalesce($8, plan_destroy)
 			where tenant_id = $2
 				and id = $3
 				and stack_template_id = $4
@@ -1510,6 +1519,9 @@ func recordTemplateRunStatus(ctx context.Context, writer templateRunStatusWriter
 			input.RunID,
 			input.StackTemplateID,
 			input.Operation,
+			add,
+			change,
+			destroy,
 		).Scan(&updatedRunID)
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1531,11 +1543,11 @@ type stackTemplateLifecycleWriter interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// recordsStackTemplateLastApplied is a plan run's apply finishing: the saved
-// plan it applied is now what is live. A plan with no changes is live too, and
+// recordsStackTemplateLastApplied is an apply run's apply finishing: what it
+// applied is now what is live. A plan with no changes is live too, and
 // FinishTemplatePlan records that one itself.
 func recordsStackTemplateLastApplied(input domain.TemplateRunStatusActivityInput) bool {
-	return input.Operation == domain.OperationPlan && input.Status == domain.TemplateRunApplyFinished
+	return input.Operation == domain.OperationApply && input.Status == domain.TemplateRunApplyFinished
 }
 
 func recordsStackTemplateDestroying(input domain.TemplateRunStatusActivityInput) bool {

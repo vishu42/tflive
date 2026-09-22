@@ -8,14 +8,17 @@ import (
 	"time"
 )
 
-// OperationType identifies what a run is for. Both operations plan first and
-// apply only the saved plan someone approved: a plan run applies a plan of the
-// desired state, a destroy run a plan to destroy everything. There is no
-// separate apply operation, because applying is what approving a plan does.
+// OperationType identifies what a run is for, as the Terraform CLI would name
+// it. A plan run only plans: it shows what would change and ends. An apply run
+// saves a plan of the desired state and applies it once someone approves it,
+// or, started with auto-approve, applies without a saved plan at all. A
+// destroy run saves a plan to destroy everything and applies it once
+// approved; it has no auto-approve.
 type OperationType string
 
 const (
 	OperationPlan    OperationType = "plan"
+	OperationApply   OperationType = "apply"
 	OperationDestroy OperationType = "destroy"
 )
 
@@ -26,11 +29,20 @@ const (
 	TerraformCommandInit            TerraformCommandType = "init"
 	TerraformCommandSelectWorkspace TerraformCommandType = "select_workspace"
 	TerraformCommandPlan            TerraformCommandType = "plan"
+	// TerraformCommandPlanDestroy is a destroy run's plan: a plan to destroy
+	// everything the template manages. It records the same statuses and log as
+	// TerraformCommandPlan.
+	TerraformCommandPlanDestroy TerraformCommandType = "plan_destroy"
 	// TerraformCommandApply and TerraformCommandDestroy both apply the run's
 	// saved plan. They stay two commands so each records its own statuses:
 	// destroy_started and destroy_finished drive the stack template lifecycle.
 	TerraformCommandApply   TerraformCommandType = "apply"
 	TerraformCommandDestroy TerraformCommandType = "destroy"
+	// TerraformCommandApplyAutoApprove is an auto-approved apply run's only
+	// Terraform step besides setup: it plans and applies in one go, with no
+	// saved plan, so it is the one apply that takes the run's variables. It
+	// records the same statuses and log as TerraformCommandApply.
+	TerraformCommandApplyAutoApprove TerraformCommandType = "apply_auto_approve"
 )
 
 // PlanSummary counts the resource changes in a saved plan. A replacement
@@ -45,7 +57,7 @@ type PlanSummary struct {
 // Valid reports whether the operation is one of the supported operation types.
 func (operation OperationType) Valid() bool {
 	switch operation {
-	case OperationPlan, OperationDestroy:
+	case OperationPlan, OperationApply, OperationDestroy:
 		return true
 	default:
 		return false
@@ -158,8 +170,8 @@ type TemplateRun struct {
 	// RunNumber counts runs within one stack template, from 1. It is what
 	// people see and what URLs carry; ID stays the identity everywhere else.
 	RunNumber int `json:"run_number"`
-	// AutoApprove means the trigger actor asked for the plan to be applied as
-	// soon as it finishes, without waiting for anyone to approve it.
+	// AutoApprove means the trigger actor asked an apply run to apply straight
+	// away, with no saved plan and without waiting for anyone to approve it.
 	AutoApprove bool `json:"auto_approve"`
 	// PlanSummary is what the saved plan would change. Nil until a plan with
 	// changes has finished.

@@ -131,7 +131,7 @@ describe("TemplateRunActions", () => {
     vi.restoreAllMocks();
   });
 
-  it("enables Plan and offers no run actions when no run has started", () => {
+  it("enables Plan and Apply and offers no run actions when no run has started", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
     seedRuns(queryClient, []);
@@ -139,9 +139,8 @@ describe("TemplateRunActions", () => {
     renderActions(queryClient);
 
     expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(false);
-    // Applying is what approving a plan does; there is no Apply to start.
-    expect(button(/^Apply$/)).toBeNull();
-    expect(button(/Cancel|Discard/)).toBeNull();
+    expect(isDisabled(screen.getByRole("button", { name: /^Apply$/ }))).toBe(false);
+    expect(button(/Approve|Cancel|Discard/)).toBeNull();
   });
 
   it("keeps Plan disabled until run history has loaded", () => {
@@ -202,41 +201,45 @@ describe("TemplateRunActions", () => {
     expect(button(/Cancel/)).toBeNull();
   });
 
-  // Auto-approve is an approval given in advance, and so is Apply on a waiting
-  // plan: neither is offered without approve access. Discarding the plan is an
-  // operator action, so it stays.
-  it("hides Apply and auto-approve when canApprove is denied", () => {
+  // Auto-approve is an approval given in advance, and so is Approve on a
+  // waiting plan: neither is offered without approve access. Discarding the
+  // plan is an operator action, so it stays, and so does starting an Apply,
+  // which only saves a plan for someone else to approve.
+  it("hides Approve and auto-approve when canApprove is denied", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, { ...allAllowed, canApprove: false });
-    seedRuns(queryClient, [run({ id: "run_waiting", operation: "plan", status: "waiting_approval" })]);
+    seedRuns(queryClient, [run({ id: "run_waiting", operation: "apply", status: "waiting_approval" })]);
 
     renderActions(queryClient);
 
-    expect(button(/^Apply$/)).toBeNull();
+    expect(button(/^Approve$/)).toBeNull();
     expect(screen.queryByTestId("template-run-auto-approve")).toBeNull();
     expect(button(/Discard/)).toBeTruthy();
+    expect(button(/^Apply$/)).toBeTruthy();
   });
 
-  it("offers Apply and Discard on the row of a plan waiting for approval that a different user started", () => {
+  it("offers Approve and Discard on the row of a plan waiting for approval that a different user started", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
     seedRuns(queryClient, [
-      run({ id: "run_waiting", run_number: 2, operation: "plan", status: "waiting_approval", trigger_actor: "someone_else", plan_summary: { add: 1, change: 0, destroy: 0 } }),
-      run({ id: "run_done", operation: "plan", status: "completed", trigger_actor: "someone_else" })
+      run({ id: "run_waiting", run_number: 2, operation: "apply", status: "waiting_approval", trigger_actor: "someone_else", plan_summary: { add: 1, change: 0, destroy: 0 } }),
+      run({ id: "run_done", operation: "apply", status: "completed", trigger_actor: "someone_else" })
     ]);
 
     renderActions(queryClient);
 
     const row = screen.getByTestId("template-run-row-run_waiting");
     const labels = Array.from(row.querySelectorAll("button")).map((candidate) => candidate.textContent);
-    expect(labels).toEqual(["Discard", "Apply"]);
+    expect(labels).toEqual(["Discard", "Approve"]);
     expect(screen.getByTestId("template-run-summary-run_waiting").textContent).toBe("+1 ~0 -0");
   });
 
-  it("starts an auto-approved plan when the box is ticked", async () => {
+  // Plan only plans, so it never carries auto-approve; Apply carries it when
+  // the box is ticked, and then applies straight away.
+  it("starts a plan, an apply, and an auto-approved apply", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
       if (init?.method === "POST") {
-        return jsonResponse(run({ id: "run_new", status: "queued" }), 201);
+        return jsonResponse(run({ id: "run_new", status: "completed" }), 201);
       }
       return jsonResponse([]);
     });
@@ -246,14 +249,22 @@ describe("TemplateRunActions", () => {
 
     renderActions(queryClient);
 
+    const posted = () => fetchMock.mock.calls.filter(([, init]) => init?.method === "POST").map(([, init]) => JSON.parse(String(init?.body)));
+    fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
+    await waitFor(() => expect(posted()).toEqual([{ operation: "plan" }]));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /^Apply$/ }))).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: /^Apply$/ }));
+    await waitFor(() => expect(posted()).toEqual([{ operation: "plan" }, { operation: "apply" }]));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(false));
+
     fireEvent.click(screen.getByRole("checkbox", { name: /Auto Apply/ }));
     fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
-
+    await waitFor(() => expect(posted()).toHaveLength(3));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /^Apply$/ }))).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /^Apply$/ }));
     await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/v1/tenants/tenant_123/stack-templates/stpl_1/runs",
-        expect.objectContaining({ method: "POST", body: JSON.stringify({ operation: "plan", auto_approve: true }) })
-      )
+      expect(posted()).toEqual([{ operation: "plan" }, { operation: "apply" }, { operation: "plan" }, { operation: "apply", auto_approve: true }])
     );
   });
 
@@ -293,7 +304,7 @@ describe("TemplateRunActions", () => {
     expect(screen.getByTestId("template-run-row-run_elsewhere").textContent).toContain("Cancel");
   });
 
-  it("walks plan → apply from persisted history, and reflects each step without a page reload", async () => {
+  it("walks apply → approve from persisted history, and reflects each step without a page reload", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
     let runsState: TemplateRun[] = [];
@@ -305,8 +316,8 @@ describe("TemplateRunActions", () => {
         return jsonResponse(runsState);
       }
       if (url.endsWith("/stack-templates/stpl_1/runs") && method === "POST") {
-        // The plan runs and waits for approval with what it would change.
-        const created = run({ id: "run_plan_1", run_number: 1, operation: "plan", status: "waiting_approval", plan_summary: { add: 2, change: 0, destroy: 0 } });
+        // The apply's plan runs and waits for approval with what it would change.
+        const created = run({ id: "run_plan_1", run_number: 1, operation: "apply", status: "waiting_approval", plan_summary: { add: 2, change: 0, destroy: 0 } });
         runsState = [created];
         return jsonResponse(created, 201);
       }
@@ -326,21 +337,21 @@ describe("TemplateRunActions", () => {
     // disabled state flipping are separate ticks.
     await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Plan/ }))).toBe(false));
 
-    fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Apply$/ }));
     await waitFor(() => expect(screen.getByTestId("template-run-history-run_plan_1")).toBeTruthy());
     expect(screen.getByTestId("template-run-history-run_plan_1").getAttribute("href")).toBe("/stacks/stack_1/templates/stpl_1/runs/1");
-    await waitFor(() => expect(button(/^Apply$/)).toBeTruthy());
+    await waitFor(() => expect(button(/^Approve$/)).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: /^Apply$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Approve$/ }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         expect.stringContaining("/template-runs/run_plan_1/approval"),
         expect.objectContaining({ method: "POST" })
       )
     );
-    // Approved, the run no longer waits: its row drops Apply and Discard, and
+    // Approved, the run no longer waits: its row drops Approve and Discard, and
     // offers Cancel while it applies.
-    await waitFor(() => expect(button(/^Apply$/)).toBeNull());
+    await waitFor(() => expect(button(/^Approve$/)).toBeNull());
     expect(button(/Cancel/)).toBeTruthy();
     expect(button(/Discard/)).toBeNull();
   });

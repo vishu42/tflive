@@ -17,7 +17,7 @@ func TestOperationTypeValid(t *testing.T) {
 		want      bool
 	}{
 		{name: "plan is valid", operation: OperationPlan, want: true},
-		{name: "apply is not an operation: it is what approving a plan does", operation: OperationType("apply"), want: false},
+		{name: "apply is valid", operation: OperationApply, want: true},
 		{name: "destroy is valid", operation: OperationDestroy, want: true},
 		{name: "empty is invalid", operation: OperationType(""), want: false},
 		{name: "unknown is invalid", operation: OperationType("refresh"), want: false},
@@ -246,8 +246,8 @@ func TestStackTemplateWorkspaceStable(t *testing.T) {
 func TestWorkflowNames(t *testing.T) {
 	t.Parallel()
 
-	if TemplateRunWorkflowName != "TemplateRunWorkflow" {
-		t.Fatalf("TemplateRunWorkflowName = %q", TemplateRunWorkflowName)
+	if TemplatePlanWorkflowName != "TemplatePlanWorkflow" {
+		t.Fatalf("TemplatePlanWorkflowName = %q", TemplatePlanWorkflowName)
 	}
 
 	if TemplateSyncWorkflowName != "TemplateSyncWorkflow" {

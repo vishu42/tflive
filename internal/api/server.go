@@ -854,8 +854,9 @@ type upgradeStackTemplateRequest struct {
 
 type startTemplateRunRequest struct {
 	Operation string `json:"operation"`
-	// AutoApprove applies the plan as soon as it finishes. It takes approve
-	// access on the stack as well as operate access.
+	// AutoApprove applies straight away, with no saved plan and no approval.
+	// Only an apply run takes it, and it needs approve access on the stack as
+	// well as operate access.
 	AutoApprove bool `json:"auto_approve"`
 }
 

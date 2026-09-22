@@ -42,7 +42,7 @@ func newDispatcher(temporalClient workflowClient, options ...DispatcherOptions) 
 	return dispatcher
 }
 
-// StartTemplateRun dispatches one TemplateRunWorkflow execution to Temporal.
+// StartTemplateRun dispatches one TemplatePlanWorkflow execution to Temporal.
 // The workflow ID is derived from tenant ID and run ID so repeated callers target
 // the same logical run. Workflows run on the control queue; the workflow itself
 // routes execution activities to the executor.
@@ -63,7 +63,7 @@ func (dispatcher *Dispatcher) StartTemplateRun(ctx context.Context, input domain
 			WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 			WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
 		},
-		domain.TemplateRunWorkflowName,
+		domain.TemplatePlanWorkflowName,
 		input)
 	if err != nil {
 		return fmt.Errorf("start template run workflow: %w", err)
@@ -115,11 +115,10 @@ func (dispatcher *Dispatcher) StartTemplateApply(ctx context.Context, input doma
 
 // CancelTemplateRun signals whichever of the run's workflows is running. At
 // most one is: the plan workflow ends before its apply workflow can start,
-// unless the run was auto-approved, in which case the plan workflow goes on
-// to apply and no apply workflow is ever started. So the plan workflow is
-// tried first, and only a plan workflow that has already closed sends the
-// signal on to the apply workflow. If neither is running the NotFound comes
-// back, and the caller reconciles the run itself.
+// and an auto-approved apply run has no plan workflow at all. So the plan
+// workflow is tried first, and only a plan workflow that is closed or was
+// never started sends the signal on to the apply workflow. If neither is
+// running the NotFound comes back, and the caller reconciles the run itself.
 func (dispatcher *Dispatcher) CancelTemplateRun(
 	ctx context.Context,
 	tenantID domain.TenantID,

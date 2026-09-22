@@ -194,15 +194,15 @@ func TestSealPlanKeyOnlyCreatesOnThePlanPhase(t *testing.T) {
 func TestFinishPlanReturnsTheStoresOutcome(t *testing.T) {
 	t.Parallel()
 
-	store := &controlStoreStub{outcome: domain.PlanOutcomeApproved}
+	store := &controlStoreStub{outcome: domain.PlanOutcomeWaiting}
 	control := NewControlActivities(store, nil)
-	input := domain.FinishPlanActivityInput{TenantID: "tenant_123", RunID: "run_123", HasChanges: true, Summary: domain.PlanSummary{Add: 1}, AutoApprove: true}
+	input := domain.FinishPlanActivityInput{TenantID: "tenant_123", RunID: "run_123", Operation: domain.OperationApply, HasChanges: true, Summary: domain.PlanSummary{Add: 1}}
 
 	outcome, err := control.FinishPlan(context.Background(), input)
 	if err != nil {
 		t.Fatalf("FinishPlan returned error: %v", err)
 	}
-	if outcome != domain.PlanOutcomeApproved || store.finished != input {
+	if outcome != domain.PlanOutcomeWaiting || store.finished != input {
 		t.Fatalf("outcome = %q, finished = %#v", outcome, store.finished)
 	}
 }

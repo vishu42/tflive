@@ -1011,21 +1011,22 @@ func TestStartTemplateRunAutoApproveRequiresApproveAccess(t *testing.T) {
 		WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
 		Lifecycle:                 domain.StackTemplateActive,
 	}
-	newService := func(t *testing.T, grant authorization.Relation) (*Service, *recordingTemplateRunRepository) {
+	newService := func(t *testing.T, grant authorization.Relation) (*Service, *recordingTemplateRunRepository, *recordingUnitOfWork) {
 		runs := &recordingTemplateRunRepository{}
+		work := &recordingUnitOfWork{templateRuns: runs}
 		authorizer := seedGrants(t, newPlatformAuthorizer(t), mustGrant(t, keycloakSubject, "stack_123", grant))
 		return NewService(Service{
 			Authorization:            authorizer,
-			Work:                     &recordingUnitOfWork{templateRuns: runs},
+			Work:                     work,
 			StackTemplates:           &recordingStackTemplateRepository{stackTemplate: stackTemplate},
 			TemplateRuns:             runs,
 			TemplateRevisionMetadata: &recordingTemplateRepository{template: domain.TemplateRevision{ID: "template_123", Status: domain.TemplateRevisionActive}},
 			RunIDs:                   fixedTemplateRunIDGenerator{runID: "run_123"},
-		}), runs
+		}), runs, work
 	}
-	command := StartTemplateRunCommand{TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: domain.OperationPlan, AutoApprove: true}
+	command := StartTemplateRunCommand{TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply, AutoApprove: true}
 
-	operator, operatorRuns := newService(t, authorization.RelationOperator)
+	operator, operatorRuns, _ := newService(t, authorization.RelationOperator)
 	if _, err := operator.StartTemplateRun(authenticatedContext(), command); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("operator error = %v, want ErrForbidden", err)
 	}
@@ -1033,13 +1034,37 @@ func TestStartTemplateRunAutoApproveRequiresApproveAccess(t *testing.T) {
 		t.Fatalf("operator created run %q, want none", operatorRuns.created.ID)
 	}
 
-	owner, ownerRuns := newService(t, authorization.RelationOwner)
+	owner, ownerRuns, ownerWork := newService(t, authorization.RelationOwner)
 	run, err := owner.StartTemplateRun(authenticatedContext(), command)
 	if err != nil {
 		t.Fatalf("owner error = %v", err)
 	}
 	if !run.AutoApprove || !ownerRuns.created.AutoApprove {
 		t.Fatalf("run auto-approve = %v, persisted = %v; want both set", run.AutoApprove, ownerRuns.created.AutoApprove)
+	}
+	// It has no plan, so it goes straight to the apply workflow, and its
+	// approval, given now, is audited now.
+	if len(ownerWork.requests) != 1 || ownerWork.requests[0].Kind != KindStartTemplateApply {
+		t.Fatalf("requests = %#v, want one start_template_apply", ownerWork.requests)
+	}
+	if len(ownerWork.audits) != 1 || ownerWork.audits[0].Action != domain.AuditActionApprovalGranted {
+		t.Fatalf("audits = %#v, want one approval granted", ownerWork.audits)
+	}
+}
+
+// Only an apply run can be auto-approved: a plan run applies nothing, and a
+// destroy always waits for someone to approve its plan.
+func TestStartTemplateRunRejectsAutoApproveOutsideApply(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{Authorization: testPlatformAuthorizer(t)})
+	for _, operation := range []domain.OperationType{domain.OperationPlan, domain.OperationDestroy} {
+		_, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
+			TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: operation, AutoApprove: true,
+		})
+		if !errors.Is(err, ErrInvalidCommand) {
+			t.Fatalf("%s error = %v, want ErrInvalidCommand", operation, err)
+		}
 	}
 }
 

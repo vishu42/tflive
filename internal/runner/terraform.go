@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/vishu42/tflive/internal/domain"
@@ -19,9 +21,6 @@ type TerraformCommand struct {
 	WorkspaceName string
 	Command       domain.TerraformCommandType
 	ConfigJSON    json.RawMessage
-	// Destroy makes a plan a plan to destroy everything. Ignored by every
-	// other command.
-	Destroy bool
 	// Environment contains resolved provider credentials for this subprocess only.
 	Environment map[string]string
 	Stdout      io.Writer
@@ -56,13 +55,16 @@ func NewLocalProcessRunnerWithExecutor(executor CommandExecutor) *LocalProcessRu
 // it back at the same path before applying it.
 const PlanFileName = "tfplan"
 
-// Result reports what a command found out. Only a plan fills it in.
+// Result reports what a command found out. A plan and an auto-approved apply
+// fill it in.
 type Result struct {
 	// HasChanges is whether the plan would change anything, read from
-	// `-detailed-exitcode`: 0 means no changes, 2 means changes.
+	// `-detailed-exitcode`: 0 means no changes, 2 means changes. For an
+	// auto-approved apply, whether it changed anything.
 	HasChanges bool
-	// Summary counts the changes, from `tofu show -json` on the saved plan.
-	// Zero when there are none.
+	// Summary counts the changes, from `tofu show -json` on the saved plan, or
+	// from an auto-approved apply's "Apply complete!" line. Zero when there are
+	// none.
 	Summary domain.PlanSummary
 }
 
@@ -76,7 +78,8 @@ type Result struct {
 // A plan saves itself to PlanFileName. Apply and destroy both apply that saved
 // plan and nothing else: what was approved is exactly what runs, the variables
 // come from inside the plan, and tofu refuses the file outright if the state
-// has moved since it was written.
+// has moved since it was written. An auto-approved apply has no saved plan, so
+// it plans and applies in one command, with the run's variables.
 func (runner *LocalProcessRunner) Run(ctx context.Context, input TerraformCommand) (Result, error) {
 	if strings.TrimSpace(input.WorkspacePath) == "" {
 		return Result{}, fmt.Errorf("workspace path is required")
@@ -90,10 +93,12 @@ func (runner *LocalProcessRunner) Run(ctx context.Context, input TerraformComman
 		return Result{}, runner.run(ctx, input, sortedEnvironment(input.Environment), "init", "-input=false", "-no-color")
 	case domain.TerraformCommandSelectWorkspace:
 		return Result{}, runner.selectWorkspace(ctx, input)
-	case domain.TerraformCommandPlan:
+	case domain.TerraformCommandPlan, domain.TerraformCommandPlanDestroy:
 		return runner.plan(ctx, input)
 	case domain.TerraformCommandApply, domain.TerraformCommandDestroy:
 		return Result{}, runner.run(ctx, input, sortedEnvironment(input.Environment), "apply", "-input=false", "-auto-approve", "-no-color", PlanFileName)
+	case domain.TerraformCommandApplyAutoApprove:
+		return runner.applyAutoApprove(ctx, input)
 	default:
 		return Result{}, fmt.Errorf("unsupported terraform command %q", input.Command)
 	}
@@ -104,7 +109,7 @@ func (runner *LocalProcessRunner) Run(ctx context.Context, input TerraformComman
 // changes, so exit 2 is success here, not failure.
 func (runner *LocalProcessRunner) plan(ctx context.Context, input TerraformCommand) (Result, error) {
 	args := []string{"plan", "-input=false", "-no-color", "-detailed-exitcode", "-out=" + PlanFileName}
-	if input.Destroy {
+	if input.Command == domain.TerraformCommandPlanDestroy {
 		args = append(args, "-destroy")
 	}
 	err := runner.runWithTerraformVariables(ctx, input, args...)
@@ -121,6 +126,53 @@ func (runner *LocalProcessRunner) plan(ctx context.Context, input TerraformComma
 		return Result{}, err
 	}
 	return Result{HasChanges: true, Summary: summary}, nil
+}
+
+// applyAutoApprove plans and applies in one command, with no saved plan, and
+// counts what the apply did from its closing "Apply complete!" line. The
+// output still goes to the command's writers; the counts are read from a copy.
+func (runner *LocalProcessRunner) applyAutoApprove(ctx context.Context, input TerraformCommand) (Result, error) {
+	var output bytes.Buffer
+	stdout, _ := outputWriters(input)
+	input.Stdout = io.MultiWriter(stdout, &output)
+	if err := runner.runWithTerraformVariables(ctx, input, "apply", "-input=false", "-auto-approve", "-no-color"); err != nil {
+		return Result{}, err
+	}
+	summary := summarizeApplyOutput(output.String())
+	return Result{HasChanges: summary != domain.PlanSummary{}, Summary: summary}, nil
+}
+
+// applyCompleteLine is tofu's closing line for a successful apply, such as
+// "Apply complete! Resources: 1 imported, 2 added, 0 changed, 1 destroyed."
+var applyCompleteLine = regexp.MustCompile(`Apply complete! Resources: ([^\n]*)`)
+
+// applyCount is one "N verb" count on that line.
+var applyCount = regexp.MustCompile(`(\d+) (added|changed|destroyed)`)
+
+// summarizeApplyOutput counts an apply's changes from its "Apply complete!"
+// line. Counts it does not track, such as imported, are ignored, and output
+// without the line counts as no changes.
+func summarizeApplyOutput(output string) domain.PlanSummary {
+	var summary domain.PlanSummary
+	line := applyCompleteLine.FindStringSubmatch(output)
+	if line == nil {
+		return summary
+	}
+	for _, count := range applyCount.FindAllStringSubmatch(line[1], -1) {
+		n, err := strconv.Atoi(count[1])
+		if err != nil {
+			continue
+		}
+		switch count[2] {
+		case "added":
+			summary.Add = n
+		case "changed":
+			summary.Change = n
+		case "destroyed":
+			summary.Destroy = n
+		}
+	}
+	return summary
 }
 
 // summarize reads the saved plan back as JSON and counts its resource changes.
