@@ -62,15 +62,15 @@ type StackTemplate struct {
 	LastAppliedConfigJSON json.RawMessage
 	// LastAppliedAt is when the last successful apply completed.
 	LastAppliedAt time.Time
-	// LastPlannedRunID is the latest plan run that completed for this component.
-	LastPlannedRunID TemplateRunID
-	// LastPlannedTemplateRevisionID is the revision that plan ran against.
-	LastPlannedTemplateRevisionID TemplateRevisionID
-	// LastPlannedConfigJSON is the config that plan ran with. Nil like
+	// PendingPlanRunID is the latest plan run that completed for this component.
+	PendingPlanRunID TemplateRunID
+	// PendingPlanTemplateRevisionID is the revision that plan ran against.
+	PendingPlanTemplateRevisionID TemplateRevisionID
+	// PendingPlanConfigJSON is the config that plan ran with. Nil like
 	// LastAppliedConfigJSON, and for the same reason.
-	LastPlannedConfigJSON json.RawMessage
-	// LastPlannedAt is when that plan completed.
-	LastPlannedAt time.Time
+	PendingPlanConfigJSON json.RawMessage
+	// PendingPlanAt is when that plan completed.
+	PendingPlanAt time.Time
 	// CreatedBy is the user that installed this component.
 	CreatedBy UserID
 	// Lifecycle determines whether this component can run or is being removed.
@@ -123,7 +123,7 @@ func (stackTemplate StackTemplate) DesiredConfig() json.RawMessage {
 // the gate is to refuse an apply nobody can vouch for, so anything unverifiable
 // fails closed.
 func (stackTemplate StackTemplate) PlanState() PlanState {
-	if stackTemplate.LastPlannedRunID == "" {
+	if stackTemplate.PendingPlanRunID == "" {
 		return PlanNone
 	}
 	if stackTemplate.matchesDesired(stackTemplate.plannedSnapshot()) {
@@ -157,8 +157,8 @@ type snapshot struct {
 // plannedSnapshot is what the latest completed plan ran against.
 func (stackTemplate StackTemplate) plannedSnapshot() snapshot {
 	return snapshot{
-		revisionID: stackTemplate.LastPlannedTemplateRevisionID,
-		configJSON: stackTemplate.LastPlannedConfigJSON,
+		revisionID: stackTemplate.PendingPlanTemplateRevisionID,
+		configJSON: stackTemplate.PendingPlanConfigJSON,
 	}
 }
 

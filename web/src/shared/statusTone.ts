@@ -15,7 +15,7 @@ const WAITING = new Set([
   "locked",
   "waiting_approval"
 ]);
-const PROGRESS = new Set(["running", "validating", "cancel_requested", "canceling"]);
+const PROGRESS = new Set(["running", "validating"]);
 
 export function statusTone(value: string): StatusTone {
   if (FAILED.has(value)) return "failed";

@@ -1,29 +1,32 @@
 import { useState } from "react";
-import { CircleStop, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import { useParams } from "react-router-dom";
-import { isTerminalRunStatus } from "../../api/polling";
 import {
   useApproveRunMutation,
-  useCancelRunMutation,
+  useDiscardRunMutation,
   useTemplateRunLogQuery,
   useTemplateRunLogsQuery,
   useTemplateRunQuery,
   useTemplateRunsQuery
 } from "../../api/queries";
-import RequireCapability from "../../auth/RequireCapability";
 import { tenantID } from "../../config";
 import { formatDateTime } from "../../shared/formatTimestamp";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import { statusGlyph, statusTone } from "../../shared/statusTone";
+import { planSummaryLabel } from "../stacks/stackWorkflow";
 import RunLogsPanel from "./RunLogsPanel";
+import { runStatusLabel } from "./runStatusLabel";
+import { WaitingRunActions } from "./TemplateRunHistory";
 
 // /stacks/:stackId/templates/:stackTemplateId/runs/:runNumber — plan/apply
 // detail with per-phase logs, reached from the Runs tab. The URL carries the
 // run's number within its template, which is what people see; the run's id,
 // which every run endpoint takes, comes from the template's runs list. That
 // list is the one the Runs tab already loaded, so arriving from there costs no
-// extra request. Phase selection is derived (not effect-synced) so a stale
-// choice falls back to the first phase instead of rendering nothing.
+// extra request. Logs arrive in the order their commands ran, and the screen
+// opens on the latest: the plan, or the apply once there is one. Phase
+// selection is derived (not effect-synced) so a stale choice falls back to the
+// latest phase instead of rendering nothing.
 export default function RunDetailScreen() {
   const {
     stackId = "",
@@ -42,15 +45,16 @@ export default function RunDetailScreen() {
 
   const logsQuery = useTemplateRunLogsQuery(tenantID, runId, run?.status ?? "");
   const logs = logsQuery.data ?? [];
-  const selectedPhase = logs.find((log) => log.phase === chosenPhase)?.phase ?? logs[0]?.phase ?? "";
+  const selectedPhase = logs.find((log) => log.phase === chosenPhase)?.phase ?? logs[logs.length - 1]?.phase ?? "";
   const logQuery = useTemplateRunLogQuery(tenantID, runId, selectedPhase, run?.status ?? "");
   const logBody = logQuery.data ?? "";
 
   const approveRunMutation = useApproveRunMutation(tenantID);
-  const cancelRunMutation = useCancelRunMutation(tenantID);
+  const discardRunMutation = useDiscardRunMutation(tenantID);
 
+  // Only a plan waiting for approval can be acted on: a run planning or
+  // applying cannot be stopped.
   const canApprove = Boolean(run && run.status === "waiting_approval");
-  const canCancel = Boolean(run && !isTerminalRunStatus(run.status));
 
   async function runAction(action: () => Promise<void>) {
     setErrorMessage("");
@@ -67,9 +71,9 @@ export default function RunDetailScreen() {
     });
   }
 
-  async function handleCancel() {
+  async function handleDiscard() {
     await runAction(async () => {
-      await cancelRunMutation.mutateAsync({ runID: runId, body: { reason: "canceled from run detail" } });
+      await discardRunMutation.mutateAsync({ runID: runId, body: { reason: "discarded from run detail" } });
     });
   }
 
@@ -119,32 +123,24 @@ export default function RunDetailScreen() {
         <>
           <header className="run-detail-header">
             <span className="run-detail-title">
-              <span className={`status-tone status-tone--${statusTone(run.status)}`} data-testid="run-detail-status">
+              <span className="run-detail-number">Run #{run.run_number}</span>
+              <span className={`status-tone status-tone--${statusTone(run.status)}`} title={run.status} data-testid="run-detail-status">
                 <span className="status-tone__glyph" aria-hidden="true">
                   {statusGlyph(statusTone(run.status))}
                 </span>
-                {run.status}
+                {runStatusLabel(run)}
               </span>
-              <span className="run-detail-operation">{run.operation}</span>
             </span>
-            {(canApprove || canCancel) && (
+            {canApprove && (
               <span className="run-detail-actions">
-                {canCancel && (
-                  <RequireCapability capability="canOperate" stackId={stackId}>
-                    <button className="secondary-button" type="button" disabled={cancelRunMutation.isPending} onClick={handleCancel}>
-                      {cancelRunMutation.isPending ? <Loader2 size={16} className="spin" /> : <CircleStop size={16} />}
-                      Cancel
-                    </button>
-                  </RequireCapability>
-                )}
-                {canApprove && (
-                  <RequireCapability capability="canApprove" stackId={stackId}>
-                    <button className="primary-button" type="button" disabled={approveRunMutation.isPending} onClick={handleApprove}>
-                      {approveRunMutation.isPending ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
-                      Approve
-                    </button>
-                  </RequireCapability>
-                )}
+                <WaitingRunActions
+                  run={run}
+                  stackId={stackId}
+                  approveBusy={approveRunMutation.isPending}
+                  discardBusy={discardRunMutation.isPending}
+                  onApprove={handleApprove}
+                  onDiscard={handleDiscard}
+                />
               </span>
             )}
           </header>
@@ -170,6 +166,12 @@ export default function RunDetailScreen() {
                 )}
               </dd>
             </div>
+            {run.plan_summary && (
+              <div>
+                <dt>Changes</dt>
+                <dd title="To add, to change, to destroy">{planSummaryLabel(run.plan_summary)}</dd>
+              </div>
+            )}
             <div>
               <dt>Started by</dt>
               <dd>{run.trigger_actor}</dd>

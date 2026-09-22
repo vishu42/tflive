@@ -28,7 +28,7 @@ func TestRecordTemplateRunStatusDelegatesToRecorder(t *testing.T) {
 		RunID:           domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		Status:          domain.TemplateRunPlanFinished,
 	}
 
@@ -64,7 +64,7 @@ func TestPrepareWorkspaceCreatesRunDirectory(t *testing.T) {
 	t.Parallel()
 
 	runRoot := t.TempDir()
-	activities := NewTemplateRunActivities(runRoot, nil, nil)
+	activities := NewTemplateRunActivities(runRoot, nil, nil, nil)
 	input := domain.PrepareWorkspaceActivityInput{
 		RunID:    domain.TemplateRunID("run_123"),
 		TenantID: domain.TenantID("tenant_123"),
@@ -91,7 +91,7 @@ func TestPrepareWorkspaceCreatesRunDirectory(t *testing.T) {
 func TestPrepareWorkspaceRejectsEmptyRoot(t *testing.T) {
 	t.Parallel()
 
-	activities := NewTemplateRunActivities("", nil, nil)
+	activities := NewTemplateRunActivities("", nil, nil, nil)
 
 	_, err := activities.PrepareWorkspace(context.Background(), domain.PrepareWorkspaceActivityInput{
 		RunID:    domain.TemplateRunID("run_123"),
@@ -108,7 +108,7 @@ func TestPrepareWorkspaceRejectsEmptyRoot(t *testing.T) {
 func TestPrepareWorkspaceRejectsUnsafePathComponents(t *testing.T) {
 	t.Parallel()
 
-	activities := NewTemplateRunActivities(t.TempDir(), nil, nil)
+	activities := NewTemplateRunActivities(t.TempDir(), nil, nil, nil)
 
 	_, err := activities.PrepareWorkspace(context.Background(), domain.PrepareWorkspaceActivityInput{
 		RunID:    domain.TemplateRunID("run_123"),
@@ -242,13 +242,14 @@ func TestRunTerraformDelegatesToRunner(t *testing.T) {
 	t.Parallel()
 
 	runner := &recordingTerraformRunner{}
-	activities := NewTemplateRunActivities(t.TempDir(), nil, nil, runner)
+	activities := NewTemplateRunActivities(t.TempDir(), nil, nil, nil, runner)
 	input := domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
 		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123",
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 		Command:       domain.TerraformCommandPlan,
+		RunPhase:      domain.RunPhasePlan,
 	}
 
 	output, err := activities.RunTerraform(context.Background(), input)
@@ -291,7 +292,7 @@ func TestRunTerraformAttachesUploadedLogToCommandFailure(t *testing.T) {
 
 	runnerErr := errors.New("terraform failed")
 	log := domain.TemplateRunLog{TenantID: "tenant_123", RunID: "run_123", Phase: "apply", ObjectKey: "tenants/tenant_123/runs/run_123/logs/apply.log"}
-	activities := NewTemplateRunActivities(t.TempDir(), nil, nil, &recordingTerraformRunner{log: log, err: runnerErr})
+	activities := NewTemplateRunActivities(t.TempDir(), nil, nil, nil, &recordingTerraformRunner{log: log, err: runnerErr})
 
 	_, err := activities.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		RunID:    domain.TemplateRunID("run_123"),
@@ -329,14 +330,16 @@ func TestLocalTerraformRunnerWritesCommandLogFile(t *testing.T) {
 		runner: gitrunner.NewLocalProcessRunnerWithExecutor(executor),
 	}
 
-	log, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+	runOutput, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
 		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 		Command:       domain.TerraformCommandPlan,
+		RunPhase:      domain.RunPhasePlan,
 		ConfigJSON:    []byte(`{"region":"us-east-1"}`),
 	})
+	log := runOutput.Log
 	if err != nil {
 		t.Fatalf("RunTerraform returned error: %v", err)
 	}
@@ -370,13 +373,15 @@ func TestLocalTerraformRunnerUploadsCommandLogFile(t *testing.T) {
 		logStore: logStore,
 	}
 
-	log, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+	runOutput, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
 		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 		Command:       domain.TerraformCommandPlan,
+		RunPhase:      domain.RunPhasePlan,
 	})
+	log := runOutput.Log
 	if err != nil {
 		t.Fatalf("RunTerraform returned error: %v", err)
 	}
@@ -398,6 +403,43 @@ func TestLocalTerraformRunnerUploadsCommandLogFile(t *testing.T) {
 	}
 }
 
+// The apply phase's init logs under its own phase, so its upload cannot
+// replace the plan phase's init log.
+func TestLocalTerraformRunnerLogsInitUnderItsRunPhase(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		runPhase domain.RunPhase
+		want     string
+	}{
+		{runPhase: domain.RunPhasePlan, want: "plan-init"},
+		{runPhase: domain.RunPhaseApply, want: "apply-init"},
+	} {
+		workspacePath := t.TempDir()
+		logStore := &recordingTemplateRunLogStore{}
+		terraformRunner := localTerraformRunner{
+			runner:   gitrunner.NewLocalProcessRunnerWithExecutor(&recordingCommandExecutor{stdout: "init stdout\n"}),
+			logStore: logStore,
+		}
+		if _, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+			RunID:         domain.TemplateRunID("run_123"),
+			TenantID:      domain.TenantID("tenant_123"),
+			WorkspacePath: workspacePath,
+			WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
+			Command:       domain.TerraformCommandInit,
+			RunPhase:      tt.runPhase,
+		}); err != nil {
+			t.Fatalf("RunTerraform(%s) returned error: %v", tt.runPhase, err)
+		}
+		if logStore.phase != tt.want {
+			t.Fatalf("%s init uploaded phase %q, want %q", tt.runPhase, logStore.phase, tt.want)
+		}
+		if logStore.content != "init stdout\n" {
+			t.Fatalf("uploaded content = %q", logStore.content)
+		}
+	}
+}
+
 func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
 	t.Parallel()
 
@@ -413,13 +455,15 @@ func TestLocalTerraformRunnerUploadsCommandLogWhenCommandFails(t *testing.T) {
 		logStore: logStore,
 	}
 
-	log, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
+	runOutput, err := terraformRunner.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
 		TenantID:      domain.TenantID("tenant_123"),
 		WorkspacePath: workspacePath,
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 		Command:       domain.TerraformCommandPlan,
+		RunPhase:      domain.RunPhasePlan,
 	})
+	log := runOutput.Log
 	if !errors.Is(err, runnerErr) {
 		t.Fatalf("error = %v, want runnerErr", err)
 	}
@@ -467,6 +511,7 @@ func TestLocalTerraformRunnerHeartbeatsWhileTheCommandRuns(t *testing.T) {
 					WorkspacePath: t.TempDir(),
 					WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 					Command:       domain.TerraformCommandPlan,
+					RunPhase:      domain.RunPhasePlan,
 				})
 				done <- err
 			}()
@@ -507,6 +552,7 @@ func TestLocalTerraformRunnerStopsHeartbeatingWhenTheCommandEnds(t *testing.T) {
 		WorkspacePath: t.TempDir(),
 		WorkspaceName: "mtp_acme_prod_vpc_a13f9c",
 		Command:       domain.TerraformCommandPlan,
+		RunPhase:      domain.RunPhasePlan,
 	}); err != nil {
 		t.Fatalf("RunTerraform returned error: %v", err)
 	}
@@ -531,7 +577,7 @@ func TestRunTerraformWrapsRunnerError(t *testing.T) {
 	t.Parallel()
 
 	runnerErr := errors.New("terraform failed")
-	activities := NewTemplateRunActivities(t.TempDir(), nil, nil, &recordingTerraformRunner{err: runnerErr})
+	activities := NewTemplateRunActivities(t.TempDir(), nil, nil, nil, &recordingTerraformRunner{err: runnerErr})
 
 	_, err := activities.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		RunID:         domain.TemplateRunID("run_123"),
@@ -564,9 +610,9 @@ type recordingTerraformRunner struct {
 	err   error
 }
 
-func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input domain.RunTerraformActivityInput) (domain.TemplateRunLog, error) {
+func (runner *recordingTerraformRunner) RunTerraform(_ context.Context, input domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
 	runner.input = input
-	return runner.log, runner.err
+	return domain.RunTerraformActivityOutput{Log: runner.log}, runner.err
 }
 
 type recordingLogMetadataRecorder struct {
@@ -867,11 +913,12 @@ func TestRunCredentialsRoundTripThroughTheRunKey(t *testing.T) {
 	}
 
 	runner := &recordingTerraformRunner{}
-	executor := NewTemplateRunActivities(t.TempDir(), nil, keys, runner)
+	executor := NewTemplateRunActivities(t.TempDir(), nil, nil, keys, runner)
 	if _, err := executor.RunTerraform(context.Background(), domain.RunTerraformActivityInput{
 		TenantID:          "tenant_123",
 		RunID:             "run_123",
 		Command:           domain.TerraformCommandPlan,
+		RunPhase:          domain.RunPhasePlan,
 		SealedEnvironment: sealed.SealedEnvironment,
 	}); err != nil {
 		t.Fatalf("RunTerraform returned error: %v", err)
@@ -888,6 +935,7 @@ func TestRunCredentialsRoundTripThroughTheRunKey(t *testing.T) {
 		TenantID:          "tenant_123",
 		RunID:             "run_123",
 		Command:           domain.TerraformCommandPlan,
+		RunPhase:          domain.RunPhasePlan,
 		SealedEnvironment: sealed.SealedEnvironment,
 	})
 	if !errors.Is(err, runseal.ErrNoKey) {
@@ -900,7 +948,7 @@ func TestPrepareWorkspaceReturnsRunPublicKey(t *testing.T) {
 	t.Parallel()
 
 	keys := runseal.NewKeyRing()
-	output, err := NewTemplateRunActivities(t.TempDir(), nil, keys).PrepareWorkspace(context.Background(), domain.PrepareWorkspaceActivityInput{
+	output, err := NewTemplateRunActivities(t.TempDir(), nil, nil, keys).PrepareWorkspace(context.Background(), domain.PrepareWorkspaceActivityInput{
 		TenantID: "tenant_123",
 		RunID:    "run_123",
 	})
@@ -923,6 +971,10 @@ type controlStoreStub struct {
 	credentials []domain.CredentialSet
 	status      *recordingStatusRecorder
 	logs        *recordingLogMetadataRecorder
+	planKey     []byte
+	finished    domain.FinishPlanActivityInput
+	outcome     domain.PlanOutcome
+	claimed     bool
 }
 
 func (store *controlStoreStub) RecordTemplateRunStatus(ctx context.Context, input domain.TemplateRunStatusActivityInput) error {
@@ -945,4 +997,24 @@ func (store *controlStoreStub) ListCredentialsForStackTemplate(context.Context, 
 
 func (*controlStoreStub) Decrypt(value string) (string, error) {
 	return "decrypted:" + value, nil
+}
+
+func (store *controlStoreStub) CreatePlanKey(context.Context, domain.TenantID, domain.TemplateRunID) ([]byte, error) {
+	return store.planKey, nil
+}
+
+func (store *controlStoreStub) PlanKey(context.Context, domain.TenantID, domain.TemplateRunID) ([]byte, error) {
+	if store.planKey == nil {
+		return nil, errors.New("run has no plan key")
+	}
+	return store.planKey, nil
+}
+
+func (store *controlStoreStub) FinishTemplatePlan(_ context.Context, input domain.FinishPlanActivityInput) (domain.PlanOutcome, error) {
+	store.finished = input
+	return store.outcome, nil
+}
+
+func (store *controlStoreStub) BeginTemplateApply(context.Context, domain.TenantID, domain.TemplateRunID, bool) (bool, error) {
+	return store.claimed, nil
 }

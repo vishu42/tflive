@@ -25,7 +25,6 @@ describe("statusTone", () => {
   it("classifies active work as progress", () => {
     expect(statusTone("running")).toBe("progress");
     expect(statusTone("validating")).toBe("progress");
-    expect(statusTone("canceling")).toBe("progress");
     expect(statusTone("init_started")).toBe("progress");
     expect(statusTone("plan_started")).toBe("progress");
     expect(statusTone("apply_started")).toBe("progress");
@@ -46,9 +45,8 @@ describe("statusTone", () => {
     expect(statusTone("error")).toBe("failed");
   });
 
-  it("distinguishes a requested cancellation from a completed cancellation", () => {
+  it("classifies a discarded run, which ends canceled, as canceled", () => {
     expect(statusTone("canceled")).toBe("canceled");
-    expect(statusTone("cancel_requested")).toBe("progress");
   });
 
   it("treats 'not ...' phrasing used by StatusRow callers as waiting", () => {

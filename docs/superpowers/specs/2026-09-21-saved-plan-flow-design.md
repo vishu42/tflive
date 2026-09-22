@@ -1,6 +1,6 @@
 # Saved plans, plan → approve → apply, template pages, run numbers
 
-Issue: #249 (Fasten epic #247). Stacked PRs: #265 (run numbers), #266 (template pages), PR 3 (saved-plan flow, not started).
+Issue: #249 (Fasten epic #247). Stacked PRs: #265 (run numbers), #266 (template pages), PR 3 (saved-plan flow).
 
 ## Status
 
@@ -8,7 +8,7 @@ Issue: #249 (Fasten epic #247). Stacked PRs: #265 (run numbers), #266 (template 
 |---|---|---|
 | 1 — #265 | Run numbers | Open, done |
 | 2 — #266 | Template list and tabbed pages, UI rework | Open, done |
-| 3 | Saved plans, plan → approve → apply, auto-approve | Not started |
+| 3 | Saved plans, plan → approve → apply, auto-approve | Open, done |
 
 ## Context
 
@@ -54,14 +54,14 @@ After this work:
    - No counter column. The migration numbers existing runs by `started_at`.
    - The random run ID stays the primary key and keeps its role in Temporal IDs and artifact keys. URLs use the run number.
    - There is no lookup-by-number endpoint: run detail finds the id in the template's runs list, which the Runs tab has already loaded.
-8. **Approve sits on the run row and on run detail.** PR 2 already put Cancel and Approve on the run's own row and in the run detail header, shown only when the run can take them and the viewer may. PR 3 renames Approve to "Apply" / "Destroy" and adds a count like "+3 ~1 −0" from `tofu show -json`, for someone who has already read the plan.
+8. **Approve sits on the run row and on run detail.** PR 2 already put Cancel and Approve on the run's own row and in the run detail header, shown only when the run can take them and the viewer may. PR 3 renames Approve to "Apply", or "Destroy N" on a destroy run, and Cancel to "Discard" on a waiting plan, and adds a Changes column like "+3 ~1 -0" from `tofu show -json`.
 9. **Destroy lives in the template's Settings tab**, in a danger zone next to upgrade, away from the Plan button. Clicking it runs a destroy **plan**, so the irreversible step becomes approving that plan:
-   - The Settings button keeps a one-step confirm plus an auto-approve checkbox, shown only to users with `canApprove`. It then navigates to the new run.
-   - Approving a destroy run uses a danger-styled button that says "Destroy N resources". Approving is now the irreversible action, so the existing two-step confirm moves to that button.
+   - The Settings button reads "Plan destroy" and is one click: it destroys nothing. It then opens the Runs tab. An "Auto Apply" checkbox is shown only to users with `canApprove`; ticking it makes the click irreversible, so then it takes a second click.
+   - Approving a destroy run uses a red "Destroy N" button (the full "Destroy N resources" is its title) with a two-step confirm, on the row and on run detail. Approving is the irreversible action, so the confirm moved there.
 
 10. **State matrix: P becomes "the waiting plan", and the D~P gate moves to approval.**
     - **P** is the snapshot of the run in `waiting_approval`. The in-flight index allows at most one. It is no longer "the latest completed plan run": a plan run now completes only after its apply, and a discarded plan must stop counting as reviewed.
-    - `plannedSnapshot()` reads the waiting run, joined when the stack template is loaded. The `last_planned_*` columns and `recordsStackTemplateLastPlanned` are **dropped** (pre-production), so no stored pointer can go stale on discard.
+    - The `last_planned_*` columns are renamed `pending_plan_*` and become a pointer to the waiting run: `FinishTemplatePlan` sets it when a plan with changes finishes, and `releaseRunPlan` clears it in the same transaction as every write that makes that run terminal. (Built as a pointer rather than the join planned here: five stack-template queries select these columns, and a pointer maintained transactionally gives the same answer with far less churn.) `recordsStackTemplateLastPlanned` is removed.
     - `PlanState()` keeps its values: `none` means no plan is waiting, `stale` means the waiting plan ≠ D, `matches` means it equals D.
     - The gate moves from `StartTemplateRun` to `ApproveRun` and to `FinishPlan` on the auto-approve path: approval requires `PlanState()==matches`, or it returns `ErrStackTemplatePlanStale` (409 `plan_stale`). `snapshotMatchesDesired` is reused unchanged.
     - **Editing is blocked while a run is in flight.** `UpdateStackTemplateConfig` and `UpgradeStackTemplate` return `ErrTemplateRunInFlight` when the template has a non-terminal run. Today nothing on the server stops them, and a waiting plan makes that window hours long. With edits blocked, the `stale` row is unreachable in normal use. The approval gate stays as a backstop.
@@ -118,19 +118,17 @@ After this work:
 - `internal/app/service.go`:
   - `AutoApprove` on the start command.
   - `ApproveRun` requires `waiting_approval` and enqueues `KindStartTemplateApply`, which replaces `signal_run_approval_handler.go`.
-  - `CancelRun` on a waiting run goes straight to `canceled`, nulls the DEK, and enqueues deletion of the saved plan.
-  - **Cancel between approval and the apply workflow starting.** Cancel accepts any non-terminal status (`repositories.go` ~L1263). In `approved` the apply workflow may not exist yet, so a signal would find nothing. Two changes close this:
-    - the apply workflow's **first** step is a control activity that reads the run status and cancels if it is `cancel_requested`;
-    - the cancel handler treats "workflow not found" as success in that window.
-    
-    Whichever order the queue processes cancel and start-apply in, the run ends `canceled`.
+  - **Cancel before the apply.** A run in `waiting_approval`, or `approved` but not yet claimed by its apply, has no workflow to signal. `CancelRun` first tries `cancelTemplateRunBeforeApply`, a conditional write from those two statuses straight to `canceled` that also drops the plan key; only if that changes nothing does it take the signal path. (Built this way instead of the planned "treat not-found as success": the existing reconciliation of a not-found cancel marks the run `failed`, which is wrong for a discard.)
+  - **The apply claims its run.** The apply phase's first step is `BeginApply`, a conditional `approved → locked`. The two conditional writes on the same row mean a cancel and an apply that race have exactly one winner: a lost claim ends the workflow quietly, since the cancel already recorded the run's end.
+  - A cancel that arrives while the plan runs is carried out by `FinishTemplatePlan`, which sees `cancel_requested` and cancels.
 - `internal/temporal/dispatcher.go`:
   - Add `StartTemplateApply`, and delete `ApproveTemplateRun` (the signal).
-  - `CancelTemplateRun` signals whichever workflow is live. The cancel payload carries the phase, which the service reads from the run status: during apply the target is the apply workflow ID.
+  - `CancelTemplateRun` signals the plan workflow and, if that has closed, the apply workflow; at most one is running. If neither is, the NotFound goes back to the handler, which reconciles as before.
   - Register both workflows on the control worker.
 - **Deleting the saved plan:**
-  - The apply workflow deletes it at the end, and the cancel path deletes it through a queued job.
-  - A plan workflow that crashes can leave a bundle behind. Its DEK is nulled when the run turns terminal, so the bundle can't be read. Note it for a later sweeper.
+  - The apply session's `CleanupWorkspace` deletes it, with the workspace, whether the apply succeeded or not.
+  - A discarded, failed or crashed plan leaves its bundle behind: there is no deletion job (dropped from the plan). Its key is nulled when the run turns terminal, so the bundle can never be read. A sweeper for these is follow-up work.
+  - The session is torn down (release key, cleanup, complete) before the run's final statuses are recorded, so it is held no longer than the Terraform work needs.
 
 **Web**
 - The Runs tab header loses Apply. Plan gains the auto-approve checkbox (only with `canApprove`), and the `hasFreshPlan` gating goes away.

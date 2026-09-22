@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../auth/AuthContext";
 import type { AuthContextValue } from "../../auth/AuthContext";
@@ -23,7 +23,7 @@ function stackTemplate(overrides: Partial<StackTemplate> = {}): StackTemplate {
     display_name: "",
     config: {},
     last_applied_run_id: "",
-    last_planned_run_id: "",
+    pending_plan_run_id: "",
     plan_state: "none",
     live_state: "never",
     created_by: "user_123",
@@ -51,6 +51,8 @@ function run(overrides: Partial<TemplateRun> = {}): TemplateRun {
     started_at: "2026-07-20T00:00:00Z",
     error_summary: "",
     run_number: 1,
+    auto_approve: false,
+    plan_summary: null,
     ...overrides
   };
 }
@@ -95,12 +97,17 @@ function renderPanel(queryClient: QueryClient, overrides: Partial<StackTemplate>
   return render(
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider value={authValue()}>
-        <MemoryRouter initialEntries={["/stacks/stack_1/template"]}>
+        <MemoryRouter initialEntries={["/stacks/stack_1/templates/stpl_1/settings"]}>
           <TemplateDestroyPanel stackId="stack_1" stackTemplate={stackTemplate(overrides)} />
+          <LocationProbe />
         </MemoryRouter>
       </AuthContext.Provider>
     </QueryClientProvider>
   );
+}
+
+function LocationProbe() {
+  return <span data-testid="location">{useLocation().pathname}</span>;
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -117,21 +124,41 @@ describe("TemplateDestroyPanel", () => {
     vi.restoreAllMocks();
   });
 
-  it("enables destroy for an active template and asks for confirmation on click", () => {
+  // Planning a destroy destroys nothing, so it is one click; the destroying
+  // happens when the plan is approved, on its row. The panel then opens the
+  // Runs tab, where that plan and its button are.
+  it("plans a destroy in one click and opens the Runs tab", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(run({ id: "destroy_1", operation: "destroy", status: "queued" }), 201)
+    );
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
     seedRuns(queryClient, []);
 
     renderPanel(queryClient);
 
-    const destroyButton = screen.getByRole("button", { name: /Destroy/ }) as HTMLButtonElement;
-    expect(destroyButton.disabled).toBe(false);
-    fireEvent.click(destroyButton);
-    // The panel's standing warning already says destroy cannot be undone, so
-    // confirmation is proved by the controls swapping, not by repeating it.
-    expect(screen.getByRole("button", { name: /Confirm destroy/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Cancel/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /^Destroy$/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^Destroy$/ }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/v1/tenants/tenant_123/stack-templates/stpl_1/runs",
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ operation: "destroy" }) })
+      )
+    );
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/stacks/stack_1/templates/stpl_1/runs"));
+  });
+
+  // A destroy always waits for someone to approve its plan, so the panel
+  // offers no auto-approve, even to someone who could approve.
+  it("never offers auto-approve on a destroy", () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    seedRuns(queryClient, []);
+
+    renderPanel(queryClient);
+
+    expect(screen.queryByRole("checkbox", { name: /Auto Apply/ })).toBeNull();
+    expect(isDisabled(screen.getByRole("button", { name: /^Destroy$/ }))).toBe(false);
   });
 
   it("keeps destroy disabled until run history has loaded", () => {
@@ -141,23 +168,7 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient);
 
-    expect(isDisabled(screen.getByRole("button", { name: /Destroy/ }))).toBe(true);
-  });
-
-  it("disables confirmation if a run appears after destroy was requested", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(run({ id: "unexpected" }), 201));
-    const queryClient = testQueryClient();
-    seedCapabilities(queryClient, allAllowed);
-    seedRuns(queryClient, []);
-
-    renderPanel(queryClient);
-
-    fireEvent.click(screen.getByRole("button", { name: /Destroy/ }));
-    queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "stpl_1"), [run({ status: "queued" })]);
-
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Confirm destroy/ }))).toBe(true));
-    fireEvent.click(screen.getByRole("button", { name: /Confirm destroy/ }));
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(isDisabled(screen.getByRole("button", { name: /^Destroy$/ }))).toBe(true);
   });
 
   // The panel re-reads the runs cache at submit time, which closes the window
@@ -177,18 +188,17 @@ describe("TemplateDestroyPanel", () => {
         return jsonResponse(runsState);
       }
       if (url.endsWith("/stack-templates/stpl_1/runs") && method === "POST") {
-        runsState = [run({ id: "run_elsewhere", operation: "apply", status: "apply_started" })];
+        runsState = [run({ id: "run_elsewhere", operation: "plan", status: "plan_started" })];
         return jsonResponse({ error: "run_in_flight", message: "create template run: a run is already in flight for this stack template" }, 409);
       }
       throw new Error(`unexpected fetch: ${url} ${method}`);
     });
 
     renderPanel(queryClient);
-    fireEvent.click(screen.getByRole("button", { name: /Destroy/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Confirm destroy/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Destroy$/ }));
 
     await waitFor(() => expect(screen.getByText(/already in flight/)).toBeTruthy());
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /Confirm destroy/ }))).toBe(true));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /^Destroy$/ }))).toBe(true));
   });
 
   it("disables destroy when lifecycle is destroying", () => {
@@ -198,7 +208,7 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient, { lifecycle: "destroying" });
 
-    expect(isDisabled(screen.getByRole("button", { name: /Destroy/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /^Destroy$/ }))).toBe(true);
   });
 
   it("disables destroy when an active run exists", () => {
@@ -208,7 +218,7 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient);
 
-    expect(isDisabled(screen.getByRole("button", { name: /Destroy/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /^Destroy$/ }))).toBe(true);
   });
 
   it("disables destroy with a reason when canOperate is denied", () => {
@@ -218,29 +228,8 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient);
 
-    expect(isDisabled(screen.getByRole("button", { name: /Destroy/ }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /^Destroy$/ }))).toBe(true);
     expect(screen.getByTestId("template-destroy-disabled-reason")).toBeTruthy();
-  });
-
-  it("starts a destroy run on confirm", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse(run({ id: "destroy_1", operation: "destroy", status: "completed" }), 201)
-    );
-    const queryClient = testQueryClient();
-    seedCapabilities(queryClient, allAllowed);
-    seedRuns(queryClient, []);
-
-    renderPanel(queryClient);
-
-    fireEvent.click(screen.getByRole("button", { name: /Destroy/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Confirm destroy/ }));
-
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/v1/tenants/tenant_123/stack-templates/stpl_1/runs",
-        expect.objectContaining({ method: "POST", body: JSON.stringify({ operation: "destroy" }) })
-      )
-    );
   });
 
   it("reports a failed destroy in place instead of leaving the panel silent", async () => {
@@ -251,8 +240,7 @@ describe("TemplateDestroyPanel", () => {
 
     renderPanel(queryClient);
 
-    fireEvent.click(screen.getByRole("button", { name: /Destroy/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Confirm destroy/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Destroy$/ }));
 
     await waitFor(() => expect(screen.getByTestId("template-destroy-error")).toBeTruthy());
   });

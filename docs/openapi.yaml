@@ -84,7 +84,7 @@ tags:
   - name: Credentials
     description: Write-only cloud credentials, injected only while Terraform runs.
   - name: Runs
-    description: Starting, watching, approving and cancelling Terraform operations.
+    description: Starting, watching, approving and discarding Terraform operations.
   - name: Access
     description: Per-stack role grants.
   - name: Users
@@ -826,8 +826,10 @@ paths:
         merge. The new config is validated against the desired revision's
         variables.
 
-        Editing config makes any existing plan stale: the component's
-        `plan_state` becomes `stale`, and applying requires a fresh plan.
+        Refused with `409 run_in_flight` while the component has an unfinished
+        run, a plan waiting for approval included: a run snapshots the config
+        when it starts, and the plan being reviewed has to stay a plan of what
+        the component says. Apply or discard the run first.
       operationId: updateStackTemplateConfig
       requestBody:
         required: true
@@ -976,20 +978,30 @@ paths:
         Runs are durably orchestrated: a plan or apply survives a process
         restart rather than being lost halfway.
 
-        One component runs one operation at a time. Starting a second while one
-        is in flight returns `409 run_in_flight` — the competing run is visible
-        through the list endpoint, so a client can wait for it or cancel it.
+        Operations work the way the Terraform CLI's do. `plan` only plans the
+        desired config: the run records what would change and completes,
+        keeping no plan. `apply` plans the desired config and saves the plan;
+        `destroy` plans the destruction of everything the component manages
+        and saves that. For either, a plan with no changes completes the run,
+        and a plan with changes waits in `waiting_approval`, where approving it
+        applies exactly that saved plan (see the approval endpoint).
 
-        An `apply` requires a current plan. If config or the desired revision
-        changed since the last plan, it returns `409 plan_stale`: re-plan, then
-        apply.
+        `auto_approve` is allowed on `apply` only. The run then applies
+        straight away, with no saved plan and nothing to approve, and records
+        the counts the apply reports. It takes approve permission on the stack
+        as well as operate permission.
+
+        One component runs one operation at a time, and a plan waiting for
+        approval counts. Starting a second while one is in flight returns `409
+        run_in_flight` — the competing run is visible through the list
+        endpoint, so a client can wait for it, or approve or discard it.
       operationId: startTemplateRun
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/StartTemplateRunRequest" }
-            example: { operation: plan }
+            example: { operation: apply, auto_approve: false }
       responses:
         "201":
           description: The run was created and queued.
@@ -1003,7 +1015,6 @@ paths:
         "409":
           description: |
             `run_in_flight` — another run is already active for this component.
-            `plan_stale` — an apply was requested against a stale plan.
             `conflict` — the component is not in a runnable state.
           content:
             application/json:
@@ -1119,9 +1130,17 @@ paths:
       - $ref: "#/components/parameters/RunID"
     post:
       tags: [Runs]
-      summary: Approve a waiting run
+      summary: Approve a waiting plan, which applies it
       description: |
-        Valid only while the run's `status` is `waiting_approval`.
+        Valid only while the run's `status` is `waiting_approval`. Approving
+        starts the apply of the plan the run saved: the same file, applied
+        with `tofu apply` on whichever executor picks it up, so what was
+        reviewed is exactly what runs. If the state has moved on since the
+        plan was made, tofu refuses the plan and the run fails; plan again.
+
+        Refused with `409 plan_stale` if the plan no longer describes the
+        component's desired config and revision. Those cannot change while
+        the plan waits, so this is a backstop.
 
         The person who started a run cannot approve it: that returns `403
         self_approval_forbidden`, which is its own code precisely so a client
@@ -1158,33 +1177,34 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
         "503": { $ref: "#/components/responses/AuthorizationUnavailable" }
 
-  /v1/tenants/{tenant_id}/template-runs/{run_id}/cancellation:
+  /v1/tenants/{tenant_id}/template-runs/{run_id}/discard:
     parameters:
       - $ref: "#/components/parameters/TenantID"
       - $ref: "#/components/parameters/RunID"
     post:
       tags: [Runs]
-      summary: Request cancellation of a run
+      summary: Discard a plan waiting for approval
       description: |
-        A request, not an instruction: the run moves to `cancel_requested`,
-        then `canceling`, then `canceled` once the orchestrator has unwound it.
-        Poll the run to see it land.
-      operationId: cancelRun
+        Throws away a run's saved plan while it waits for approval (or is
+        approved and not yet applying). The run ends `canceled` straight away
+        and its plan can never be applied. A run that is planning or applying
+        cannot be stopped.
+      operationId: discardRun
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/CancelRunRequest" }
+            schema: { $ref: "#/components/schemas/DiscardRunRequest" }
             example: { reason: superseded by a newer plan }
       responses:
         "204":
-          description: Cancellation requested.
+          description: The plan was discarded.
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
-          description: The run is already finished, or otherwise not cancelable (`conflict`).
+          description: The run has no plan waiting to discard (`conflict`).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1748,8 +1768,11 @@ components:
           description: The desired Terraform input variables.
         last_applied_run_id: { type: string }
         last_applied_at: { type: string, format: date-time }
-        last_planned_run_id: { type: string }
-        last_planned_at: { type: string, format: date-time }
+        pending_plan_run_id:
+          type: string
+          description: |
+            The run whose plan is waiting for approval, or empty when none is.
+        pending_plan_at: { type: string, format: date-time }
         plan_state: { $ref: "#/components/schemas/PlanState" }
         live_state: { $ref: "#/components/schemas/LiveState" }
         created_by: { type: string }
@@ -1758,16 +1781,16 @@ components:
         [id, stack_id, component_key, source_template_id,
          desired_template_revision_id, last_applied_template_revision_id,
          source_ref, workspace_name, display_name, config,
-         last_applied_run_id, last_planned_run_id, plan_state, live_state,
+         last_applied_run_id, pending_plan_run_id, plan_state, live_state,
          created_by, lifecycle]
 
     PlanState:
       type: string
       enum: [none, stale, matches]
       description: |
-        Whether the last plan still describes the desired config. `none` — no
-        plan yet. `stale` — config or the desired revision changed since;
-        applying returns `409 plan_stale`. `matches` — the plan is current.
+        Whether the plan waiting for approval still describes the desired
+        config and revision. `none` — no plan is waiting. `stale` — it no
+        longer does; approving returns `409 plan_stale`. `matches` — it does.
 
         Derived server-side on purpose. The snapshots it is computed from are
         deliberately not returned: a client re-deriving this comparison is the
@@ -1834,19 +1857,29 @@ components:
       additionalProperties: false
       properties:
         operation: { $ref: "#/components/schemas/OperationType" }
+        auto_approve:
+          type: boolean
+          description: |
+            Apply straight away, with no saved plan and no approval. Allowed
+            on `apply` only. Needs approve permission on the stack as well as
+            operate permission.
       required: [operation]
 
     OperationType:
       type: string
       enum: [plan, apply, destroy]
+      description: |
+        `plan` only plans. `apply` saves a plan to approve, or with
+        `auto_approve` applies without one. `destroy` saves a plan to destroy
+        everything, to approve.
 
-    CancelRunRequest:
+    DiscardRunRequest:
       type: object
       additionalProperties: false
       properties:
         reason:
           type: string
-          description: Recorded with the cancellation. Optional.
+          description: Recorded with the discard. Optional.
 
     TemplateRun:
       type: object
@@ -1893,17 +1926,35 @@ components:
             Counts runs within one stack template, from 1, in the order they
             were started. Unique per stack template, not globally; `id` is the
             identifier every other endpoint takes.
+        auto_approve:
+          type: boolean
+          description: An `apply` run that applied straight away, with no saved plan.
+        plan_summary:
+          type: [object, "null"]
+          description: |
+            What the plan would change, counted the way tofu's own summary
+            line counts: a replacement is one add and one destroy. Null until
+            a plan with changes has finished. For an auto-approved `apply`,
+            what the apply changed, read from its "Apply complete!" line, and
+            null until it finishes.
+          properties:
+            add: { type: integer, minimum: 0 }
+            change: { type: integer, minimum: 0 }
+            destroy: { type: integer, minimum: 0 }
+          required: [add, change, destroy]
       required:
         [id, tenant_id, stack_template_id, template_revision_id,
          source_template_id, operation, selected_ref, resolved_commit_sha,
          workspace_name, backend_type, backend_config_hash, status,
-         trigger_actor, started_at, error_summary, run_number]
+         trigger_actor, started_at, error_summary, run_number, auto_approve,
+         plan_summary]
 
     TemplateRunStatus:
       type: string
       description: |
         A run's progress. Terminal states are `completed`, `failed` and
-        `canceled`; everything else means the run is still in flight.
+        `canceled`, which is how a discarded plan ends; everything else means
+        the run is still in flight.
 
         `waiting_approval` is the one that needs a person — post to the run's
         approval endpoint to release it.
@@ -1923,8 +1974,6 @@ components:
         - apply_finished
         - destroy_started
         - destroy_finished
-        - cancel_requested
-        - canceling
         - canceled
         - lock_released
         - completed

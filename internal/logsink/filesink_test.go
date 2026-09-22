@@ -17,9 +17,9 @@ func TestFileSinkWritesAndAppendsPhaseLog(t *testing.T) {
 	workspacePath := t.TempDir()
 	sink := NewFileSink(workspacePath)
 
-	first, err := sink.OpenPhase("plan")
+	first, err := sink.Open("plan.log")
 	if err != nil {
-		t.Fatalf("OpenPhase returned error: %v", err)
+		t.Fatalf("Open returned error: %v", err)
 	}
 	if _, err := first.Write([]byte("first line\n")); err != nil {
 		t.Fatalf("write first log: %v", err)
@@ -28,9 +28,9 @@ func TestFileSinkWritesAndAppendsPhaseLog(t *testing.T) {
 		t.Fatalf("close first log: %v", err)
 	}
 
-	second, err := sink.OpenPhase("plan")
+	second, err := sink.Open("plan.log")
 	if err != nil {
-		t.Fatalf("OpenPhase returned error: %v", err)
+		t.Fatalf("Open returned error: %v", err)
 	}
 	if _, err := second.Write([]byte("second line\n")); err != nil {
 		t.Fatalf("write second log: %v", err)
@@ -53,37 +53,50 @@ func TestFileSinkRejectsUnsafePhase(t *testing.T) {
 
 	sink := NewFileSink(t.TempDir())
 
-	_, err := sink.OpenPhase("../plan")
+	_, err := sink.Open("../plan.log")
 	if err == nil {
-		t.Fatal("OpenPhase returned nil error, want unsafe phase error")
+		t.Fatal("Open returned nil error, want unsafe phase error")
 	}
 	if !strings.Contains(err.Error(), "safe path") {
 		t.Fatalf("error = %q, want safe path context", err.Error())
 	}
 }
 
-func TestPhaseForTerraformCommand(t *testing.T) {
+func TestFileNameForTerraformCommand(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		command domain.TerraformCommandType
-		want    string
+		command  domain.TerraformCommandType
+		runPhase domain.RunPhase
+		want     string
 	}{
-		{command: domain.TerraformCommandInit, want: "init"},
-		{command: domain.TerraformCommandSelectWorkspace, want: "workspace"},
-		{command: domain.TerraformCommandPlan, want: "plan"},
-		{command: domain.TerraformCommandApply, want: "apply"},
-		{command: domain.TerraformCommandDestroy, want: "destroy"},
+		{command: domain.TerraformCommandInit, runPhase: domain.RunPhasePlan, want: "plan-init.log"},
+		{command: domain.TerraformCommandSelectWorkspace, runPhase: domain.RunPhasePlan, want: "plan-workspace.log"},
+		{command: domain.TerraformCommandPlan, runPhase: domain.RunPhasePlan, want: "plan.log"},
+		{command: domain.TerraformCommandPlanDestroy, runPhase: domain.RunPhasePlan, want: "plan.log"},
+		{command: domain.TerraformCommandInit, runPhase: domain.RunPhaseApply, want: "apply-init.log"},
+		{command: domain.TerraformCommandSelectWorkspace, runPhase: domain.RunPhaseApply, want: "apply-workspace.log"},
+		{command: domain.TerraformCommandApply, runPhase: domain.RunPhaseApply, want: "apply.log"},
+		{command: domain.TerraformCommandApplyAutoApprove, runPhase: domain.RunPhaseApply, want: "apply.log"},
+		{command: domain.TerraformCommandDestroy, runPhase: domain.RunPhaseApply, want: "destroy.log"},
 	}
 
 	for _, tt := range tests {
-		got, err := PhaseForTerraformCommand(tt.command)
+		got, err := FileNameForTerraformCommand(tt.command, tt.runPhase)
 		if err != nil {
-			t.Fatalf("PhaseForTerraformCommand(%q) returned error: %v", tt.command, err)
+			t.Fatalf("FileNameForTerraformCommand(%q, %q) returned error: %v", tt.command, tt.runPhase, err)
 		}
 		if got != tt.want {
-			t.Fatalf("PhaseForTerraformCommand(%q) = %q, want %q", tt.command, got, tt.want)
+			t.Fatalf("FileNameForTerraformCommand(%q, %q) = %q, want %q", tt.command, tt.runPhase, got, tt.want)
 		}
+	}
+}
+
+func TestFileNameForTerraformCommandRejectsMissingRunPhase(t *testing.T) {
+	t.Parallel()
+
+	if _, err := FileNameForTerraformCommand(domain.TerraformCommandInit, ""); err == nil {
+		t.Fatal("FileNameForTerraformCommand accepted an empty run phase")
 	}
 }
 

@@ -608,10 +608,10 @@ func (store *Store) GetStackWithTemplates(ctx context.Context, tenantID domain.T
 			last_applied_run_id,
 			last_applied_config_json,
 			last_applied_at,
-			last_planned_run_id,
-			last_planned_template_revision_id,
-			last_planned_config_json,
-			last_planned_at,
+			pending_plan_run_id,
+			pending_plan_template_revision_id,
+			pending_plan_config_json,
+			pending_plan_at,
 			created_by,
 			lifecycle
 		from stack_templates
@@ -672,10 +672,10 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate domai
 			last_applied_run_id,
 			last_applied_config_json,
 			last_applied_at,
-			last_planned_run_id,
-			last_planned_template_revision_id,
-			last_planned_config_json,
-			last_planned_at,
+			pending_plan_run_id,
+			pending_plan_template_revision_id,
+			pending_plan_config_json,
+			pending_plan_at,
 			created_by,
 			lifecycle
 		)
@@ -700,10 +700,10 @@ func (store *Store) CreateStackTemplate(ctx context.Context, stackTemplate domai
 		stackTemplate.LastAppliedRunID,
 		nullJSON(stackTemplate.LastAppliedConfigJSON),
 		nullTime(stackTemplate.LastAppliedAt),
-		stackTemplate.LastPlannedRunID,
-		stackTemplate.LastPlannedTemplateRevisionID,
-		nullJSON(stackTemplate.LastPlannedConfigJSON),
-		nullTime(stackTemplate.LastPlannedAt),
+		stackTemplate.PendingPlanRunID,
+		stackTemplate.PendingPlanTemplateRevisionID,
+		nullJSON(stackTemplate.PendingPlanConfigJSON),
+		nullTime(stackTemplate.PendingPlanAt),
 		stackTemplate.CreatedBy,
 		stackTemplate.Lifecycle,
 	)
@@ -765,10 +765,10 @@ func (store *Store) GetStackTemplate(ctx context.Context, tenantID domain.Tenant
 			last_applied_run_id,
 			last_applied_config_json,
 			last_applied_at,
-			last_planned_run_id,
-			last_planned_template_revision_id,
-			last_planned_config_json,
-			last_planned_at,
+			pending_plan_run_id,
+			pending_plan_template_revision_id,
+			pending_plan_config_json,
+			pending_plan_at,
 			created_by,
 			lifecycle
 		from stack_templates
@@ -805,10 +805,10 @@ func (store *Store) UpdateStackTemplateConfig(ctx context.Context, tenantID doma
 			last_applied_run_id,
 			last_applied_config_json,
 			last_applied_at,
-			last_planned_run_id,
-			last_planned_template_revision_id,
-			last_planned_config_json,
-			last_planned_at,
+			pending_plan_run_id,
+			pending_plan_template_revision_id,
+			pending_plan_config_json,
+			pending_plan_at,
 			created_by,
 			lifecycle
 	`, defaultJSON(configJSON), tenantID, id)
@@ -844,10 +844,10 @@ func (store *Store) UpdateStackTemplateDesiredRevision(ctx context.Context, tena
 			last_applied_run_id,
 			last_applied_config_json,
 			last_applied_at,
-			last_planned_run_id,
-			last_planned_template_revision_id,
-			last_planned_config_json,
-			last_planned_at,
+			pending_plan_run_id,
+			pending_plan_template_revision_id,
+			pending_plan_config_json,
+			pending_plan_at,
 			created_by,
 			lifecycle
 	`, templateRevisionID, defaultJSON(configJSON), tenantID, id)
@@ -904,10 +904,11 @@ func createTemplateRun(ctx context.Context, exec pgxExecutor, run domain.Templat
 			started_at,
 			completed_at,
 			error_summary,
+			auto_approve,
 			run_number
 		) values (
 			$1, $2, $3, $4, $5, $6, $7, $8,
-			$9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17,
+			$9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18,
 			(
 				select coalesce(max(run_number), 0) + 1
 				from template_runs
@@ -934,6 +935,7 @@ func createTemplateRun(ctx context.Context, exec pgxExecutor, run domain.Templat
 		nullTime(run.StartedAt),
 		nullTime(run.CompletedAt),
 		run.ErrorSummary,
+		run.AutoApprove,
 	).Scan(&runNumber)
 	// The gate against concurrent runs on one stack template: the insert is the
 	// check, so there is no window between deciding and writing. See migration
@@ -957,6 +959,7 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID domain.TenantID
 	var run domain.TemplateRun
 	var startedAt sql.NullTime
 	var completedAt sql.NullTime
+	var planAdd, planChange, planDestroy *int
 
 	err := store.pool.QueryRow(ctx, `
 		select
@@ -977,7 +980,11 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID domain.TenantID
 			started_at,
 			completed_at,
 			error_summary,
-			run_number
+			run_number,
+			auto_approve,
+			plan_add,
+			plan_change,
+			plan_destroy
 		from template_runs
 		where tenant_id = $1
 			and id = $2
@@ -1000,6 +1007,10 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID domain.TenantID
 		&completedAt,
 		&run.ErrorSummary,
 		&run.RunNumber,
+		&run.AutoApprove,
+		&planAdd,
+		&planChange,
+		&planDestroy,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.TemplateRun{}, app.ErrNotFound
@@ -1014,8 +1025,18 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID domain.TenantID
 	if completedAt.Valid {
 		run.CompletedAt = completedAt.Time
 	}
+	run.PlanSummary = planSummary(planAdd, planChange, planDestroy)
 
 	return run, nil
+}
+
+// planSummary reassembles a run's plan counts, which are written together:
+// either all three are set or none is.
+func planSummary(add, change, destroy *int) *domain.PlanSummary {
+	if add == nil || change == nil || destroy == nil {
+		return nil
+	}
+	return &domain.PlanSummary{Add: *add, Change: *change, Destroy: *destroy}
 }
 
 func (store *Store) ListTemplateRuns(ctx context.Context, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID) ([]domain.TemplateRun, error) {
@@ -1038,7 +1059,11 @@ func (store *Store) ListTemplateRuns(ctx context.Context, tenantID domain.Tenant
 			started_at,
 			completed_at,
 			error_summary,
-			run_number
+			run_number,
+			auto_approve,
+			plan_add,
+			plan_change,
+			plan_destroy
 		from template_runs
 		where tenant_id = $1
 			and stack_template_id = $2
@@ -1054,6 +1079,7 @@ func (store *Store) ListTemplateRuns(ctx context.Context, tenantID domain.Tenant
 		var run domain.TemplateRun
 		var startedAt sql.NullTime
 		var completedAt sql.NullTime
+		var planAdd, planChange, planDestroy *int
 		if err := rows.Scan(
 			&run.ID,
 			&run.TenantID,
@@ -1073,6 +1099,10 @@ func (store *Store) ListTemplateRuns(ctx context.Context, tenantID domain.Tenant
 			&completedAt,
 			&run.ErrorSummary,
 			&run.RunNumber,
+			&run.AutoApprove,
+			&planAdd,
+			&planChange,
+			&planDestroy,
 		); err != nil {
 			return nil, fmt.Errorf("scan template run: %w", err)
 		}
@@ -1082,6 +1112,7 @@ func (store *Store) ListTemplateRuns(ctx context.Context, tenantID domain.Tenant
 		if completedAt.Valid {
 			run.CompletedAt = completedAt.Time
 		}
+		run.PlanSummary = planSummary(planAdd, planChange, planDestroy)
 		runs = append(runs, run)
 	}
 	if err := rows.Err(); err != nil {
@@ -1178,7 +1209,7 @@ func (store *Store) ListTemplateRunLogs(ctx context.Context, tenantID domain.Ten
 		from template_run_logs
 		where tenant_id = $1
 			and run_id = $2
-		order by phase
+		order by uploaded_at, phase
 	`, tenantID, runID)
 	if err != nil {
 		return nil, fmt.Errorf("list template run logs: %w", err)
@@ -1265,72 +1296,6 @@ func approveTemplateRun(ctx context.Context, exec pgxExecutor, approval domain.T
 	return nil
 }
 
-func (store *Store) RequestTemplateRunCancellation(ctx context.Context, cancellation domain.TemplateRunCancellation) error {
-	return requestTemplateRunCancellation(ctx, store.pool, cancellation)
-}
-
-func requestTemplateRunCancellation(ctx context.Context, exec pgxExecutor, cancellation domain.TemplateRunCancellation) error {
-	// TODO: Revisit cancellation eligibility. This currently allows every
-	// non-terminal status, including post-action cleanup states such as applied,
-	// destroyed, and lock_released, to move back to cancel_requested.
-	commandTag, err := exec.Exec(ctx, `
-		update template_runs
-		set
-			status = $1,
-			cancellation_requested_by = $2,
-			cancellation_reason = $3,
-			cancellation_requested_at = $4
-		where tenant_id = $5
-			and id = $6
-			and status not in ($7, $8, $9)
-	`,
-		domain.TemplateRunCancelRequested,
-		cancellation.RequestedBy,
-		cancellation.Reason,
-		cancellation.RequestedAt,
-		cancellation.TenantID,
-		cancellation.RunID,
-		domain.TemplateRunCompleted,
-		domain.TemplateRunFailed,
-		domain.TemplateRunCanceled,
-	)
-	if err != nil {
-		return fmt.Errorf("request template run cancellation: %w", err)
-	}
-	if commandTag.RowsAffected() == 0 {
-		return app.ErrRunNotCancelable
-	}
-
-	return nil
-}
-
-func (store *Store) ReconcileTemplateRunCancellation(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, errorSummary string) error {
-	commandTag, err := store.pool.Exec(ctx, `
-		update template_runs
-		set
-			status = $1,
-			error_summary = $2,
-			completed_at = coalesce(completed_at, now())
-		where tenant_id = $3
-			and id = $4
-			and status = $5
-	`,
-		domain.TemplateRunFailed,
-		errorSummary,
-		tenantID,
-		runID,
-		domain.TemplateRunCancelRequested,
-	)
-	if err != nil {
-		return fmt.Errorf("reconcile template run cancellation: %w", err)
-	}
-	if commandTag.RowsAffected() == 0 {
-		return app.ErrRunNotCancelable
-	}
-
-	return nil
-}
-
 func (store *Store) AppendAuditEvent(ctx context.Context, event domain.SecurityAuditEvent) error {
 	return appendAuditEvent(ctx, store.pool, event)
 }
@@ -1350,7 +1315,7 @@ func appendAuditEvent(ctx context.Context, exec pgxExecutor, event domain.Securi
 }
 
 func (store *Store) RecordTemplateRunStatus(ctx context.Context, input domain.TemplateRunStatusActivityInput) error {
-	if recordsStackTemplateLastApplied(input) || recordsStackTemplateLastPlanned(input) || recordsStackTemplateDestroying(input) || recordsStackTemplateDestroyed(input) || recordsStackTemplateDestroyInterrupted(input) {
+	if input.Status.Terminal() || recordsStackTemplateLastApplied(input) || recordsStackTemplateDestroying(input) || recordsStackTemplateDestroyed(input) || recordsStackTemplateDestroyInterrupted(input) {
 		tx, err := store.pool.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("begin record template run status: %w", err)
@@ -1368,10 +1333,6 @@ func (store *Store) RecordTemplateRunStatus(ctx context.Context, input domain.Te
 			if err := recordStackTemplateLastApplied(ctx, tx, input); err != nil {
 				return err
 			}
-		case recordsStackTemplateLastPlanned(input):
-			if err := recordStackTemplateLastPlanned(ctx, tx, input); err != nil {
-				return err
-			}
 		case recordsStackTemplateDestroying(input):
 			if err := recordStackTemplateLifecycle(ctx, tx, input, domain.StackTemplateDestroying); err != nil {
 				return err
@@ -1386,6 +1347,12 @@ func (store *Store) RecordTemplateRunStatus(ctx context.Context, input domain.Te
 			}
 		}
 
+		if input.Status.Terminal() {
+			if err := releaseRunPlan(ctx, tx, input.TenantID, input.RunID); err != nil {
+				return err
+			}
+		}
+
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("commit record template run status: %w", err)
 		}
@@ -1393,6 +1360,34 @@ func (store *Store) RecordTemplateRunStatus(ctx context.Context, input domain.Te
 	}
 
 	return recordTemplateRunStatus(ctx, store.pool, input)
+}
+
+// releaseRunPlan is what a run becoming terminal does to its saved plan. Its
+// key is dropped, so the plan file left in the artifact store can never be
+// opened again, whoever holds the file; and the plan stops being the stack
+// template's pending plan, so a discarded or failed plan no longer counts as
+// reviewed. Every path that makes a run terminal calls it in the same
+// transaction.
+func releaseRunPlan(ctx context.Context, exec pgxExecutor, tenantID domain.TenantID, runID domain.TemplateRunID) error {
+	if _, err := exec.Exec(ctx, `
+		update template_runs
+		set plan_artifact_dek = null
+		where tenant_id = $1 and id = $2
+	`, tenantID, runID); err != nil {
+		return fmt.Errorf("drop plan key: %w", err)
+	}
+	if _, err := exec.Exec(ctx, `
+		update stack_templates
+		set
+			pending_plan_run_id = '',
+			pending_plan_template_revision_id = '',
+			pending_plan_config_json = null,
+			pending_plan_at = null
+		where tenant_id = $1 and pending_plan_run_id = $2
+	`, tenantID, runID); err != nil {
+		return fmt.Errorf("clear pending plan: %w", err)
+	}
+	return nil
 }
 
 type templateRunStatusWriter interface {
@@ -1424,9 +1419,18 @@ func recordTemplateRunStatus(ctx context.Context, writer templateRunStatusWriter
 			input.Operation,
 		).Scan(&updatedRunID)
 	} else {
+		// A status that carries a summary records the run's counts with it.
+		var add, change, destroy *int
+		if input.Summary != nil {
+			add, change, destroy = &input.Summary.Add, &input.Summary.Change, &input.Summary.Destroy
+		}
 		err = writer.QueryRow(ctx, `
 			update template_runs
-			set status = $1
+			set
+				status = $1,
+				plan_add = coalesce($6, plan_add),
+				plan_change = coalesce($7, plan_change),
+				plan_destroy = coalesce($8, plan_destroy)
 			where tenant_id = $2
 				and id = $3
 				and stack_template_id = $4
@@ -1438,6 +1442,9 @@ func recordTemplateRunStatus(ctx context.Context, writer templateRunStatusWriter
 			input.RunID,
 			input.StackTemplateID,
 			input.Operation,
+			add,
+			change,
+			destroy,
 		).Scan(&updatedRunID)
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1459,18 +1466,11 @@ type stackTemplateLifecycleWriter interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// recordsStackTemplateLastApplied is an apply run's apply finishing: what it
+// applied is now what is live. A plan with no changes is live too, and
+// FinishTemplatePlan records that one itself.
 func recordsStackTemplateLastApplied(input domain.TemplateRunStatusActivityInput) bool {
 	return input.Operation == domain.OperationApply && input.Status == domain.TemplateRunApplyFinished
-}
-
-// recordsStackTemplateLastPlanned mirrors recordsStackTemplateLastApplied for
-// the plan side. A plan run's terminal status is Completed rather than
-// PlanFinished — plan_finished is the phase status recorded around the
-// terraform command, and the run goes on to lock_released and completed — so
-// completed is what "there is a reviewable plan" means, and it is the same
-// signal the web client already keys apply off.
-func recordsStackTemplateLastPlanned(input domain.TemplateRunStatusActivityInput) bool {
-	return input.Operation == domain.OperationPlan && input.Status == domain.TemplateRunCompleted
 }
 
 func recordsStackTemplateDestroying(input domain.TemplateRunStatusActivityInput) bool {
@@ -1511,43 +1511,6 @@ func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLas
 	)
 	if err != nil {
 		return fmt.Errorf("record stack template last applied: %w", err)
-	}
-	if commandTag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-
-	return nil
-}
-
-// recordStackTemplateLastPlanned denormalises the completed plan's snapshot
-// onto the template, the same way recordStackTemplateLastApplied does for
-// applies. Without it, answering "does the reviewed plan still describe desired
-// state?" means scanning every run the template ever had.
-func recordStackTemplateLastPlanned(ctx context.Context, writer stackTemplateLastAppliedWriter, input domain.TemplateRunStatusActivityInput) error {
-	commandTag, err := writer.Exec(ctx, `
-		update stack_templates
-		set
-			last_planned_run_id = template_runs.id,
-			last_planned_template_revision_id = template_runs.template_revision_id,
-			last_planned_config_json = template_runs.config_json,
-			last_planned_at = now()
-		from template_runs
-		where stack_templates.tenant_id = $1
-			and stack_templates.id = $2
-			and template_runs.tenant_id = stack_templates.tenant_id
-			and template_runs.id = $3
-			and template_runs.stack_template_id = stack_templates.id
-			and template_runs.operation = $4
-			and template_runs.status = $5
-	`,
-		input.TenantID,
-		input.StackTemplateID,
-		input.RunID,
-		input.Operation,
-		input.Status,
-	)
-	if err != nil {
-		return fmt.Errorf("record stack template last planned: %w", err)
 	}
 	if commandTag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -1628,8 +1591,8 @@ func scanStackTemplate(scanner stackTemplateScanner) (domain.StackTemplate, erro
 		&stackTemplate.LastAppliedRunID,
 		&lastAppliedConfigJSON,
 		&lastAppliedAt,
-		&stackTemplate.LastPlannedRunID,
-		&stackTemplate.LastPlannedTemplateRevisionID,
+		&stackTemplate.PendingPlanRunID,
+		&stackTemplate.PendingPlanTemplateRevisionID,
 		&lastPlannedConfigJSON,
 		&lastPlannedAt,
 		&stackTemplate.CreatedBy,
@@ -1645,13 +1608,13 @@ func scanStackTemplate(scanner stackTemplateScanner) (domain.StackTemplate, erro
 		stackTemplate.LastAppliedConfigJSON = lastAppliedConfigJSON
 	}
 	if lastPlannedConfigJSON != nil {
-		stackTemplate.LastPlannedConfigJSON = lastPlannedConfigJSON
+		stackTemplate.PendingPlanConfigJSON = lastPlannedConfigJSON
 	}
 	if lastAppliedAt.Valid {
 		stackTemplate.LastAppliedAt = lastAppliedAt.Time
 	}
 	if lastPlannedAt.Valid {
-		stackTemplate.LastPlannedAt = lastPlannedAt.Time
+		stackTemplate.PendingPlanAt = lastPlannedAt.Time
 	}
 	return stackTemplate, nil
 }

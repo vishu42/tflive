@@ -8,7 +8,12 @@ import (
 	"time"
 )
 
-// OperationType identifies a Terraform operation supported by the platform.
+// OperationType identifies what a run is for, as the Terraform CLI would name
+// it. A plan run only plans: it shows what would change and ends. An apply run
+// saves a plan of the desired state and applies it once someone approves it,
+// or, started with auto-approve, applies without a saved plan at all. A
+// destroy run saves a plan to destroy everything and applies it once
+// approved; it has no auto-approve.
 type OperationType string
 
 const (
@@ -24,9 +29,30 @@ const (
 	TerraformCommandInit            TerraformCommandType = "init"
 	TerraformCommandSelectWorkspace TerraformCommandType = "select_workspace"
 	TerraformCommandPlan            TerraformCommandType = "plan"
-	TerraformCommandApply           TerraformCommandType = "apply"
-	TerraformCommandDestroy         TerraformCommandType = "destroy"
+	// TerraformCommandPlanDestroy is a destroy run's plan: a plan to destroy
+	// everything the template manages. It records the same statuses and log as
+	// TerraformCommandPlan.
+	TerraformCommandPlanDestroy TerraformCommandType = "plan_destroy"
+	// TerraformCommandApply and TerraformCommandDestroy both apply the run's
+	// saved plan. They stay two commands so each records its own statuses:
+	// destroy_started and destroy_finished drive the stack template lifecycle.
+	TerraformCommandApply   TerraformCommandType = "apply"
+	TerraformCommandDestroy TerraformCommandType = "destroy"
+	// TerraformCommandApplyAutoApprove is an auto-approved apply run's only
+	// Terraform step besides setup: it plans and applies in one go, with no
+	// saved plan, so it is the one apply that takes the run's variables. It
+	// records the same statuses and log as TerraformCommandApply.
+	TerraformCommandApplyAutoApprove TerraformCommandType = "apply_auto_approve"
 )
+
+// PlanSummary counts the resource changes in a saved plan. A replacement
+// counts once as an add and once as a destroy, as Terraform's own summary line
+// does.
+type PlanSummary struct {
+	Add     int `json:"add"`
+	Change  int `json:"change"`
+	Destroy int `json:"destroy"`
+}
 
 // Valid reports whether the operation is one of the supported operation types.
 func (operation OperationType) Valid() bool {
@@ -49,8 +75,6 @@ const (
 	TemplateRunWorkspaceSelected TemplateRunStatus = "workspace_selected"
 	TemplateRunWaitingApproval   TemplateRunStatus = "waiting_approval"
 	TemplateRunApproved          TemplateRunStatus = "approved"
-	TemplateRunCancelRequested   TemplateRunStatus = "cancel_requested"
-	TemplateRunCanceling         TemplateRunStatus = "canceling"
 	TemplateRunCanceled          TemplateRunStatus = "canceled"
 	TemplateRunLockReleased      TemplateRunStatus = "lock_released"
 	TemplateRunCompleted         TemplateRunStatus = "completed"
@@ -91,8 +115,6 @@ var AllTemplateRunStatuses = []TemplateRunStatus{
 	TemplateRunWorkspaceSelected,
 	TemplateRunWaitingApproval,
 	TemplateRunApproved,
-	TemplateRunCancelRequested,
-	TemplateRunCanceling,
 	TemplateRunCanceled,
 	TemplateRunLockReleased,
 	TemplateRunCompleted,
@@ -144,6 +166,12 @@ type TemplateRun struct {
 	// RunNumber counts runs within one stack template, from 1. It is what
 	// people see and what URLs carry; ID stays the identity everywhere else.
 	RunNumber int `json:"run_number"`
+	// AutoApprove means the trigger actor asked an apply run to apply straight
+	// away, with no saved plan and without waiting for anyone to approve it.
+	AutoApprove bool `json:"auto_approve"`
+	// PlanSummary is what the saved plan would change. Nil until a plan with
+	// changes has finished.
+	PlanSummary *PlanSummary `json:"plan_summary"`
 }
 
 // TemplateRunLog records the object-store location for one run phase log.
@@ -166,9 +194,9 @@ type TemplateRunApproval struct {
 	ApprovedAt time.Time
 }
 
-// TemplateRunCancellation records who requested a run cancellation.
-// TemplateRunCancellation records who requested a run cancellation.
-type TemplateRunCancellation struct {
+// TemplateRunDiscard records who threw away a plan waiting for approval, and
+// why. A discarded run ends canceled.
+type TemplateRunDiscard struct {
 	RunID       TemplateRunID
 	TenantID    TenantID
 	RequestedBy UserID

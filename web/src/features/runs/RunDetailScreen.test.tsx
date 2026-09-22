@@ -43,6 +43,8 @@ function run(overrides: Partial<TemplateRun> = {}): TemplateRun {
     started_at: "2026-07-20T00:00:00Z",
     error_summary: "",
     run_number: 1,
+    auto_approve: false,
+    plan_summary: null,
     ...overrides
   };
 }
@@ -132,7 +134,7 @@ describe("RunDetailScreen", () => {
     renderScreen(queryClient, undefined, "1");
 
     // The breadcrumb names the run; the screen shows the run it resolved.
-    expect(screen.getByTestId("run-detail-status").textContent).toContain("failed");
+    expect(screen.getByTestId("run-detail-status").textContent).toContain("Plan failed");
     expect(screen.getByText("the older one")).toBeTruthy();
   });
 
@@ -222,7 +224,7 @@ describe("RunDetailScreen", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url.endsWith("/logs")) {
-        return jsonResponse([runLog({ phase: "plan" }), runLog({ phase: "init" })]);
+        return jsonResponse([runLog({ phase: "init" }), runLog({ phase: "plan" })]);
       }
       if (url.endsWith("/logs/plan")) {
         return new Response("plan log body", { status: 200, headers: { "content-type": "text/plain" } });
@@ -236,7 +238,7 @@ describe("RunDetailScreen", () => {
     renderScreen(queryClient);
 
     expect(screen.getByTestId("run-detail-screen")).toBeTruthy();
-    expect(screen.getByTestId("run-detail-status").textContent).toContain("completed");
+    expect(screen.getByTestId("run-detail-status").textContent).toContain("No changes");
     expect(screen.getByText("main @ abcdef1")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("plan log body")).toBeTruthy());
 
@@ -260,64 +262,99 @@ describe("RunDetailScreen", () => {
     expect(screen.queryByRole("button", { name: /Cancel/ })).toBeNull();
   });
 
-  it("enables Approve only for a waiting_approval apply run, gated by canApprove", async () => {
+  it("offers Approve and Discard for a plan waiting for approval, and shows what it would change", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
-    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ operation: "apply", status: "waiting_approval" }));
+    queryClient.setQueryData(
+      queryKeys.templateRun("tenant_123", "run_1"),
+      run({ status: "waiting_approval", plan_summary: { add: 2, change: 0, destroy: 1 } })
+    );
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([]));
 
     renderScreen(queryClient);
 
-    expect(isDisabled(screen.getByRole("button", { name: /Approve/ }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /^Approve$/ }))).toBe(false);
+    expect(screen.getByRole("button", { name: /Discard/ })).toBeTruthy();
+    expect(screen.getByText("+2 ~0 -1")).toBeTruthy();
+  });
+
+  // Approving a destroy plan is what destroys, so it names the count and takes
+  // a second click before it calls the approval endpoint.
+  it("asks for a second click before approving a destroy plan", async () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    queryClient.setQueryData(
+      queryKeys.templateRun("tenant_123", "run_1"),
+      run({ operation: "destroy", status: "waiting_approval", plan_summary: { add: 0, change: 0, destroy: 4 } })
+    );
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (init?.method === "POST") {
+        return new Response(null, { status: 204 });
+      }
+      if (String(input).endsWith("/template-runs/run_1")) {
+        return jsonResponse(run({ operation: "destroy", status: "approved", plan_summary: { add: 0, change: 0, destroy: 4 } }));
+      }
+      return jsonResponse([]);
+    });
+
+    renderScreen(queryClient);
+
+    fireEvent.click(screen.getByRole("button", { name: /Destroy 4/ }));
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: /Confirm/ }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/template-runs/run_1/approval"), expect.objectContaining({ method: "POST" }))
+    );
   });
 
   it("hides Approve when canApprove is denied", async () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, { ...allAllowed, canApprove: false });
-    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ operation: "apply", status: "waiting_approval" }));
+    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "waiting_approval" }));
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([]));
 
     renderScreen(queryClient);
 
-    expect(screen.queryByRole("button", { name: /Approve/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Approve$/ })).toBeNull();
   });
 
-  it("enables Cancel for a non-terminal run and calls the cancellation endpoint, gated by canOperate", async () => {
+  // A run planning or applying cannot be stopped, so it offers no action,
+  // whatever the viewer may do.
+  it.each(["plan_started", "plan_finished", "apply_started"] as const)("offers nothing on a run that is %s", (status) => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
-    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "plan_finished" }));
+    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status }));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([]));
+
+    renderScreen(queryClient);
+
+    expect(screen.queryByRole("button", { name: /Cancel|Discard|Approve/ })).toBeNull();
+  });
+
+  it("discards a plan waiting for approval", async () => {
+    const queryClient = testQueryClient();
+    seedCapabilities(queryClient, allAllowed);
+    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "waiting_approval", operation: "apply" }));
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
-      if (url.endsWith("/logs")) {
-        return jsonResponse([]);
-      }
-      if (init?.method === "POST" && url.endsWith("/template-runs/run_1/cancellation")) {
+      if (init?.method === "POST" && url.endsWith("/template-runs/run_1/discard")) {
         return new Response(null, { status: 204 });
       }
-      throw new Error(`unexpected fetch: ${url} ${init?.method ?? "GET"}`);
+      if (url.endsWith("/template-runs/run_1")) {
+        return jsonResponse(run({ status: "canceled", operation: "apply" }));
+      }
+      return jsonResponse([]);
     });
 
     renderScreen(queryClient);
 
-    expect(isDisabled(screen.getByRole("button", { name: /Cancel/ }))).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: /Cancel/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Discard/ }));
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/template-runs/run_1/cancellation"),
-        expect.objectContaining({ method: "POST" })
+        expect.stringContaining("/template-runs/run_1/discard"),
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ reason: "discarded from run detail" }) })
       )
     );
-  });
-
-  it("hides Cancel when canOperate is denied", async () => {
-    const queryClient = testQueryClient();
-    seedCapabilities(queryClient, { ...allAllowed, canOperate: false });
-    queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status: "plan_finished" }));
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([]));
-
-    renderScreen(queryClient);
-
-    expect(screen.queryByRole("button", { name: /Cancel/ })).toBeNull();
   });
 });

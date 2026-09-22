@@ -246,8 +246,8 @@ func TestStackTemplateWorkspaceStable(t *testing.T) {
 func TestWorkflowNames(t *testing.T) {
 	t.Parallel()
 
-	if TemplateRunWorkflowName != "TemplateRunWorkflow" {
-		t.Fatalf("TemplateRunWorkflowName = %q", TemplateRunWorkflowName)
+	if TemplatePlanWorkflowName != "TemplatePlanWorkflow" {
+		t.Fatalf("TemplatePlanWorkflowName = %q", TemplatePlanWorkflowName)
 	}
 
 	if TemplateSyncWorkflowName != "TemplateSyncWorkflow" {
@@ -282,7 +282,7 @@ func TestTemplateRunWorkflowInputUsesTraitTypes(t *testing.T) {
 		RunID:           TemplateRunID("run_123"),
 		TenantID:        TenantID("tenant_123"),
 		StackTemplateID: StackTemplateID("stack_template_123"),
-		Operation:       OperationApply,
+		Operation:       OperationDestroy,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 		RepoOwner:       "acme",
@@ -290,8 +290,8 @@ func TestTemplateRunWorkflowInputUsesTraitTypes(t *testing.T) {
 		RootPath:        "modules/vpc",
 	}
 
-	if input.Operation != OperationApply {
-		t.Fatalf("Operation = %q, want %q", input.Operation, OperationApply)
+	if input.Operation != OperationDestroy {
+		t.Fatalf("Operation = %q, want %q", input.Operation, OperationDestroy)
 	}
 
 	if input.WorkspaceName == "" {
@@ -325,16 +325,4 @@ func TestTemplateSyncWorkflowInputUsesRegistrationSource(t *testing.T) {
 
 func templateRegistrationID(id string) TemplateRegistrationID {
 	return TemplateRegistrationID(id)
-}
-
-func TestSignalNames(t *testing.T) {
-	t.Parallel()
-
-	if ApprovalSignalName != "approval" {
-		t.Fatalf("ApprovalSignalName = %q", ApprovalSignalName)
-	}
-
-	if CancelSignalName != "cancel" {
-		t.Fatalf("CancelSignalName = %q", CancelSignalName)
-	}
 }

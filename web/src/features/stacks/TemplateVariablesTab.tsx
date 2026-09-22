@@ -4,6 +4,7 @@ import { useTemplateRevisionVariablesQuery, useUpdateStackTemplateConfigMutation
 import { tenantID } from "../../config";
 import RequireCapability from "../../auth/RequireCapability";
 import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
+import { runInFlightReason, useRunInFlight } from "../runs/useRunInFlight";
 import StackTemplateConfigPanel from "./StackTemplateConfigPanel";
 import { useStackTemplateOutlet } from "./StackTemplateDetailShell";
 import {
@@ -25,6 +26,7 @@ export default function TemplateVariablesTab() {
   const variables = variablesQuery.data ?? [];
   const boundary = useQueryErrorBoundary(variablesQuery.error);
   const updateStackTemplateConfigMutation = useUpdateStackTemplateConfigMutation(tenantID, stackId);
+  const runInFlight = useRunInFlight(stackTemplate.id);
 
   // Displayed values are the installed config overlaid with unsaved edits.
   const baseValues = variableValuesFromConfig(stackTemplate.config, variables);
@@ -89,7 +91,11 @@ export default function TemplateVariablesTab() {
     canSave: canSaveConfig,
     onSave: handleSave,
     saveBusy: updateStackTemplateConfigMutation.isPending,
-    disabledReason: isDestroyingStackTemplate(stackTemplate) ? "Destroy in progress" : undefined
+    disabledReason: isDestroyingStackTemplate(stackTemplate)
+      ? "Destroy in progress"
+      : runInFlight
+        ? runInFlightReason(runInFlight, "changing the config")
+        : undefined
   };
 
   return (

@@ -232,3 +232,45 @@ func TestFilesystemStoreWritesUnderRoot(t *testing.T) {
 		t.Fatalf("stat object path: %v", err)
 	}
 }
+
+// A saved plan round-trips through the store under a key beside the run's
+// logs, and deleting it twice is fine: the second delete, like one for a run
+// that never uploaded a plan, has nothing to do.
+func TestPlanStoreRoundTripsAndDeletesASavedPlan(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	plans := NewPlanStore(NewFilesystemStore(root))
+
+	if err := plans.PutPlan(ctx, "tenant_123", "run_123", []byte("sealed plan")); err != nil {
+		t.Fatalf("PutPlan returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "tenants", "tenant_123", "runs", "run_123", "plan", "tfplan.bundle.enc")); err != nil {
+		t.Fatalf("saved plan not at its key: %v", err)
+	}
+	got, err := plans.GetPlan(ctx, "tenant_123", "run_123")
+	if err != nil {
+		t.Fatalf("GetPlan returned error: %v", err)
+	}
+	if string(got) != "sealed plan" {
+		t.Fatalf("GetPlan = %q", got)
+	}
+
+	for range 2 {
+		if err := plans.DeletePlan(ctx, "tenant_123", "run_123"); err != nil {
+			t.Fatalf("DeletePlan returned error: %v", err)
+		}
+	}
+	if _, err := plans.GetPlan(ctx, "tenant_123", "run_123"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("GetPlan after delete error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestPlanKeyRejectsUnsafeComponents(t *testing.T) {
+	t.Parallel()
+
+	if _, err := PlanKey("tenant_123", "../run"); err == nil {
+		t.Fatal("PlanKey accepted a path traversal")
+	}
+}

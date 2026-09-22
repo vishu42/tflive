@@ -94,7 +94,7 @@ The API server is responsible for:
 - Creating and reading product records in Postgres.
 - Atomically creating queued template runs and their Postgres workflow-outbox entries.
 - Starting template-sync workflows directly in Temporal.
-- Sending approval/cancel signals to Temporal workflows.
+- Starting the workflows that plan and apply runs.
 - Serving UI-facing run, stack, template, and log endpoints.
 - Exposing live log streams to the UI.
 
@@ -139,9 +139,7 @@ every 20 seconds, and Temporal fails the activity if two minutes pass without
 one -- six intervals of slack, because a Terraform command is not retried and a
 heartbeat lost to a pause should not kill a run mid-apply. The heartbeat
 carries no payload: Temporal reads only its arrival, so what keeps the activity
-alive is that one came, not what it said. It is also the only channel by which
-a cancel signal reaches a running command: Temporal delivers activity
-cancellation on the heartbeat response.
+alive is that one came, not what it said.
 
 ### Executors
 
@@ -225,14 +223,14 @@ Package ownership:
 - `cmd/api`: control plane boot: config loading, dependency wiring, HTTP server, the queue loop, and the Temporal worker on the `control` queue.
 - `cmd/executor`: data plane boot: Temporal worker on the `execution` queue with the execution activities. No database, no keys.
 - `internal/domain`: the product's core entities and shared contracts, including IDs, statuses, operation types, validation helpers, entities such as `Tenant`, `Template`, `Stack`, `StackTemplate`, `TemplateRun`, `StackRun`, and `CredentialSet`, plus Temporal workflow payloads, signal names, query names, and constants. Keep this package focused on stable cross-boundary data contracts; concrete behavior and side effects belong in the packages that own them.
-- `internal/app`: application use cases such as creating stacks, registering templates, adding templates to stacks, starting runs, approving runs, canceling runs, listing runs, and fetching log metadata. This package owns use-case interfaces for persistence, workflow dispatch, events, locks, artifacts, and secrets; concrete adapters implement those interfaces outside `app`.
+- `internal/app`: application use cases such as creating stacks, registering templates, adding templates to stacks, starting runs, approving runs, discarding plans, listing runs, and fetching log metadata. This package owns use-case interfaces for persistence, workflow dispatch, events, locks, artifacts, and secrets; concrete adapters implement those interfaces outside `app`.
 - `internal/api`: HTTP handlers, request and response DTOs, routing, SSE endpoints, API validation, and mapping API input into app commands.
 - `internal/auth`: mock identity for MVP, tenant/user context extraction, and the future authentication boundary.
 - `internal/authorization`: embedded OpenFGA and the only authorization package. It owns the model, in-process store and model bootstrap, `Can`/`CanAll`/`ListGrants` checks, and `Grant`/`Revoke` tuple writes that join the caller's Postgres transaction. `app` calls it directly; there is no provider port. See [Authorization](#authorization).
 - `internal/postgres`: Postgres repositories, transactions, SQL queries, persistence models, workflow-outbox operations, and migration helper code.
 - `internal/dispatch`: broker-free Postgres-to-Temporal dispatch loop. It leases pending workflow-start intents, invokes the narrow workflow starter interface, marks successful entries complete, and schedules failed entries for retry.
 - `internal/temporal`: Temporal client adapter that implements `app` workflow-dispatch interfaces and is wired in `cmd`. API and app code should depend on interfaces, not on this adapter package directly.
-- `internal/workflows`: deterministic Temporal workflow definitions such as `TemplateRunWorkflow`, `TemplateSyncWorkflow`, and future `StackRunWorkflow`.
+- `internal/workflows`: deterministic Temporal workflow definitions such as `TemplatePlanWorkflow`, `TemplateSyncWorkflow`, and future `StackRunWorkflow`.
 - `internal/activities`: Temporal activities that perform side effects such as cloning repositories, parsing templates, acquiring locks, running the OpenTofu CLI for Terraform-compatible operations, persisting logs, and writing activity events.
 - `internal/runner`: Terraform-compatible runner interface and runner implementations, including the MVP OpenTofu-backed `LocalProcessRunner`.
 - `internal/terraform`: Terraform-specific helpers for HCL variable parsing, tfvars rendering, backend metadata extraction, plan summary parsing, and workspace command modeling.
@@ -586,9 +584,9 @@ Dispatchers poll Postgres for eligible rows, claim with `FOR UPDATE SKIP LOCKED`
 
 Migration `0007_workflow_outbox.sql` also backfills existing queued template runs. Replaying a run that was already submitted to Temporal is safe because it targets the same deterministic workflow ID.
 
-## TemplateRun Workflow
+## TemplatePlanWorkflow
 
-`TemplateRunWorkflow` is the main execution workflow.
+`TemplatePlanWorkflow` is the main execution workflow.
 
 Plan-only flow:
 
@@ -644,31 +642,16 @@ failed
 lock_released
 ```
 
-If a destroy run fails or is canceled after `destroy_started`, its associated
+If a destroy run fails after `destroy_started`, its associated
 `StackTemplate` lifecycle transitions from `destroying` to `failed`. This does
 not roll back infrastructure changes; the template is treated as unsafe to run
 again until an explicit recovery or reconciliation flow exists.
 
-Canceled runs transition to:
-
-```text
-cancel_requested
-canceling
-canceled
-lock_released
-```
+A run in flight cannot be stopped. A plan waiting for approval can be
+discarded, which ends the run `canceled` in one write and drops the saved
+plan's key; nothing is running at that point, so there is nothing to unwind.
 
 The workflow should acquire a product-level lock before running Terraform so only one active run can target a `StackTemplate` at a time.
-
-Cancellation is cooperative and must leave the product lock, run status, and logs in a consistent state:
-
-- The API records the cancel request actor and timestamp, then sends a cancellation signal to Temporal.
-- If the run is queued or waiting for approval, the workflow can mark it canceled without starting more Terraform work.
-- If a Terraform subprocess is active, the executor first sends a graceful interrupt, waits for a bounded shutdown period, then terminates the process if needed.
-- Long-running activities heartbeat cancellation progress so Temporal can observe executor liveness.
-- Partial logs are flushed to object storage before the run reaches `canceled`.
-- The product-level lock is released only during cancellation finalization.
-- Canceling an apply or destroy does not imply infrastructure rollback; the next run should use Terraform state and backend locking to determine the current infrastructure state.
 
 ## Approval
 
@@ -715,12 +698,17 @@ Example phases:
 
 ```text
 clone.log
-init.log
-workspace.log
+plan-init.log
+plan-workspace.log
 plan.log
+apply-init.log
+apply-workspace.log
 apply.log
 destroy.log
 ```
+
+Init and workspace selection run again before an apply, so their logs are
+named for the phase that ran them.
 
 Postgres stores log metadata, not large log bodies.
 

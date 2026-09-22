@@ -64,7 +64,6 @@ type controlStore interface {
 	queue.Enqueuer
 	activities.ControlStore
 	activities.TemplateSyncStore
-	app.TemplateRunCancellationReconciler
 }
 
 type temporalWorker interface {
@@ -245,7 +244,7 @@ func defaultAPIDependencies() apiDependencies {
 			return temporal.NewDispatcher(temporalClient, options)
 		},
 		newQueueController: func(store controlStore, dispatcher app.WorkflowDispatcher) (queueController, error) {
-			registry, err := app.NewQueueRegistry(dispatcher, store)
+			registry, err := app.NewQueueRegistry(dispatcher)
 			if err != nil {
 				return nil, err
 			}
@@ -256,8 +255,11 @@ func defaultAPIDependencies() apiDependencies {
 }
 
 func registerControl(worker temporalWorker, store controlStore, gitHubTokens activities.GitHubTokenSource) {
-	worker.RegisterWorkflowWithOptions(workflows.TemplateRunWorkflow, workflow.RegisterOptions{
-		Name: domain.TemplateRunWorkflowName,
+	worker.RegisterWorkflowWithOptions(workflows.TemplatePlanWorkflow, workflow.RegisterOptions{
+		Name: domain.TemplatePlanWorkflowName,
+	})
+	worker.RegisterWorkflowWithOptions(workflows.TemplateApplyWorkflow, workflow.RegisterOptions{
+		Name: domain.TemplateApplyWorkflowName,
 	})
 	worker.RegisterWorkflowWithOptions(workflows.TemplateSyncWorkflow, workflow.RegisterOptions{
 		Name: domain.TemplateSyncWorkflowName,
@@ -275,6 +277,15 @@ func registerControl(worker temporalWorker, store controlStore, gitHubTokens act
 	})
 	worker.RegisterActivityWithOptions(control.SealSourceToken, activity.RegisterOptions{
 		Name: domain.SealSourceTokenActivityName,
+	})
+	worker.RegisterActivityWithOptions(control.SealPlanKey, activity.RegisterOptions{
+		Name: domain.SealPlanKeyActivityName,
+	})
+	worker.RegisterActivityWithOptions(control.FinishPlan, activity.RegisterOptions{
+		Name: domain.FinishPlanActivityName,
+	})
+	worker.RegisterActivityWithOptions(control.BeginApply, activity.RegisterOptions{
+		Name: domain.BeginApplyActivityName,
 	})
 
 	sync := activities.NewTemplateSyncActivities(store, activities.WithTemplateSyncTokenSource(gitHubTokens))

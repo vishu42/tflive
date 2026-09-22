@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vishu42/tflive/internal/app"
 	"github.com/vishu42/tflive/internal/domain"
+	"github.com/vishu42/tflive/internal/logsink"
 	"github.com/vishu42/tflive/internal/queue"
 )
 
@@ -1444,7 +1445,7 @@ func TestCreateTemplateRunPersistsRunFields(t *testing.T) {
 		StackTemplateID:    domain.StackTemplateID("stack_template_123"),
 		TemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
 		SourceTemplateID:   domain.SourceTemplateID("source_template_vpc"),
-		Operation:          domain.OperationApply,
+		Operation:          domain.OperationPlan,
 		SelectedRef:        "main",
 		ResolvedCommitSHA:  "abc123",
 		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
@@ -1763,8 +1764,8 @@ func TestUnitOfWorkTemplateWritesRollbackTogether(t *testing.T) {
 	// template_runs_in_flight_idx allows only one of those per stack template.
 	// What this test is about is that four unrelated writes roll back together,
 	// so which template each run belongs to does not matter to it.
-	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_approval", TenantID: "tenant_123", StackTemplateID: "stack_template_approval", Operation: domain.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunWaitingApproval, TriggerActor: "user_123"})
-	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_cancel", TenantID: "tenant_123", StackTemplateID: "stack_template_cancel", Operation: domain.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunQueued, TriggerActor: "user_123"})
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_approval", TenantID: "tenant_123", StackTemplateID: "stack_template_approval", Operation: domain.OperationPlan, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunWaitingApproval, TriggerActor: "user_123"})
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{ID: "run_discard", TenantID: "tenant_123", StackTemplateID: "stack_template_discard", Operation: domain.OperationApply, SelectedRef: "main", WorkspaceName: "workspace", Status: domain.TemplateRunWaitingApproval, TriggerActor: "user_123"})
 	sentinel := errors.New("rollback")
 
 	err = store.InTx(ctx, func(ctx context.Context, repo app.TxRepo, _ queue.Enqueuer) error {
@@ -1777,8 +1778,8 @@ func TestUnitOfWorkTemplateWritesRollbackTogether(t *testing.T) {
 		if err := repo.ApproveTemplateRun(ctx, domain.TemplateRunApproval{TenantID: "tenant_123", RunID: "run_approval", ApprovedBy: "user_123", ApprovedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil {
 			return err
 		}
-		if err := repo.RequestTemplateRunCancellation(ctx, domain.TemplateRunCancellation{TenantID: "tenant_123", RunID: "run_cancel", RequestedBy: "user_123", Reason: "superseded", RequestedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil {
-			return err
+		if discarded, err := repo.DiscardTemplateRun(ctx, domain.TemplateRunDiscard{TenantID: "tenant_123", RunID: "run_discard", RequestedBy: "user_123", Reason: "superseded", RequestedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)}); err != nil || !discarded {
+			return fmt.Errorf("discard = %v, %w", discarded, err)
 		}
 		return sentinel
 	})
@@ -1787,12 +1788,12 @@ func TestUnitOfWorkTemplateWritesRollbackTogether(t *testing.T) {
 	}
 
 	var registrations, createdRuns, approvals int
-	var approvalStatus, cancellationStatus domain.TemplateRunStatus
-	if err := pool.QueryRow(ctx, `select (select count(*) from template_registrations where id = 'registration_123'), (select count(*) from template_runs where id = 'run_created'), (select count(*) from template_run_approvals where run_id = 'run_approval'), (select status from template_runs where id = 'run_approval'), (select status from template_runs where id = 'run_cancel')`).Scan(&registrations, &createdRuns, &approvals, &approvalStatus, &cancellationStatus); err != nil {
+	var approvalStatus, discardStatus domain.TemplateRunStatus
+	if err := pool.QueryRow(ctx, `select (select count(*) from template_registrations where id = 'registration_123'), (select count(*) from template_runs where id = 'run_created'), (select count(*) from template_run_approvals where run_id = 'run_approval'), (select status from template_runs where id = 'run_approval'), (select status from template_runs where id = 'run_discard')`).Scan(&registrations, &createdRuns, &approvals, &approvalStatus, &discardStatus); err != nil {
 		t.Fatalf("read transaction state: %v", err)
 	}
-	if registrations != 0 || createdRuns != 0 || approvals != 0 || approvalStatus != domain.TemplateRunWaitingApproval || cancellationStatus != domain.TemplateRunQueued {
-		t.Fatalf("registrations=%d createdRuns=%d approvals=%d approvalStatus=%q cancellationStatus=%q", registrations, createdRuns, approvals, approvalStatus, cancellationStatus)
+	if registrations != 0 || createdRuns != 0 || approvals != 0 || approvalStatus != domain.TemplateRunWaitingApproval || discardStatus != domain.TemplateRunWaitingApproval {
+		t.Fatalf("registrations=%d createdRuns=%d approvals=%d approvalStatus=%q discardStatus=%q", registrations, createdRuns, approvals, approvalStatus, discardStatus)
 	}
 }
 
@@ -1922,7 +1923,58 @@ func TestRecordTemplateRunLogUpsertsTenantScopedMetadata(t *testing.T) {
 	}
 }
 
-func TestListTemplateRunLogsReturnsTenantScopedMetadataOrderedByPhase(t *testing.T) {
+// Every log name the executor can upload under must be one the table accepts:
+// a refused name fails the run at the command that logged it.
+func TestRecordTemplateRunLogAcceptsEveryTerraformLogName(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          domain.TemplateRunQueued,
+		TriggerActor:    domain.UserID("user_123"),
+	})
+
+	commands := []domain.TerraformCommandType{
+		domain.TerraformCommandInit,
+		domain.TerraformCommandSelectWorkspace,
+		domain.TerraformCommandPlan,
+		domain.TerraformCommandPlanDestroy,
+		domain.TerraformCommandApply,
+		domain.TerraformCommandDestroy,
+		domain.TerraformCommandApplyAutoApprove,
+	}
+	for _, runPhase := range []domain.RunPhase{domain.RunPhasePlan, domain.RunPhaseApply} {
+		for _, command := range commands {
+			fileName, err := logsink.FileNameForTerraformCommand(command, runPhase)
+			if err != nil {
+				t.Fatalf("FileNameForTerraformCommand(%q, %q) returned error: %v", command, runPhase, err)
+			}
+			phase := strings.TrimSuffix(fileName, logsink.LogFileExtension)
+			if err := store.RecordTemplateRunLog(ctx, domain.TemplateRunLog{
+				TenantID:    domain.TenantID("tenant_123"),
+				RunID:       domain.TemplateRunID("run_123"),
+				Phase:       phase,
+				ObjectKey:   "tenants/tenant_123/runs/run_123/logs/" + fileName,
+				ContentType: "text/plain; charset=utf-8",
+				UploadedAt:  time.Now(),
+			}); err != nil {
+				t.Fatalf("RecordTemplateRunLog(%q) returned error: %v", phase, err)
+			}
+		}
+	}
+}
+
+// Logs come back in the order their commands ran, which is not alphabetical:
+// workspace selection runs between init and plan.
+func TestListTemplateRunLogsReturnsTenantScopedMetadataInUploadOrder(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -1962,11 +2014,20 @@ func TestListTemplateRunLogsReturnsTenantScopedMetadataOrderedByPhase(t *testing
 		{
 			TenantID:    domain.TenantID("tenant_123"),
 			RunID:       domain.TemplateRunID("run_123"),
-			Phase:       "init",
-			ObjectKey:   "tenants/tenant_123/runs/run_123/logs/init.log",
+			Phase:       "plan-init",
+			ObjectKey:   "tenants/tenant_123/runs/run_123/logs/plan-init.log",
 			ContentType: "text/plain; charset=utf-8",
 			SizeBytes:   12,
 			UploadedAt:  uploadedAt.Add(-time.Minute),
+		},
+		{
+			TenantID:    domain.TenantID("tenant_123"),
+			RunID:       domain.TemplateRunID("run_123"),
+			Phase:       "plan-workspace",
+			ObjectKey:   "tenants/tenant_123/runs/run_123/logs/plan-workspace.log",
+			ContentType: "text/plain; charset=utf-8",
+			SizeBytes:   9,
+			UploadedAt:  uploadedAt.Add(-time.Second),
 		},
 		{
 			TenantID:    domain.TenantID("tenant_456"),
@@ -1988,11 +2049,12 @@ func TestListTemplateRunLogsReturnsTenantScopedMetadataOrderedByPhase(t *testing
 		t.Fatalf("ListTemplateRunLogs returned error: %v", err)
 	}
 
-	if len(logs) != 2 {
-		t.Fatalf("len(logs) = %d, want 2", len(logs))
+	phases := make([]string, 0, len(logs))
+	for _, log := range logs {
+		phases = append(phases, log.Phase)
 	}
-	if logs[0].Phase != "init" || logs[1].Phase != "plan" {
-		t.Fatalf("phases = %q, %q; want init, plan", logs[0].Phase, logs[1].Phase)
+	if want := []string{"plan-init", "plan-workspace", "plan"}; !reflect.DeepEqual(phases, want) {
+		t.Fatalf("phases = %q, want %q", phases, want)
 	}
 }
 
@@ -2049,7 +2111,7 @@ func TestListTemplateRunsReturnsMostRecentFirstScopedToStackTemplate(t *testing.
 		ID:              domain.TemplateRunID("run_newer"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 		Status:          domain.TemplateRunWaitingApproval,
@@ -2117,7 +2179,7 @@ func TestApproveTemplateRunApprovesWaitingRun(t *testing.T) {
 		ID:              domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 		Status:          domain.TemplateRunWaitingApproval,
@@ -2169,7 +2231,7 @@ func TestApproveTemplateRunRejectsNonWaitingRun(t *testing.T) {
 		ID:              domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 		Status:          domain.TemplateRunQueued,
@@ -2184,93 +2246,6 @@ func TestApproveTemplateRunRejectsNonWaitingRun(t *testing.T) {
 	})
 	if !errors.Is(err, app.ErrRunNotApprovable) {
 		t.Fatalf("error = %v, want ErrRunNotApprovable", err)
-	}
-}
-
-func TestRequestTemplateRunCancellationMarksCancelableRun(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	pool := openMigratedTestPool(t, ctx)
-	store := NewStore(pool)
-	requestedAt := time.Date(2026, 7, 2, 10, 45, 0, 123456000, time.UTC)
-	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
-		ID:              domain.TemplateRunID("run_123"),
-		TenantID:        domain.TenantID("tenant_123"),
-		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
-		SelectedRef:     "main",
-		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          domain.TemplateRunApplyStarted,
-		TriggerActor:    requesterSubject,
-	})
-
-	err := store.RequestTemplateRunCancellation(ctx, domain.TemplateRunCancellation{
-		RunID:       domain.TemplateRunID("run_123"),
-		TenantID:    domain.TenantID("tenant_123"),
-		RequestedBy: requesterSubject,
-		Reason:      "superseded by newer run",
-		RequestedAt: requestedAt,
-	})
-	if err != nil {
-		t.Fatalf("RequestTemplateRunCancellation returned error: %v", err)
-	}
-
-	var status domain.TemplateRunStatus
-	var requestedBy domain.UserID
-	var reason string
-	var gotRequestedAt time.Time
-	if err := pool.QueryRow(ctx, `
-		select
-			status,
-			cancellation_requested_by,
-			cancellation_reason,
-			cancellation_requested_at
-		from template_runs
-		where id = $1
-	`, "run_123").Scan(&status, &requestedBy, &reason, &gotRequestedAt); err != nil {
-		t.Fatalf("read cancellation metadata: %v", err)
-	}
-	if status != domain.TemplateRunCancelRequested {
-		t.Fatalf("status = %q, want %q", status, domain.TemplateRunCancelRequested)
-	}
-	if requestedBy != requesterSubject {
-		t.Fatalf("requested_by = %q, want %q", requestedBy, requesterSubject)
-	}
-	if reason != "superseded by newer run" {
-		t.Fatalf("reason = %q, want superseded by newer run", reason)
-	}
-	if !gotRequestedAt.Equal(requestedAt) {
-		t.Fatalf("requested_at = %v, want %v", gotRequestedAt, requestedAt)
-	}
-}
-
-func TestRequestTemplateRunCancellationRejectsTerminalRun(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	pool := openMigratedTestPool(t, ctx)
-	store := NewStore(pool)
-	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
-		ID:              domain.TemplateRunID("run_123"),
-		TenantID:        domain.TenantID("tenant_123"),
-		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
-		SelectedRef:     "main",
-		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
-		Status:          domain.TemplateRunCompleted,
-		TriggerActor:    domain.UserID("user_123"),
-	})
-
-	err := store.RequestTemplateRunCancellation(ctx, domain.TemplateRunCancellation{
-		RunID:       domain.TemplateRunID("run_123"),
-		TenantID:    domain.TenantID("tenant_123"),
-		RequestedBy: domain.UserID("user_456"),
-		Reason:      "too late",
-		RequestedAt: time.Date(2026, 7, 2, 10, 45, 0, 0, time.UTC),
-	})
-	if !errors.Is(err, app.ErrRunNotCancelable) {
-		t.Fatalf("error = %v, want ErrRunNotCancelable", err)
 	}
 }
 
@@ -2427,72 +2402,6 @@ func TestRecordTemplateRunStatusPersistsFailureSummary(t *testing.T) {
 	}
 }
 
-func TestReconcileTemplateRunCancellationMarksRunFailed(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	pool := openMigratedTestPool(t, ctx)
-	store := NewStore(pool)
-	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
-		ID:              domain.TemplateRunID("run_reconcile"),
-		TenantID:        domain.TenantID("tenant_123"),
-		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
-		SelectedRef:     "main",
-		WorkspaceName:   "workspace",
-		Status:          domain.TemplateRunCancelRequested,
-		TriggerActor:    requesterSubject,
-	})
-
-	err := store.ReconcileTemplateRunCancellation(ctx, domain.TenantID("tenant_123"), domain.TemplateRunID("run_reconcile"), "workflow closed before cancellation was processed")
-	if err != nil {
-		t.Fatalf("ReconcileTemplateRunCancellation returned error: %v", err)
-	}
-
-	var status domain.TemplateRunStatus
-	var errorSummary string
-	var completedAt time.Time
-	if err := pool.QueryRow(ctx, `
-		select status, error_summary, completed_at
-		from template_runs
-		where id = $1
-	`, "run_reconcile").Scan(&status, &errorSummary, &completedAt); err != nil {
-		t.Fatalf("read reconciled run: %v", err)
-	}
-	if status != domain.TemplateRunFailed {
-		t.Fatalf("status = %q, want %q", status, domain.TemplateRunFailed)
-	}
-	if errorSummary != "workflow closed before cancellation was processed" {
-		t.Fatalf("error_summary = %q", errorSummary)
-	}
-	if completedAt.IsZero() {
-		t.Fatal("completed_at was not set")
-	}
-}
-
-func TestReconcileTemplateRunCancellationRejectsTerminalRun(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	pool := openMigratedTestPool(t, ctx)
-	store := NewStore(pool)
-	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
-		ID:              domain.TemplateRunID("run_reconcile_terminal"),
-		TenantID:        domain.TenantID("tenant_123"),
-		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
-		SelectedRef:     "main",
-		WorkspaceName:   "workspace",
-		Status:          domain.TemplateRunCompleted,
-		TriggerActor:    requesterSubject,
-	})
-
-	err := store.ReconcileTemplateRunCancellation(ctx, domain.TenantID("tenant_123"), domain.TemplateRunID("run_reconcile_terminal"), "should not overwrite terminal run")
-	if !errors.Is(err, app.ErrRunNotCancelable) {
-		t.Fatalf("error = %v, want ErrRunNotCancelable", err)
-	}
-}
-
 func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulApply(t *testing.T) {
 	t.Parallel()
 
@@ -2577,6 +2486,56 @@ func TestRecordTemplateRunStatusUpdatesStackTemplateLastAppliedForSuccessfulAppl
 	}
 }
 
+// An auto-approved apply has no plan to count, so the counts it reports come
+// with its finished status; a status without counts leaves them alone.
+func TestRecordTemplateRunStatusRecordsCountsItCarries(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          domain.TemplateRunApplyStarted,
+		TriggerActor:    domain.UserID("user_123"),
+		AutoApprove:     true,
+	})
+	status := domain.TemplateRunStatusActivityInput{
+		RunID:           domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationApply,
+		Status:          domain.TemplateRunApplyStarted,
+	}
+	if err := store.RecordTemplateRunStatus(ctx, status); err != nil {
+		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+	}
+	run, err := store.GetTemplateRun(ctx, "tenant_123", "run_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.PlanSummary != nil {
+		t.Fatalf("plan summary = %#v, want none before the apply reports it", run.PlanSummary)
+	}
+
+	status.Summary = &domain.PlanSummary{Add: 2, Change: 1}
+	if err := store.RecordTemplateRunStatus(ctx, status); err != nil {
+		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
+	}
+	run, err = store.GetTemplateRun(ctx, "tenant_123", "run_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.PlanSummary == nil || *run.PlanSummary != (domain.PlanSummary{Add: 2, Change: 1}) {
+		t.Fatalf("plan summary = %#v, want the counts the status carried", run.PlanSummary)
+	}
+}
+
 func TestRecordTemplateRunStatusReturnsNotFoundForOtherTenant(t *testing.T) {
 	t.Parallel()
 
@@ -2603,75 +2562,6 @@ func TestRecordTemplateRunStatusReturnsNotFoundForOtherTenant(t *testing.T) {
 	})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("error = %v, want ErrNotFound", err)
-	}
-}
-
-func TestRecordTemplateRunStatusUpdatesStackTemplateLastPlannedForCompletedPlan(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	pool := openMigratedTestPool(t, ctx)
-	store := NewStore(pool)
-	seedStackWithTemplate(t, ctx, store)
-	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
-		ID:                 domain.TemplateRunID("run_plan_1"),
-		TenantID:           domain.TenantID("tenant_123"),
-		StackTemplateID:    domain.StackTemplateID("stack_template_123"),
-		TemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
-		SourceTemplateID:   domain.SourceTemplateID("source_template_vpc"),
-		Operation:          domain.OperationPlan,
-		SelectedRef:        "main",
-		WorkspaceName:      "mtp_acme_prod_vpc_a13f9c",
-		ConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
-		Status:             domain.TemplateRunPlanFinished,
-		TriggerActor:       domain.UserID("user_123"),
-	})
-
-	if err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
-		RunID:           domain.TemplateRunID("run_plan_1"),
-		TenantID:        domain.TenantID("tenant_123"),
-		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationPlan,
-		Status:          domain.TemplateRunCompleted,
-	}); err != nil {
-		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
-	}
-
-	stackTemplate, err := store.GetStackTemplate(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"))
-	if err != nil {
-		t.Fatalf("GetStackTemplate returned error: %v", err)
-	}
-	if stackTemplate.LastPlannedRunID != domain.TemplateRunID("run_plan_1") {
-		t.Fatalf("LastPlannedRunID = %q, want run_plan_1", stackTemplate.LastPlannedRunID)
-	}
-	if stackTemplate.LastPlannedTemplateRevisionID != domain.TemplateRevisionID("template_rev_2") {
-		t.Fatalf("LastPlannedTemplateRevisionID = %q, want template_rev_2", stackTemplate.LastPlannedTemplateRevisionID)
-	}
-	if stackTemplate.LastPlannedAt.IsZero() {
-		t.Fatal("LastPlannedAt was not set")
-	}
-	// The point of recording it: the plan snapshot equals desired, so an apply
-	// would run exactly what this plan showed. Note the config comes back with
-	// jsonb's own key spacing, which is why the comparison parses rather than
-	// comparing bytes.
-	if stackTemplate.PlanState() != domain.PlanMatches {
-		t.Fatalf("PlanState() = %q, want matches (planned config %s, desired %s)", stackTemplate.PlanState(), stackTemplate.LastPlannedConfigJSON, stackTemplate.DesiredConfig())
-	}
-	if stackTemplate.LiveState() != domain.LiveNever {
-		t.Fatalf("LiveState() = %q, want never", stackTemplate.LiveState())
-	}
-
-	// Saving config moves desired without touching runs; the recorded plan is
-	// what makes that visible instead of leaving apply enabled.
-	if _, err := store.UpdateStackTemplateConfig(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"), json.RawMessage(`{"region":"eu-west-1"}`)); err != nil {
-		t.Fatalf("UpdateStackTemplateConfig returned error: %v", err)
-	}
-	edited, err := store.GetStackTemplate(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"))
-	if err != nil {
-		t.Fatalf("GetStackTemplate returned error: %v", err)
-	}
-	if edited.PlanState() != domain.PlanStale {
-		t.Fatalf("PlanState() after config edit = %q, want stale", edited.PlanState())
 	}
 }
 
@@ -2728,7 +2618,7 @@ func TestStackTemplateSnapshotConfigsStartAbsentRatherThanEmpty(t *testing.T) {
 
 	var plannedConfig, appliedConfig *string
 	if err := pool.QueryRow(ctx, `
-		select last_planned_config_json, last_applied_config_json
+		select pending_plan_config_json, last_applied_config_json
 		from stack_templates
 		where tenant_id = $1
 			and id = $2
@@ -2795,30 +2685,24 @@ func TestPlannedStateMigrationBackfillsFromExistingRuns(t *testing.T) {
 		t.Fatalf("seed pre-migration rows: %v", err)
 	}
 
-	// Migrate to head rather than to 0015 alone: the assertions are about the
-	// 0015 backfill, but the store reads the current schema.
-	if err := Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
+	// Stop before 0023, which renames these columns and clears them: the
+	// assertions are about what 0015 backfilled.
+	migrateThrough(t, ctx, pool, "0022_run_numbers")
 
-	store := NewStore(pool)
-	stackTemplate, err := store.GetStackTemplate(ctx, domain.TenantID("tenant_123"), domain.StackTemplateID("stack_template_123"))
-	if err != nil {
-		t.Fatalf("GetStackTemplate returned error: %v", err)
+	var plannedRunID string
+	var plannedAt *time.Time
+	if err := pool.QueryRow(ctx, `
+		select last_planned_run_id, last_planned_at
+		from stack_templates
+		where tenant_id = 'tenant_123' and id = 'stack_template_123'
+	`).Scan(&plannedRunID, &plannedAt); err != nil {
+		t.Fatalf("read backfilled plan: %v", err)
 	}
-	if stackTemplate.LastPlannedRunID != domain.TemplateRunID("run_plan_new") {
-		t.Fatalf("LastPlannedRunID = %q, want run_plan_new", stackTemplate.LastPlannedRunID)
+	if plannedRunID != "run_plan_new" {
+		t.Fatalf("last_planned_run_id = %q, want run_plan_new", plannedRunID)
 	}
-	if stackTemplate.LastPlannedAt.IsZero() {
-		t.Fatal("LastPlannedAt was not backfilled")
-	}
-	// Both snapshots equal desired, so the template lands in steady state
-	// rather than being told to re-plan something it already applied.
-	if stackTemplate.PlanState() != domain.PlanMatches {
-		t.Fatalf("PlanState() = %q, want matches", stackTemplate.PlanState())
-	}
-	if stackTemplate.LiveState() != domain.LiveMatches {
-		t.Fatalf("LiveState() = %q, want matches", stackTemplate.LiveState())
+	if plannedAt == nil {
+		t.Fatal("last_planned_at was not backfilled")
 	}
 }
 
@@ -2903,8 +2787,8 @@ func TestPlannedStateMigrationLeavesUnplannedTemplatesAbsent(t *testing.T) {
 	}
 	// An all-optional template's config is '{}' on both sides, so absence has
 	// to be carried by the run pointers rather than by the config being empty.
-	if stackTemplate.LastPlannedConfigJSON != nil || stackTemplate.LastAppliedConfigJSON != nil {
-		t.Fatalf("snapshot configs = %s / %s, want both absent", stackTemplate.LastPlannedConfigJSON, stackTemplate.LastAppliedConfigJSON)
+	if stackTemplate.PendingPlanConfigJSON != nil || stackTemplate.LastAppliedConfigJSON != nil {
+		t.Fatalf("snapshot configs = %s / %s, want both absent", stackTemplate.PendingPlanConfigJSON, stackTemplate.LastAppliedConfigJSON)
 	}
 	if stackTemplate.PlanState() != domain.PlanNone || stackTemplate.LiveState() != domain.LiveNever {
 		t.Fatalf("states = %q / %q, want none / never", stackTemplate.PlanState(), stackTemplate.LiveState())
@@ -3065,10 +2949,11 @@ func seedTemplateRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run 
 			started_at,
 			completed_at,
 			error_summary,
+			auto_approve,
 			run_number
 		) values (
 			$1, $2, $3, $4, $5, $6, $7, $8,
-			$9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17,
+			$9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18,
 			(
 				select coalesce(max(run_number), 0) + 1
 				from template_runs
@@ -3094,6 +2979,7 @@ func seedTemplateRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run 
 		nullTime(run.StartedAt),
 		nullTime(run.CompletedAt),
 		run.ErrorSummary,
+		run.AutoApprove,
 	)
 	if err != nil {
 		t.Fatalf("seed template run: %v", err)
@@ -3396,7 +3282,7 @@ func TestRecordsStackTemplateDestroyInterrupted(t *testing.T) {
 		},
 		{
 			name:      "failed apply",
-			operation: domain.OperationApply,
+			operation: domain.OperationPlan,
 			status:    domain.TemplateRunFailed,
 			want:      false,
 		},
@@ -3712,5 +3598,111 @@ func TestWorkQueueMigrationBackfillsPendingAuthorizationOutbox(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("backfilled rows = %+v, want %+v", got, want)
+	}
+}
+
+// Logs recorded before init and workspace selection were named for their
+// phase were all written by a plan phase, so migration 0024 renames them
+// rather than dropping them, and the renamed rows satisfy the new constraint.
+func TestMigrationRenamesPlanPhaseSetupLogs(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+	// Stop the first migration short of 0024 by marking it applied.
+	if _, err := pool.Exec(ctx, `
+		create table schema_migrations (version text primary key, applied_at timestamptz not null default now());
+		insert into schema_migrations (version) values ('0024_run_phase_log_names');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate to 0023: %v", err)
+	}
+	seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+		ID:              domain.TemplateRunID("run_123"),
+		TenantID:        domain.TenantID("tenant_123"),
+		StackTemplateID: domain.StackTemplateID("stack_template_123"),
+		Operation:       domain.OperationPlan,
+		SelectedRef:     "main",
+		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+		Status:          domain.TemplateRunCompleted,
+		TriggerActor:    domain.UserID("user_123"),
+	})
+	if _, err := pool.Exec(ctx, `
+		insert into template_run_logs (tenant_id, run_id, phase, object_key, content_type, size_bytes, uploaded_at)
+		values
+			('tenant_123', 'run_123', 'init', 'logs/init.log', 'text/plain', 1, now()),
+			('tenant_123', 'run_123', 'workspace', 'logs/workspace.log', 'text/plain', 1, now()),
+			('tenant_123', 'run_123', 'plan', 'logs/plan.log', 'text/plain', 1, now());
+		delete from schema_migrations where version = '0024_run_phase_log_names';
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate 0024 over existing logs: %v", err)
+	}
+
+	logs, err := NewStore(pool).ListTemplateRunLogs(ctx, "tenant_123", "run_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]string{}
+	for _, log := range logs {
+		keys[log.Phase] = log.ObjectKey
+	}
+	want := map[string]string{"plan-init": "logs/init.log", "plan-workspace": "logs/workspace.log", "plan": "logs/plan.log"}
+	if !reflect.DeepEqual(keys, want) {
+		t.Fatalf("logs = %#v, want %#v", keys, want)
+	}
+}
+
+// Canceling a run in flight is gone, so migration 0025 closes out any run
+// still waiting on a cancel signal before the statuses that meant it are
+// refused.
+func TestMigrationClosesOutRunsBeingCanceled(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+	// Stop the first migration short of 0025 by marking it applied.
+	if _, err := pool.Exec(ctx, `
+		create table schema_migrations (version text primary key, applied_at timestamptz not null default now());
+		insert into schema_migrations (version) values ('0025_remove_run_cancel');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate to 0024: %v", err)
+	}
+	for i, status := range []domain.TemplateRunStatus{"cancel_requested", "canceling"} {
+		seedTemplateRun(t, ctx, pool, domain.TemplateRun{
+			ID:              domain.TemplateRunID(fmt.Sprintf("run_%d", i)),
+			TenantID:        domain.TenantID("tenant_123"),
+			StackTemplateID: domain.StackTemplateID(fmt.Sprintf("stack_template_%d", i)),
+			Operation:       domain.OperationApply,
+			SelectedRef:     "main",
+			WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
+			Status:          status,
+			TriggerActor:    domain.UserID("user_123"),
+		})
+	}
+	if _, err := pool.Exec(ctx, `delete from schema_migrations where version = '0025_remove_run_cancel'`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate 0025 over runs being canceled: %v", err)
+	}
+
+	for _, id := range []domain.TemplateRunID{"run_0", "run_1"} {
+		run, err := NewStore(pool).GetTemplateRun(ctx, "tenant_123", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.Status != domain.TemplateRunCanceled || run.CompletedAt.IsZero() {
+			t.Fatalf("%s status = %q, completed at = %v; want canceled and completed", id, run.Status, run.CompletedAt)
+		}
 	}
 }

@@ -241,8 +241,9 @@ func TestRegisterControlRegistersWorkflowsAndControlActivities(t *testing.T) {
 	registerControl(worker, &recordingStore{}, nil)
 
 	wantWorkflows := map[string]bool{
-		domain.TemplateRunWorkflowName:  true,
-		domain.TemplateSyncWorkflowName: true,
+		domain.TemplatePlanWorkflowName:  true,
+		domain.TemplateApplyWorkflowName: true,
+		domain.TemplateSyncWorkflowName:  true,
 	}
 	if !reflect.DeepEqual(worker.workflows, wantWorkflows) {
 		t.Fatalf("workflows = %v, want %v", worker.workflows, wantWorkflows)
@@ -252,6 +253,9 @@ func TestRegisterControlRegistersWorkflowsAndControlActivities(t *testing.T) {
 		domain.RecordTemplateRunLogActivityName:             true,
 		domain.SealRunCredentialsActivityName:               true,
 		domain.SealSourceTokenActivityName:                  true,
+		domain.SealPlanKeyActivityName:                      true,
+		domain.FinishPlanActivityName:                       true,
+		domain.BeginApplyActivityName:                       true,
 		domain.RecordTemplateRegistrationStatusActivityName: true,
 		domain.SyncTemplateActivityName:                     true,
 	}
@@ -268,8 +272,7 @@ func assertAPIQueueSpecs(t *testing.T, registry *queue.SpecRegistry) {
 	for _, kind := range []queue.Kind{
 		app.KindStartTemplateRun,
 		app.KindStartTemplateSync,
-		app.KindSignalRunApproval,
-		app.KindSignalRunCancellation,
+		app.KindStartTemplateApply,
 	} {
 		if _, ok := registry.Spec(kind); !ok {
 			t.Fatalf("queue spec registry missing %q", kind)
@@ -808,8 +811,24 @@ func (recordingStore) ApproveTemplateRun(context.Context, domain.TemplateRunAppr
 	return nil
 }
 
-func (recordingStore) RequestTemplateRunCancellation(context.Context, domain.TemplateRunCancellation) error {
-	return nil
+func (recordingStore) DiscardTemplateRun(context.Context, domain.TemplateRunDiscard) (bool, error) {
+	return false, nil
+}
+
+func (recordingStore) CreatePlanKey(context.Context, domain.TenantID, domain.TemplateRunID) ([]byte, error) {
+	return nil, nil
+}
+
+func (recordingStore) PlanKey(context.Context, domain.TenantID, domain.TemplateRunID) ([]byte, error) {
+	return nil, nil
+}
+
+func (recordingStore) FinishTemplatePlan(context.Context, domain.FinishPlanActivityInput) (domain.PlanOutcome, error) {
+	return "", nil
+}
+
+func (recordingStore) BeginTemplateApply(context.Context, domain.TenantID, domain.TemplateRunID, bool) (bool, error) {
+	return false, nil
 }
 
 func (recordingStore) GetTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID) (domain.TemplateRun, error) {
@@ -826,10 +845,6 @@ func (recordingStore) GetTemplateRunLog(context.Context, domain.TenantID, domain
 
 func (recordingStore) ListTemplateRunLogs(context.Context, domain.TenantID, domain.TemplateRunID) ([]domain.TemplateRunLog, error) {
 	return nil, nil
-}
-
-func (recordingStore) ReconcileTemplateRunCancellation(context.Context, domain.TenantID, domain.TemplateRunID, string) error {
-	return nil
 }
 
 func (recordingStore) GetTemplateRegistration(context.Context, domain.TenantID, domain.TemplateRegistrationID) (domain.TemplateRegistration, error) {
@@ -1054,11 +1069,7 @@ func (recordingAPIDispatcher) StartTemplateSync(context.Context, domain.Template
 	return nil
 }
 
-func (recordingAPIDispatcher) ApproveTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID, domain.ApprovalSignal) error {
-	return nil
-}
-
-func (recordingAPIDispatcher) CancelTemplateRun(context.Context, domain.TenantID, domain.TemplateRunID, domain.CancelSignal) error {
+func (recordingAPIDispatcher) StartTemplateApply(context.Context, domain.TemplateRunWorkflowInput) error {
 	return nil
 }
 

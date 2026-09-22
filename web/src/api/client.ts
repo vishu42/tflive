@@ -59,6 +59,9 @@ interface UpgradeStackTemplateRequest {
 
 interface StartRunRequest {
   operation: Operation;
+  // Applies straight away, with no saved plan. Only an apply run takes it,
+  // and it needs approve access on the stack.
+  auto_approve?: boolean;
 }
 
 interface CredentialRequest {
@@ -66,7 +69,7 @@ interface CredentialRequest {
   value: string;
 }
 
-interface CancelRunRequest {
+interface DiscardRunRequest {
   reason: string;
 }
 
@@ -189,8 +192,10 @@ export function approveRun(tenantID: string, runID: string): Promise<void> {
   });
 }
 
-export function cancelRun(tenantID: string, runID: string, body: CancelRunRequest): Promise<void> {
-  return requestNoContent(`/v1/tenants/${encodeURIComponent(tenantID)}/template-runs/${encodeURIComponent(runID)}/cancellation`, {
+// discardRun throws away a plan waiting for approval. A run that is planning
+// or applying cannot be stopped.
+export function discardRun(tenantID: string, runID: string, body: DiscardRunRequest): Promise<void> {
+  return requestNoContent(`/v1/tenants/${encodeURIComponent(tenantID)}/template-runs/${encodeURIComponent(runID)}/discard`, {
     method: "POST",
     body: JSON.stringify(body)
   });

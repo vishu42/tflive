@@ -30,9 +30,9 @@ func TestStackTemplatePlanAndLiveState(t *testing.T) {
 		{
 			name: "plan matching desired is safe to apply",
 			stackTemplate: desired(StackTemplate{
-				LastPlannedRunID:              TemplateRunID("run_plan_1"),
-				LastPlannedTemplateRevisionID: TemplateRevisionID("rev_2"),
-				LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+				PendingPlanRunID:              TemplateRunID("run_plan_1"),
+				PendingPlanTemplateRevisionID: TemplateRevisionID("rev_2"),
+				PendingPlanConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 			}),
 			wantPlan: PlanMatches,
 			wantLive: LiveNever,
@@ -40,9 +40,9 @@ func TestStackTemplatePlanAndLiveState(t *testing.T) {
 		{
 			name: "config edited after the plan makes it stale",
 			stackTemplate: desired(StackTemplate{
-				LastPlannedRunID:              TemplateRunID("run_plan_1"),
-				LastPlannedTemplateRevisionID: TemplateRevisionID("rev_2"),
-				LastPlannedConfigJSON:         json.RawMessage(`{"region":"eu-west-1"}`),
+				PendingPlanRunID:              TemplateRunID("run_plan_1"),
+				PendingPlanTemplateRevisionID: TemplateRevisionID("rev_2"),
+				PendingPlanConfigJSON:         json.RawMessage(`{"region":"eu-west-1"}`),
 			}),
 			wantPlan: PlanStale,
 			wantLive: LiveNever,
@@ -50,9 +50,9 @@ func TestStackTemplatePlanAndLiveState(t *testing.T) {
 		{
 			name: "revision changed after the plan makes it stale even with an identical config",
 			stackTemplate: desired(StackTemplate{
-				LastPlannedRunID:              TemplateRunID("run_plan_1"),
-				LastPlannedTemplateRevisionID: TemplateRevisionID("rev_1"),
-				LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+				PendingPlanRunID:              TemplateRunID("run_plan_1"),
+				PendingPlanTemplateRevisionID: TemplateRevisionID("rev_1"),
+				PendingPlanConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 			}),
 			wantPlan: PlanStale,
 			wantLive: LiveNever,
@@ -60,9 +60,9 @@ func TestStackTemplatePlanAndLiveState(t *testing.T) {
 		{
 			name: "steady state: plan and live both match desired",
 			stackTemplate: desired(StackTemplate{
-				LastPlannedRunID:              TemplateRunID("run_plan_1"),
-				LastPlannedTemplateRevisionID: TemplateRevisionID("rev_2"),
-				LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+				PendingPlanRunID:              TemplateRunID("run_plan_1"),
+				PendingPlanTemplateRevisionID: TemplateRevisionID("rev_2"),
+				PendingPlanConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 				LastAppliedRunID:              TemplateRunID("run_apply_1"),
 				LastAppliedTemplateRevisionID: TemplateRevisionID("rev_2"),
 				LastAppliedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
@@ -73,9 +73,9 @@ func TestStackTemplatePlanAndLiveState(t *testing.T) {
 		{
 			name: "edited after going live: the worst cell",
 			stackTemplate: desired(StackTemplate{
-				LastPlannedRunID:              TemplateRunID("run_plan_1"),
-				LastPlannedTemplateRevisionID: TemplateRevisionID("rev_2"),
-				LastPlannedConfigJSON:         json.RawMessage(`{"region":"eu-west-1"}`),
+				PendingPlanRunID:              TemplateRunID("run_plan_1"),
+				PendingPlanTemplateRevisionID: TemplateRevisionID("rev_2"),
+				PendingPlanConfigJSON:         json.RawMessage(`{"region":"eu-west-1"}`),
 				LastAppliedRunID:              TemplateRunID("run_apply_1"),
 				LastAppliedTemplateRevisionID: TemplateRevisionID("rev_2"),
 				LastAppliedConfigJSON:         json.RawMessage(`{"region":"eu-west-1"}`),
@@ -86,8 +86,8 @@ func TestStackTemplatePlanAndLiveState(t *testing.T) {
 		{
 			name: "a recorded run with no config fails closed",
 			stackTemplate: desired(StackTemplate{
-				LastPlannedRunID:              TemplateRunID("run_plan_1"),
-				LastPlannedTemplateRevisionID: TemplateRevisionID("rev_2"),
+				PendingPlanRunID:              TemplateRunID("run_plan_1"),
+				PendingPlanTemplateRevisionID: TemplateRevisionID("rev_2"),
 				LastAppliedRunID:              TemplateRunID("run_apply_1"),
 				LastAppliedTemplateRevisionID: TemplateRevisionID("rev_2"),
 			}),
@@ -100,12 +100,12 @@ func TestStackTemplatePlanAndLiveState(t *testing.T) {
 				stackTemplate := StackTemplate{
 					DesiredTemplateRevisionID:     TemplateRevisionID("rev_2"),
 					DesiredConfigJSON:             json.RawMessage(`{"aa":1,"b":2}`),
-					LastPlannedRunID:              TemplateRunID("run_plan_1"),
-					LastPlannedTemplateRevisionID: TemplateRevisionID("rev_2"),
+					PendingPlanRunID:              TemplateRunID("run_plan_1"),
+					PendingPlanTemplateRevisionID: TemplateRevisionID("rev_2"),
 					// What Postgres hands back: jsonb orders keys by length
 					// first, so this is byte-unequal to desired and
 					// semantically identical.
-					LastPlannedConfigJSON: json.RawMessage(`{"b": 2, "aa": 1}`),
+					PendingPlanConfigJSON: json.RawMessage(`{"b": 2, "aa": 1}`),
 				}
 				return stackTemplate
 			}(),
@@ -116,9 +116,9 @@ func TestStackTemplatePlanAndLiveState(t *testing.T) {
 			name: "an all-optional template compares empty against empty",
 			stackTemplate: StackTemplate{
 				DesiredTemplateRevisionID:     TemplateRevisionID("rev_2"),
-				LastPlannedRunID:              TemplateRunID("run_plan_1"),
-				LastPlannedTemplateRevisionID: TemplateRevisionID("rev_2"),
-				LastPlannedConfigJSON:         json.RawMessage(`{}`),
+				PendingPlanRunID:              TemplateRunID("run_plan_1"),
+				PendingPlanTemplateRevisionID: TemplateRevisionID("rev_2"),
+				PendingPlanConfigJSON:         json.RawMessage(`{}`),
 			},
 			wantPlan: PlanMatches,
 			wantLive: LiveNever,
@@ -130,9 +130,9 @@ func TestStackTemplatePlanAndLiveState(t *testing.T) {
 			stackTemplate: StackTemplate{
 				DesiredTemplateRevisionID:     TemplateRevisionID("rev_2"),
 				InstalledConfigJSON:           json.RawMessage(`{"region":"us-east-1"}`),
-				LastPlannedRunID:              TemplateRunID("run_plan_1"),
-				LastPlannedTemplateRevisionID: TemplateRevisionID("rev_2"),
-				LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+				PendingPlanRunID:              TemplateRunID("run_plan_1"),
+				PendingPlanTemplateRevisionID: TemplateRevisionID("rev_2"),
+				PendingPlanConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 			},
 			wantPlan: PlanStale,
 			wantLive: LiveNever,

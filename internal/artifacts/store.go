@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,6 +27,8 @@ const logContentType = "text/plain; charset=utf-8"
 type ObjectStore interface {
 	PutObject(ctx context.Context, key string, contentType string, body io.Reader) error
 	GetObject(ctx context.Context, key string) ([]byte, error)
+	// DeleteObject removes key. Deleting a key that does not exist succeeds.
+	DeleteObject(ctx context.Context, key string) error
 }
 
 type LogStore struct {
@@ -77,6 +80,63 @@ func (store LogStore) ReadTemplateRunLog(ctx context.Context, log domain.Templat
 	return content, nil
 }
 
+// PlanStore keeps a run's saved plan: the encrypted bundle the plan phase
+// uploads and the apply phase downloads. It never sees plaintext; encryption
+// happens on the executor before Put and after Get.
+type PlanStore struct {
+	store ObjectStore
+}
+
+func NewPlanStore(store ObjectStore) PlanStore {
+	return PlanStore{store: store}
+}
+
+const planContentType = "application/octet-stream"
+
+func (store PlanStore) PutPlan(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, sealed []byte) error {
+	key, err := PlanKey(tenantID, runID)
+	if err != nil {
+		return err
+	}
+	if err := store.store.PutObject(ctx, key, planContentType, bytes.NewReader(sealed)); err != nil {
+		return fmt.Errorf("put saved plan: %w", err)
+	}
+	return nil
+}
+
+func (store PlanStore) GetPlan(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID) ([]byte, error) {
+	key, err := PlanKey(tenantID, runID)
+	if err != nil {
+		return nil, err
+	}
+	sealed, err := store.store.GetObject(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("get saved plan: %w", err)
+	}
+	return sealed, nil
+}
+
+func (store PlanStore) DeletePlan(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID) error {
+	key, err := PlanKey(tenantID, runID)
+	if err != nil {
+		return err
+	}
+	if err := store.store.DeleteObject(ctx, key); err != nil {
+		return fmt.Errorf("delete saved plan: %w", err)
+	}
+	return nil
+}
+
+// PlanKey is where a run's saved plan lives, next to its logs. With the
+// filesystem store every executor must share the root: a run's apply can land
+// on a different executor from its plan.
+func PlanKey(tenantID domain.TenantID, runID domain.TemplateRunID) (string, error) {
+	if !safePathComponent(string(tenantID)) || !safePathComponent(string(runID)) {
+		return "", fmt.Errorf("tenant ID and run ID must be safe path components")
+	}
+	return path.Join("tenants", string(tenantID), "runs", string(runID), "plan", "tfplan.bundle.enc"), nil
+}
+
 func LogKey(tenantID domain.TenantID, runID domain.TemplateRunID, phase string) (string, error) {
 	if !safePathComponent(string(tenantID)) || !safePathComponent(string(runID)) || !safePathComponent(phase) {
 		return "", fmt.Errorf("tenant ID, run ID, and phase must be safe path components")
@@ -125,6 +185,17 @@ func (store FilesystemStore) GetObject(_ context.Context, key string) ([]byte, e
 		return nil, fmt.Errorf("read object: %w", err)
 	}
 	return content, nil
+}
+
+func (store FilesystemStore) DeleteObject(_ context.Context, key string) error {
+	objectPath, err := store.objectPath(key)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(objectPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("delete object: %w", err)
+	}
+	return nil
 }
 
 func (store FilesystemStore) objectPath(key string) (string, error) {
@@ -219,6 +290,26 @@ func (store *S3Store) GetObject(ctx context.Context, key string) ([]byte, error)
 		return nil, fmt.Errorf("read s3 object: %w", err)
 	}
 	return content, nil
+}
+
+// DeleteObject removes key. S3 answers 204 whether or not the key existed.
+func (store *S3Store) DeleteObject(ctx context.Context, key string) error {
+	if !safeObjectKey(key) {
+		return fmt.Errorf("object key must be a safe object key")
+	}
+	request, err := store.newRequest(ctx, http.MethodDelete, key, "", nil)
+	if err != nil {
+		return err
+	}
+	response, err := store.httpClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("delete s3 object: %w", err)
+	}
+	defer response.Body.Close()
+	if (response.StatusCode < 200 || response.StatusCode >= 300) && response.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("delete s3 object: status %d", response.StatusCode)
+	}
+	return nil
 }
 
 func (store *S3Store) newRequest(ctx context.Context, method string, key string, contentType string, content []byte) (*http.Request, error) {

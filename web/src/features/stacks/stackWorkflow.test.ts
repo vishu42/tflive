@@ -305,7 +305,7 @@ function stackTemplate(overrides: Partial<StackTemplate>): StackTemplate {
     display_name: "",
     config: {},
     last_applied_run_id: "",
-    last_planned_run_id: "",
+    pending_plan_run_id: "",
     plan_state: "none",
     live_state: "never",
     created_by: "user_123",

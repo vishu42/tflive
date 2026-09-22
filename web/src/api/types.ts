@@ -21,8 +21,6 @@ export type TemplateRunStatus =
   | "workspace_selected"
   | "waiting_approval"
   | "approved"
-  | "cancel_requested"
-  | "canceling"
   | "canceled"
   | "lock_released"
   | "completed"
@@ -36,6 +34,8 @@ export type TemplateRunStatus =
   | "destroy_started"
   | "destroy_finished";
 
+// "apply" survives only on runs from before saved plans; a run is started as a
+// plan or a destroy, and approving its plan is what applies it.
 export type Operation = "plan" | "apply" | "destroy";
 
 export interface ApiErrorBody {
@@ -114,8 +114,8 @@ export interface StackTemplate {
   config: Record<string, unknown>;
   last_applied_run_id: string;
   last_applied_at?: string;
-  last_planned_run_id: string;
-  last_planned_at?: string;
+  pending_plan_run_id: string;
+  pending_plan_at?: string;
   plan_state: PlanState;
   live_state: LiveState;
   created_by: string;
@@ -143,6 +143,12 @@ export interface CredentialMetadata {
   created_at: string;
 }
 
+export interface PlanSummary {
+  add: number;
+  change: number;
+  destroy: number;
+}
+
 export interface TemplateRun {
   id: string;
   tenant_id: string;
@@ -163,6 +169,12 @@ export interface TemplateRun {
   error_summary: string;
   // Counts runs within one stack template, from 1. Shown as "Run #N".
   run_number: number;
+  // An apply run that applies straight away, with no saved plan and no
+  // approval.
+  auto_approve: boolean;
+  // What the plan would change, or, for an auto-approved apply, what it
+  // changed. Null until a plan with changes, or the apply, finishes.
+  plan_summary: PlanSummary | null;
 }
 
 export interface TemplateRunLog {

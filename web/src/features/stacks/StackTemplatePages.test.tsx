@@ -53,7 +53,7 @@ function stackTemplate(overrides: Partial<StackTemplate> = {}): StackTemplate {
     display_name: "",
     config: { region: "us-east-1" },
     last_applied_run_id: "run_9",
-    last_planned_run_id: "",
+    pending_plan_run_id: "",
     plan_state: "none",
     live_state: "never",
     created_by: "user_123",
@@ -149,6 +149,8 @@ function runFor(stackTemplateID: string, overrides: Partial<TemplateRun> = {}): 
     started_at: "2026-07-20T00:00:00Z",
     error_summary: "",
     run_number: 1,
+    auto_approve: false,
+    plan_summary: null,
     ...overrides
   };
 }
@@ -451,6 +453,25 @@ describe("TemplateVariablesTab", () => {
   it("renders NotFound when the API returns 404", async () => {
     mockVariablesFailure(404, "not_found");
     await waitFor(() => expect(screen.getByTestId("route-not-found")).toBeTruthy());
+  });
+});
+
+describe("editing while a run is in flight", () => {
+  // A plan waiting for approval is a promise about the config and revision it
+  // was made from, so neither can change until it is applied or discarded.
+  it("locks the config and the revision behind the waiting plan", async () => {
+    const queryClient = testQueryClient();
+    seedDefaultData(queryClient);
+    queryClient.setQueryData(queryKeys.templateRuns("tenant_123", "st_1"), [runFor("st_1", { status: "waiting_approval", run_number: 7 })]);
+
+    const variables = renderAt(queryClient, "/stacks/stack_1/templates/st_1/variables");
+    await waitFor(() => expect(screen.getByTestId("variables-disabled-reason").textContent).toBe("Apply or discard run #7 before changing the config"));
+    expect(actionButton(/Save config/).disabled).toBe(true);
+    variables.unmount();
+
+    renderAt(queryClient, "/stacks/stack_1/templates/st_1/settings");
+    expect(screen.getByTestId("upgrade-disabled-reason").textContent).toBe("Apply or discard run #7 before changing the revision");
+    expect((screen.getByTestId("change-stack-template-revision-link") as HTMLButtonElement).disabled).toBe(true);
   });
 });
 

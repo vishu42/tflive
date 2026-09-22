@@ -30,7 +30,7 @@ func TestStartTemplateRunExecutesWorkflow(t *testing.T) {
 		RunID:           domain.TemplateRunID("run_123"),
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 		SelectedRef:     "main",
 		WorkspaceName:   "mtp_acme_prod_vpc_a13f9c",
 	}
@@ -51,7 +51,7 @@ func TestStartTemplateRunExecutesWorkflow(t *testing.T) {
 	if workflowClient.executeOptions.WorkflowIDConflictPolicy != enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING {
 		t.Fatalf("workflow ID conflict policy = %v, want use existing", workflowClient.executeOptions.WorkflowIDConflictPolicy)
 	}
-	if workflowClient.executeWorkflow != domain.TemplateRunWorkflowName {
+	if workflowClient.executeWorkflow != domain.TemplatePlanWorkflowName {
 		t.Fatalf("workflow name = %#v", workflowClient.executeWorkflow)
 	}
 	if len(workflowClient.executeArgs) != 1 {
@@ -146,68 +146,38 @@ func TestStartTemplateSyncExecutesWorkflow(t *testing.T) {
 	}
 }
 
-func TestApproveTemplateRunSignalsWorkflow(t *testing.T) {
+// The apply workflow starts on the control queue under an ID derived from the
+// run's, and a redelivered start finds it running rather than starting twice.
+func TestStartTemplateApplyStartsTheApplyWorkflow(t *testing.T) {
 	t.Parallel()
 
 	workflowClient := &recordingWorkflowClient{}
-	dispatcher := newDispatcher(workflowClient)
-	signal := domain.ApprovalSignal{ApprovedBy: approverSubject}
-
-	err := dispatcher.ApproveTemplateRun(
-		context.Background(),
-		domain.TenantID("tenant_123"),
-		domain.TemplateRunID("run_123"),
-		signal,
-	)
-	if err != nil {
-		t.Fatalf("ApproveTemplateRun returned error: %v", err)
+	dispatcher := newDispatcher(workflowClient, DispatcherOptions{TerraformTimeout: 20 * time.Minute})
+	input := domain.TemplateRunWorkflowInput{
+		RunID:     domain.TemplateRunID("run_123"),
+		TenantID:  domain.TenantID("tenant_123"),
+		Operation: domain.OperationPlan,
 	}
 
-	if workflowClient.signalWorkflowID != "template-run/tenant_123/run_123" {
-		t.Fatalf("signal workflow ID = %q", workflowClient.signalWorkflowID)
-	}
-	if workflowClient.signalRunID != "" {
-		t.Fatalf("signal run ID = %q, want empty", workflowClient.signalRunID)
-	}
-	if workflowClient.signalName != domain.ApprovalSignalName {
-		t.Fatalf("signal name = %q", workflowClient.signalName)
-	}
-	if !reflect.DeepEqual(workflowClient.signalArg, signal) {
-		t.Fatalf("signal arg = %#v, want %#v", workflowClient.signalArg, signal)
-	}
-}
-
-func TestCancelTemplateRunSignalsWorkflow(t *testing.T) {
-	t.Parallel()
-
-	workflowClient := &recordingWorkflowClient{}
-	dispatcher := newDispatcher(workflowClient)
-	signal := domain.CancelSignal{
-		RequestedBy: requesterSubject,
-		Reason:      "superseded by a newer run",
+	if err := dispatcher.StartTemplateApply(context.Background(), input); err != nil {
+		t.Fatalf("StartTemplateApply returned error: %v", err)
 	}
 
-	err := dispatcher.CancelTemplateRun(
-		context.Background(),
-		domain.TenantID("tenant_123"),
-		domain.TemplateRunID("run_123"),
-		signal,
-	)
-	if err != nil {
-		t.Fatalf("CancelTemplateRun returned error: %v", err)
+	if workflowClient.executeOptions.ID != "template-run/tenant_123/run_123/apply" {
+		t.Fatalf("workflow ID = %q", workflowClient.executeOptions.ID)
 	}
-
-	if workflowClient.signalWorkflowID != "template-run/tenant_123/run_123" {
-		t.Fatalf("signal workflow ID = %q", workflowClient.signalWorkflowID)
+	if workflowClient.executeOptions.TaskQueue != domain.ControlTaskQueue {
+		t.Fatalf("task queue = %q", workflowClient.executeOptions.TaskQueue)
 	}
-	if workflowClient.signalRunID != "" {
-		t.Fatalf("signal run ID = %q, want empty", workflowClient.signalRunID)
+	if workflowClient.executeOptions.WorkflowIDConflictPolicy != enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING {
+		t.Fatalf("conflict policy = %v, want use existing", workflowClient.executeOptions.WorkflowIDConflictPolicy)
 	}
-	if workflowClient.signalName != domain.CancelSignalName {
-		t.Fatalf("signal name = %q", workflowClient.signalName)
+	if workflowClient.executeWorkflow != domain.TemplateApplyWorkflowName {
+		t.Fatalf("workflow = %v", workflowClient.executeWorkflow)
 	}
-	if !reflect.DeepEqual(workflowClient.signalArg, signal) {
-		t.Fatalf("signal arg = %#v, want %#v", workflowClient.signalArg, signal)
+	started := workflowClient.executeArgs[0].(domain.TemplateRunWorkflowInput)
+	if started.TerraformTimeout != 20*time.Minute {
+		t.Fatalf("terraform timeout = %v, want the deployment's", started.TerraformTimeout)
 	}
 }
 
@@ -247,47 +217,7 @@ func TestStartTemplateSyncWrapsClientError(t *testing.T) {
 	}
 }
 
-func TestApproveTemplateRunWrapsClientError(t *testing.T) {
-	t.Parallel()
-
-	clientErr := errors.New("temporal unavailable")
-	dispatcher := newDispatcher(&recordingWorkflowClient{signalErr: clientErr})
-
-	err := dispatcher.ApproveTemplateRun(
-		context.Background(),
-		domain.TenantID("tenant_123"),
-		domain.TemplateRunID("run_123"),
-		domain.ApprovalSignal{ApprovedBy: approverSubject},
-	)
-	if !errors.Is(err, clientErr) {
-		t.Fatalf("error = %v, want wrapped client error", err)
-	}
-	if !strings.Contains(err.Error(), "signal template run approval") {
-		t.Fatalf("error = %q, want approval context", err.Error())
-	}
-}
-
-func TestCancelTemplateRunWrapsClientError(t *testing.T) {
-	t.Parallel()
-
-	clientErr := errors.New("temporal unavailable")
-	dispatcher := newDispatcher(&recordingWorkflowClient{signalErr: clientErr})
-
-	err := dispatcher.CancelTemplateRun(
-		context.Background(),
-		domain.TenantID("tenant_123"),
-		domain.TemplateRunID("run_123"),
-		domain.CancelSignal{RequestedBy: requesterSubject},
-	)
-	if !errors.Is(err, clientErr) {
-		t.Fatalf("error = %v, want wrapped client error", err)
-	}
-	if !strings.Contains(err.Error(), "signal template run cancellation") {
-		t.Fatalf("error = %q, want cancellation context", err.Error())
-	}
-}
-
-func TestTemplateRunWorkflowID(t *testing.T) {
+func TestTemplatePlanWorkflowID(t *testing.T) {
 	t.Parallel()
 
 	got := templateRunWorkflowID(domain.TenantID("tenant_123"), domain.TemplateRunID("run_123"))
@@ -306,15 +236,10 @@ func TestTemplateSyncWorkflowID(t *testing.T) {
 }
 
 type recordingWorkflowClient struct {
-	executeOptions   client.StartWorkflowOptions
-	executeWorkflow  interface{}
-	executeArgs      []interface{}
-	executeErr       error
-	signalWorkflowID string
-	signalRunID      string
-	signalName       string
-	signalArg        interface{}
-	signalErr        error
+	executeOptions  client.StartWorkflowOptions
+	executeWorkflow interface{}
+	executeArgs     []interface{}
+	executeErr      error
 }
 
 func (workflowClient *recordingWorkflowClient) ExecuteWorkflow(
@@ -327,18 +252,4 @@ func (workflowClient *recordingWorkflowClient) ExecuteWorkflow(
 	workflowClient.executeWorkflow = workflow
 	workflowClient.executeArgs = args
 	return nil, workflowClient.executeErr
-}
-
-func (workflowClient *recordingWorkflowClient) SignalWorkflow(
-	_ context.Context,
-	workflowID string,
-	runID string,
-	signalName string,
-	arg interface{},
-) error {
-	workflowClient.signalWorkflowID = workflowID
-	workflowClient.signalRunID = runID
-	workflowClient.signalName = signalName
-	workflowClient.signalArg = arg
-	return workflowClient.signalErr
 }

@@ -25,7 +25,8 @@ func authenticatedContext() context.Context {
 func TestActorMutationsRejectMissingPrincipal(t *testing.T) {
 	t.Parallel()
 
-	service := NewService(Service{})
+	service := NewService(Service{
+		TemplateRuns: &recordingTemplateRunRepository{}})
 	tests := []struct {
 		name string
 		call func() error
@@ -57,8 +58,8 @@ func TestActorMutationsRejectMissingPrincipal(t *testing.T) {
 		{name: "approve run", call: func() error {
 			return service.ApproveRun(context.Background(), ApproveRunCommand{})
 		}},
-		{name: "cancel run", call: func() error {
-			return service.CancelRun(context.Background(), CancelRunCommand{})
+		{name: "discard run", call: func() error {
+			return service.DiscardRun(context.Background(), DiscardRunCommand{})
 		}},
 	}
 
@@ -87,11 +88,11 @@ func TestCreateStackDerivesSlugAndPersistsStack(t *testing.T) {
 	now := time.Date(2026, 7, 6, 13, 30, 0, 0, time.UTC)
 	stacks := &recordingStackRepository{}
 	service := NewService(Service{
-		Stacks:     stacks,
-		Work:       newRecordingWork(stacks),
+		Stacks:        stacks,
+		Work:          newRecordingWork(stacks),
 		Authorization: testPlatformAuthorizer(t),
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
-		Clock:      fixedClock{now: now},
+		StackIDs:      fixedStackIDGenerator{id: domain.StackID("stack_new")},
+		Clock:         fixedClock{now: now},
 	})
 
 	stack, err := service.CreateStack(ctx, CreateStackCommand{
@@ -135,11 +136,11 @@ func TestCreateStackReturnsDuplicateSlugConflict(t *testing.T) {
 	stacks := &recordingStackRepository{createErr: ErrDuplicateStackSlug}
 	authorizer := testPlatformAuthorizer(t)
 	service := NewService(Service{
-		Stacks:     stacks,
-		Work:       newRecordingWork(stacks),
+		Stacks:        stacks,
+		Work:          newRecordingWork(stacks),
 		Authorization: authorizer,
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
-		Clock:      fixedClock{now: time.Now()},
+		StackIDs:      fixedStackIDGenerator{id: domain.StackID("stack_new")},
+		Clock:         fixedClock{now: time.Now()},
 	})
 
 	_, err := service.CreateStack(authenticatedContext(), CreateStackCommand{
@@ -167,9 +168,9 @@ func TestCreateStackRejectsInvalidTagKey(t *testing.T) {
 
 	service := NewService(Service{
 		Authorization: testPlatformAuthorizer(t),
-		Stacks:     &recordingStackRepository{},
-		Work:       newRecordingWork(&recordingStackRepository{}),
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
+		Stacks:        &recordingStackRepository{},
+		Work:          newRecordingWork(&recordingStackRepository{}),
+		StackIDs:      fixedStackIDGenerator{id: domain.StackID("stack_new")},
 	})
 
 	_, err := service.CreateStack(authenticatedContext(), CreateStackCommand{
@@ -189,9 +190,9 @@ func TestCreateStackRejectsEmptyDefaultCredentialID(t *testing.T) {
 
 	service := NewService(Service{
 		Authorization: testPlatformAuthorizer(t),
-		Stacks:     &recordingStackRepository{},
-		Work:       newRecordingWork(&recordingStackRepository{}),
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
+		Stacks:        &recordingStackRepository{},
+		Work:          newRecordingWork(&recordingStackRepository{}),
+		StackIDs:      fixedStackIDGenerator{id: domain.StackID("stack_new")},
 	})
 
 	_, err := service.CreateStack(authenticatedContext(), CreateStackCommand{
@@ -417,7 +418,7 @@ func TestAddTemplateToStackValidatesVariablesAndPersistsStackTemplate(t *testing
 	}
 	installer := &recordingStackTemplateInstaller{}
 	service := NewService(Service{
-		Authorization:               testPlatformAuthorizer(t),
+		Authorization:            testPlatformAuthorizer(t),
 		Stacks:                   stacks,
 		Work:                     newRecordingWork(stacks),
 		TemplateRevisionMetadata: templates,
@@ -582,9 +583,9 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 			WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
 			Lifecycle:                 domain.StackTemplateActive,
 			// An apply needs a plan that still describes desired state.
-			LastPlannedRunID:              domain.TemplateRunID("run_plan_1"),
-			LastPlannedTemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
-			LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+			PendingPlanRunID:              domain.TemplateRunID("run_plan_1"),
+			PendingPlanTemplateRevisionID: domain.TemplateRevisionID("template_rev_2"),
+			PendingPlanConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 		},
 	}
 	templates := &recordingTemplateRepository{
@@ -605,7 +606,7 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
-		Authorization:               testPlatformAuthorizer(t),
+		Authorization:            testPlatformAuthorizer(t),
 		Work:                     work,
 		StackTemplates:           stackTemplates,
 		TemplateRuns:             runs,
@@ -617,7 +618,7 @@ func TestStartTemplateRunCreatesQueuedRunWithoutDispatchingWorkflow(t *testing.T
 	run, err := service.StartTemplateRun(ctx, StartTemplateRunCommand{
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 	})
 	if err != nil {
 		t.Fatalf("StartTemplateRun returned error: %v", err)
@@ -706,7 +707,8 @@ func TestUpdateStackTemplateConfigValidatesDesiredRevisionVariables(t *testing.T
 		},
 	}
 	service := NewService(Service{
-		Authorization:        testPlatformAuthorizer(t),
+		TemplateRuns:      &recordingTemplateRunRepository{},
+		Authorization:     testPlatformAuthorizer(t),
 		StackTemplates:    stackTemplates,
 		TemplateRevisions: templates,
 	})
@@ -742,7 +744,8 @@ func TestUpdateStackTemplateConfigRejectsMissingDesiredRevision(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		Authorization:        testPlatformAuthorizer(t),
+		TemplateRuns:      &recordingTemplateRunRepository{},
+		Authorization:     testPlatformAuthorizer(t),
 		StackTemplates:    stackTemplates,
 		TemplateRevisions: &recordingTemplateRepository{},
 	})
@@ -786,7 +789,8 @@ func TestUpgradeStackTemplateCarriesForwardCompatibleConfig(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		Authorization:               testPlatformAuthorizer(t),
+		TemplateRuns:             &recordingTemplateRunRepository{},
+		Authorization:            testPlatformAuthorizer(t),
 		StackTemplates:           stackTemplates,
 		TemplateRevisionMetadata: templates,
 		TemplateRevisions:        templates,
@@ -832,7 +836,8 @@ func TestUpgradeStackTemplateRejectsDifferentSourceTemplate(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		Authorization:               testPlatformAuthorizer(t),
+		TemplateRuns:             &recordingTemplateRunRepository{},
+		Authorization:            testPlatformAuthorizer(t),
 		StackTemplates:           stackTemplates,
 		TemplateRevisionMetadata: templates,
 		TemplateRevisions:        templates,
@@ -880,7 +885,7 @@ func TestStartTemplateRunRejectsInactiveStackTemplate(t *testing.T) {
 	}
 	runs := &recordingTemplateRunRepository{}
 	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
+		Authorization:  testPlatformAuthorizer(t),
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
 		RunIDs:         fixedTemplateRunIDGenerator{runID: domain.TemplateRunID("run_123")},
@@ -890,7 +895,7 @@ func TestStartTemplateRunRejectsInactiveStackTemplate(t *testing.T) {
 	_, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 	})
 	if !errors.Is(err, ErrStackTemplateNotRunnable) {
 		t.Fatalf("error = %v, want ErrStackTemplateNotRunnable", err)
@@ -902,10 +907,10 @@ func TestStartTemplateRunRejectsInactiveStackTemplate(t *testing.T) {
 
 }
 
-// The bug this closes: saving config leaves the completed plan as the latest
-// run, so the old "is the latest run a completed plan?" check stayed true and
-// the apply then snapshotted the edited config instead of the reviewed one.
-func TestStartTemplateRunRejectsApplyWhosePlanNoLongerMatchesDesired(t *testing.T) {
+// Approving checks that the plan waiting for approval still describes desired
+// state. Config and revision cannot change while a run is in flight, so this is
+// the backstop behind that rule rather than the gate itself.
+func TestApproveRunRejectsAPlanThatNoLongerMatchesDesired(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -913,24 +918,28 @@ func TestStartTemplateRunRejectsApplyWhosePlanNoLongerMatchesDesired(t *testing.
 		stackTemplate domain.StackTemplate
 	}{
 		{
-			name: "config saved after the plan",
+			name: "config changed after the plan",
 			stackTemplate: domain.StackTemplate{
-				LastPlannedRunID:              domain.TemplateRunID("run_plan_1"),
-				LastPlannedTemplateRevisionID: domain.TemplateRevisionID("template_123"),
-				LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+				PendingPlanRunID:              "run_123",
+				PendingPlanTemplateRevisionID: "template_123",
+				PendingPlanConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 			},
 		},
 		{
 			name: "revision changed after the plan",
 			stackTemplate: domain.StackTemplate{
-				LastPlannedRunID:              domain.TemplateRunID("run_plan_1"),
-				LastPlannedTemplateRevisionID: domain.TemplateRevisionID("template_122"),
-				LastPlannedConfigJSON:         json.RawMessage(`{"region":"eu-west-1"}`),
+				PendingPlanRunID:              "run_123",
+				PendingPlanTemplateRevisionID: "template_122",
+				PendingPlanConfigJSON:         json.RawMessage(`{"region":"eu-west-1"}`),
 			},
 		},
 		{
-			name:          "never planned at all",
-			stackTemplate: domain.StackTemplate{},
+			name: "another run's plan is the pending one",
+			stackTemplate: domain.StackTemplate{
+				PendingPlanRunID:              "run_other",
+				PendingPlanTemplateRevisionID: "template_123",
+				PendingPlanConfigJSON:         json.RawMessage(`{"region":"eu-west-1"}`),
+			},
 		},
 	}
 
@@ -939,36 +948,180 @@ func TestStartTemplateRunRejectsApplyWhosePlanNoLongerMatchesDesired(t *testing.
 			t.Parallel()
 
 			stackTemplate := test.stackTemplate
-			stackTemplate.ID = domain.StackTemplateID("stack_template_123")
-			stackTemplate.DesiredTemplateRevisionID = domain.TemplateRevisionID("template_123")
+			stackTemplate.ID = "stack_template_123"
+			stackTemplate.TenantID = "tenant_123"
+			stackTemplate.StackID = "stack_123"
+			stackTemplate.DesiredTemplateRevisionID = "template_123"
 			stackTemplate.DesiredConfigJSON = json.RawMessage(`{"region":"eu-west-1"}`)
-			stackTemplate.WorkspaceName = "mtp_acme_prod_vpc_a13f9c"
-			stackTemplate.Lifecycle = domain.StackTemplateActive
 
-			runs := &recordingTemplateRunRepository{}
+			runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Status: domain.TemplateRunWaitingApproval}}
+			work := &recordingUnitOfWork{templateRuns: runs}
 			service := NewService(Service{
-				Authorization:     testPlatformAuthorizer(t),
-				StackTemplates: &recordingStackTemplateRepository{stackTemplate: stackTemplate},
-				TemplateRuns:   runs,
-				TemplateRevisionMetadata: &recordingTemplateRepository{
-					template: domain.TemplateRevision{ID: domain.TemplateRevisionID("template_123"), Status: domain.TemplateRevisionActive},
-				},
-				RunIDs: fixedTemplateRunIDGenerator{runID: domain.TemplateRunID("run_123")},
-				Clock:  fixedClock{now: time.Now()},
+				Authorization:            testPlatformAuthorizer(t),
+				Work:                     work,
+				TemplateRuns:             runs,
+				StackTemplates:           &recordingStackTemplateRepository{stackTemplate: stackTemplate},
+				TemplateRevisionMetadata: &recordingTemplateRepository{},
 			})
 
-			_, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
-				TenantID:        domain.TenantID("tenant_123"),
-				StackTemplateID: domain.StackTemplateID("stack_template_123"),
-				Operation:       domain.OperationApply,
-			})
+			err := service.ApproveRun(authenticatedContext(), ApproveRunCommand{TenantID: "tenant_123", RunID: "run_123"})
 			if !errors.Is(err, ErrStackTemplatePlanStale) {
 				t.Fatalf("error = %v, want ErrStackTemplatePlanStale", err)
 			}
-			if runs.created.ID != "" {
-				t.Fatalf("created run ID = %q, want no persisted run", runs.created.ID)
+			if len(work.requests) != 0 || runs.approval.RunID != "" {
+				t.Fatalf("requests = %#v, approval = %#v; want nothing recorded", work.requests, runs.approval)
 			}
 		})
+	}
+}
+
+// Only a plan that is waiting can be approved: one already approved, applying
+// or finished is refused before anything is written.
+func TestApproveRunRejectsARunThatIsNotWaiting(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Status: domain.TemplateRunApplyStarted}}
+	work := &recordingUnitOfWork{templateRuns: runs}
+	service := NewService(Service{
+		Authorization:            testPlatformAuthorizer(t),
+		Work:                     work,
+		TemplateRuns:             runs,
+		StackTemplates:           approvableStackTemplates(),
+		TemplateRevisionMetadata: &recordingTemplateRepository{},
+	})
+
+	err := service.ApproveRun(authenticatedContext(), ApproveRunCommand{TenantID: "tenant_123", RunID: "run_123"})
+	if !errors.Is(err, ErrRunNotApprovable) {
+		t.Fatalf("error = %v, want ErrRunNotApprovable", err)
+	}
+	if work.inTxCalls != 0 {
+		t.Fatalf("transaction calls = %d, want none", work.inTxCalls)
+	}
+}
+
+// Auto-approve is an approval given before the plan exists, so starting an
+// auto-approved run takes approve access as well as operate access.
+func TestStartTemplateRunAutoApproveRequiresApproveAccess(t *testing.T) {
+	t.Parallel()
+
+	stackTemplate := domain.StackTemplate{
+		ID:                        "stack_template_123",
+		StackID:                   "stack_123",
+		DesiredTemplateRevisionID: "template_123",
+		WorkspaceName:             "mtp_acme_prod_vpc_a13f9c",
+		Lifecycle:                 domain.StackTemplateActive,
+	}
+	newService := func(t *testing.T, grant authorization.Relation) (*Service, *recordingTemplateRunRepository, *recordingUnitOfWork) {
+		runs := &recordingTemplateRunRepository{}
+		work := &recordingUnitOfWork{templateRuns: runs}
+		authorizer := seedGrants(t, newPlatformAuthorizer(t), mustGrant(t, keycloakSubject, "stack_123", grant))
+		return NewService(Service{
+			Authorization:            authorizer,
+			Work:                     work,
+			StackTemplates:           &recordingStackTemplateRepository{stackTemplate: stackTemplate},
+			TemplateRuns:             runs,
+			TemplateRevisionMetadata: &recordingTemplateRepository{template: domain.TemplateRevision{ID: "template_123", Status: domain.TemplateRevisionActive}},
+			RunIDs:                   fixedTemplateRunIDGenerator{runID: "run_123"},
+		}), runs, work
+	}
+	command := StartTemplateRunCommand{TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply, AutoApprove: true}
+
+	operator, operatorRuns, _ := newService(t, authorization.RelationOperator)
+	if _, err := operator.StartTemplateRun(authenticatedContext(), command); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("operator error = %v, want ErrForbidden", err)
+	}
+	if operatorRuns.created.ID != "" {
+		t.Fatalf("operator created run %q, want none", operatorRuns.created.ID)
+	}
+
+	owner, ownerRuns, ownerWork := newService(t, authorization.RelationOwner)
+	run, err := owner.StartTemplateRun(authenticatedContext(), command)
+	if err != nil {
+		t.Fatalf("owner error = %v", err)
+	}
+	if !run.AutoApprove || !ownerRuns.created.AutoApprove {
+		t.Fatalf("run auto-approve = %v, persisted = %v; want both set", run.AutoApprove, ownerRuns.created.AutoApprove)
+	}
+	// It has no plan, so it goes straight to the apply workflow, and its
+	// approval, given now, is audited now.
+	if len(ownerWork.requests) != 1 || ownerWork.requests[0].Kind != KindStartTemplateApply {
+		t.Fatalf("requests = %#v, want one start_template_apply", ownerWork.requests)
+	}
+	if len(ownerWork.audits) != 1 || ownerWork.audits[0].Action != domain.AuditActionApprovalGranted {
+		t.Fatalf("audits = %#v, want one approval granted", ownerWork.audits)
+	}
+}
+
+// Only an apply run can be auto-approved: a plan run applies nothing, and a
+// destroy always waits for someone to approve its plan.
+func TestStartTemplateRunRejectsAutoApproveOutsideApply(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Service{Authorization: testPlatformAuthorizer(t)})
+	for _, operation := range []domain.OperationType{domain.OperationPlan, domain.OperationDestroy} {
+		_, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
+			TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: operation, AutoApprove: true,
+		})
+		if !errors.Is(err, ErrInvalidCommand) {
+			t.Fatalf("%s error = %v, want ErrInvalidCommand", operation, err)
+		}
+	}
+}
+
+// A run snapshots desired state when it starts, so desired state cannot move
+// while one is unfinished: the plan waiting for approval would stop being the
+// plan of what the template says.
+func TestConfigAndRevisionChangesWaitForTheRunInFlight(t *testing.T) {
+	t.Parallel()
+
+	stackTemplate := domain.StackTemplate{
+		ID:                        "stack_template_123",
+		StackID:                   "stack_123",
+		SourceTemplateID:          "source_template_vpc",
+		DesiredTemplateRevisionID: "template_123",
+		Lifecycle:                 domain.StackTemplateActive,
+	}
+	runs := &recordingTemplateRunRepository{list: []domain.TemplateRun{{ID: "run_123", RunNumber: 4, Status: domain.TemplateRunWaitingApproval}}}
+	service := NewService(Service{
+		Authorization:            testPlatformAuthorizer(t),
+		StackTemplates:           &recordingStackTemplateRepository{stackTemplate: stackTemplate},
+		TemplateRuns:             runs,
+		TemplateRevisions:        &recordingTemplateRepository{},
+		TemplateRevisionMetadata: &recordingTemplateRepository{template: domain.TemplateRevision{ID: "template_124", SourceTemplateID: "source_template_vpc", Status: domain.TemplateRevisionActive}},
+	})
+
+	_, err := service.UpdateStackTemplateConfig(authenticatedContext(), UpdateStackTemplateConfigCommand{TenantID: "tenant_123", StackTemplateID: "stack_template_123", ConfigJSON: json.RawMessage(`{}`)})
+	if !errors.Is(err, ErrTemplateRunInFlight) {
+		t.Fatalf("config error = %v, want ErrTemplateRunInFlight", err)
+	}
+	_, err = service.UpgradeStackTemplate(authenticatedContext(), UpgradeStackTemplateCommand{TenantID: "tenant_123", StackTemplateID: "stack_template_123", TargetTemplateRevisionID: "template_124"})
+	if !errors.Is(err, ErrTemplateRunInFlight) {
+		t.Fatalf("upgrade error = %v, want ErrTemplateRunInFlight", err)
+	}
+}
+
+// A plan waiting for approval, or approved but not yet applying, has no
+// workflow running, so discarding it is only the write.
+func TestDiscardRunDiscardsAWaitingPlan(t *testing.T) {
+	t.Parallel()
+
+	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Status: domain.TemplateRunWaitingApproval}}
+	work := &recordingUnitOfWork{templateRuns: runs}
+	service := NewService(Service{
+		Authorization:  testPlatformAuthorizer(t),
+		Work:           work,
+		TemplateRuns:   runs,
+		StackTemplates: approvableStackTemplates(),
+	})
+
+	if err := service.DiscardRun(authenticatedContext(), DiscardRunCommand{TenantID: "tenant_123", RunID: "run_123", Reason: "discard"}); err != nil {
+		t.Fatalf("DiscardRun returned error: %v", err)
+	}
+	if runs.discarded.RunID != "run_123" || runs.discarded.RequestedBy != domain.UserID(keycloakSubject) {
+		t.Fatalf("discarded = %#v, want run_123 by the caller", runs.discarded)
+	}
+	if len(work.requests) != 0 {
+		t.Fatalf("queued = %#v, want nothing queued", work.requests)
 	}
 }
 
@@ -983,9 +1136,9 @@ func TestStartTemplateRunSurfacesTheStoresInFlightRejection(t *testing.T) {
 	runs := &recordingTemplateRunRepository{createErr: ErrTemplateRunInFlight}
 	work := &recordingUnitOfWork{templateRuns: runs}
 	service := NewService(Service{
-		Work:         work,
-		Authorization:   testPlatformAuthorizer(t),
-		TemplateRuns: runs,
+		Work:          work,
+		Authorization: testPlatformAuthorizer(t),
+		TemplateRuns:  runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{
 			ID:                        domain.StackTemplateID("stack_template_123"),
 			DesiredTemplateRevisionID: domain.TemplateRevisionID("template_123"),
@@ -1028,9 +1181,9 @@ func TestStartTemplateRunStampsTheRefOfTheRevisionBeingRun(t *testing.T) {
 	runs := &recordingTemplateRunRepository{}
 	work := &recordingUnitOfWork{templateRuns: runs}
 	service := NewService(Service{
-		Work:         work,
-		Authorization:   testPlatformAuthorizer(t),
-		TemplateRuns: runs,
+		Work:          work,
+		Authorization: testPlatformAuthorizer(t),
+		TemplateRuns:  runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{
 			ID:                        domain.StackTemplateID("stack_template_123"),
 			DesiredTemplateRevisionID: domain.TemplateRevisionID("template_123"),
@@ -1075,18 +1228,18 @@ func TestStartTemplateRunAllowsPlanWhenThePlanIsStale(t *testing.T) {
 	runs := &recordingTemplateRunRepository{}
 	work := &recordingUnitOfWork{templateRuns: runs}
 	service := NewService(Service{
-		Work:         work,
-		Authorization:   testPlatformAuthorizer(t),
-		TemplateRuns: runs,
+		Work:          work,
+		Authorization: testPlatformAuthorizer(t),
+		TemplateRuns:  runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{
 			ID:                            domain.StackTemplateID("stack_template_123"),
 			DesiredTemplateRevisionID:     domain.TemplateRevisionID("template_123"),
 			DesiredConfigJSON:             json.RawMessage(`{"region":"eu-west-1"}`),
 			WorkspaceName:                 "mtp_acme_prod_vpc_a13f9c",
 			Lifecycle:                     domain.StackTemplateActive,
-			LastPlannedRunID:              domain.TemplateRunID("run_plan_1"),
-			LastPlannedTemplateRevisionID: domain.TemplateRevisionID("template_123"),
-			LastPlannedConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
+			PendingPlanRunID:              domain.TemplateRunID("run_plan_1"),
+			PendingPlanTemplateRevisionID: domain.TemplateRevisionID("template_123"),
+			PendingPlanConfigJSON:         json.RawMessage(`{"region":"us-east-1"}`),
 		}},
 		TemplateRevisionMetadata: &recordingTemplateRepository{
 			template: domain.TemplateRevision{ID: domain.TemplateRevisionID("template_123"), Status: domain.TemplateRevisionActive},
@@ -1120,7 +1273,7 @@ func TestStartTemplateRunRejectsMissingDesiredRevision(t *testing.T) {
 	}
 	runs := &recordingTemplateRunRepository{}
 	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
+		Authorization:  testPlatformAuthorizer(t),
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
 		TemplateRevisionMetadata: &recordingTemplateRepository{
@@ -1136,7 +1289,7 @@ func TestStartTemplateRunRejectsMissingDesiredRevision(t *testing.T) {
 	_, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
-		Operation:       domain.OperationApply,
+		Operation:       domain.OperationPlan,
 	})
 	if !errors.Is(err, ErrStackTemplateNotRunnable) {
 		t.Fatalf("error = %v, want ErrStackTemplateNotRunnable", err)
@@ -1159,7 +1312,7 @@ func TestStartTemplateRunUsesDefaultRunIDGenerator(t *testing.T) {
 	}
 	runs := &recordingTemplateRunRepository{}
 	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
+		Authorization:  testPlatformAuthorizer(t),
 		Work:           &recordingUnitOfWork{templateRuns: runs},
 		StackTemplates: stackTemplates,
 		TemplateRuns:   runs,
@@ -1202,7 +1355,7 @@ func TestRegisterTemplateCreatesPendingRegistrationAndDispatchesWorkflow(t *test
 	work := &recordingUnitOfWork{templateRegistrations: registrations}
 
 	service := NewService(Service{
-		Authorization:            testPlatformAuthorizer(t),
+		Authorization:         testPlatformAuthorizer(t),
 		Work:                  work,
 		TemplateRegistrations: registrations,
 		RegistrationIDs:       fixedTemplateRegistrationIDGenerator{id: domain.TemplateRegistrationID("template_registration_123")},
@@ -1244,7 +1397,7 @@ func TestRegisterTemplateRejectsMissingSourceRef(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Authorization:            testPlatformAuthorizer(t),
+		Authorization:         testPlatformAuthorizer(t),
 		TemplateRegistrations: &recordingTemplateRegistrationRepository{},
 	})
 
@@ -1266,7 +1419,7 @@ func TestRegisterTemplateDoesNotDispatchWhenPersistenceFails(t *testing.T) {
 	registrations := &recordingTemplateRegistrationRepository{createErr: persistErr}
 	work := &recordingUnitOfWork{templateRegistrations: registrations}
 	service := NewService(Service{
-		Authorization:            testPlatformAuthorizer(t),
+		Authorization:         testPlatformAuthorizer(t),
 		Work:                  work,
 		TemplateRegistrations: registrations,
 		RegistrationIDs:       fixedTemplateRegistrationIDGenerator{id: domain.TemplateRegistrationID("template_registration_123")},
@@ -1287,7 +1440,7 @@ func TestRegisterTemplateDoesNotDispatchWhenPersistenceFails(t *testing.T) {
 	}
 }
 
-func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
+func TestApproveRunRecordsApprovalAndQueuesTheApply(t *testing.T) {
 	t.Parallel()
 
 	ctx := authenticatedContext()
@@ -1296,16 +1449,18 @@ func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 		ID:              "run_123",
 		TenantID:        "tenant_123",
 		StackTemplateID: "stack_template_123",
+		Status:          domain.TemplateRunWaitingApproval,
 		TriggerActor:    domain.UserID("different-user"),
 	}}
 	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
-		Work:           work,
-		TemplateRuns:   runs,
-		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Clock:          fixedClock{now: now},
+		Authorization:            testPlatformAuthorizer(t),
+		Work:                     work,
+		TemplateRuns:             runs,
+		StackTemplates:           approvableStackTemplates(),
+		TemplateRevisionMetadata: &recordingTemplateRepository{},
+		Clock:                    fixedClock{now: now},
 	})
 
 	err := service.ApproveRun(ctx, ApproveRunCommand{
@@ -1332,23 +1487,24 @@ func TestApproveRunRecordsApprovalAndSignalsWorkflow(t *testing.T) {
 		t.Fatalf("approval time = %v, want %v", runs.approval.ApprovedAt, now)
 	}
 
-	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunApproval {
+	if len(work.requests) != 1 || work.requests[0].Kind != KindStartTemplateApply {
 		t.Fatalf("queued requests = %#v, want one signal_run_approval request", work.requests)
 	}
 }
 
-func TestApproveRunDoesNotSignalWhenRunIsNotApprovable(t *testing.T) {
+func TestApproveRunQueuesNothingWhenRunIsNotApprovable(t *testing.T) {
 	t.Parallel()
 
-	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}, approvalErr: ErrRunNotApprovable}
+	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Status: domain.TemplateRunWaitingApproval}, approvalErr: ErrRunNotApprovable}
 	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
-		Work:           work,
-		TemplateRuns:   runs,
-		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Clock:          fixedClock{now: time.Now()},
+		Authorization:            testPlatformAuthorizer(t),
+		Work:                     work,
+		TemplateRuns:             runs,
+		StackTemplates:           approvableStackTemplates(),
+		TemplateRevisionMetadata: &recordingTemplateRepository{},
+		Clock:                    fixedClock{now: time.Now()},
 	})
 
 	err := service.ApproveRun(authenticatedContext(), ApproveRunCommand{
@@ -1372,17 +1528,19 @@ func TestApproveRunAllowsSelfApproval(t *testing.T) {
 		ID:              "run_123",
 		TenantID:        "tenant_123",
 		StackTemplateID: "stack_template_123",
+		Status:          domain.TemplateRunWaitingApproval,
 		TriggerActor:    domain.UserID(keycloakSubject),
 	}}
 	work := &recordingUnitOfWork{templateRuns: runs}
 	audit := &recordingAuditRepository{}
 
 	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
-		Work:           work,
-		TemplateRuns:   runs,
-		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Audit:          audit,
+		Authorization:            testPlatformAuthorizer(t),
+		Work:                     work,
+		TemplateRuns:             runs,
+		StackTemplates:           approvableStackTemplates(),
+		TemplateRevisionMetadata: &recordingTemplateRepository{},
+		Audit:                    audit,
 	})
 
 	err := service.ApproveRun(ctx, ApproveRunCommand{
@@ -1397,7 +1555,7 @@ func TestApproveRunAllowsSelfApproval(t *testing.T) {
 		t.Fatalf("approval was not recorded, want approval")
 	}
 
-	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunApproval {
+	if len(work.requests) != 1 || work.requests[0].Kind != KindStartTemplateApply {
 		t.Fatalf("queued requests = %#v, want one approval signal", work.requests)
 	}
 }
@@ -1410,17 +1568,19 @@ func TestApproveRunSelfApprovalWorksForPlatformAdmins(t *testing.T) {
 		ID:              "run_123",
 		TenantID:        "tenant_123",
 		StackTemplateID: "stack_template_123",
+		Status:          domain.TemplateRunWaitingApproval,
 		TriggerActor:    domain.UserID(keycloakSubject),
 	}}
 	work := &recordingUnitOfWork{templateRuns: runs}
 	audit := &recordingAuditRepository{}
 
 	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
-		Work:           work,
-		TemplateRuns:   runs,
-		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Audit:          audit,
+		Authorization:            testPlatformAuthorizer(t),
+		Work:                     work,
+		TemplateRuns:             runs,
+		StackTemplates:           approvableStackTemplates(),
+		TemplateRevisionMetadata: &recordingTemplateRepository{},
+		Audit:                    audit,
 	})
 
 	err := service.ApproveRun(ctx, ApproveRunCommand{
@@ -1431,7 +1591,7 @@ func TestApproveRunSelfApprovalWorksForPlatformAdmins(t *testing.T) {
 		t.Fatalf("error = %v, want nil", err)
 	}
 
-	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunApproval {
+	if len(work.requests) != 1 || work.requests[0].Kind != KindStartTemplateApply {
 		t.Fatalf("queued requests = %#v, want one approval signal", work.requests)
 	}
 }
@@ -1445,18 +1605,20 @@ func TestApproveRunAuditsSuccessfulApproval(t *testing.T) {
 		ID:              "run_123",
 		TenantID:        "tenant_123",
 		StackTemplateID: "stack_template_123",
+		Status:          domain.TemplateRunWaitingApproval,
 		TriggerActor:    domain.UserID("different-user"),
 	}}
 	work := &recordingUnitOfWork{templateRuns: runs}
 	audit := &recordingAuditRepository{}
 
 	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
-		Work:           work,
-		TemplateRuns:   runs,
-		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Clock:          fixedClock{now: now},
-		Audit:          audit,
+		Authorization:            testPlatformAuthorizer(t),
+		Work:                     work,
+		TemplateRuns:             runs,
+		StackTemplates:           approvableStackTemplates(),
+		TemplateRevisionMetadata: &recordingTemplateRepository{},
+		Clock:                    fixedClock{now: now},
+		Audit:                    audit,
 	})
 
 	err := service.ApproveRun(ctx, ApproveRunCommand{
@@ -1478,93 +1640,31 @@ func TestApproveRunAuditsSuccessfulApproval(t *testing.T) {
 	}
 }
 
-func TestCancelRunRecordsCancellationAndQueuesSignal(t *testing.T) {
+// A run with no plan waiting, such as one still planning or applying, has
+// nothing to discard, and running runs cannot be stopped.
+func TestDiscardRunRefusesARunWithNoPlanWaiting(t *testing.T) {
 	t.Parallel()
 
-	ctx := authenticatedContext()
-	now := time.Date(2026, 7, 2, 10, 45, 0, 0, time.UTC)
-	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
+	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Status: domain.TemplateRunApplyStarted}}
 	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
-		Work:           work,
-		TemplateRuns:   runs,
-		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", StackID: "stack_123"}},
-		Clock:          fixedClock{now: now},
-	})
-
-	err := service.CancelRun(ctx, CancelRunCommand{
-		TenantID: domain.TenantID("tenant_123"),
-		RunID:    domain.TemplateRunID("run_123"),
-		Reason:   "superseded by a newer run",
-	})
-	if err != nil {
-		t.Fatalf("CancelRun returned error: %v", err)
-	}
-
-	if runs.cancellation.RunID != domain.TemplateRunID("run_123") {
-		t.Fatalf("cancellation run ID = %q, want run_123", runs.cancellation.RunID)
-	}
-
-	if runs.cancellation.RequestedBy != domain.UserID(keycloakSubject) {
-		t.Fatalf("cancellation actor = %q, want %q", runs.cancellation.RequestedBy, keycloakSubject)
-	}
-
-	if runs.cancellation.Reason != "superseded by a newer run" {
-		t.Fatalf("cancellation reason = %q", runs.cancellation.Reason)
-	}
-
-	if !runs.cancellation.RequestedAt.Equal(now) {
-		t.Fatalf("cancellation time = %v, want %v", runs.cancellation.RequestedAt, now)
-	}
-
-	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunCancellation {
-		t.Fatalf("queued requests = %#v, want one cancellation signal", work.requests)
-	}
-}
-
-func TestCancelRunDoesNotReconcileWorkflowInline(t *testing.T) {
-	t.Parallel()
-
-	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
-	work := &recordingUnitOfWork{templateRuns: runs}
-	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
+		Authorization:  testPlatformAuthorizer(t),
 		Work:           work,
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 		Clock:          fixedClock{now: time.Now()},
 	})
 
-	if err := service.CancelRun(authenticatedContext(), CancelRunCommand{TenantID: "tenant_123", RunID: "run_123"}); err != nil {
-		t.Fatalf("CancelRun returned error: %v", err)
-	}
-	if runs.reconciledRunID != "" {
-		t.Fatalf("reconciled run ID = %q, want no inline reconciliation", runs.reconciledRunID)
-	}
-}
-
-func TestCancelRunDoesNotSignalWhenRunIsNotCancelable(t *testing.T) {
-	t.Parallel()
-
-	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}, cancellationErr: ErrRunNotCancelable}
-	work := &recordingUnitOfWork{templateRuns: runs}
-
-	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
-		Work:           work,
-		TemplateRuns:   runs,
-		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Clock:          fixedClock{now: time.Now()},
-	})
-
-	err := service.CancelRun(authenticatedContext(), CancelRunCommand{
+	err := service.DiscardRun(authenticatedContext(), DiscardRunCommand{
 		TenantID: domain.TenantID("tenant_123"),
 		RunID:    domain.TemplateRunID("run_123"),
 	})
-	if !errors.Is(err, ErrRunNotCancelable) {
-		t.Fatalf("error = %v, want ErrRunNotCancelable", err)
+	if !errors.Is(err, ErrRunNotDiscardable) {
+		t.Fatalf("error = %v, want ErrRunNotDiscardable", err)
+	}
+	if runs.discarded.RunID != "" {
+		t.Fatalf("discarded = %#v, want nothing", runs.discarded)
 	}
 
 	if len(work.requests) != 0 {
@@ -1585,7 +1685,7 @@ func TestGetTemplateRunReturnsTenantScopedRun(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
+		Authorization:  testPlatformAuthorizer(t),
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 	})
@@ -1615,12 +1715,12 @@ func TestListTemplateRunsReturnsRunsScopedToStackTemplate(t *testing.T) {
 
 	runs := &recordingTemplateRunRepository{
 		list: []domain.TemplateRun{
-			{ID: domain.TemplateRunID("run_newer"), TenantID: domain.TenantID("tenant_123"), StackTemplateID: domain.StackTemplateID("stack_template_123"), Operation: domain.OperationApply, Status: domain.TemplateRunWaitingApproval},
+			{ID: domain.TemplateRunID("run_newer"), TenantID: domain.TenantID("tenant_123"), StackTemplateID: domain.StackTemplateID("stack_template_123"), Operation: domain.OperationPlan, Status: domain.TemplateRunWaitingApproval},
 			{ID: domain.TemplateRunID("run_older"), TenantID: domain.TenantID("tenant_123"), StackTemplateID: domain.StackTemplateID("stack_template_123"), Operation: domain.OperationPlan, Status: domain.TemplateRunCompleted},
 		},
 	}
 	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
+		Authorization:  testPlatformAuthorizer(t),
 		TemplateRuns:   runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 	})
@@ -1649,7 +1749,7 @@ func TestListTemplateRunsNormalizesNilAndRequiresStackTemplateID(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Authorization:     testPlatformAuthorizer(t),
+		Authorization:  testPlatformAuthorizer(t),
 		TemplateRuns:   &recordingTemplateRunRepository{},
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 	})
@@ -1770,7 +1870,7 @@ func TestGetTemplateRunLogChecksRunOwnershipBeforeReadingLog(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		Authorization:             testPlatformAuthorizer(t),
+		Authorization:          testPlatformAuthorizer(t),
 		TemplateRuns:           runs,
 		StackTemplates:         &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", StackID: "stack_123"}},
 		TemplateRunLogs:        logs,
@@ -1815,7 +1915,7 @@ func TestGetTemplateRunLogDoesNotReadLogWhenRunIsMissing(t *testing.T) {
 	runs := &recordingTemplateRunRepository{getErr: ErrNotFound}
 	logs := &recordingTemplateRunLogReader{content: []byte("plan output\n")}
 	service := NewService(Service{
-		Authorization:             testPlatformAuthorizer(t),
+		Authorization:          testPlatformAuthorizer(t),
 		TemplateRuns:           runs,
 		TemplateRunLogs:        logs,
 		TemplateRunLogMetadata: &recordingTemplateRunLogRepository{},
@@ -1847,7 +1947,7 @@ func TestGetTemplateRunLogDoesNotReadObjectWhenMetadataIsMissing(t *testing.T) {
 	logs := &recordingTemplateRunLogReader{content: []byte("plan output\n")}
 	metadata := &recordingTemplateRunLogRepository{getErr: ErrNotFound}
 	service := NewService(Service{
-		Authorization:             testPlatformAuthorizer(t),
+		Authorization:          testPlatformAuthorizer(t),
 		TemplateRuns:           runs,
 		StackTemplates:         &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 		TemplateRunLogs:        logs,
@@ -1888,7 +1988,7 @@ func TestGetTemplateRunLogMapsMissingLogToNotFound(t *testing.T) {
 		},
 	}
 	service := NewService(Service{
-		Authorization:             testPlatformAuthorizer(t),
+		Authorization:          testPlatformAuthorizer(t),
 		TemplateRuns:           runs,
 		StackTemplates:         &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", StackID: "stack_123"}},
 		TemplateRunLogs:        logs,
@@ -1947,7 +2047,7 @@ func TestListTemplateRunLogsChecksRunOwnershipBeforeListingMetadata(t *testing.T
 		},
 	}
 	service := NewService(Service{
-		Authorization:             testPlatformAuthorizer(t),
+		Authorization:          testPlatformAuthorizer(t),
 		TemplateRuns:           runs,
 		StackTemplates:         &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
 		TemplateRunLogMetadata: metadata,
@@ -1991,11 +2091,11 @@ func TestCreateStackAuditsOwnerGrant(t *testing.T) {
 	now := time.Date(2026, 7, 6, 13, 30, 0, 0, time.UTC)
 	work := newRecordingWork(&recordingStackRepository{})
 	service := NewService(Service{
-		Stacks:     &recordingStackRepository{},
-		Work:       work,
+		Stacks:        &recordingStackRepository{},
+		Work:          work,
 		Authorization: testPlatformAuthorizer(t),
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
-		Clock:      fixedClock{now: now},
+		StackIDs:      fixedStackIDGenerator{id: domain.StackID("stack_new")},
+		Clock:         fixedClock{now: now},
 	})
 
 	_, err := service.CreateStack(ctx, CreateStackCommand{
@@ -2039,12 +2139,12 @@ func TestCreateStackAuditWriteFailureDoesNotBlockMutation(t *testing.T) {
 
 	ctx := authenticatedContext()
 	service := NewService(Service{
-		Stacks:     &recordingStackRepository{},
-		Work:       newRecordingWork(&recordingStackRepository{}),
+		Stacks:        &recordingStackRepository{},
+		Work:          newRecordingWork(&recordingStackRepository{}),
 		Authorization: testPlatformAuthorizer(t),
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
-		Clock:      fixedClock{now: time.Now()},
-		Audit:      failingAuditRepository{},
+		StackIDs:      fixedStackIDGenerator{id: domain.StackID("stack_new")},
+		Clock:         fixedClock{now: time.Now()},
+		Audit:         failingAuditRepository{},
 	})
 
 	stack, err := service.CreateStack(ctx, CreateStackCommand{
@@ -2065,12 +2165,12 @@ func TestCreateStackWithNilAuditRepositoryDoesNotPanic(t *testing.T) {
 
 	ctx := authenticatedContext()
 	service := NewService(Service{
-		Stacks:     &recordingStackRepository{},
-		Work:       newRecordingWork(&recordingStackRepository{}),
+		Stacks:        &recordingStackRepository{},
+		Work:          newRecordingWork(&recordingStackRepository{}),
 		Authorization: testPlatformAuthorizer(t),
-		StackIDs:   fixedStackIDGenerator{id: domain.StackID("stack_new")},
-		Clock:      fixedClock{now: time.Now()},
-		Audit:      nil,
+		StackIDs:      fixedStackIDGenerator{id: domain.StackID("stack_new")},
+		Clock:         fixedClock{now: time.Now()},
+		Audit:         nil,
 	})
 
 	_, err := service.CreateStack(ctx, CreateStackCommand{
@@ -2082,8 +2182,6 @@ func TestCreateStackWithNilAuditRepositoryDoesNotPanic(t *testing.T) {
 		t.Fatalf("CreateStack returned error: %v", err)
 	}
 }
-
-
 
 func TestAddTemplateToStackAuditsAuthorizationDenial(t *testing.T) {
 	t.Parallel()
@@ -2243,7 +2341,6 @@ type recordingTemplateRunRepository struct {
 	run                    domain.TemplateRun
 	list                   []domain.TemplateRun
 	approval               domain.TemplateRunApproval
-	cancellation           domain.TemplateRunCancellation
 	gotGetTenantID         domain.TenantID
 	gotGetRunID            domain.TemplateRunID
 	gotListTenantID        domain.TenantID
@@ -2251,9 +2348,7 @@ type recordingTemplateRunRepository struct {
 	getErr                 error
 	createErr              error
 	approvalErr            error
-	cancellationErr        error
-	reconciledRunID        domain.TemplateRunID
-	reconciledSummary      string
+	discarded              domain.TemplateRunDiscard
 	// createdRunNumber is what CreateTemplateRun reports it assigned.
 	createdRunNumber int
 }
@@ -2289,18 +2384,14 @@ func (repository *recordingTemplateRunRepository) ApproveTemplateRun(_ context.C
 	return nil
 }
 
-func (repository *recordingTemplateRunRepository) RequestTemplateRunCancellation(_ context.Context, cancellation domain.TemplateRunCancellation) error {
-	if repository.cancellationErr != nil {
-		return repository.cancellationErr
+// DiscardTemplateRun discards only a run waiting for approval or approved, as
+// the real store does.
+func (repository *recordingTemplateRunRepository) DiscardTemplateRun(_ context.Context, discard domain.TemplateRunDiscard) (bool, error) {
+	if repository.run.Status != domain.TemplateRunWaitingApproval && repository.run.Status != domain.TemplateRunApproved {
+		return false, nil
 	}
-	repository.cancellation = cancellation
-	return nil
-}
-
-func (repository *recordingTemplateRunRepository) ReconcileTemplateRunCancellation(_ context.Context, _ domain.TenantID, runID domain.TemplateRunID, errorSummary string) error {
-	repository.reconciledRunID = runID
-	repository.reconciledSummary = errorSummary
-	return nil
+	repository.discarded = discard
+	return true, nil
 }
 
 type recordingTemplateRunLogReader struct {
@@ -2390,6 +2481,19 @@ func (repository *recordingTemplateRegistrationRepository) RecordTemplateRegistr
 	return nil
 }
 
+// approvableStackTemplates is a stack template whose pending plan is run_123
+// and still describes desired state, which is what ApproveRun requires.
+func approvableStackTemplates() *recordingStackTemplateRepository {
+	return &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{
+		ID:                    "stack_template_123",
+		TenantID:              "tenant_123",
+		StackID:               "stack_123",
+		DesiredConfigJSON:     json.RawMessage(`{}`),
+		PendingPlanRunID:      "run_123",
+		PendingPlanConfigJSON: json.RawMessage(`{}`),
+	}}
+}
+
 type recordingTemplateRepository struct {
 	template                       domain.TemplateRevision
 	templates                      []domain.TemplateRevision
@@ -2450,10 +2554,6 @@ type recordingWorkflowDispatcher struct {
 	startTemplateRunCalls int
 	syncInput             domain.TemplateSyncWorkflowInput
 	approvalRunID         domain.TemplateRunID
-	approvalSignal        domain.ApprovalSignal
-	cancelRunID           domain.TemplateRunID
-	cancelSignal          domain.CancelSignal
-	cancelErr             error
 }
 
 func (dispatcher *recordingWorkflowDispatcher) StartTemplateRun(_ context.Context, input domain.TemplateRunWorkflowInput) error {
@@ -2480,18 +2580,10 @@ func (dispatcher *recordingWorkflowDispatcher) StartTemplateSync(_ context.Conte
 	return nil
 }
 
-func (dispatcher *recordingWorkflowDispatcher) ApproveTemplateRun(_ context.Context, _ domain.TenantID, runID domain.TemplateRunID, signal domain.ApprovalSignal) error {
-	dispatcher.approvalRunID = runID
-	dispatcher.approvalSignal = signal
-	return nil
-}
-
-func (dispatcher *recordingWorkflowDispatcher) CancelTemplateRun(_ context.Context, _ domain.TenantID, runID domain.TemplateRunID, signal domain.CancelSignal) error {
-	if dispatcher.cancelErr != nil {
-		return dispatcher.cancelErr
-	}
-	dispatcher.cancelRunID = runID
-	dispatcher.cancelSignal = signal
+// StartTemplateApply records a direct start, which the service never makes:
+// approval queues the start instead, in the approval's transaction.
+func (dispatcher *recordingWorkflowDispatcher) StartTemplateApply(_ context.Context, input domain.TemplateRunWorkflowInput) error {
+	dispatcher.approvalRunID = input.RunID
 	return nil
 }
 
@@ -2598,11 +2690,14 @@ func (unit *recordingUnitOfWork) ApproveTemplateRun(ctx context.Context, approva
 	return unit.templateRuns.ApproveTemplateRun(ctx, approval)
 }
 
-func (unit *recordingUnitOfWork) RequestTemplateRunCancellation(ctx context.Context, cancellation domain.TemplateRunCancellation) error {
-	if unit.templateRuns == nil {
-		return nil
+func (unit *recordingUnitOfWork) DiscardTemplateRun(ctx context.Context, discard domain.TemplateRunDiscard) (bool, error) {
+	discarder, ok := unit.templateRuns.(interface {
+		DiscardTemplateRun(context.Context, domain.TemplateRunDiscard) (bool, error)
+	})
+	if !ok {
+		return false, nil
 	}
-	return unit.templateRuns.RequestTemplateRunCancellation(ctx, cancellation)
+	return discarder.DiscardTemplateRun(ctx, discard)
 }
 
 func (unit *recordingUnitOfWork) Enqueue(_ context.Context, requests ...queue.Request) error {
@@ -2616,7 +2711,7 @@ func TestRegisterTemplatePairsRegistrationWithSyncIntentInTransaction(t *testing
 	registrations := &recordingTemplateRegistrationRepository{}
 	work := &recordingUnitOfWork{templateRegistrations: registrations}
 	service := NewService(Service{
-		Authorization:            testPlatformAuthorizer(t),
+		Authorization:         testPlatformAuthorizer(t),
 		Work:                  work,
 		TemplateRegistrations: registrations,
 		RegistrationIDs:       fixedTemplateRegistrationIDGenerator{id: "registration_123"},
@@ -2650,19 +2745,19 @@ func TestStartTemplateRunPairsRunWithStartIntentInTransaction(t *testing.T) {
 	runs := &recordingTemplateRunRepository{}
 	work := &recordingUnitOfWork{templateRuns: runs}
 	service := NewService(Service{
-		Work:         work,
-		Authorization:   testPlatformAuthorizer(t),
-		TemplateRuns: runs,
+		Work:          work,
+		Authorization: testPlatformAuthorizer(t),
+		TemplateRuns:  runs,
 		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{
 			ID: "stack_template_123", TenantID: "tenant_123", SourceTemplateID: "source_123", DesiredTemplateRevisionID: "revision_123", DesiredConfigJSON: json.RawMessage(`{"region":"us-east-1"}`), WorkspaceName: "workspace", Lifecycle: domain.StackTemplateActive,
-			LastPlannedRunID: "run_plan_1", LastPlannedTemplateRevisionID: "revision_123", LastPlannedConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
+			PendingPlanRunID: "run_plan_1", PendingPlanTemplateRevisionID: "revision_123", PendingPlanConfigJSON: json.RawMessage(`{"region":"us-east-1"}`),
 		}},
 		TemplateRevisionMetadata: &recordingTemplateRepository{template: domain.TemplateRevision{ID: "revision_123", TenantID: "tenant_123", SourceTemplateID: "source_123", RepoOwner: "acme", RepoName: "infra", SourceRef: "main", ResolvedCommitSHA: "sha_123", RootPath: "modules/vpc"}},
 		RunIDs:                   fixedTemplateRunIDGenerator{runID: "run_123"},
 		Clock:                    fixedClock{now: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)},
 	})
 
-	run, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply})
+	run, err := service.StartTemplateRun(authenticatedContext(), StartTemplateRunCommand{TenantID: "tenant_123", StackTemplateID: "stack_template_123", Operation: domain.OperationPlan})
 	if err != nil {
 		t.Fatalf("StartTemplateRun returned error: %v", err)
 	}
@@ -2687,19 +2782,20 @@ func TestStartTemplateRunPairsRunWithStartIntentInTransaction(t *testing.T) {
 	}
 }
 
-func TestApproveRunPairsApprovalAuditAndSignalIntentInTransaction(t *testing.T) {
+func TestApproveRunPairsApprovalAuditAndApplyIntentInTransaction(t *testing.T) {
 	t.Parallel()
 
-	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
+	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Status: domain.TemplateRunWaitingApproval}}
 	work := &recordingUnitOfWork{templateRuns: runs}
 	workflows := &recordingWorkflowDispatcher{}
 	service := NewService(Service{
-		Work:           work,
-		Authorization:     testPlatformAuthorizer(t),
-		TemplateRuns:   runs,
-		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Workflows:      workflows,
-		Clock:          fixedClock{now: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)},
+		Work:                     work,
+		Authorization:            testPlatformAuthorizer(t),
+		TemplateRuns:             runs,
+		StackTemplates:           approvableStackTemplates(),
+		TemplateRevisionMetadata: &recordingTemplateRepository{},
+		Workflows:                workflows,
+		Clock:                    fixedClock{now: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)},
 	})
 
 	if err := service.ApproveRun(authenticatedContext(), ApproveRunCommand{TenantID: "tenant_123", RunID: "run_123"}); err != nil {
@@ -2708,48 +2804,15 @@ func TestApproveRunPairsApprovalAuditAndSignalIntentInTransaction(t *testing.T) 
 	if work.inTxCalls != 1 || runs.approval.RunID != "run_123" || len(work.audits) != 1 {
 		t.Fatalf("transaction calls = %d, approval = %#v, audits = %#v", work.inTxCalls, runs.approval, work.audits)
 	}
-	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunApproval || work.requests[0].ActorSubject != keycloakSubject || work.requests[0].TenantID != "tenant_123" || workflows.approvalRunID != "" {
+	if len(work.requests) != 1 || work.requests[0].Kind != KindStartTemplateApply || work.requests[0].ActorSubject != keycloakSubject || work.requests[0].TenantID != "tenant_123" || workflows.approvalRunID != "" {
 		t.Fatalf("requests = %#v, direct approval = %q", work.requests, workflows.approvalRunID)
 	}
-	var payload SignalRunApprovalPayload
+	var payload StartTemplateApplyPayload
 	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
-		t.Fatalf("decode approval intent: %v", err)
+		t.Fatalf("decode apply intent: %v", err)
 	}
-	if payload.TenantID != "tenant_123" || payload.RunID != "run_123" || payload.Signal.ApprovedBy != keycloakSubject {
-		t.Fatalf("approval payload = %#v", payload)
-	}
-}
-
-func TestCancelRunPairsCancellationWithSignalIntentInTransaction(t *testing.T) {
-	t.Parallel()
-
-	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123"}}
-	work := &recordingUnitOfWork{templateRuns: runs}
-	workflows := &recordingWorkflowDispatcher{}
-	service := NewService(Service{
-		Work:           work,
-		Authorization:     testPlatformAuthorizer(t),
-		TemplateRuns:   runs,
-		StackTemplates: &recordingStackTemplateRepository{stackTemplate: domain.StackTemplate{ID: "stack_template_123", TenantID: "tenant_123", StackID: "stack_123"}},
-		Workflows:      workflows,
-		Clock:          fixedClock{now: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)},
-	})
-
-	if err := service.CancelRun(authenticatedContext(), CancelRunCommand{TenantID: "tenant_123", RunID: "run_123", Reason: "superseded"}); err != nil {
-		t.Fatalf("CancelRun returned error: %v", err)
-	}
-	if work.inTxCalls != 1 || runs.cancellation.RunID != "run_123" {
-		t.Fatalf("transaction calls = %d, cancellation = %#v", work.inTxCalls, runs.cancellation)
-	}
-	if len(work.requests) != 1 || work.requests[0].Kind != KindSignalRunCancellation || work.requests[0].ActorSubject != keycloakSubject || work.requests[0].TenantID != "tenant_123" || workflows.cancelRunID != "" {
-		t.Fatalf("requests = %#v, direct cancellation = %q", work.requests, workflows.cancelRunID)
-	}
-	var payload SignalRunCancellationPayload
-	if err := json.Unmarshal(work.requests[0].Payload, &payload); err != nil {
-		t.Fatalf("decode cancellation intent: %v", err)
-	}
-	if payload.TenantID != "tenant_123" || payload.RunID != "run_123" || payload.Signal.RequestedBy != keycloakSubject || payload.Signal.Reason != "superseded" {
-		t.Fatalf("cancellation payload = %#v", payload)
+	if payload.TenantID != "tenant_123" || payload.RunID != "run_123" {
+		t.Fatalf("apply payload = %#v", payload)
 	}
 }
 
@@ -2970,7 +3033,7 @@ func TestOperableStackTemplateCommandsAuditRefusals(t *testing.T) {
 			_, err := service.StartTemplateRun(ctx, StartTemplateRunCommand{
 				TenantID:        domain.TenantID("tenant_123"),
 				StackTemplateID: domain.StackTemplateID("stack_template_123"),
-				Operation:       domain.OperationApply,
+				Operation:       domain.OperationPlan,
 			})
 			return err
 		}},
@@ -2998,6 +3061,7 @@ func TestOperableStackTemplateCommandsAuditRefusals(t *testing.T) {
 
 			audit := &recordingAuditRepository{}
 			service := NewService(Service{
+				TemplateRuns:  &recordingTemplateRunRepository{},
 				Authorization: newTestAuthorization(t),
 				StackTemplates: &recordingStackTemplateRepository{
 					stackTemplate: domain.StackTemplate{

@@ -12,7 +12,6 @@ import (
 
 type workflowClient interface {
 	ExecuteWorkflow(context.Context, client.StartWorkflowOptions, interface{}, ...interface{}) (client.WorkflowRun, error)
-	SignalWorkflow(context.Context, string, string, string, interface{}) error
 }
 
 type Dispatcher struct {
@@ -40,7 +39,7 @@ func newDispatcher(temporalClient workflowClient, options ...DispatcherOptions) 
 	return dispatcher
 }
 
-// StartTemplateRun dispatches one TemplateRunWorkflow execution to Temporal.
+// StartTemplateRun dispatches one TemplatePlanWorkflow execution to Temporal.
 // The workflow ID is derived from tenant ID and run ID so repeated callers target
 // the same logical run. Workflows run on the control queue; the workflow itself
 // routes execution activities to the executor.
@@ -61,7 +60,7 @@ func (dispatcher *Dispatcher) StartTemplateRun(ctx context.Context, input domain
 			WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 			WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
 		},
-		domain.TemplateRunWorkflowName,
+		domain.TemplatePlanWorkflowName,
 		input)
 	if err != nil {
 		return fmt.Errorf("start template run workflow: %w", err)
@@ -87,39 +86,25 @@ func (dispatcher *Dispatcher) StartTemplateSync(ctx context.Context, input domai
 	return nil
 }
 
-func (dispatcher *Dispatcher) ApproveTemplateRun(
-	ctx context.Context,
-	tenantID domain.TenantID,
-	runID domain.TemplateRunID,
-	signal domain.ApprovalSignal,
-) error {
-	if err := dispatcher.client.SignalWorkflow(
-		ctx,
-		templateRunWorkflowID(tenantID, runID),
-		"",
-		domain.ApprovalSignalName,
-		signal,
-	); err != nil {
-		return fmt.Errorf("signal template run approval: %w", err)
+// StartTemplateApply starts the workflow that applies an approved run's saved
+// plan. Its ID extends the run's, so a redelivered start intent finds the
+// workflow already running instead of starting a second apply.
+func (dispatcher *Dispatcher) StartTemplateApply(ctx context.Context, input domain.TemplateRunWorkflowInput) error {
+	if input.TerraformTimeout <= 0 {
+		input.TerraformTimeout = dispatcher.options.TerraformTimeout
 	}
-
-	return nil
-}
-
-func (dispatcher *Dispatcher) CancelTemplateRun(
-	ctx context.Context,
-	tenantID domain.TenantID,
-	runID domain.TemplateRunID,
-	signal domain.CancelSignal,
-) error {
-	if err := dispatcher.client.SignalWorkflow(
+	_, err := dispatcher.client.ExecuteWorkflow(
 		ctx,
-		templateRunWorkflowID(tenantID, runID),
-		"",
-		domain.CancelSignalName,
-		signal,
-	); err != nil {
-		return fmt.Errorf("signal template run cancellation: %w", err)
+		client.StartWorkflowOptions{
+			ID:                       templateApplyWorkflowID(input.TenantID, input.RunID),
+			TaskQueue:                domain.ControlTaskQueue,
+			WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+			WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
+		},
+		domain.TemplateApplyWorkflowName,
+		input)
+	if err != nil {
+		return fmt.Errorf("start template apply workflow: %w", err)
 	}
 
 	return nil
@@ -127,6 +112,10 @@ func (dispatcher *Dispatcher) CancelTemplateRun(
 
 func templateRunWorkflowID(tenantID domain.TenantID, runID domain.TemplateRunID) string {
 	return fmt.Sprintf("template-run/%s/%s", tenantID, runID)
+}
+
+func templateApplyWorkflowID(tenantID domain.TenantID, runID domain.TemplateRunID) string {
+	return templateRunWorkflowID(tenantID, runID) + "/apply"
 }
 
 func templateSyncWorkflowID(tenantID domain.TenantID, registrationID domain.TemplateRegistrationID) string {

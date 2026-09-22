@@ -21,11 +21,11 @@ const (
 	// queue nobody polls. Environments are separated by Temporal namespace.
 	ExecutionTaskQueue = "execution"
 
-	TemplateRunWorkflowName  = "TemplateRunWorkflow"
-	TemplateSyncWorkflowName = "TemplateSyncWorkflow"
-
-	ApprovalSignalName = "approval"
-	CancelSignalName   = "cancel"
+	// TemplatePlanWorkflowName plans a run. TemplateApplyWorkflowName applies a
+	// plan someone approved, or applies an auto-approved run with no plan.
+	TemplatePlanWorkflowName  = "TemplatePlanWorkflow"
+	TemplateApplyWorkflowName = "TemplateApplyWorkflow"
+	TemplateSyncWorkflowName  = "TemplateSyncWorkflow"
 
 	RecordTemplateRunStatusActivityName          = "RecordTemplateRunStatus"
 	RecordTemplateRunLogActivityName             = "RecordTemplateRunLog"
@@ -37,6 +37,12 @@ const (
 	SealSourceTokenActivityName                  = "SealSourceToken"
 	SealRunCredentialsActivityName               = "SealRunCredentials"
 	ReleaseRunKeyActivityName                    = "ReleaseRunKey"
+	CleanupWorkspaceActivityName                 = "CleanupWorkspace"
+	SealPlanKeyActivityName                      = "SealPlanKey"
+	UploadPlanActivityName                       = "UploadPlan"
+	DownloadPlanActivityName                     = "DownloadPlan"
+	FinishPlanActivityName                       = "FinishPlan"
+	BeginApplyActivityName                       = "BeginApply"
 
 	// TerraformCommandFailedErrorType marks a RunTerraform failure whose
 	// ApplicationError details carry the uploaded log's TemplateRunLog.
@@ -61,10 +67,7 @@ const (
 	// waits for the next report before failing the activity.
 	//
 	// The pair is the only thing that makes a lost executor visible before the
-	// full Terraform timeout expires, and the only channel by which a cancel
-	// signal reaches a running command: Temporal delivers activity
-	// cancellation on the heartbeat response, so an activity that never
-	// heartbeats can never be canceled.
+	// full Terraform timeout expires.
 	//
 	// The slack between them is deliberately wide -- six intervals. Terraform
 	// commands are not retried, so a heartbeat lost to a GC pause or a blip in
@@ -76,6 +79,8 @@ const (
 )
 
 // TemplateRunWorkflowInput starts one Terraform operation for one StackTemplate.
+// The apply workflow takes the same input: it re-fetches the same commit and
+// applies the plan saved under the same run.
 type TemplateRunWorkflowInput struct {
 	RunID           TemplateRunID
 	TenantID        TenantID
@@ -93,6 +98,9 @@ type TemplateRunWorkflowInput struct {
 	RepoName          string
 	RootPath          string
 	ConfigJSON        json.RawMessage
+	// AutoApprove makes an apply run apply straight away, with no saved plan
+	// and no approval. Only an apply run takes it.
+	AutoApprove bool
 	// TerraformTimeout bounds each Terraform command this run issues. It is
 	// stamped by the dispatcher from deployment configuration so the value a
 	// run was started with stays visible in its workflow history; zero means
@@ -108,6 +116,10 @@ type TemplateRunStatusActivityInput struct {
 	Operation       OperationType
 	Status          TemplateRunStatus
 	ErrorSummary    string
+	// Summary, when set, records the run's change counts along with the
+	// status. An auto-approved apply has no plan to count, so it records what
+	// the apply itself reported.
+	Summary *PlanSummary
 }
 
 // PrepareWorkspaceActivityInput asks the executor to create a local run workspace.
@@ -188,6 +200,16 @@ type FetchSourceActivityOutput struct {
 	TerraformPath string
 }
 
+// RunPhase is the phase of a run a Terraform command belongs to. An approved
+// run has both, and both run init and workspace selection, so it keeps their
+// logs apart.
+type RunPhase string
+
+const (
+	RunPhasePlan  RunPhase = "plan"
+	RunPhaseApply RunPhase = "apply"
+)
+
 // RunTerraformActivityInput asks the executor to run one Terraform subprocess command.
 type RunTerraformActivityInput struct {
 	RunID           TemplateRunID
@@ -197,7 +219,9 @@ type RunTerraformActivityInput struct {
 	TerraformPath   string
 	WorkspaceName   string
 	Command         TerraformCommandType
-	ConfigJSON      json.RawMessage
+	// RunPhase names the phase Command runs in, which picks its log.
+	RunPhase   RunPhase
+	ConfigJSON json.RawMessage
 	// SealedEnvironment is the run's credentials sealed to its key.
 	SealedEnvironment []byte
 	// Environment is the opened credentials, filled in on the executor. It is
@@ -210,6 +234,80 @@ type RunTerraformActivityOutput struct {
 	// Log describes the uploaded phase log. The executor has no database, so
 	// the workflow records it through a control activity.
 	Log TemplateRunLog
+	// HasChanges and Summary describe a plan: whether it would change
+	// anything, and what. Zero for every other command.
+	HasChanges bool
+	Summary    PlanSummary
+}
+
+// CleanupWorkspaceActivityInput asks the executor to delete a run's workspace
+// before its session ends, and with DeletePlan also the run's saved plan.
+type CleanupWorkspaceActivityInput struct {
+	TenantID      TenantID
+	RunID         TemplateRunID
+	WorkspacePath string
+	DeletePlan    bool
+}
+
+// SealPlanKeyActivityInput asks the control plane for the key a run's saved
+// plan is encrypted with, sealed to the run's key on the executor now holding
+// it. Create makes the key on the plan phase; the apply phase only reads it.
+type SealPlanKeyActivityInput struct {
+	TenantID  TenantID
+	RunID     TemplateRunID
+	PublicKey []byte
+	Create    bool
+}
+
+// SealPlanKeyActivityOutput carries the sealed plan key.
+type SealPlanKeyActivityOutput struct {
+	SealedPlanKey []byte
+}
+
+// PlanArtifactActivityInput asks the executor to upload a run's saved plan
+// from TerraformPath, or to download it back there.
+type PlanArtifactActivityInput struct {
+	TenantID      TenantID
+	RunID         TemplateRunID
+	TerraformPath string
+	SealedPlanKey []byte
+}
+
+// PlanOutcome is what happens to a run once its plan has finished.
+type PlanOutcome string
+
+const (
+	// PlanOutcomeNoChanges: nothing to apply, so the run completes.
+	PlanOutcomeNoChanges PlanOutcome = "no_changes"
+	// PlanOutcomeWaiting: the plan waits for someone to approve it.
+	PlanOutcomeWaiting PlanOutcome = "waiting"
+	// PlanOutcomePlanned: a plan run's plan had changes. A plan run only
+	// plans, so the run completes with the changes recorded.
+	PlanOutcomePlanned PlanOutcome = "planned"
+)
+
+// FinishPlanActivityInput records a finished plan and decides what follows.
+type FinishPlanActivityInput struct {
+	TenantID        TenantID
+	RunID           TemplateRunID
+	StackTemplateID StackTemplateID
+	Operation       OperationType
+	HasChanges      bool
+	Summary         PlanSummary
+}
+
+// BeginApplyActivityInput claims a run for its apply phase: an approved run,
+// or, with AutoApprove, a queued one that never had a plan to approve.
+type BeginApplyActivityInput struct {
+	TenantID    TenantID
+	RunID       TemplateRunID
+	AutoApprove bool
+}
+
+// BeginApplyActivityOutput reports whether the claim won. It loses when the
+// plan was discarded after it was approved and before its apply began.
+type BeginApplyActivityOutput struct {
+	Claimed bool
 }
 
 // TemplateSyncWorkflowInput starts template metadata sync for a public GitHub template.
@@ -248,15 +346,4 @@ type TemplateRegistrationStatusActivityInput struct {
 	TemplateRevisionID TemplateRevisionID
 	ResolvedCommitSHA  string
 	ErrorSummary       string
-}
-
-// ApprovalSignal records an approval actor for a waiting apply run.
-type ApprovalSignal struct {
-	ApprovedBy UserID
-}
-
-// CancelSignal records a cancel actor and reason for a running workflow.
-type CancelSignal struct {
-	RequestedBy UserID
-	Reason      string
 }

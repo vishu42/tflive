@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import RequireCapability from "../../auth/RequireCapability";
 import TemplateDestroyPanel from "../runs/TemplateDestroyPanel";
 import { useStackTemplateOutlet } from "./StackTemplateDetailShell";
+import { runInFlightReason, useRunInFlight } from "../runs/useRunInFlight";
 import { isDestroyingStackTemplate } from "./stackWorkflow";
 
 // /stacks/:stackId/templates/:stackTemplateId/settings — the actions that
@@ -12,6 +13,8 @@ import { isDestroyingStackTemplate } from "./stackWorkflow";
 export default function TemplateSettingsTab() {
   const { stackId, stackTemplate } = useStackTemplateOutlet();
   const destroying = isDestroyingStackTemplate(stackTemplate);
+  const runInFlight = useRunInFlight(stackTemplate.id);
+  const revisionLockedReason = destroying ? "Destroy in progress" : runInFlight ? runInFlightReason(runInFlight, "changing the revision") : "";
 
   return (
     <div className="stack-template-tab" data-testid="template-settings-tab">
@@ -21,13 +24,13 @@ export default function TemplateSettingsTab() {
           Choose a template revision
         </p>
         <RequireCapability capability="canOperate">
-          {destroying ? (
+          {revisionLockedReason ? (
             <>
               <button className="secondary-button" type="button" disabled data-testid="change-stack-template-revision-link">
                 Change revision
               </button>
               <p className="muted" data-testid="upgrade-disabled-reason">
-                Destroy in progress
+                {revisionLockedReason}
               </p>
             </>
           ) : (

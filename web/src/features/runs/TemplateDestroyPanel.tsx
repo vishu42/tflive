@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, Trash2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { isTerminalRunStatus } from "../../api/polling";
 import { queryKeys } from "../../api/queryKeys";
 import { useStartTemplateRunMutation, useTemplateRunsQuery } from "../../api/queries";
@@ -15,16 +16,20 @@ interface TemplateDestroyPanelProps {
   stackTemplate: StackTemplate;
 }
 
-// Destroy is separated from the plan/apply controls in TemplateRunActions and
-// placed at the foot of the template screen on purpose: it is the one run
-// operation that cannot be undone, so it does not belong under the cursor next
-// to Apply. The two-step confirm is the second guard.
+// Destroy lives on the Settings tab, a tab away from Plan, because it is the
+// one operation that cannot be undone.
+//
+// Destroy here only plans the destroy: it shows what would be destroyed and
+// destroys nothing. Destroying happens when that plan is approved, on the
+// run's row, which is why the red "Destroy N resources" confirmation lives
+// there. A destroy is never auto-approved, so that confirmation is always the
+// irreversible click.
 export default function TemplateDestroyPanel({ stackId, stackTemplate }: TemplateDestroyPanelProps) {
   const [errorMessage, setErrorMessage] = useState("");
-  const [confirmDestroy, setConfirmDestroy] = useState(false);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
-  // Shares the runs query key with TemplateRunActions, so this costs no extra
+  // Shares the runs query key with the Runs tab, so this costs no extra
   // request — it is read here only to keep Destroy disabled while a run is
   // still in flight.
   const runsQuery = useTemplateRunsQuery(tenantID, stackTemplate.id);
@@ -35,20 +40,20 @@ export default function TemplateDestroyPanel({ stackId, stackTemplate }: Templat
   const startRunMutation = useStartTemplateRunMutation(tenantID);
   const canDestroy = runsReady && canDestroyStackTemplate(stackTemplate) && !activeRun;
   const destroying = isDestroyingStackTemplate(stackTemplate);
-  const destroyBusy = startRunMutation.isPending && startRunMutation.variables?.body.operation === "destroy";
+  const destroyBusy = startRunMutation.isPending;
 
   async function handleDestroy() {
     const currentRuns = queryClient.getQueryData<TemplateRun[]>(queryKeys.templateRuns(tenantID, stackTemplate.id));
     const currentRunActive = currentRuns?.some((candidate) => !isTerminalRunStatus(candidate.status)) ?? true;
-    if (!canDestroy || !canDestroyStackTemplate(stackTemplate) || isDestroyingStackTemplate(stackTemplate) || currentRunActive) {
-      setConfirmDestroy(false);
+    if (!canDestroy || currentRunActive) {
       return;
     }
     setErrorMessage("");
     try {
       await startRunMutation.mutateAsync({ stackTemplateID: stackTemplate.id, body: { operation: "destroy" } });
-      setConfirmDestroy(false);
       await queryClient.invalidateQueries({ queryKey: queryKeys.templateRuns(tenantID, stackTemplate.id) });
+      // The plan, and the button that destroys, are on the Runs tab.
+      navigate(`/stacks/${stackId}/templates/${stackTemplate.id}/runs`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Request failed");
       if (isRunInFlightError(error)) {
@@ -57,20 +62,15 @@ export default function TemplateDestroyPanel({ stackId, stackTemplate }: Templat
     }
   }
 
-  const controlProps = {
-    canDestroy,
-    destroying,
-    onDestroy: handleDestroy,
-    destroyBusy,
-    confirmDestroy,
-    onConfirmDestroy: () => setConfirmDestroy(true),
-    onCancelConfirm: () => setConfirmDestroy(false)
-  };
+  const controlProps = { canDestroy, destroying, onDestroy: handleDestroy, destroyBusy };
 
   return (
     <section className="panel danger-zone" data-testid="template-destroy-panel">
       <h2>Danger zone</h2>
-      <p className="muted">Destroys all infrastructure this template manages. This cannot be undone.</p>
+      <p className="muted">
+        Plans the destruction of all infrastructure this template manages. Nothing is destroyed until that plan is approved, and then it
+        cannot be undone.
+      </p>
       {errorMessage && (
         <p className="error-text" data-testid="template-destroy-error">
           {errorMessage}
@@ -92,42 +92,17 @@ interface DestroyControlProps {
   destroying: boolean;
   onDestroy: () => void;
   destroyBusy: boolean;
-  confirmDestroy: boolean;
-  onConfirmDestroy: () => void;
-  onCancelConfirm: () => void;
   disabledReason?: string;
 }
 
-function DestroyControl({
-  canDestroy,
-  destroying,
-  onDestroy,
-  destroyBusy,
-  confirmDestroy,
-  onConfirmDestroy,
-  onCancelConfirm,
-  disabledReason
-  }: DestroyControlProps) {
-  const locked = Boolean(disabledReason);
-  const confirmationDisabled = locked || destroying || !canDestroy || destroyBusy;
+function DestroyControl({ canDestroy, destroying, onDestroy, destroyBusy, disabledReason }: DestroyControlProps) {
+  const disabled = Boolean(disabledReason) || destroying || !canDestroy || destroyBusy;
   return (
     <div className="button-row">
-      {confirmDestroy ? (
-        <>
-          <button className="destructive-button" disabled={confirmationDisabled} onClick={onDestroy} type="button">
-            {destroyBusy ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}
-            Confirm destroy
-          </button>
-          <button className="secondary-button" disabled={destroyBusy} onClick={onCancelConfirm} type="button">
-            Cancel
-          </button>
-        </>
-      ) : (
-        <button className="destructive-button" disabled={locked || destroying || !canDestroy || destroyBusy} onClick={onConfirmDestroy} type="button">
-          <Trash2 size={16} />
-          Destroy
-        </button>
-      )}
+      <button className="destructive-button" disabled={disabled} onClick={onDestroy} type="button">
+        {destroyBusy ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}
+        Destroy
+      </button>
       {disabledReason && (
         <p className="muted" data-testid="template-destroy-disabled-reason">
           {disabledReason}
