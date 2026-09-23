@@ -1953,33 +1953,21 @@ components:
     TemplateRunStatus:
       type: string
       description: |
-        A run's progress. Terminal states are `completed`, `failed` and
-        `canceled`, which is how a discarded plan ends; everything else means
-        the run is still in flight.
+        A run's lifecycle state: what may happen to it next. Terminal states
+        are `completed`, `failed` and `canceled`, which is how a discarded
+        plan ends; anything else means the run is still in flight.
 
         `waiting_approval` is the one that needs a person — post to the run's
-        approval endpoint to release it.
+        approval endpoint to release it. What a `running` run is doing is its
+        `step`.
       enum:
         - queued
         - running
-        - locked
-        - workspace_prepared
-        - source_fetched
-        - workspace_selected
-        - init_started
-        - init_finished
-        - plan_started
-        - plan_finished
         - waiting_approval
         - approved
-        - apply_started
-        - apply_finished
-        - destroy_started
-        - destroy_finished
-        - canceled
-        - lock_released
         - completed
         - failed
+        - canceled
 
     TemplateRunStep:
       type: string

@@ -30,18 +30,18 @@ const (
 	TerraformCommandSelectWorkspace TerraformCommandType = "select_workspace"
 	TerraformCommandPlan            TerraformCommandType = "plan"
 	// TerraformCommandPlanDestroy is a destroy run's plan: a plan to destroy
-	// everything the template manages. It records the same statuses and log as
-	// TerraformCommandPlan.
+	// everything the template manages. It is the same step and records the
+	// same log as TerraformCommandPlan.
 	TerraformCommandPlanDestroy TerraformCommandType = "plan_destroy"
 	// TerraformCommandApply and TerraformCommandDestroy both apply the run's
-	// saved plan. They stay two commands so each records its own statuses:
-	// destroy_started and destroy_finished drive the stack template lifecycle.
+	// saved plan. They stay two commands because a destroy records the
+	// destroying and destroyed events around it.
 	TerraformCommandApply   TerraformCommandType = "apply"
 	TerraformCommandDestroy TerraformCommandType = "destroy"
 	// TerraformCommandApplyAutoApprove is an auto-approved apply run's only
 	// Terraform step besides setup: it plans and applies in one go, with no
 	// saved plan, so it is the one apply that takes the run's variables. It
-	// records the same statuses and log as TerraformCommandApply.
+	// is the same step and records the same log as TerraformCommandApply.
 	TerraformCommandApplyAutoApprove TerraformCommandType = "apply_auto_approve"
 )
 
@@ -64,7 +64,9 @@ func (operation OperationType) Valid() bool {
 	}
 }
 
-// TemplateRunStatus identifies the lifecycle phase of a TemplateRun.
+// TemplateRunStatus is a run's lifecycle state: the one fact about a run that
+// decides what may happen to it next. It is not progress. What a running run
+// is doing is its Step.
 type TemplateRunStatus string
 
 const (
@@ -72,33 +74,12 @@ const (
 	// TemplateRunRunning is a run a workflow is working on: planning, or,
 	// once claimed for its apply, applying. What it is doing right now is its
 	// Step.
-	TemplateRunRunning           TemplateRunStatus = "running"
-	TemplateRunLocked            TemplateRunStatus = "locked"
-	TemplateRunWorkspacePrepared TemplateRunStatus = "workspace_prepared"
-	TemplateRunSourceFetched     TemplateRunStatus = "source_fetched"
-	TemplateRunWorkspaceSelected TemplateRunStatus = "workspace_selected"
-	TemplateRunWaitingApproval   TemplateRunStatus = "waiting_approval"
-	TemplateRunApproved          TemplateRunStatus = "approved"
-	TemplateRunCanceled          TemplateRunStatus = "canceled"
-	TemplateRunLockReleased      TemplateRunStatus = "lock_released"
-	TemplateRunCompleted         TemplateRunStatus = "completed"
-	TemplateRunFailed            TemplateRunStatus = "failed"
-
-	// init statues
-	TemplateRunInitStarted  TemplateRunStatus = "init_started"
-	TemplateRunInitFinished TemplateRunStatus = "init_finished"
-
-	// plan statues
-	TemplateRunPlanStarted  TemplateRunStatus = "plan_started"
-	TemplateRunPlanFinished TemplateRunStatus = "plan_finished"
-
-	// apply statues
-	TemplateRunApplyStarted  TemplateRunStatus = "apply_started"
-	TemplateRunApplyFinished TemplateRunStatus = "apply_finished"
-
-	// destroy statues
-	TemplateRunDestroyStarted  TemplateRunStatus = "destroy_started"
-	TemplateRunDestroyFinished TemplateRunStatus = "destroy_finished"
+	TemplateRunRunning         TemplateRunStatus = "running"
+	TemplateRunWaitingApproval TemplateRunStatus = "waiting_approval"
+	TemplateRunApproved        TemplateRunStatus = "approved"
+	TemplateRunCompleted       TemplateRunStatus = "completed"
+	TemplateRunFailed          TemplateRunStatus = "failed"
+	TemplateRunCanceled        TemplateRunStatus = "canceled"
 )
 
 // AllTemplateRunStatuses is every status a run may hold, in lifecycle order.
@@ -114,24 +95,11 @@ const (
 var AllTemplateRunStatuses = []TemplateRunStatus{
 	TemplateRunQueued,
 	TemplateRunRunning,
-	TemplateRunLocked,
-	TemplateRunWorkspacePrepared,
-	TemplateRunSourceFetched,
-	TemplateRunWorkspaceSelected,
 	TemplateRunWaitingApproval,
 	TemplateRunApproved,
-	TemplateRunCanceled,
-	TemplateRunLockReleased,
 	TemplateRunCompleted,
 	TemplateRunFailed,
-	TemplateRunInitStarted,
-	TemplateRunInitFinished,
-	TemplateRunPlanStarted,
-	TemplateRunPlanFinished,
-	TemplateRunApplyStarted,
-	TemplateRunApplyFinished,
-	TemplateRunDestroyStarted,
-	TemplateRunDestroyFinished,
+	TemplateRunCanceled,
 }
 
 // Valid reports whether the status is one of the supported run states.

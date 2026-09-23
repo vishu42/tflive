@@ -110,7 +110,8 @@ type TemplateRunWorkflowInput struct {
 	TerraformTimeout time.Duration
 }
 
-// TemplateRunStatusActivityInput asks the control plane to persist one run status transition.
+// TemplateRunStatusActivityInput asks the control plane to move a run along
+// its lifecycle.
 type TemplateRunStatusActivityInput struct {
 	RunID           TemplateRunID
 	TenantID        TenantID
@@ -118,10 +119,6 @@ type TemplateRunStatusActivityInput struct {
 	Operation       OperationType
 	Status          TemplateRunStatus
 	ErrorSummary    string
-	// Summary, when set, records the run's change counts along with the
-	// status. An auto-approved apply has no plan to count, so it records what
-	// the apply itself reported.
-	Summary *PlanSummary
 }
 
 // TemplateRunStepActivityInput records the step a running run has started.

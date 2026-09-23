@@ -980,7 +980,7 @@ func TestApproveRunRejectsAPlanThatNoLongerMatchesDesired(t *testing.T) {
 func TestApproveRunRejectsARunThatIsNotWaiting(t *testing.T) {
 	t.Parallel()
 
-	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Status: domain.TemplateRunApplyStarted}}
+	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Status: domain.TemplateRunRunning}}
 	work := &recordingUnitOfWork{templateRuns: runs}
 	service := NewService(Service{
 		Authorization:            testPlatformAuthorizer(t),
@@ -1645,7 +1645,7 @@ func TestApproveRunAuditsSuccessfulApproval(t *testing.T) {
 func TestDiscardRunRefusesARunWithNoPlanWaiting(t *testing.T) {
 	t.Parallel()
 
-	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Status: domain.TemplateRunApplyStarted}}
+	runs := &recordingTemplateRunRepository{run: domain.TemplateRun{ID: "run_123", TenantID: "tenant_123", StackTemplateID: "stack_template_123", Status: domain.TemplateRunRunning}}
 	work := &recordingUnitOfWork{templateRuns: runs}
 
 	service := NewService(Service{

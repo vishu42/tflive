@@ -588,61 +588,35 @@ Migration `0007_workflow_outbox.sql` also backfills existing queued template run
 
 `TemplatePlanWorkflow` is the main execution workflow.
 
-Plan-only flow:
+A run's `status` is its lifecycle state; what it is doing while `running` is
+its `step`, written as each step starts and kept when the run ends.
+
+Plan run:
 
 ```text
-queued
-locked
-workspace_prepared
-source_fetched
-init
-workspace_selected
-planned
-lock_released
-completed
+queued → running → completed
 ```
 
-Apply flow:
+Apply or destroy run:
 
 ```text
-queued
-locked
-workspace_prepared
-source_fetched
-init
-workspace_selected
-planned
-waiting_approval
-approved
-apply_started
-applied
-lock_released
-completed
+queued → running → waiting_approval → approved → running → completed
 ```
 
-Destroy flow:
+An auto-approved apply goes `queued → running → completed`. Any non-terminal
+run can end `failed`, and a plan waiting for approval can be discarded, which
+ends it `canceled`.
 
-```text
-queued
-locked
-workspace_prepared
-source_fetched
-init
-workspace_selected
-destroy_started
-destroyed
-lock_released
-completed
-```
+Steps, in order: `waiting_for_executor`, `preparing_workspace`,
+`fetching_source`, `restoring_plan` (approved apply only), `initializing`,
+`selecting_workspace`, then `planning` and `saving_plan` in the plan phase or
+`applying` in the apply phase.
 
-Failed runs transition to:
+What a run does to its stack template is recorded as an event, not a status:
+`applied` makes the run the template's live state, and a destroy records
+`destroying` before it destroys and `destroyed` once it has.
 
-```text
-failed
-lock_released
-```
-
-If a destroy run fails after `destroy_started`, its associated
+If a destroy run fails after recording `destroying`, its associated
 `StackTemplate` lifecycle transitions from `destroying` to `failed`. This does
 not roll back infrastructure changes; the template is treated as unsafe to run
 again until an explicit recovery or reconciliation flow exists.

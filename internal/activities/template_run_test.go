@@ -29,7 +29,7 @@ func TestRecordTemplateRunStatusDelegatesToRecorder(t *testing.T) {
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
 		Operation:       domain.OperationPlan,
-		Status:          domain.TemplateRunPlanFinished,
+		Status:          domain.TemplateRunRunning,
 	}
 
 	if err := activities.RecordTemplateRunStatus(context.Background(), input); err != nil {

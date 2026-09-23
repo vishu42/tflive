@@ -66,7 +66,7 @@ func TestPlanKeyIsCreatedOnceAndStoredEncrypted(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := savedPlanStore(t, pool)
 	seedStackWithTemplate(t, ctx, store)
-	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunPlanStarted)
+	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunRunning)
 
 	if _, err := store.PlanKey(ctx, "tenant_123", "run_123"); err == nil {
 		t.Fatal("PlanKey returned a key for a run that has none")
@@ -104,7 +104,7 @@ func TestFinishTemplatePlanWithChangesWaitsForApproval(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := savedPlanStore(t, pool)
 	seedStackWithTemplate(t, ctx, store)
-	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunPlanFinished)
+	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunRunning)
 
 	outcome, err := store.FinishTemplatePlan(ctx, domain.FinishPlanActivityInput{
 		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply,
@@ -144,7 +144,7 @@ func TestFinishTemplatePlanCompletesAPlanRunWithChanges(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := savedPlanStore(t, pool)
 	seedStackWithTemplate(t, ctx, store)
-	seedPlanRun(t, ctx, pool, "run_123", domain.OperationPlan, domain.TemplateRunPlanFinished)
+	seedPlanRun(t, ctx, pool, "run_123", domain.OperationPlan, domain.TemplateRunRunning)
 
 	outcome, err := store.FinishTemplatePlan(ctx, domain.FinishPlanActivityInput{
 		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationPlan,
@@ -160,8 +160,8 @@ func TestFinishTemplatePlanCompletesAPlanRunWithChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.TemplateRunPlanFinished {
-		t.Fatalf("status = %q, want plan_finished", run.Status)
+	if run.Status != domain.TemplateRunRunning {
+		t.Fatalf("status = %q, want running", run.Status)
 	}
 	if run.PlanSummary == nil || *run.PlanSummary != (domain.PlanSummary{Add: 1, Destroy: 2}) {
 		t.Fatalf("plan summary = %#v", run.PlanSummary)
@@ -189,7 +189,7 @@ func TestFinishTemplatePlanWithoutChangesRecordsTheSnapshotAsLive(t *testing.T) 
 			pool := openMigratedTestPool(t, ctx)
 			store := savedPlanStore(t, pool)
 			seedStackWithTemplate(t, ctx, store)
-			seedPlanRun(t, ctx, pool, "run_123", operation, domain.TemplateRunPlanFinished)
+			seedPlanRun(t, ctx, pool, "run_123", operation, domain.TemplateRunRunning)
 
 			outcome, err := store.FinishTemplatePlan(ctx, domain.FinishPlanActivityInput{
 				TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: operation,
@@ -322,7 +322,7 @@ func TestTerminalRunsDropTheirPlanKeyAndPendingPlan(t *testing.T) {
 	pool := openMigratedTestPool(t, ctx)
 	store := savedPlanStore(t, pool)
 	seedStackWithTemplate(t, ctx, store)
-	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunPlanFinished)
+	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunRunning)
 	if _, err := store.CreatePlanKey(ctx, "tenant_123", "run_123"); err != nil {
 		t.Fatal(err)
 	}
@@ -346,30 +346,6 @@ func TestTerminalRunsDropTheirPlanKeyAndPendingPlan(t *testing.T) {
 	}
 	if stackTemplate.PendingPlanRunID != "" || stackTemplate.PlanState() != domain.PlanNone {
 		t.Fatalf("pending plan = %q, plan state = %q; want none", stackTemplate.PendingPlanRunID, stackTemplate.PlanState())
-	}
-}
-
-// A plan run's apply finishing records its snapshot as live.
-func TestApplyFinishedOnAPlanRunRecordsLastApplied(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	pool := openMigratedTestPool(t, ctx)
-	store := savedPlanStore(t, pool)
-	seedStackWithTemplate(t, ctx, store)
-	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunApplyStarted)
-
-	if err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
-		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123", Operation: domain.OperationApply, Status: domain.TemplateRunApplyFinished,
-	}); err != nil {
-		t.Fatalf("RecordTemplateRunStatus returned error: %v", err)
-	}
-	stackTemplate, err := store.GetStackTemplate(ctx, "tenant_123", "stack_template_123")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stackTemplate.LastAppliedRunID != "run_123" {
-		t.Fatalf("last applied = %q, want run_123", stackTemplate.LastAppliedRunID)
 	}
 }
 
@@ -400,6 +376,43 @@ func TestSavedPlansMigrationClosesUnfinishedRuns(t *testing.T) {
 	}
 	if got := runStatus(t, ctx, pool, "run_done"); got != domain.TemplateRunCompleted {
 		t.Fatalf("finished run status = %q, want completed", got)
+	}
+}
+
+// Runs 0027 finds mid-progress were in flight under a workflow that wrote the
+// old statuses; they are closed out, as 0021 and 0023 did. Runs in a
+// lifecycle state keep it.
+func TestLifecycleStatusMigrationClosesRunsMidProgress(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+	migrateThrough(t, ctx, pool, "0026_run_steps")
+	if _, err := pool.Exec(ctx, `
+		insert into template_runs (
+			id, tenant_id, stack_template_id, template_revision_id,
+			operation, selected_ref, workspace_name, config_json, status, trigger_actor, run_number
+		) values
+			('run_planning', 'tenant_123', 'stack_template_a', 'rev', 'apply', 'main', 'ws', '{}', 'plan_started', 'user_123', 3),
+			('run_waiting', 'tenant_123', 'stack_template_b', 'rev', 'apply', 'main', 'ws', '{}', 'waiting_approval', 'user_123', 1),
+			('run_done', 'tenant_123', 'stack_template_a', 'rev', 'plan', 'main', 'ws', '{}', 'completed', 'user_123', 1),
+			('run_locked', 'tenant_123', 'stack_template_c', 'rev', 'apply', 'main', 'ws', '{}', 'locked', 'user_123', 1)
+	`); err != nil {
+		t.Fatalf("seed pre-migration runs: %v", err)
+	}
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate to head: %v", err)
+	}
+	for runID, want := range map[string]domain.TemplateRunStatus{
+		"run_planning": domain.TemplateRunFailed,
+		"run_locked":   domain.TemplateRunFailed,
+		"run_waiting":  domain.TemplateRunWaitingApproval,
+		"run_done":     domain.TemplateRunCompleted,
+	} {
+		if got := runStatus(t, ctx, pool, domain.TemplateRunID(runID)); got != want {
+			t.Errorf("%s status = %q, want %q", runID, got, want)
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -1318,52 +1319,101 @@ func appendAuditEvent(ctx context.Context, exec pgxExecutor, event domain.Securi
 	return err
 }
 
+// ErrTemplateRunTransition is a status write the run's current state does not
+// allow.
+var ErrTemplateRunTransition = errors.New("postgres: template run cannot make that transition")
+
+// workflowStatusSources is every status the workflow records, with the
+// statuses a run may be in when it does. Waiting, approved and canceled are
+// written by the approval flow, never here.
+var workflowStatusSources = map[domain.TemplateRunStatus][]domain.TemplateRunStatus{
+	domain.TemplateRunRunning:   {domain.TemplateRunQueued},
+	domain.TemplateRunCompleted: {domain.TemplateRunRunning},
+	domain.TemplateRunFailed: {
+		domain.TemplateRunQueued,
+		domain.TemplateRunRunning,
+		domain.TemplateRunWaitingApproval,
+		domain.TemplateRunApproved,
+	},
+}
+
+// RecordTemplateRunStatus moves a run along its lifecycle, with the run row
+// locked. A run already in the status is this write retried after its
+// acknowledgement was lost, so it succeeds and changes nothing.
+//
+// Becoming terminal sets completed_at, drops the run's saved plan, and, for a
+// destroy that failed after it began destroying, leaves the stack template
+// failed. The step is never touched: a failed run keeps the one it failed on.
 func (store *Store) RecordTemplateRunStatus(ctx context.Context, input domain.TemplateRunStatusActivityInput) error {
-	if input.Status.Terminal() || recordsStackTemplateLastApplied(input) || recordsStackTemplateDestroying(input) || recordsStackTemplateDestroyed(input) || recordsStackTemplateDestroyInterrupted(input) {
-		tx, err := store.pool.Begin(ctx)
-		if err != nil {
-			return fmt.Errorf("begin record template run status: %w", err)
-		}
-		defer func() {
-			_ = tx.Rollback(ctx)
-		}()
-
-		if err := recordTemplateRunStatus(ctx, tx, input); err != nil {
-			return err
-		}
-
-		switch {
-		case recordsStackTemplateLastApplied(input):
-			if err := recordStackTemplateLastApplied(ctx, tx, input.TenantID, input.StackTemplateID, input.RunID, input.Status); err != nil {
-				return err
-			}
-		case recordsStackTemplateDestroying(input):
-			if err := recordStackTemplateLifecycle(ctx, tx, input.TenantID, input.StackTemplateID, domain.StackTemplateDestroying); err != nil {
-				return err
-			}
-		case recordsStackTemplateDestroyed(input):
-			if err := recordStackTemplateLifecycle(ctx, tx, input.TenantID, input.StackTemplateID, domain.StackTemplateDestroyed); err != nil {
-				return err
-			}
-		case recordsStackTemplateDestroyInterrupted(input):
-			if err := recordInterruptedDestroyLifecycle(ctx, tx, input.TenantID, input.StackTemplateID); err != nil {
-				return err
-			}
-		}
-
-		if input.Status.Terminal() {
-			if err := releaseRunPlan(ctx, tx, input.TenantID, input.RunID); err != nil {
-				return err
-			}
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("commit record template run status: %w", err)
-		}
-		return nil
+	sources, ok := workflowStatusSources[input.Status]
+	if !ok {
+		return fmt.Errorf("record template run status: the workflow does not record %q", input.Status)
 	}
 
-	return recordTemplateRunStatus(ctx, store.pool, input)
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin record template run status: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var current domain.TemplateRunStatus
+	err = tx.QueryRow(ctx, `
+		select status
+		from template_runs
+		where tenant_id = $1
+			and id = $2
+			and stack_template_id = $3
+			and operation = $4
+		for update
+	`, input.TenantID, input.RunID, input.StackTemplateID, input.Operation).Scan(&current)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read template run status: %w", err)
+	}
+	if current == input.Status {
+		return nil
+	}
+	if !slices.Contains(sources, current) {
+		return fmt.Errorf("%w: %q cannot become %q", ErrTemplateRunTransition, current, input.Status)
+	}
+
+	if !input.Status.Terminal() {
+		if _, err := tx.Exec(ctx, `
+			update template_runs set status = $1 where tenant_id = $2 and id = $3
+		`, input.Status, input.TenantID, input.RunID); err != nil {
+			return fmt.Errorf("record template run status: %w", err)
+		}
+		return commitTemplateRunStatus(ctx, tx)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		update template_runs
+		set
+			status = $1,
+			error_summary = case when $2 <> '' then $2 else error_summary end,
+			completed_at = coalesce(completed_at, now())
+		where tenant_id = $3 and id = $4
+	`, input.Status, input.ErrorSummary, input.TenantID, input.RunID); err != nil {
+		return fmt.Errorf("record template run status: %w", err)
+	}
+	if input.Status == domain.TemplateRunFailed && input.Operation == domain.OperationDestroy {
+		if err := recordInterruptedDestroyLifecycle(ctx, tx, input.TenantID, input.StackTemplateID); err != nil {
+			return err
+		}
+	}
+	if err := releaseRunPlan(ctx, tx, input.TenantID, input.RunID); err != nil {
+		return err
+	}
+	return commitTemplateRunStatus(ctx, tx)
+}
+
+func commitTemplateRunStatus(ctx context.Context, tx pgx.Tx) error {
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit record template run status: %w", err)
+	}
+	return nil
 }
 
 // releaseRunPlan is what a run becoming terminal does to its saved plan. Its
@@ -1394,73 +1444,6 @@ func releaseRunPlan(ctx context.Context, exec pgxExecutor, tenantID domain.Tenan
 	return nil
 }
 
-type templateRunStatusWriter interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
-func recordTemplateRunStatus(ctx context.Context, writer templateRunStatusWriter, input domain.TemplateRunStatusActivityInput) error {
-	var updatedRunID domain.TemplateRunID
-	var err error
-
-	if input.Status.Terminal() {
-		err = writer.QueryRow(ctx, `
-			update template_runs
-			set
-				status = $1,
-				error_summary = case when $2 <> '' then $2 else error_summary end,
-				completed_at = coalesce(completed_at, now())
-			where tenant_id = $3
-				and id = $4
-				and stack_template_id = $5
-				and operation = $6
-			returning id
-		`,
-			input.Status,
-			input.ErrorSummary,
-			input.TenantID,
-			input.RunID,
-			input.StackTemplateID,
-			input.Operation,
-		).Scan(&updatedRunID)
-	} else {
-		// A status that carries a summary records the run's counts with it.
-		var add, change, destroy *int
-		if input.Summary != nil {
-			add, change, destroy = &input.Summary.Add, &input.Summary.Change, &input.Summary.Destroy
-		}
-		err = writer.QueryRow(ctx, `
-			update template_runs
-			set
-				status = $1,
-				plan_add = coalesce($6, plan_add),
-				plan_change = coalesce($7, plan_change),
-				plan_destroy = coalesce($8, plan_destroy)
-			where tenant_id = $2
-				and id = $3
-				and stack_template_id = $4
-				and operation = $5
-			returning id
-		`,
-			input.Status,
-			input.TenantID,
-			input.RunID,
-			input.StackTemplateID,
-			input.Operation,
-			add,
-			change,
-			destroy,
-		).Scan(&updatedRunID)
-	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("record template run status: %w", err)
-	}
-
-	return nil
-}
-
 type stackTemplateLastAppliedWriter interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
@@ -1468,26 +1451,6 @@ type stackTemplateLastAppliedWriter interface {
 type stackTemplateLifecycleWriter interface {
 	stackTemplateLastAppliedWriter
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
-// recordsStackTemplateLastApplied is an apply run's apply finishing: what it
-// applied is now what is live. A plan with no changes is live too, and
-// FinishTemplatePlan records that one itself.
-func recordsStackTemplateLastApplied(input domain.TemplateRunStatusActivityInput) bool {
-	return input.Operation == domain.OperationApply && input.Status == domain.TemplateRunApplyFinished
-}
-
-func recordsStackTemplateDestroying(input domain.TemplateRunStatusActivityInput) bool {
-	return input.Operation == domain.OperationDestroy && input.Status == domain.TemplateRunDestroyStarted
-}
-
-func recordsStackTemplateDestroyed(input domain.TemplateRunStatusActivityInput) bool {
-	return input.Operation == domain.OperationDestroy && input.Status == domain.TemplateRunDestroyFinished
-}
-
-func recordsStackTemplateDestroyInterrupted(input domain.TemplateRunStatusActivityInput) bool {
-	return input.Operation == domain.OperationDestroy &&
-		(input.Status == domain.TemplateRunFailed || input.Status == domain.TemplateRunCanceled)
 }
 
 // recordStackTemplateLastApplied makes the run the stack template's live

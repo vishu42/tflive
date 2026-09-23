@@ -224,6 +224,119 @@ func TestRecordTemplateRunEventMovesADestroyedTemplateThroughItsLifecycle(t *tes
 	}
 }
 
+// Temporal redelivers an activity whose acknowledgement was lost. A status
+// the run already has is that retry: it succeeds and changes nothing.
+func TestRecordTemplateRunStatusIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	run := templateRunAt("stack_template_123", "run_123", domain.TemplateRunRunning)
+	seedTemplateRun(t, ctx, pool, run)
+	completed := domain.TemplateRunStatusActivityInput{
+		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123",
+		Operation: run.Operation, Status: domain.TemplateRunCompleted,
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := store.RecordTemplateRunStatus(ctx, completed); err != nil {
+			t.Fatalf("attempt %d: RecordTemplateRunStatus returned error: %v", attempt, err)
+		}
+	}
+	if got := runStatus(t, ctx, pool, "run_123"); got != domain.TemplateRunCompleted {
+		t.Fatalf("status = %q, want completed", got)
+	}
+}
+
+// The workflow moves a run only along its lifecycle: a finished run cannot
+// start running again, and a queued one cannot complete without running.
+func TestRecordTemplateRunStatusRejectsTransitionsOffTheLifecycle(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		from, to domain.TemplateRunStatus
+	}{
+		{from: domain.TemplateRunCompleted, to: domain.TemplateRunRunning},
+		{from: domain.TemplateRunCompleted, to: domain.TemplateRunFailed},
+		{from: domain.TemplateRunQueued, to: domain.TemplateRunCompleted},
+		{from: domain.TemplateRunCanceled, to: domain.TemplateRunRunning},
+	} {
+		t.Run(string(testCase.from)+"_to_"+string(testCase.to), func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			pool := openMigratedTestPool(t, ctx)
+			store := NewStore(pool)
+			run := templateRunAt("stack_template_123", "run_123", testCase.from)
+			seedTemplateRun(t, ctx, pool, run)
+
+			err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
+				TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123",
+				Operation: run.Operation, Status: testCase.to,
+			})
+			if !errors.Is(err, ErrTemplateRunTransition) {
+				t.Fatalf("error = %v, want ErrTemplateRunTransition", err)
+			}
+			if got := runStatus(t, ctx, pool, "run_123"); got != testCase.from {
+				t.Fatalf("status = %q, want it left %q", got, testCase.from)
+			}
+		})
+	}
+}
+
+// Waiting, approved and canceled are written by the approval flow, never by
+// the workflow's status activity.
+func TestRecordTemplateRunStatusRejectsStatusesTheWorkflowDoesNotWrite(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	run := templateRunAt("stack_template_123", "run_123", domain.TemplateRunRunning)
+	seedTemplateRun(t, ctx, pool, run)
+
+	for _, status := range []domain.TemplateRunStatus{domain.TemplateRunWaitingApproval, domain.TemplateRunApproved, domain.TemplateRunCanceled, domain.TemplateRunQueued} {
+		if err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
+			TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123",
+			Operation: run.Operation, Status: status,
+		}); err == nil {
+			t.Fatalf("RecordTemplateRunStatus(%q) returned nil, want an error", status)
+		}
+	}
+}
+
+// A failed run keeps the step it failed on, which is how it says where.
+func TestRecordTemplateRunStatusKeepsTheStep(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	run := templateRunAt("stack_template_123", "run_123", domain.TemplateRunRunning)
+	seedTemplateRun(t, ctx, pool, run)
+	if err := store.RecordTemplateRunStep(ctx, domain.TemplateRunStepActivityInput{
+		TenantID: "tenant_123", RunID: "run_123", Step: domain.TemplateRunStepFetchingSource,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.RecordTemplateRunStatus(ctx, domain.TemplateRunStatusActivityInput{
+		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123",
+		Operation: run.Operation, Status: domain.TemplateRunFailed, ErrorSummary: "clone failed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.GetTemplateRun(ctx, "tenant_123", "run_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.TemplateRunFailed || got.Step != domain.TemplateRunStepFetchingSource {
+		t.Fatalf("status, step = %q, %q; want failed, fetching_source", got.Status, got.Step)
+	}
+}
+
 // An event belongs to one kind of run, and only a running run has events: an
 // apply run cannot record destroyed, and a finished run records nothing.
 func TestRecordTemplateRunEventRejectsEventsTheRunCannotHave(t *testing.T) {
