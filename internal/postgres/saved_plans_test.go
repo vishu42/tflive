@@ -381,7 +381,10 @@ func TestSavedPlansMigrationClosesUnfinishedRuns(t *testing.T) {
 
 // Runs 0027 finds mid-progress were in flight under a workflow that wrote the
 // old statuses; they are closed out, as 0021 and 0023 did. Runs in a
-// lifecycle state keep it.
+// lifecycle state keep it. A closed-out run that held a saved plan must not
+// stay reviewable: releaseRunPlan does the same two things (drop the plan
+// key, clear the template's pending plan) for every other path that makes a
+// run terminal, and 0027's close-out is such a path.
 func TestLifecycleStatusMigrationClosesRunsMidProgress(t *testing.T) {
 	t.Parallel()
 
@@ -400,19 +403,55 @@ func TestLifecycleStatusMigrationClosesRunsMidProgress(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("seed pre-migration runs: %v", err)
 	}
+	if _, err := pool.Exec(ctx, `
+		insert into template_runs (
+			id, tenant_id, stack_template_id, template_revision_id,
+			operation, selected_ref, workspace_name, config_json, status, trigger_actor, run_number,
+			plan_artifact_dek
+		) values (
+			'run_apply_started', 'tenant_123', 'stack_template_d', 'rev', 'apply', 'main', 'ws', '{}', 'apply_started', 'user_123', 1,
+			'sealed-plan-key'
+		)
+	`); err != nil {
+		t.Fatalf("seed pre-migration run with a saved plan: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		insert into stack_templates (
+			id, tenant_id, stack_id, workspace_name, lifecycle,
+			pending_plan_run_id, pending_plan_template_revision_id, pending_plan_config_json, pending_plan_at
+		) values (
+			'stack_template_d', 'tenant_123', 'stack_d', 'ws', 'active',
+			'run_apply_started', 'rev', '{}', now()
+		)
+	`); err != nil {
+		t.Fatalf("seed pre-migration stack template with a pending plan: %v", err)
+	}
 
 	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
 	for runID, want := range map[string]domain.TemplateRunStatus{
-		"run_planning": domain.TemplateRunFailed,
-		"run_locked":   domain.TemplateRunFailed,
-		"run_waiting":  domain.TemplateRunWaitingApproval,
-		"run_done":     domain.TemplateRunCompleted,
+		"run_planning":      domain.TemplateRunFailed,
+		"run_locked":        domain.TemplateRunFailed,
+		"run_waiting":       domain.TemplateRunWaitingApproval,
+		"run_done":          domain.TemplateRunCompleted,
+		"run_apply_started": domain.TemplateRunFailed,
 	} {
 		if got := runStatus(t, ctx, pool, domain.TemplateRunID(runID)); got != want {
 			t.Errorf("%s status = %q, want %q", runID, got, want)
 		}
+	}
+	if !planKeyIsNull(t, ctx, pool, "run_apply_started") {
+		t.Error("closed-out run kept its plan key")
+	}
+	var pendingPlanRunID string
+	if err := pool.QueryRow(ctx, `
+		select pending_plan_run_id from stack_templates where tenant_id = 'tenant_123' and id = 'stack_template_d'
+	`).Scan(&pendingPlanRunID); err != nil {
+		t.Fatalf("read pending plan run id: %v", err)
+	}
+	if pendingPlanRunID != "" {
+		t.Errorf("pending plan run id = %q, want none: a closed-out run must stop counting as reviewed", pendingPlanRunID)
 	}
 }
 
