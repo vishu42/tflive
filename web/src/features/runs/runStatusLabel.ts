@@ -103,7 +103,12 @@ export function runStatusLabel(
   if (run.step === "" || HEADLINE_STEPS.has(run.step)) {
     return headline;
   }
+  // A backend newer than this client can send a step outside the union; read
+  // it as if there were none rather than rendering "undefined" or throwing.
   const step = STEP_LABELS[run.step];
+  if (!step) {
+    return headline;
+  }
   if (run.status === "running") {
     return `${headline} · ${step}`;
   }

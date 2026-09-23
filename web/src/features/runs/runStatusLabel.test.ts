@@ -79,6 +79,15 @@ describe("runStatusLabel", () => {
   ] as const)("%s %s (planned: %s, auto: %s) on %s reads %s", (operation, status, planned, autoApprove, step, expected) => {
     expect(label(operation, status, planned, autoApprove, step)).toBe(expected);
   });
+
+  // A backend newer than this client can send a step outside the union (API
+  // responses are cast, not validated). It should read exactly like no step
+  // at all, not "undefined" and not throw.
+  it("reads an unknown step as its headline, running or failed", () => {
+    const unknownStep = "cloning" as TemplateRun["step"];
+    expect(label("apply", "running", false, false, unknownStep)).toBe("Planning");
+    expect(label("apply", "failed", false, false, unknownStep)).toBe("Plan failed");
+  });
 });
 
 // Logs are refetched when this tag changes. Status alone stays running for a
