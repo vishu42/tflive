@@ -1961,6 +1961,7 @@ components:
         approval endpoint to release it.
       enum:
         - queued
+        - running
         - locked
         - workspace_prepared
         - source_fetched
