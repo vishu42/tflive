@@ -6,6 +6,12 @@
 -- workflow that wrote them, and cannot finish under one that does not. tflive
 -- is pre-production, so they are closed out, as 0021 and 0023 did.
 --
+-- Operators must terminate open template-run workflows before migrating. A
+-- run still `queued` has no old-status row for this migration to catch, but
+-- its workflow keeps running under the new workflow code, which replays it
+-- nondeterministically -- the run is left stuck in flight rather than closed
+-- out by anything here.
+--
 -- A run this closes out may hold a saved plan: it stops being reachable once
 -- the run is failed below, so its key must go, and it must stop being any
 -- stack template's pending plan -- the same two things releaseRunPlan does
@@ -24,6 +30,24 @@ where pending_plan_run_id in (
 	from template_runs
 	where status not in ('queued', 'running', 'waiting_approval', 'approved', 'completed', 'failed', 'canceled')
 );
+
+-- A destroy run this closes out may have been mid-destroy: its stack
+-- template's lifecycle was set to 'destroying' (run_progress.go) and nothing
+-- else would ever move it off that. This mirrors what
+-- recordInterruptedDestroyLifecycle does when a destroy fails normally,
+-- keyed on the same pre-close-out predicate, run before the close-out below
+-- changes it.
+update stack_templates st
+set lifecycle = 'failed'
+where st.lifecycle = 'destroying'
+	and exists (
+		select 1
+		from template_runs tr
+		where tr.tenant_id = st.tenant_id
+			and tr.stack_template_id = st.id
+			and tr.operation = 'destroy'
+			and tr.status not in ('queued', 'running', 'waiting_approval', 'approved', 'completed', 'failed', 'canceled')
+	);
 
 update template_runs
 set

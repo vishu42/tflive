@@ -214,7 +214,7 @@ func TestFinishTemplatePlanWithoutChangesRecordsTheSnapshotAsLive(t *testing.T) 
 	}
 }
 
-// The apply claims its run by moving it from approved to locked, and a
+// The apply claims its run by moving it from approved to running, and a
 // discarded run cannot be claimed. Discarding before the claim takes the same
 // row the other way, so exactly one of them wins.
 func TestApplyClaimAndDiscardExcludeEachOther(t *testing.T) {
@@ -426,16 +426,33 @@ func TestLifecycleStatusMigrationClosesRunsMidProgress(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("seed pre-migration stack template with a pending plan: %v", err)
 	}
+	if _, err := pool.Exec(ctx, `
+		insert into stack_templates (id, tenant_id, stack_id, workspace_name, lifecycle)
+		values ('stack_template_e', 'tenant_123', 'stack_e', 'ws', 'destroying')
+	`); err != nil {
+		t.Fatalf("seed pre-migration stack template mid-destroy: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		insert into template_runs (
+			id, tenant_id, stack_template_id, template_revision_id,
+			operation, selected_ref, workspace_name, config_json, status, trigger_actor, run_number
+		) values (
+			'run_destroy_started', 'tenant_123', 'stack_template_e', 'rev', 'destroy', 'main', 'ws', '{}', 'destroy_started', 'user_123', 1
+		)
+	`); err != nil {
+		t.Fatalf("seed pre-migration destroy run: %v", err)
+	}
 
 	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
 	for runID, want := range map[string]domain.TemplateRunStatus{
-		"run_planning":      domain.TemplateRunFailed,
-		"run_locked":        domain.TemplateRunFailed,
-		"run_waiting":       domain.TemplateRunWaitingApproval,
-		"run_done":          domain.TemplateRunCompleted,
-		"run_apply_started": domain.TemplateRunFailed,
+		"run_planning":        domain.TemplateRunFailed,
+		"run_locked":          domain.TemplateRunFailed,
+		"run_waiting":         domain.TemplateRunWaitingApproval,
+		"run_done":            domain.TemplateRunCompleted,
+		"run_apply_started":   domain.TemplateRunFailed,
+		"run_destroy_started": domain.TemplateRunFailed,
 	} {
 		if got := runStatus(t, ctx, pool, domain.TemplateRunID(runID)); got != want {
 			t.Errorf("%s status = %q, want %q", runID, got, want)
@@ -452,6 +469,15 @@ func TestLifecycleStatusMigrationClosesRunsMidProgress(t *testing.T) {
 	}
 	if pendingPlanRunID != "" {
 		t.Errorf("pending plan run id = %q, want none: a closed-out run must stop counting as reviewed", pendingPlanRunID)
+	}
+	var stackTemplateELifecycle domain.StackTemplateLifecycle
+	if err := pool.QueryRow(ctx, `
+		select lifecycle from stack_templates where tenant_id = 'tenant_123' and id = 'stack_template_e'
+	`).Scan(&stackTemplateELifecycle); err != nil {
+		t.Fatalf("read stack_template_e lifecycle: %v", err)
+	}
+	if stackTemplateELifecycle != domain.StackTemplateFailed {
+		t.Errorf("stack_template_e lifecycle = %q, want failed: a destroy closed out mid-destroy must not leave its template stuck destroying", stackTemplateELifecycle)
 	}
 }
 
