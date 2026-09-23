@@ -6,36 +6,17 @@ describe("statusTone", () => {
     expect(statusTone("completed")).toBe("settled");
     expect(statusTone("active")).toBe("settled");
     expect(statusTone("approved")).toBe("settled");
-    expect(statusTone("lock_released")).toBe("settled");
-  });
-
-  it("classifies finished pipeline phases as settled", () => {
-    expect(statusTone("init_finished")).toBe("settled");
-    expect(statusTone("plan_finished")).toBe("settled");
-    expect(statusTone("apply_finished")).toBe("settled");
-    expect(statusTone("destroy_finished")).toBe("settled");
-  });
-
-  it("classifies intermediate pipeline steps as settled", () => {
-    expect(statusTone("workspace_prepared")).toBe("settled");
-    expect(statusTone("source_fetched")).toBe("settled");
-    expect(statusTone("workspace_selected")).toBe("settled");
   });
 
   it("classifies active work as progress", () => {
     expect(statusTone("running")).toBe("progress");
     expect(statusTone("validating")).toBe("progress");
-    expect(statusTone("init_started")).toBe("progress");
-    expect(statusTone("plan_started")).toBe("progress");
-    expect(statusTone("apply_started")).toBe("progress");
-    expect(statusTone("destroy_started")).toBe("progress");
   });
 
   it("classifies queued and blocked states as waiting", () => {
     expect(statusTone("pending")).toBe("waiting");
     expect(statusTone("pending_validation")).toBe("waiting");
     expect(statusTone("queued")).toBe("waiting");
-    expect(statusTone("locked")).toBe("waiting");
     expect(statusTone("waiting_approval")).toBe("waiting");
   });
 
@@ -56,6 +37,7 @@ describe("statusTone", () => {
 
   it("falls back to settled for unrecognised values", () => {
     expect(statusTone("something_new")).toBe("settled");
+    expect(statusTone("plan_started")).toBe("settled");
   });
 });
 

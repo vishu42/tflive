@@ -23,6 +23,7 @@ function run(overrides: Partial<TemplateRun> = {}): TemplateRun {
     backend_type: "s3",
     backend_config_hash: "hash",
     status: "queued",
+    step: "",
     trigger_actor: "user_123",
     started_at: "2026-07-20T00:00:00Z",
     error_summary: "",
@@ -115,7 +116,7 @@ describe("TemplateRunHistory", () => {
 
   it("adds no actions column for a run in flight", () => {
     const queryClient = testQueryClient();
-    seedRuns(queryClient, [run({ id: "run_apply_1", run_number: 1, operation: "apply", status: "apply_started" })]);
+    seedRuns(queryClient, [run({ id: "run_apply_1", run_number: 1, operation: "apply", status: "running" })]);
 
     renderHistory(queryClient);
 

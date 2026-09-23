@@ -48,6 +48,7 @@ function run(overrides: Partial<TemplateRun> = {}): TemplateRun {
     backend_type: "s3",
     backend_config_hash: "hash",
     status: "queued",
+    step: "",
     trigger_actor: "user_123",
     started_at: "2026-07-20T00:00:00Z",
     error_summary: "",
@@ -194,7 +195,7 @@ describe("TemplateRunActions", () => {
   it("disables Plan with a reason, and hides Cancel, when canOperate is denied", () => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, { ...allAllowed, canOperate: false });
-    seedRuns(queryClient, [run({ id: "run_active", operation: "plan", status: "plan_started" })]);
+    seedRuns(queryClient, [run({ id: "run_active", operation: "plan", status: "running" })]);
 
     renderActions(queryClient);
 
@@ -288,7 +289,7 @@ describe("TemplateRunActions", () => {
       }
       if (url.endsWith("/stack-templates/stpl_1/runs") && method === "POST") {
         // What the server knows: someone else's run is already going.
-        runsState = [run({ id: "run_elsewhere", operation: "plan", status: "apply_started" })];
+        runsState = [run({ id: "run_elsewhere", operation: "plan", status: "running" })];
         return jsonResponse({ error: "run_in_flight", message: "create template run: a run is already in flight for this stack template" }, 409);
       }
       throw new Error(`unexpected fetch: ${url} ${method}`);

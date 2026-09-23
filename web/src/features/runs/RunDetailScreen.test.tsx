@@ -39,6 +39,7 @@ function run(overrides: Partial<TemplateRun> = {}): TemplateRun {
     backend_type: "s3",
     backend_config_hash: "hash",
     status: "completed",
+    step: "",
     trigger_actor: "user_123",
     started_at: "2026-07-20T00:00:00Z",
     error_summary: "",
@@ -320,7 +321,7 @@ describe("RunDetailScreen", () => {
 
   // A run planning or applying cannot be stopped, so it offers no action,
   // whatever the viewer may do.
-  it.each(["plan_started", "plan_finished", "apply_started"] as const)("offers nothing on a run that is %s", (status) => {
+  it.each(["queued", "running"] as const)("offers nothing on a run that is %s", (status) => {
     const queryClient = testQueryClient();
     seedCapabilities(queryClient, allAllowed);
     queryClient.setQueryData(queryKeys.templateRun("tenant_123", "run_1"), run({ status }));

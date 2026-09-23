@@ -47,6 +47,7 @@ function run(overrides: Partial<TemplateRun> = {}): TemplateRun {
     backend_type: "s3",
     backend_config_hash: "hash",
     status: "queued",
+    step: "",
     trigger_actor: "user_123",
     started_at: "2026-07-20T00:00:00Z",
     error_summary: "",
@@ -188,7 +189,7 @@ describe("TemplateDestroyPanel", () => {
         return jsonResponse(runsState);
       }
       if (url.endsWith("/stack-templates/stpl_1/runs") && method === "POST") {
-        runsState = [run({ id: "run_elsewhere", operation: "plan", status: "plan_started" })];
+        runsState = [run({ id: "run_elsewhere", operation: "plan", status: "running" })];
         return jsonResponse({ error: "run_in_flight", message: "create template run: a run is already in flight for this stack template" }, 409);
       }
       throw new Error(`unexpected fetch: ${url} ${method}`);
