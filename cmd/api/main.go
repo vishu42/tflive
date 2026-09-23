@@ -298,6 +298,9 @@ func registerControl(worker temporalWorker, store controlStore, gitHubTokens act
 	worker.RegisterActivityWithOptions(sync.RecordTemplateRegistrationStatus, activity.RegisterOptions{
 		Name: domain.RecordTemplateRegistrationStatusActivityName,
 	})
+	worker.RegisterActivityWithOptions(sync.RecordTemplateRegistrationStep, activity.RegisterOptions{
+		Name: domain.RecordTemplateRegistrationStepActivityName,
+	})
 	worker.RegisterActivityWithOptions(sync.SyncTemplate, activity.RegisterOptions{
 		Name: domain.SyncTemplateActivityName,
 	})

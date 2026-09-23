@@ -259,6 +259,7 @@ func TestRegisterControlRegistersWorkflowsAndControlActivities(t *testing.T) {
 		domain.RecordTemplateRunStepActivityName:            true,
 		domain.RecordTemplateRunEventActivityName:           true,
 		domain.RecordTemplateRegistrationStatusActivityName: true,
+		domain.RecordTemplateRegistrationStepActivityName:   true,
 		domain.SyncTemplateActivityName:                     true,
 	}
 	if !reflect.DeepEqual(worker.activities, wantActivities) {
@@ -854,6 +855,10 @@ func (recordingStore) GetTemplateRegistration(context.Context, domain.TenantID, 
 }
 
 func (recordingStore) RecordTemplateRegistrationStatus(context.Context, domain.TemplateRegistrationStatusActivityInput) error {
+	return nil
+}
+
+func (recordingStore) RecordTemplateRegistrationStep(context.Context, domain.TemplateRegistrationStepActivityInput) error {
 	return nil
 }
 

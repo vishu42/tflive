@@ -69,13 +69,84 @@ func TestTemplateSyncWorkflowRunsOnControlQueue(t *testing.T) {
 	env.ExecuteWorkflow(TemplateSyncWorkflow, templateSyncWorkflowInput())
 
 	assertWorkflowCompleted(t, env)
-	if len(queues) != 3 {
-		t.Fatalf("activity queues = %#v, want 3 activities", queues)
+	if len(queues) != 4 {
+		t.Fatalf("activity queues = %#v, want 4 activities", queues)
 	}
 	for _, queue := range queues {
 		if queue != domain.ControlTaskQueue {
 			t.Fatalf("activity queues = %#v, want all %q", queues, domain.ControlTaskQueue)
 		}
+	}
+}
+
+// The sync is a job with one step: the step is recorded for the registration
+// once it is running, and before the work it names.
+func TestTemplateSyncWorkflowRecordsItsStepBeforeSyncing(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateSyncWorkflowTestEnvironment(t)
+	input := templateSyncWorkflowInput()
+	var calls []string
+	env.OnActivity(domain.RecordTemplateRegistrationStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRegistrationStatusActivityInput) error {
+			calls = append(calls, "status:"+string(activityInput.Status))
+			return nil
+		})
+	env.OnActivity(domain.RecordTemplateRegistrationStepActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRegistrationStepActivityInput) error {
+			if activityInput.RegistrationID != input.RegistrationID || activityInput.TenantID != input.TenantID {
+				t.Fatalf("step recorded for %q/%q, want %q/%q", activityInput.TenantID, activityInput.RegistrationID, input.TenantID, input.RegistrationID)
+			}
+			calls = append(calls, "step:"+string(activityInput.Step))
+			return nil
+		})
+	env.OnActivity(domain.SyncTemplateActivityName, mock.Anything, mock.Anything).
+		Return(func(context.Context, domain.TemplateSyncActivityInput) (domain.TemplateSyncActivityOutput, error) {
+			calls = append(calls, "sync")
+			return domain.TemplateSyncActivityOutput{Status: domain.TemplateRegistrationCompleted}, nil
+		})
+
+	env.ExecuteWorkflow(TemplateSyncWorkflow, input)
+
+	assertWorkflowCompleted(t, env)
+	want := []string{"status:running", "step:syncing", "sync", "status:completed"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
+// A step that cannot be recorded fails the sync before its work starts, as a
+// run's does.
+func TestTemplateSyncWorkflowFailsWhenItsStepCannotBeRecorded(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateSyncWorkflowTestEnvironment(t)
+	var statuses []domain.TemplateRegistrationStatus
+	env.OnActivity(domain.RecordTemplateRegistrationStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRegistrationStatusActivityInput) error {
+			statuses = append(statuses, activityInput.Status)
+			return nil
+		})
+	env.OnActivity(domain.RecordTemplateRegistrationStepActivityName, mock.Anything, mock.Anything).
+		Return(errors.New("database unavailable"))
+	synced := false
+	env.OnActivity(domain.SyncTemplateActivityName, mock.Anything, mock.Anything).
+		Return(func(context.Context, domain.TemplateSyncActivityInput) (domain.TemplateSyncActivityOutput, error) {
+			synced = true
+			return domain.TemplateSyncActivityOutput{}, nil
+		})
+
+	env.ExecuteWorkflow(TemplateSyncWorkflow, templateSyncWorkflowInput())
+
+	if err := env.GetWorkflowError(); err == nil {
+		t.Fatal("workflow error is nil, want the step error")
+	}
+	if synced {
+		t.Fatal("sync ran although its step was never recorded")
+	}
+	want := []domain.TemplateRegistrationStatus{domain.TemplateRegistrationRunning, domain.TemplateRegistrationFailed}
+	if !reflect.DeepEqual(statuses, want) {
+		t.Fatalf("statuses = %#v, want %#v", statuses, want)
 	}
 }
 
@@ -150,6 +221,12 @@ func newTemplateSyncWorkflowTestEnvironment(t *testing.T) *testsuite.TestWorkflo
 			return nil
 		},
 		activity.RegisterOptions{Name: domain.RecordTemplateRegistrationStatusActivityName},
+	)
+	env.RegisterActivityWithOptions(
+		func(context.Context, domain.TemplateRegistrationStepActivityInput) error {
+			return nil
+		},
+		activity.RegisterOptions{Name: domain.RecordTemplateRegistrationStepActivityName},
 	)
 	env.RegisterActivityWithOptions(
 		func(context.Context, domain.TemplateSyncActivityInput) (domain.TemplateSyncActivityOutput, error) {

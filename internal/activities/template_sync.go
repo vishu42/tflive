@@ -33,6 +33,7 @@ type GitHubTokenSource interface {
 
 type TemplateSyncStore interface {
 	RecordTemplateRegistrationStatus(context.Context, domain.TemplateRegistrationStatusActivityInput) error
+	RecordTemplateRegistrationStep(context.Context, domain.TemplateRegistrationStepActivityInput) error
 	UpsertTemplateRevisionWithVariables(context.Context, domain.TemplateRevision, []domain.TemplateVariable) (domain.TemplateRevision, error)
 }
 
@@ -81,6 +82,13 @@ func NewTemplateSyncActivities(store TemplateSyncStore, options ...TemplateSyncO
 func (activities *TemplateSyncActivities) RecordTemplateRegistrationStatus(ctx context.Context, input domain.TemplateRegistrationStatusActivityInput) error {
 	if err := activities.store.RecordTemplateRegistrationStatus(ctx, input); err != nil {
 		return fmt.Errorf("record template registration status: %w", err)
+	}
+	return nil
+}
+
+func (activities *TemplateSyncActivities) RecordTemplateRegistrationStep(ctx context.Context, input domain.TemplateRegistrationStepActivityInput) error {
+	if err := activities.store.RecordTemplateRegistrationStep(ctx, input); err != nil {
+		return fmt.Errorf("record template registration step: %w", err)
 	}
 	return nil
 }

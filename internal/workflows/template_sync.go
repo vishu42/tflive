@@ -13,13 +13,13 @@ import (
 // are (see template_run.go):
 //
 //   - registration is the workflow. It alone moves the registration along its
-//     lifecycle (status).
-//   - syncTemplate is the work. It is handed a context and the sync's input,
-//     never the registration, so it has no status write.
+//     lifecycle (status), and it opens the sync's job.
+//   - syncJob is the work, as the steps it runs (job.go). It records the
+//     registration's step, and has no status write.
 //
-// A sync has no executor session and no steps: it clones and parses a
-// repository but runs none of its code, so all of it stays on the control
-// plane, as one activity.
+// A sync has no executor session: it clones and parses a repository but runs
+// none of its code, so all of it stays on the control plane. Its job's worker
+// is the control-queue context, and its one step is one activity.
 
 // syncRetryPolicy is the retry policy for template-sync activities. Git clones
 // and HCL parsing can fail due to transient network errors or GitHub rate
@@ -44,7 +44,7 @@ func TemplateSyncWorkflow(ctx workflow.Context, input domain.TemplateSyncWorkflo
 	if err := r.start(); err != nil {
 		return err
 	}
-	synced, err := syncTemplate(r.ctx, input)
+	synced, err := r.syncJob().sync()
 	if err != nil {
 		return r.fail(err)
 	}
@@ -115,6 +115,45 @@ func (r *registration) recordStatus(input domain.TemplateRegistrationStatusActiv
 		domain.RecordTemplateRegistrationStatusActivityName,
 		input,
 	).Get(r.ctx, nil)
+}
+
+// syncJob opens the sync's job. It is handed the registration's context and
+// input, never the registration, so it has no status write.
+func (r *registration) syncJob() *syncJob {
+	return &syncJob{
+		job:   job[domain.TemplateRegistrationStep, workflow.Context]{recordStep: r.recordStep, worker: r.ctx},
+		input: r.input,
+	}
+}
+
+// recordStep records the step the sync is starting, for the people watching
+// it. It is written before the work, never after.
+func (r *registration) recordStep(step domain.TemplateRegistrationStep) error {
+	return workflow.ExecuteActivity(
+		r.ctx,
+		domain.RecordTemplateRegistrationStepActivityName,
+		domain.TemplateRegistrationStepActivityInput{
+			RegistrationID: r.input.RegistrationID,
+			TenantID:       r.input.TenantID,
+			Step:           step,
+		},
+	).Get(r.ctx, nil)
+}
+
+// syncJob is a template sync's job: one step on the control queue.
+type syncJob struct {
+	job[domain.TemplateRegistrationStep, workflow.Context]
+	input domain.TemplateSyncWorkflowInput
+}
+
+// sync syncs the template as the job's one step.
+func (j *syncJob) sync() (domain.TemplateSyncActivityOutput, error) {
+	var synced domain.TemplateSyncActivityOutput
+	err := j.step(domain.TemplateRegistrationStepSyncing, func(ctx workflow.Context) (err error) {
+		synced, err = syncTemplate(ctx, j.input)
+		return err
+	})
+	return synced, err
 }
 
 // syncTemplate clones the registration's repository at its ref and parses the

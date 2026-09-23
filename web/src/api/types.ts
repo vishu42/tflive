@@ -45,6 +45,10 @@ export interface ApiErrorBody {
   message: string;
 }
 
+// What a sync is doing, or, once it ended, what it was doing last. Nothing
+// about what the registration may do next depends on it.
+export type TemplateRegistrationStep = "syncing";
+
 export interface TemplateRegistration {
   id: string;
   tenant_id: string;
@@ -53,6 +57,8 @@ export interface TemplateRegistration {
   source_ref: string;
   root_path: string;
   status: TemplateRegistrationStatus;
+  // Empty until the sync starts its first step.
+  step: TemplateRegistrationStep | "";
   template_revision_id: string;
   resolved_commit_sha: string;
   requested_by: string;

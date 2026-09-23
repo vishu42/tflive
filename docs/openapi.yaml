@@ -1524,6 +1524,7 @@ components:
         source_ref: { type: string }
         root_path: { type: string }
         status: { $ref: "#/components/schemas/TemplateRegistrationStatus" }
+        step: { $ref: "#/components/schemas/TemplateRegistrationStep" }
         template_revision_id:
           type: string
           description: Populated once `status` is `completed`. Empty before that.
@@ -1543,8 +1544,8 @@ components:
           description: Why registration failed. Empty otherwise.
       required:
         [id, tenant_id, repo_owner, repo_name, source_ref, root_path, status,
-         template_revision_id, resolved_commit_sha, requested_by, requested_at,
-         error_summary]
+         step, template_revision_id, resolved_commit_sha, requested_by,
+         requested_at, error_summary]
 
     TemplateRegistrationStatus:
       type: string
@@ -1553,6 +1554,17 @@ components:
         `pending` and `running` are in flight. `completed` carries a
         `template_revision_id`. `invalid` means the source was rejected;
         `failed` means registration itself broke.
+
+    TemplateRegistrationStep:
+      type: string
+      description: |
+        What a running sync is doing right now, or, once it ended, what it was
+        doing last, so a failed sync says where it failed. Empty until the sync
+        starts its first step. It is for people: nothing about what a
+        registration may do next depends on it.
+      enum:
+        - ""
+        - syncing
 
     TemplateRevision:
       type: object

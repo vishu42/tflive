@@ -168,6 +168,7 @@ func (store *Store) GetTemplateRegistration(ctx context.Context, tenantID domain
 			source_ref,
 			root_path,
 			status,
+			step,
 			template_revision_id,
 			resolved_commit_sha,
 			requested_by,
@@ -185,6 +186,7 @@ func (store *Store) GetTemplateRegistration(ctx context.Context, tenantID domain
 		&registration.SourceRef,
 		&registration.RootPath,
 		&registration.Status,
+		&registration.Step,
 		&registration.TemplateRevisionID,
 		&registration.ResolvedCommitSHA,
 		&registration.RequestedBy,
@@ -202,6 +204,29 @@ func (store *Store) GetTemplateRegistration(ctx context.Context, tenantID domain
 		registration.CompletedAt = completedAt.Time
 	}
 	return registration, nil
+}
+
+// RecordTemplateRegistrationStep records the step a running sync has started.
+// Only a running registration has a step to start, so any other registration
+// is not found.
+func (store *Store) RecordTemplateRegistrationStep(ctx context.Context, input domain.TemplateRegistrationStepActivityInput) error {
+	if !input.Step.Valid() {
+		return fmt.Errorf("record template registration step: unknown step %q", input.Step)
+	}
+	commandTag, err := store.pool.Exec(ctx, `
+		update template_registrations
+		set step = $1
+		where tenant_id = $2
+			and id = $3
+			and status = $4
+	`, input.Step, input.TenantID, input.RegistrationID, domain.TemplateRegistrationRunning)
+	if err != nil {
+		return fmt.Errorf("record template registration step: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (store *Store) RecordTemplateRegistrationStatus(ctx context.Context, input domain.TemplateRegistrationStatusActivityInput) error {

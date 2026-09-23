@@ -32,6 +32,7 @@ const (
 	RecordTemplateRunStepActivityName            = "RecordTemplateRunStep"
 	RecordTemplateRunEventActivityName           = "RecordTemplateRunEvent"
 	RecordTemplateRegistrationStatusActivityName = "RecordTemplateRegistrationStatus"
+	RecordTemplateRegistrationStepActivityName   = "RecordTemplateRegistrationStep"
 	PrepareWorkspaceActivityName                 = "PrepareWorkspace"
 	FetchSourceActivityName                      = "FetchSource"
 	RunTerraformActivityName                     = "RunTerraform"
@@ -366,4 +367,12 @@ type TemplateRegistrationStatusActivityInput struct {
 	TemplateRevisionID TemplateRevisionID
 	ResolvedCommitSHA  string
 	ErrorSummary       string
+}
+
+// TemplateRegistrationStepActivityInput records the step a running sync has
+// started.
+type TemplateRegistrationStepActivityInput struct {
+	RegistrationID TemplateRegistrationID
+	TenantID       TenantID
+	Step           TemplateRegistrationStep
 }

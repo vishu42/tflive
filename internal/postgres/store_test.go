@@ -628,6 +628,101 @@ func TestRecordTemplateRegistrationStatusUpdatesTerminalFields(t *testing.T) {
 	}
 }
 
+// Every step in domain.AllTemplateRegistrationSteps must round-trip through
+// the step column: 0028's check constraint is a copy of that list, and this
+// keeps the two from drifting apart unnoticed.
+func TestRecordTemplateRegistrationStepAcceptsEveryDomainStep(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRegistration(t, ctx, store, "tenant_123", domain.TemplateRegistrationRunning)
+
+	for _, step := range domain.AllTemplateRegistrationSteps {
+		if err := store.RecordTemplateRegistrationStep(ctx, domain.TemplateRegistrationStepActivityInput{
+			TenantID: "tenant_123", RegistrationID: "template_registration_123", Step: step,
+		}); err != nil {
+			t.Fatalf("RecordTemplateRegistrationStep(%q) returned error: %v", step, err)
+		}
+		got, err := store.GetTemplateRegistration(ctx, "tenant_123", "template_registration_123")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Step != step {
+			t.Fatalf("step = %q, want %q", got.Step, step)
+		}
+	}
+}
+
+// Only a running registration has a step to start: a pending or finished one
+// is not found, and neither is another tenant's.
+func TestRecordTemplateRegistrationStepNeedsARunningRegistrationOfTheTenant(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		status domain.TemplateRegistrationStatus
+		tenant domain.TenantID
+	}{
+		{name: "pending", status: domain.TemplateRegistrationPending, tenant: "tenant_123"},
+		{name: "completed", status: domain.TemplateRegistrationCompleted, tenant: "tenant_123"},
+		{name: "failed", status: domain.TemplateRegistrationFailed, tenant: "tenant_123"},
+		{name: "other tenant", status: domain.TemplateRegistrationRunning, tenant: "tenant_456"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			pool := openMigratedTestPool(t, ctx)
+			store := NewStore(pool)
+			seedTemplateRegistration(t, ctx, store, "tenant_123", testCase.status)
+
+			err := store.RecordTemplateRegistrationStep(ctx, domain.TemplateRegistrationStepActivityInput{
+				TenantID: testCase.tenant, RegistrationID: "template_registration_123", Step: domain.TemplateRegistrationStepSyncing,
+			})
+			if !errors.Is(err, ErrNotFound) {
+				t.Fatalf("error = %v, want ErrNotFound", err)
+			}
+		})
+	}
+}
+
+// An unknown step is refused before it reaches the database.
+func TestRecordTemplateRegistrationStepRejectsAnUnknownStep(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRegistration(t, ctx, store, "tenant_123", domain.TemplateRegistrationRunning)
+
+	err := store.RecordTemplateRegistrationStep(ctx, domain.TemplateRegistrationStepActivityInput{
+		TenantID: "tenant_123", RegistrationID: "template_registration_123", Step: "cloning",
+	})
+	if err == nil {
+		t.Fatal("RecordTemplateRegistrationStep accepted an unknown step")
+	}
+}
+
+func seedTemplateRegistration(t *testing.T, ctx context.Context, store *Store, tenantID domain.TenantID, status domain.TemplateRegistrationStatus) {
+	t.Helper()
+
+	if err := store.CreateTemplateRegistration(ctx, domain.TemplateRegistration{
+		ID:          "template_registration_123",
+		TenantID:    tenantID,
+		RepoOwner:   "acme",
+		RepoName:    "infra-templates",
+		SourceRef:   "v0.0.1",
+		RootPath:    "modules/vpc",
+		Status:      status,
+		RequestedBy: "user_123",
+		RequestedAt: time.Date(2026, 7, 6, 11, 30, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("CreateTemplateRegistration returned error: %v", err)
+	}
+}
+
 func TestUpsertTemplateRevisionWithVariablesCreatesAndReusesImmutableRevision(t *testing.T) {
 	t.Parallel()
 

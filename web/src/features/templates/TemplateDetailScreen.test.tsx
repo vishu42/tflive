@@ -57,6 +57,7 @@ function registration(overrides: Partial<TemplateRegistration> = {}): TemplateRe
     source_ref: "main",
     root_path: "environments/dev",
     status: "completed",
+    step: "syncing",
     template_revision_id: "rev_1",
     resolved_commit_sha: "abcdef1234567890",
     requested_by: "user_1",

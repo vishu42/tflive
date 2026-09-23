@@ -341,3 +341,18 @@ func TestTemplateRunStepValid(t *testing.T) {
 		}
 	}
 }
+
+func TestTemplateRegistrationStepValid(t *testing.T) {
+	t.Parallel()
+
+	for _, step := range AllTemplateRegistrationSteps {
+		if !step.Valid() {
+			t.Errorf("%q is listed but not valid", step)
+		}
+	}
+	for _, step := range []TemplateRegistrationStep{"", "cloning", "running"} {
+		if step.Valid() {
+			t.Errorf("%q is valid, want invalid", step)
+		}
+	}
+}
