@@ -29,6 +29,7 @@ func NewLocalReader(runRoot string) LocalReader {
 	return LocalReader{runRoot: runRoot}
 }
 
+// COMMENT: this just looks like a helper method for activities, don't think it belongs here
 // RunWorkspacePath returns the local workspace path for one tenant-owned run.
 func RunWorkspacePath(runRoot string, tenantID domain.TenantID, runID domain.TemplateRunID) (string, error) {
 	if strings.TrimSpace(runRoot) == "" {
