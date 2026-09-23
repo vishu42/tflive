@@ -69,20 +69,6 @@ func newTemplateRunWorkflow(ctx workflow.Context, input domain.TemplateRunWorkfl
 	return &templateRunWorkflow{ctx: ctx, input: input}
 }
 
-// finish owns terminal error handling for both workflows. If recording a
-// failure also fails, the run's persisted status will not match reality, so
-// both errors are surfaced: the original wrapped with %w to stay matchable by
-// callers, the persistence error appended as context.
-func (run *templateRunWorkflow) finish(err error) error {
-	if err == nil {
-		return nil
-	}
-	if failureErr := run.recordFailure(err); failureErr != nil {
-		return fmt.Errorf("%w (also failed to persist failure status: %v)", err, failureErr)
-	}
-	return err
-}
-
 type templateRunWorkflow struct {
 	ctx           workflow.Context
 	sessionCtx    workflow.Context
@@ -95,6 +81,20 @@ type templateRunWorkflow struct {
 	// applying is set for the apply phase, whose Terraform commands log under
 	// the apply phase's names.
 	applying bool
+}
+
+// finish owns terminal error handling for both workflows. If recording a
+// failure also fails, the run's persisted status will not match reality, so
+// both errors are surfaced: the original wrapped with %w to stay matchable by
+// callers, the persistence error appended as context.
+func (run *templateRunWorkflow) finish(err error) error {
+	if err == nil {
+		return nil
+	}
+	if failureErr := run.recordFailure(err); failureErr != nil {
+		return fmt.Errorf("%w (also failed to persist failure status: %v)", err, failureErr)
+	}
+	return err
 }
 
 // validateOperation rejects an operation this workflow does not run before any
