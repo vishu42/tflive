@@ -1905,6 +1905,7 @@ components:
         backend_type: { type: string }
         backend_config_hash: { type: string }
         status: { $ref: "#/components/schemas/TemplateRunStatus" }
+        step: { $ref: "#/components/schemas/TemplateRunStep" }
         trigger_actor:
           type: string
           description: |
@@ -1945,7 +1946,7 @@ components:
       required:
         [id, tenant_id, stack_template_id, template_revision_id,
          source_template_id, operation, selected_ref, resolved_commit_sha,
-         workspace_name, backend_type, backend_config_hash, status,
+         workspace_name, backend_type, backend_config_hash, status, step,
          trigger_actor, started_at, error_summary, run_number, auto_approve,
          plan_summary]
 
@@ -1978,6 +1979,25 @@ components:
         - lock_released
         - completed
         - failed
+
+    TemplateRunStep:
+      type: string
+      description: |
+        What a running run is doing right now, or, once it ended, what it was
+        doing last, so a failed run says where it failed. Empty until the run
+        starts its first step. It is for people: nothing about what a run may
+        do next depends on it.
+      enum:
+        - ""
+        - waiting_for_executor
+        - preparing_workspace
+        - fetching_source
+        - restoring_plan
+        - initializing
+        - selecting_workspace
+        - planning
+        - saving_plan
+        - applying
 
     LogPhase:
       type: string

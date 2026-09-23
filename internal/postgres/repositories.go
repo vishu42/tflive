@@ -976,6 +976,7 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID domain.TenantID
 			backend_type,
 			backend_config_hash,
 			status,
+			step,
 			trigger_actor,
 			started_at,
 			completed_at,
@@ -1002,6 +1003,7 @@ func (store *Store) GetTemplateRun(ctx context.Context, tenantID domain.TenantID
 		&run.BackendType,
 		&run.BackendConfigHash,
 		&run.Status,
+		&run.Step,
 		&run.TriggerActor,
 		&startedAt,
 		&completedAt,
@@ -1055,6 +1057,7 @@ func (store *Store) ListTemplateRuns(ctx context.Context, tenantID domain.Tenant
 			backend_type,
 			backend_config_hash,
 			status,
+			step,
 			trigger_actor,
 			started_at,
 			completed_at,
@@ -1094,6 +1097,7 @@ func (store *Store) ListTemplateRuns(ctx context.Context, tenantID domain.Tenant
 			&run.BackendType,
 			&run.BackendConfigHash,
 			&run.Status,
+			&run.Step,
 			&run.TriggerActor,
 			&startedAt,
 			&completedAt,
@@ -1330,19 +1334,19 @@ func (store *Store) RecordTemplateRunStatus(ctx context.Context, input domain.Te
 
 		switch {
 		case recordsStackTemplateLastApplied(input):
-			if err := recordStackTemplateLastApplied(ctx, tx, input); err != nil {
+			if err := recordStackTemplateLastApplied(ctx, tx, input.TenantID, input.StackTemplateID, input.RunID, input.Status); err != nil {
 				return err
 			}
 		case recordsStackTemplateDestroying(input):
-			if err := recordStackTemplateLifecycle(ctx, tx, input, domain.StackTemplateDestroying); err != nil {
+			if err := recordStackTemplateLifecycle(ctx, tx, input.TenantID, input.StackTemplateID, domain.StackTemplateDestroying); err != nil {
 				return err
 			}
 		case recordsStackTemplateDestroyed(input):
-			if err := recordStackTemplateLifecycle(ctx, tx, input, domain.StackTemplateDestroyed); err != nil {
+			if err := recordStackTemplateLifecycle(ctx, tx, input.TenantID, input.StackTemplateID, domain.StackTemplateDestroyed); err != nil {
 				return err
 			}
 		case recordsStackTemplateDestroyInterrupted(input):
-			if err := recordInterruptedDestroyLifecycle(ctx, tx, input); err != nil {
+			if err := recordInterruptedDestroyLifecycle(ctx, tx, input.TenantID, input.StackTemplateID); err != nil {
 				return err
 			}
 		}
@@ -1486,7 +1490,10 @@ func recordsStackTemplateDestroyInterrupted(input domain.TemplateRunStatusActivi
 		(input.Status == domain.TemplateRunFailed || input.Status == domain.TemplateRunCanceled)
 }
 
-func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLastAppliedWriter, input domain.TemplateRunStatusActivityInput) error {
+// recordStackTemplateLastApplied makes the run the stack template's live
+// state. runStatus is the status the run must be in, so a run that has
+// already moved on cannot become live.
+func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLastAppliedWriter, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID, runID domain.TemplateRunID, runStatus domain.TemplateRunStatus) error {
 	commandTag, err := writer.Exec(ctx, `
 		update stack_templates
 		set
@@ -1502,30 +1509,23 @@ func recordStackTemplateLastApplied(ctx context.Context, writer stackTemplateLas
 			and template_runs.stack_template_id = stack_templates.id
 			and template_runs.operation = $4
 			and template_runs.status = $5
-	`,
-		input.TenantID,
-		input.StackTemplateID,
-		input.RunID,
-		input.Operation,
-		input.Status,
-	)
+	`, tenantID, stackTemplateID, runID, domain.OperationApply, runStatus)
 	if err != nil {
 		return fmt.Errorf("record stack template last applied: %w", err)
 	}
 	if commandTag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-
 	return nil
 }
 
-func recordStackTemplateLifecycle(ctx context.Context, writer stackTemplateLastAppliedWriter, input domain.TemplateRunStatusActivityInput, lifecycle domain.StackTemplateLifecycle) error {
+func recordStackTemplateLifecycle(ctx context.Context, writer stackTemplateLastAppliedWriter, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID, lifecycle domain.StackTemplateLifecycle) error {
 	commandTag, err := writer.Exec(ctx, `
 		update stack_templates
 		set lifecycle = $1
 		where tenant_id = $2
 			and id = $3
-	`, lifecycle, input.TenantID, input.StackTemplateID)
+	`, lifecycle, tenantID, stackTemplateID)
 	if err != nil {
 		return fmt.Errorf("record stack template lifecycle: %w", err)
 	}
@@ -1535,14 +1535,14 @@ func recordStackTemplateLifecycle(ctx context.Context, writer stackTemplateLastA
 	return nil
 }
 
-func recordInterruptedDestroyLifecycle(ctx context.Context, writer stackTemplateLifecycleWriter, input domain.TemplateRunStatusActivityInput) error {
+func recordInterruptedDestroyLifecycle(ctx context.Context, writer stackTemplateLifecycleWriter, tenantID domain.TenantID, stackTemplateID domain.StackTemplateID) error {
 	var lifecycle domain.StackTemplateLifecycle
 	err := writer.QueryRow(ctx, `
 		select lifecycle
 		from stack_templates
 		where tenant_id = $1 and id = $2
 		for update
-	`, input.TenantID, input.StackTemplateID).Scan(&lifecycle)
+	`, tenantID, stackTemplateID).Scan(&lifecycle)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -1552,8 +1552,7 @@ func recordInterruptedDestroyLifecycle(ctx context.Context, writer stackTemplate
 	if lifecycle != domain.StackTemplateDestroying {
 		return nil
 	}
-
-	return recordStackTemplateLifecycle(ctx, writer, input, domain.StackTemplateFailed)
+	return recordStackTemplateLifecycle(ctx, writer, tenantID, stackTemplateID, domain.StackTemplateFailed)
 }
 
 type stackTemplateScanner interface {

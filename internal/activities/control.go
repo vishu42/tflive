@@ -31,9 +31,10 @@ type PlanKeyStore interface {
 type PlanRecorder interface {
 	// FinishTemplatePlan records a finished plan and decides what follows it.
 	FinishTemplatePlan(ctx context.Context, input domain.FinishPlanActivityInput) (domain.PlanOutcome, error)
-	// BeginTemplateApply claims a run for its apply phase: an approved run, or
-	// with autoApprove a queued one. It reports false when the run is no longer
-	// in that state.
+	// BeginTemplateApply claims a run for its apply phase by moving it to
+	// running: an approved run, or with autoApprove a queued one. It reports
+	// true for a run it already claimed, so a retried claim is idempotent, and
+	// false when the run is no longer in a state this claim can take.
 	BeginTemplateApply(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, autoApprove bool) (bool, error)
 }
 

@@ -326,3 +326,18 @@ func TestTemplateSyncWorkflowInputUsesRegistrationSource(t *testing.T) {
 func templateRegistrationID(id string) TemplateRegistrationID {
 	return TemplateRegistrationID(id)
 }
+
+func TestTemplateRunStepValid(t *testing.T) {
+	t.Parallel()
+
+	for _, step := range AllTemplateRunSteps {
+		if !step.Valid() {
+			t.Errorf("%q is listed but not valid", step)
+		}
+	}
+	for _, step := range []TemplateRunStep{"", "cloning", "plan_started"} {
+		if step.Valid() {
+			t.Errorf("%q is valid, want invalid", step)
+		}
+	}
+}

@@ -231,8 +231,8 @@ func TestApplyClaimAndDiscardExcludeEachOther(t *testing.T) {
 	if err != nil || !claimed {
 		t.Fatalf("BeginTemplateApply = %v, %v; want claimed", claimed, err)
 	}
-	if runStatus(t, ctx, pool, "run_claimed") != domain.TemplateRunLocked {
-		t.Fatalf("status = %q, want locked", runStatus(t, ctx, pool, "run_claimed"))
+	if runStatus(t, ctx, pool, "run_claimed") != domain.TemplateRunRunning {
+		t.Fatalf("status = %q, want running", runStatus(t, ctx, pool, "run_claimed"))
 	}
 	discarded, err := discardTemplateRun(ctx, pool, domain.TemplateRunDiscard{TenantID: "tenant_123", RunID: "run_claimed", RequestedBy: "user_123"})
 	if err != nil || discarded {
@@ -300,8 +300,8 @@ func TestAutoApprovedApplyIsClaimedFromQueued(t *testing.T) {
 	if claimed, err := store.BeginTemplateApply(ctx, "tenant_123", "run_auto", true); err != nil || !claimed {
 		t.Fatalf("BeginTemplateApply = %v, %v; want claimed", claimed, err)
 	}
-	if runStatus(t, ctx, pool, "run_auto") != domain.TemplateRunLocked {
-		t.Fatalf("status = %q, want locked", runStatus(t, ctx, pool, "run_auto"))
+	if runStatus(t, ctx, pool, "run_auto") != domain.TemplateRunRunning {
+		t.Fatalf("status = %q, want running", runStatus(t, ctx, pool, "run_auto"))
 	}
 	if _, err := pool.Exec(ctx, `update template_runs set status = 'completed' where id = 'run_auto'`); err != nil {
 		t.Fatal(err)
@@ -400,5 +400,32 @@ func TestSavedPlansMigrationClosesUnfinishedRuns(t *testing.T) {
 	}
 	if got := runStatus(t, ctx, pool, "run_done"); got != domain.TemplateRunCompleted {
 		t.Fatalf("finished run status = %q, want completed", got)
+	}
+}
+
+// A claim whose acknowledgement was lost is retried. The run is already
+// running under this claim (nothing else moves an approved run to running),
+// so the retry must report the claim, not a lost race: reporting false would
+// end the apply workflow and leave the run running forever.
+func TestBeginTemplateApplyClaimIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := savedPlanStore(t, pool)
+	seedStackWithTemplate(t, ctx, store)
+	seedPlanRun(t, ctx, pool, "run_123", domain.OperationApply, domain.TemplateRunApproved)
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		claimed, err := store.BeginTemplateApply(ctx, "tenant_123", "run_123", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !claimed {
+			t.Fatalf("attempt %d: claimed = false, want true", attempt)
+		}
+	}
+	if got := runStatus(t, ctx, pool, "run_123"); got != domain.TemplateRunRunning {
+		t.Fatalf("status = %q, want running", got)
 	}
 }

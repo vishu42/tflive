@@ -3666,16 +3666,7 @@ func TestMigrationClosesOutRunsBeingCanceled(t *testing.T) {
 
 	ctx := context.Background()
 	pool := openTestPool(t, ctx)
-	// Stop the first migration short of 0025 by marking it applied.
-	if _, err := pool.Exec(ctx, `
-		create table schema_migrations (version text primary key, applied_at timestamptz not null default now());
-		insert into schema_migrations (version) values ('0025_remove_run_cancel');
-	`); err != nil {
-		t.Fatal(err)
-	}
-	if err := Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate to 0024: %v", err)
-	}
+	migrateThrough(t, ctx, pool, "0024_run_phase_log_names")
 	for i, status := range []domain.TemplateRunStatus{"cancel_requested", "canceling"} {
 		seedTemplateRun(t, ctx, pool, domain.TemplateRun{
 			ID:              domain.TemplateRunID(fmt.Sprintf("run_%d", i)),
@@ -3687,9 +3678,6 @@ func TestMigrationClosesOutRunsBeingCanceled(t *testing.T) {
 			Status:          status,
 			TriggerActor:    domain.UserID("user_123"),
 		})
-	}
-	if _, err := pool.Exec(ctx, `delete from schema_migrations where version = '0025_remove_run_cancel'`); err != nil {
-		t.Fatal(err)
 	}
 
 	if err := Migrate(ctx, pool); err != nil {

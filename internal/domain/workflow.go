@@ -29,6 +29,8 @@ const (
 
 	RecordTemplateRunStatusActivityName          = "RecordTemplateRunStatus"
 	RecordTemplateRunLogActivityName             = "RecordTemplateRunLog"
+	RecordTemplateRunStepActivityName            = "RecordTemplateRunStep"
+	RecordTemplateRunEventActivityName           = "RecordTemplateRunEvent"
 	RecordTemplateRegistrationStatusActivityName = "RecordTemplateRegistrationStatus"
 	PrepareWorkspaceActivityName                 = "PrepareWorkspace"
 	FetchSourceActivityName                      = "FetchSource"
@@ -119,6 +121,27 @@ type TemplateRunStatusActivityInput struct {
 	// Summary, when set, records the run's change counts along with the
 	// status. An auto-approved apply has no plan to count, so it records what
 	// the apply itself reported.
+	Summary *PlanSummary
+}
+
+// TemplateRunStepActivityInput records the step a running run has started.
+type TemplateRunStepActivityInput struct {
+	RunID    TemplateRunID
+	TenantID TenantID
+	Step     TemplateRunStep
+}
+
+// TemplateRunEventActivityInput records something a running run did to its
+// stack template.
+type TemplateRunEventActivityInput struct {
+	RunID           TemplateRunID
+	TenantID        TenantID
+	StackTemplateID StackTemplateID
+	Operation       OperationType
+	Event           TemplateRunEvent
+	// Summary, when set, records the run's change counts with the event. An
+	// auto-approved apply has no plan to count, so it records what the apply
+	// itself reported with TemplateRunApplied.
 	Summary *PlanSummary
 }
 
