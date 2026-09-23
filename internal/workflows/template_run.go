@@ -15,18 +15,18 @@ import (
 //
 //   - run is the workflow. It alone moves the run along its lifecycle
 //     (status), and it opens jobs.
-//   - job is one executor session, seen as the ordered steps it runs. It
-//     records steps, the run's events and command logs, and has no status
-//     write.
+//   - runJob is one executor session, seen as the ordered steps it runs
+//     (job.go). It records steps, the run's events and command logs, and has
+//     no status write.
 //   - session is the executor work itself. It records nothing.
 //
-// Phase code receives a *job, never the run, so it has no status write, and
-// its path to executor work is job.step, which records the step first. Go's
+// Phase code receives a *runJob, never the run, so it has no status write, and
+// its path to executor work is step, which records the step first. Go's
 // privacy stops at the package, so the compiler does not forbid reaching past
-// that path from inside this package (job.session, or a recorder's context):
-// the method sets make the right path the only obvious one, and reaching past
-// it is visible in review. Enforcement by the compiler would need each level in
-// a package of its own.
+// that path from inside this package (the job's worker, or a recorder's
+// context): the method sets make the right path the only obvious one, and
+// reaching past it is visible in review. Enforcement by the compiler would
+// need each level in a package of its own.
 
 const (
 	// planSessionCreationTimeout fails a plan that finds no executor free in a
@@ -72,7 +72,7 @@ func TemplatePlanWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflow
 			return err
 		}
 		var planned domain.RunTerraformActivityOutput
-		err := r.runJob(planSessionCreationTimeout, domain.RunPhasePlan, false, func(j *job) (err error) {
+		err := r.runJob(planSessionCreationTimeout, domain.RunPhasePlan, false, func(j *runJob) (err error) {
 			planned, err = plan(j)
 			return err
 		})
@@ -261,7 +261,7 @@ func (r *run) recorder() recorder {
 //
 // fn receives the job, never the run: a job records steps and events, and has
 // no way to change the run's status.
-func (r *run) runJob(creationTimeout time.Duration, phase domain.RunPhase, deletePlan bool, fn func(*job) error) error {
+func (r *run) runJob(creationTimeout time.Duration, phase domain.RunPhase, deletePlan bool, fn func(*runJob) error) error {
 	record := r.recorder()
 	if err := record.step(domain.TemplateRunStepWaitingForExecutor); err != nil {
 		return err
@@ -270,7 +270,7 @@ func (r *run) runJob(creationTimeout time.Duration, phase domain.RunPhase, delet
 	if err != nil {
 		return err
 	}
-	err = fn(&job{input: r.input, record: record, session: s})
+	err = fn(newRunJob(r.input, record, s))
 	s.close(deletePlan)
 	return err
 }
