@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -167,5 +168,38 @@ func templateSyncWorkflowInput() domain.TemplateSyncWorkflowInput {
 		RepoName:       "infra-templates",
 		SourceRef:      "v0.0.1",
 		RootPath:       "modules/vpc",
+	}
+}
+
+// A sync that fails, and whose failure then cannot be recorded, returns both
+// errors: the sync's is the cause, and dropping it would leave nothing saying
+// why the registration never finished.
+func TestTemplateSyncWorkflowKeepsTheSyncErrorWhenItsFailureCannotBeRecorded(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateSyncWorkflowTestEnvironment(t)
+	env.OnActivity(domain.RecordTemplateRegistrationStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, activityInput domain.TemplateRegistrationStatusActivityInput) error {
+			if activityInput.Status == domain.TemplateRegistrationFailed {
+				return errors.New("database unavailable")
+			}
+			return nil
+		})
+	env.OnActivity(domain.SyncTemplateActivityName, mock.Anything, mock.Anything).
+		Return(domain.TemplateSyncActivityOutput{}, errors.New("clone process failed"))
+
+	env.ExecuteWorkflow(TemplateSyncWorkflow, templateSyncWorkflowInput())
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	err := env.GetWorkflowError()
+	if err == nil {
+		t.Fatal("workflow error is nil, want the sync error")
+	}
+	for _, want := range []string{"clone process failed", "also failed to persist failure status", "database unavailable"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("workflow error = %q, want it to mention %q", err, want)
+		}
 	}
 }
