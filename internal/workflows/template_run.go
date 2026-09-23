@@ -58,8 +58,8 @@ func TemplateApplyWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflo
 
 // newTemplateRunWorkflow sets the baseline options for every activity
 // scheduled on the workflow context. Activities scheduled on ctx itself are
-// control-plane work (status writes), so they go to the control queue;
-// execution work goes through a session on the execution queue.
+// control-plane work (status, step and event writes), so they go to the
+// control queue; execution work goes through a session on the execution queue.
 func newTemplateRunWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowInput) *templateRunWorkflow {
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		TaskQueue:           domain.ControlTaskQueue,
@@ -95,12 +95,6 @@ type templateRunWorkflow struct {
 	// applying is set for the apply phase, whose Terraform commands log under
 	// the apply phase's names.
 	applying bool
-	// setupRecorded is set when the plan phase already recorded this run's
-	// setup (prepare, fetch, init, select), so an apply phase repeating it does
-	// not record it again: the timeline reads approved, locked, apply_started,
-	// apply_finished. An auto-approved apply has no plan phase, so it records
-	// its setup like a plan does.
-	setupRecorded bool
 }
 
 // validateOperation rejects an operation this workflow does not run before any
@@ -138,6 +132,9 @@ func (run *templateRunWorkflow) planPhase() error {
 	if err := run.validateOperation(false); err != nil {
 		return err
 	}
+	if err := run.recordStatus(domain.TemplateRunRunning); err != nil {
+		return err
+	}
 
 	var plan domain.RunTerraformActivityOutput
 	err := run.withSession(planSessionCreationTimeout, false, func() error {
@@ -155,6 +152,9 @@ func (run *templateRunWorkflow) planPhase() error {
 		plan = output
 		if !plan.HasChanges || run.input.Operation == domain.OperationPlan {
 			return nil
+		}
+		if err := run.recordStep(domain.TemplateRunStepSavingPlan); err != nil {
+			return err
 		}
 		sealedPlanKey, err := run.sealPlanKey(true)
 		if err != nil {
@@ -183,7 +183,7 @@ func (run *templateRunWorkflow) planPhase() error {
 		// Nothing left to destroy is a destroy that is done: recording it is
 		// what moves the stack template to destroyed.
 		if run.input.Operation == domain.OperationDestroy {
-			if err := run.recordStatus(domain.TemplateRunDestroyFinished); err != nil {
+			if err := run.recordEvent(domain.TemplateRunDestroyed, nil); err != nil {
 				return err
 			}
 		}
@@ -201,7 +201,7 @@ func (run *templateRunWorkflow) planPhase() error {
 // apply run, applies without one.
 //
 // It begins by claiming the run: approved (or, auto-approved, queued) becomes
-// locked, or nothing happens because the plan was discarded first. A lost
+// running, or nothing happens because the plan was discarded first. A lost
 // claim is not a failure, since the discard already recorded the run's end.
 func (run *templateRunWorkflow) applyPhase() error {
 	if err := run.validateOperation(true); err != nil {
@@ -220,7 +220,6 @@ func (run *templateRunWorkflow) applyPhase() error {
 	}
 
 	run.applying = true
-	run.setupRecorded = !run.input.AutoApprove
 	command := domain.TerraformCommandApply
 	switch {
 	case run.input.AutoApprove:
@@ -242,13 +241,38 @@ func (run *templateRunWorkflow) applyPhase() error {
 		if err := run.prepareWorkspace(restorePlan); err != nil {
 			return err
 		}
-		_, err := run.runTerraform(command)
-		return err
+		return run.apply(command)
 	})
 	if err != nil {
 		return err
 	}
 	return run.complete()
+}
+
+// apply runs the apply phase's command, recording what it does to the stack
+// template around it: a destroy marks the template destroying before it starts
+// and destroyed once it succeeds, and an apply records what it applied as
+// live, with the counts an auto-approved apply reports, since it had no plan
+// to count.
+func (run *templateRunWorkflow) apply(command domain.TerraformCommandType) error {
+	destroy := run.input.Operation == domain.OperationDestroy
+	if destroy {
+		if err := run.recordEvent(domain.TemplateRunDestroying, nil); err != nil {
+			return err
+		}
+	}
+	output, err := run.runTerraform(command)
+	if err != nil {
+		return err
+	}
+	if destroy {
+		return run.recordEvent(domain.TemplateRunDestroyed, nil)
+	}
+	var summary *domain.PlanSummary
+	if run.input.AutoApprove {
+		summary = &output.Summary
+	}
+	return run.recordEvent(domain.TemplateRunApplied, summary)
 }
 
 const (
@@ -269,8 +293,13 @@ const (
 //
 // CreateSession takes its base queue from the context's activity options, so
 // naming the execution queue here is what places the session, and every
-// activity later scheduled on sessionCtx, on an executor host.
+// activity later scheduled on sessionCtx, on an executor host. Waiting for a
+// session is a step of its own: an approved apply can wait minutes for a free
+// executor.
 func (run *templateRunWorkflow) withSession(creationTimeout time.Duration, deletePlan bool, fn func() error) error {
+	if err := run.recordStep(domain.TemplateRunStepWaitingForExecutor); err != nil {
+		return err
+	}
 	executionCtx := workflow.WithTaskQueue(run.ctx, domain.ExecutionTaskQueue)
 	sessionCtx, err := workflow.CreateSession(executionCtx, &workflow.SessionOptions{
 		CreationTimeout:  creationTimeout,
@@ -292,27 +321,27 @@ func (run *templateRunWorkflow) withSession(creationTimeout time.Duration, delet
 
 // prepareWorkspace readies a workspace for Terraform: a directory and a key on
 // the executor, the source at the run's commit, then init and workspace
-// selection. beforeInit runs once the source is in place; the apply phase uses
-// it to put the saved plan and its lock file back, so init installs the
-// providers the plan was made with.
-func (run *templateRunWorkflow) prepareWorkspace(beforeInit func() error) error {
-	if err := run.recordSetupStatus(domain.TemplateRunLocked); err != nil {
+// selection. restorePlan, when set, runs once the source is in place; the
+// apply phase uses it to put the saved plan and its lock file back, so init
+// installs the providers the plan was made with.
+func (run *templateRunWorkflow) prepareWorkspace(restorePlan func() error) error {
+	if err := run.recordStep(domain.TemplateRunStepPreparingWorkspace); err != nil {
 		return err
 	}
 	if err := run.prepareLocalWorkspace(); err != nil {
 		return err
 	}
-	if err := run.recordSetupStatus(domain.TemplateRunWorkspacePrepared); err != nil {
+	if err := run.recordStep(domain.TemplateRunStepFetchingSource); err != nil {
 		return err
 	}
 	if err := run.fetchSource(); err != nil {
 		return err
 	}
-	if err := run.recordSetupStatus(domain.TemplateRunSourceFetched); err != nil {
-		return err
-	}
-	if beforeInit != nil {
-		if err := beforeInit(); err != nil {
+	if restorePlan != nil {
+		if err := run.recordStep(domain.TemplateRunStepRestoringPlan); err != nil {
+			return err
+		}
+		if err := restorePlan(); err != nil {
 			return err
 		}
 	}
@@ -321,15 +350,6 @@ func (run *templateRunWorkflow) prepareWorkspace(beforeInit func() error) error 
 	}
 	_, err := run.runTerraform(domain.TerraformCommandSelectWorkspace)
 	return err
-}
-
-// recordSetupStatus records a workspace setup step, unless the plan phase
-// already recorded it.
-func (run *templateRunWorkflow) recordSetupStatus(status domain.TemplateRunStatus) error {
-	if run.setupRecorded {
-		return nil
-	}
-	return run.recordStatus(status)
 }
 
 // prepareLocalWorkspace schedules the executor-side activity that creates the
@@ -467,9 +487,6 @@ func (run *templateRunWorkflow) fetchSource() error {
 }
 
 func (run *templateRunWorkflow) complete() error {
-	if err := run.recordStatus(domain.TemplateRunLockReleased); err != nil {
-		return err
-	}
 	return run.recordStatus(domain.TemplateRunCompleted)
 }
 
@@ -500,45 +517,28 @@ var terraformRetryPolicy = &temporal.RetryPolicy{
 	},
 }
 
-// terraformCommandStatuses is the before/after status pair recorded around a
-// Terraform command. Not every command has a before status — select_workspace
-// has no meaningful "about to" signal — so before is left zero-valued there.
-type terraformCommandStatuses struct {
-	before domain.TemplateRunStatus
-	after  domain.TemplateRunStatus
+// terraformCommandSteps is the step each Terraform command is. Planning a
+// destroy is planning, and applying one is applying: the run's operation
+// already says it is a destroy.
+var terraformCommandSteps = map[domain.TerraformCommandType]domain.TemplateRunStep{
+	domain.TerraformCommandInit:             domain.TemplateRunStepInitializing,
+	domain.TerraformCommandSelectWorkspace:  domain.TemplateRunStepSelectingWorkspace,
+	domain.TerraformCommandPlan:             domain.TemplateRunStepPlanning,
+	domain.TerraformCommandPlanDestroy:      domain.TemplateRunStepPlanning,
+	domain.TerraformCommandApply:            domain.TemplateRunStepApplying,
+	domain.TerraformCommandDestroy:          domain.TemplateRunStepApplying,
+	domain.TerraformCommandApplyAutoApprove: domain.TemplateRunStepApplying,
 }
 
-var terraformCommandStatusTable = map[domain.TerraformCommandType]terraformCommandStatuses{
-	domain.TerraformCommandInit:             {before: domain.TemplateRunInitStarted, after: domain.TemplateRunInitFinished},
-	domain.TerraformCommandSelectWorkspace:  {after: domain.TemplateRunWorkspaceSelected},
-	domain.TerraformCommandPlan:             {before: domain.TemplateRunPlanStarted, after: domain.TemplateRunPlanFinished},
-	domain.TerraformCommandPlanDestroy:      {before: domain.TemplateRunPlanStarted, after: domain.TemplateRunPlanFinished},
-	domain.TerraformCommandApply:            {before: domain.TemplateRunApplyStarted, after: domain.TemplateRunApplyFinished},
-	domain.TerraformCommandDestroy:          {before: domain.TemplateRunDestroyStarted, after: domain.TemplateRunDestroyFinished},
-	domain.TerraformCommandApplyAutoApprove: {before: domain.TemplateRunApplyStarted, after: domain.TemplateRunApplyFinished},
-}
-
-// runTerraform executes one Terraform command, recording the before/after
-// status from terraformCommandStatusTable around it. Callers only record
-// statuses that aren't tied to a specific command (e.g. approval statuses).
-// On an apply phase after a plan phase, init and workspace selection are setup
-// that the plan phase already recorded once, so they run without statuses.
-//
-// An auto-approved apply has no plan, so the counts it reports are recorded
-// with its finished status.
+// runTerraform executes one Terraform command as a step of its own, recording
+// the step before it starts and the command's log after it ends.
 func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType) (domain.RunTerraformActivityOutput, error) {
-	statuses := terraformCommandStatusTable[command]
 	runPhase := domain.RunPhasePlan
 	if run.applying {
 		runPhase = domain.RunPhaseApply
 	}
-	if run.setupRecorded && (command == domain.TerraformCommandInit || command == domain.TerraformCommandSelectWorkspace) {
-		statuses = terraformCommandStatuses{}
-	}
-	if statuses.before != "" {
-		if err := run.recordStatus(statuses.before); err != nil {
-			return domain.RunTerraformActivityOutput{}, err
-		}
+	if err := run.recordStep(terraformCommandSteps[command]); err != nil {
+		return domain.RunTerraformActivityOutput{}, err
 	}
 
 	// Sealed for every command rather than once per run: credentials are read
@@ -602,16 +602,6 @@ func (run *templateRunWorkflow) runTerraform(command domain.TerraformCommandType
 	if err := run.recordLog(output.Log); err != nil {
 		return domain.RunTerraformActivityOutput{}, err
 	}
-
-	if statuses.after != "" {
-		status := run.statusInput(statuses.after)
-		if command == domain.TerraformCommandApplyAutoApprove {
-			status.Summary = &output.Summary
-		}
-		if err := run.recordStatusInput(status); err != nil {
-			return domain.RunTerraformActivityOutput{}, err
-		}
-	}
 	return output, nil
 }
 
@@ -666,26 +656,48 @@ func (run *templateRunWorkflow) recordFailure(rootErr error) error {
 }
 
 func (run *templateRunWorkflow) recordStatusWithSummary(status domain.TemplateRunStatus, errorSummary string) error {
-	input := run.statusInput(status)
-	input.ErrorSummary = errorSummary
-	return run.recordStatusInput(input)
-}
-
-// statusInput is a status transition for this run.
-func (run *templateRunWorkflow) statusInput(status domain.TemplateRunStatus) domain.TemplateRunStatusActivityInput {
-	return domain.TemplateRunStatusActivityInput{
-		RunID:           run.input.RunID,
-		TenantID:        run.input.TenantID,
-		StackTemplateID: run.input.StackTemplateID,
-		Operation:       run.input.Operation,
-		Status:          status,
-	}
-}
-
-func (run *templateRunWorkflow) recordStatusInput(input domain.TemplateRunStatusActivityInput) error {
 	return workflow.ExecuteActivity(
 		run.ctx,
 		domain.RecordTemplateRunStatusActivityName,
-		input,
+		domain.TemplateRunStatusActivityInput{
+			RunID:           run.input.RunID,
+			TenantID:        run.input.TenantID,
+			StackTemplateID: run.input.StackTemplateID,
+			Operation:       run.input.Operation,
+			Status:          status,
+			ErrorSummary:    errorSummary,
+		},
+	).Get(run.ctx, nil)
+}
+
+// recordStep records the step the run is starting, for the people watching
+// it. It is written before the work, never after, so a slow step shows as
+// itself rather than as the step before it.
+func (run *templateRunWorkflow) recordStep(step domain.TemplateRunStep) error {
+	return workflow.ExecuteActivity(
+		run.ctx,
+		domain.RecordTemplateRunStepActivityName,
+		domain.TemplateRunStepActivityInput{
+			RunID:    run.input.RunID,
+			TenantID: run.input.TenantID,
+			Step:     step,
+		},
+	).Get(run.ctx, nil)
+}
+
+// recordEvent records something the run did to its stack template, with the
+// counts it carries, if any.
+func (run *templateRunWorkflow) recordEvent(event domain.TemplateRunEvent, summary *domain.PlanSummary) error {
+	return workflow.ExecuteActivity(
+		run.ctx,
+		domain.RecordTemplateRunEventActivityName,
+		domain.TemplateRunEventActivityInput{
+			RunID:           run.input.RunID,
+			TenantID:        run.input.TenantID,
+			StackTemplateID: run.input.StackTemplateID,
+			Operation:       run.input.Operation,
+			Event:           event,
+			Summary:         summary,
+		},
 	).Get(run.ctx, nil)
 }
