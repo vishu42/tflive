@@ -1510,3 +1510,81 @@ func TestTemplatePlanWorkflowPinsLogIdentityOfFailedCommand(t *testing.T) {
 		}
 	}
 }
+
+// A job that fails still gives its executor back: the run's key is released,
+// its workspace deleted and its session completed, as after a job that
+// succeeds.
+func TestTemplatePlanWorkflowClosesTheSessionOfAFailedJob(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	var teardown []string
+	env.OnActivity(domain.PrepareWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(domain.PrepareWorkspaceActivityOutput{WorkspacePath: "/tmp/tflive/runs/tenant_123/run_123", PublicKey: []byte("run-key")}, nil)
+	mockFetchSource(t, env)
+	env.OnActivity(domain.RunTerraformActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.RunTerraformActivityInput) (domain.RunTerraformActivityOutput, error) {
+			if input.Command == domain.TerraformCommandPlan {
+				return domain.RunTerraformActivityOutput{}, errors.New("plan exploded")
+			}
+			return domain.RunTerraformActivityOutput{}, nil
+		})
+	env.OnActivity(domain.ReleaseRunKeyActivityName, mock.Anything, mock.Anything).
+		Return(func(context.Context, domain.ReleaseRunKeyActivityInput) error {
+			teardown = append(teardown, "release_key")
+			return nil
+		})
+	env.OnActivity(domain.CleanupWorkspaceActivityName, mock.Anything, mock.Anything).
+		Return(func(context.Context, domain.CleanupWorkspaceActivityInput) error {
+			teardown = append(teardown, "cleanup_workspace")
+			return nil
+		})
+
+	env.ExecuteWorkflow(TemplatePlanWorkflow, templateRunWorkflowInput(domain.OperationPlan))
+
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() == nil {
+		t.Fatal("workflow succeeded, want the failed plan to fail it")
+	}
+	if want := []string{"release_key", "cleanup_workspace"}; !reflect.DeepEqual(teardown, want) {
+		t.Fatalf("teardown = %#v, want %#v", teardown, want)
+	}
+}
+
+// A step whose record fails never starts its work, and the run ends failed.
+func TestTemplatePlanWorkflowDoesNotStartAStepItCouldNotRecord(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	fetched := false
+	var statuses []domain.TemplateRunStatus
+	mockPrepareWorkspace(t, env)
+	env.OnActivity(domain.FetchSourceActivityName, mock.Anything, mock.Anything).
+		Return(func(context.Context, domain.FetchSourceActivityInput) (domain.FetchSourceActivityOutput, error) {
+			fetched = true
+			return domain.FetchSourceActivityOutput{}, nil
+		})
+	env.OnActivity(domain.RecordTemplateRunStepActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.TemplateRunStepActivityInput) error {
+			if input.Step == domain.TemplateRunStepFetchingSource {
+				return errors.New("database unavailable")
+			}
+			return nil
+		})
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.TemplateRunStatusActivityInput) error {
+			statuses = append(statuses, input.Status)
+			return nil
+		})
+
+	env.ExecuteWorkflow(TemplatePlanWorkflow, templateRunWorkflowInput(domain.OperationPlan))
+
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() == nil {
+		t.Fatal("workflow succeeded, want the failed step write to fail it")
+	}
+	if fetched {
+		t.Fatal("fetch source ran although its step was never recorded")
+	}
+	if want := []domain.TemplateRunStatus{domain.TemplateRunRunning, domain.TemplateRunFailed}; !reflect.DeepEqual(statuses, want) {
+		t.Fatalf("statuses = %#v, want %#v", statuses, want)
+	}
+}
