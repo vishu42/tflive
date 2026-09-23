@@ -18,9 +18,10 @@ type job struct {
 	session *session
 }
 
-// step records step, then does its work. The session is reachable only here,
-// so no executor work runs outside a named step, and no step is recorded after
-// its work has started.
+// step records step, then does its work. It is the one path phase code takes
+// to the session, so executor work runs inside a named step, and no step is
+// recorded after its work has started. Phase code never uses j.session
+// directly.
 func (j *job) step(step domain.TemplateRunStep, work func(*session) error) error {
 	if err := j.record.step(step); err != nil {
 		return err

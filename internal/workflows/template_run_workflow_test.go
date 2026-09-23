@@ -1511,9 +1511,9 @@ func TestTemplatePlanWorkflowPinsLogIdentityOfFailedCommand(t *testing.T) {
 	}
 }
 
-// A job that fails still gives its executor back: the run's key is released,
-// its workspace deleted and its session completed, as after a job that
-// succeeds.
+// A job that fails still gives its executor back: the run's key is released
+// and its workspace deleted, as after a job that succeeds. (Completing the
+// session itself is not observable from the test environment.)
 func TestTemplatePlanWorkflowClosesTheSessionOfAFailedJob(t *testing.T) {
 	t.Parallel()
 

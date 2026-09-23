@@ -10,8 +10,8 @@ import (
 )
 
 // A template run is carried out at three levels, and each level is handed only
-// what it may use, so where a write belongs is settled by the types, not by
-// convention:
+// what it may use, so where a write belongs follows from the method set each
+// level works through:
 //
 //   - run is the workflow. It alone moves the run along its lifecycle
 //     (status), and it opens jobs.
@@ -20,9 +20,13 @@ import (
 //     write.
 //   - session is the executor work itself. It records nothing.
 //
-// Go's privacy stops at the package, so the lines are drawn by which value a
-// function is given: phase code receives a *job, and executor work is reachable
-// only through job.step, which records the step first.
+// Phase code receives a *job, never the run, so it has no status write, and
+// its path to executor work is job.step, which records the step first. Go's
+// privacy stops at the package, so the compiler does not forbid reaching past
+// that path from inside this package (job.session, or a recorder's context):
+// the method sets make the right path the only obvious one, and reaching past
+// it is visible in review. Enforcement by the compiler would need each level in
+// a package of its own.
 
 const (
 	// planSessionCreationTimeout fails a plan that finds no executor free in a
