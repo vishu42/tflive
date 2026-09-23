@@ -256,6 +256,8 @@ func TestRegisterControlRegistersWorkflowsAndControlActivities(t *testing.T) {
 		domain.SealPlanKeyActivityName:                      true,
 		domain.FinishPlanActivityName:                       true,
 		domain.BeginApplyActivityName:                       true,
+		domain.RecordTemplateRunStepActivityName:            true,
+		domain.RecordTemplateRunEventActivityName:           true,
 		domain.RecordTemplateRegistrationStatusActivityName: true,
 		domain.SyncTemplateActivityName:                     true,
 	}
@@ -852,6 +854,14 @@ func (recordingStore) GetTemplateRegistration(context.Context, domain.TenantID, 
 }
 
 func (recordingStore) RecordTemplateRegistrationStatus(context.Context, domain.TemplateRegistrationStatusActivityInput) error {
+	return nil
+}
+
+func (recordingStore) RecordTemplateRunStep(context.Context, domain.TemplateRunStepActivityInput) error {
+	return nil
+}
+
+func (recordingStore) RecordTemplateRunEvent(context.Context, domain.TemplateRunEventActivityInput) error {
 	return nil
 }
 

@@ -68,6 +68,23 @@ func (activities *ControlActivities) RecordTemplateRunStatus(ctx context.Context
 	return nil
 }
 
+// RecordTemplateRunStep records the step a running run has started.
+func (activities *ControlActivities) RecordTemplateRunStep(ctx context.Context, input domain.TemplateRunStepActivityInput) error {
+	if err := activities.store.RecordTemplateRunStep(ctx, input); err != nil {
+		return fmt.Errorf("record template run step: %w", err)
+	}
+	return nil
+}
+
+// RecordTemplateRunEvent records something a running run did to its stack
+// template: an apply that is now live, or a destroy starting or done.
+func (activities *ControlActivities) RecordTemplateRunEvent(ctx context.Context, input domain.TemplateRunEventActivityInput) error {
+	if err := activities.store.RecordTemplateRunEvent(ctx, input); err != nil {
+		return fmt.Errorf("record template run event: %w", err)
+	}
+	return nil
+}
+
 // RecordTemplateRunLog records the metadata for a phase log the executor has
 // already uploaded. The row is keyed by run and phase, so a retry upserts.
 func (activities *ControlActivities) RecordTemplateRunLog(ctx context.Context, log domain.TemplateRunLog) error {
