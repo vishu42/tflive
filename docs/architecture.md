@@ -604,8 +604,8 @@ queued → running → waiting_approval → approved → running → completed
 ```
 
 An auto-approved apply goes `queued → running → completed`. Any non-terminal
-run can end `failed`, and a plan waiting for approval can be discarded, which
-ends it `canceled`.
+run can end `failed`, and a plan waiting for approval, or approved but not yet
+claimed by its apply, can be discarded, which ends it `canceled`.
 
 Steps, in order: `waiting_for_executor`, `preparing_workspace`,
 `fetching_source`, `restoring_plan` (approved apply only), `initializing`,

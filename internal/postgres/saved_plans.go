@@ -87,7 +87,7 @@ func (store *Store) PlanKey(ctx context.Context, tenantID domain.TenantID, runID
 //     the stack template's last applied state, and the run completes. That
 //     holds for a plan run too: nothing was applied, but nothing needed to
 //     be. (A destroy with nothing left to destroy completes the same way; the
-//     workflow records destroy_finished for it, which is what moves the
+//     workflow records the `destroyed` event for it, which is what moves the
 //     template's lifecycle.)
 //   - Changes on a plan run: the counts are stored and the run completes. A
 //     plan run saved no plan, so there is nothing to approve.

@@ -124,7 +124,7 @@ approval.
 An auto-approved apply run (`{operation: apply, auto_approve: true}`) has no
 plan phase. `StartTemplateRun` records the approval's audit event and queues
 `TemplateApplyWorkflow` directly. `BeginApply` claims the run from `queued`,
-the apply phase records its setup statuses the way a plan phase would, skips
+the apply phase records its setup steps the way a plan phase would, skips
 `DownloadPlan`, and runs `tofu apply -auto-approve` with the run's variables.
 The counts come from the apply's "Apply complete!" line and are recorded with
 the `applied` event. A destroy is never auto-approved.
@@ -201,7 +201,7 @@ sequenceDiagram
 ```
 
 The executor's part ends at step 1, apart from releasing its key, cleaning up
-and closing the session, which now happen before the final statuses so the
+and closing the session, which now happen before the final status so the
 session is never held a moment longer than the Terraform work needs. Every write after that is a workflow step on the control worker,
 which is what keeps them ordered: the log row cannot land after `completed`.
 Recording the `applied` event is what records the stack template's last

@@ -2952,17 +2952,9 @@ func TestAppendAuditEventSuccess(t *testing.T) {
 	}
 }
 
-// TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroying verifies
-// that reaching the destroy_started status on an OperationDestroy run updates
-// the associated stack_template row to lifecycle = 'destroying'.
-// TestRecordTemplateRunStatusReconcilesInterruptedDestroyLifecycle covers
-// what TestRecordTemplateRunStatusSetsStackTemplateLifecycleToDestroying,
-// ...ToDestroyed and TestRecordsStackTemplateDestroyInterrupted used to test
-// directly: those exercised the deleted destroy_started/destroy_finished
-// statuses and the deleted recordsStackTemplateDestroyInterrupted predicate.
-// The destroying/destroyed lifecycle transitions themselves now happen from
-// TemplateRunEvent (see run_progress_test.go); this test keeps covering what
-// a destroy run's failure does to an in-progress destroy.
+// TestRecordTemplateRunStatusReconcilesInterruptedDestroyLifecycle checks
+// that a destroy run which fails after its template began destroying leaves
+// the template's lifecycle failed; otherwise the lifecycle is left alone.
 func TestRecordTemplateRunStatusReconcilesInterruptedDestroyLifecycle(t *testing.T) {
 	t.Parallel()
 

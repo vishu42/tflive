@@ -36,6 +36,33 @@ func TestRecordTemplateRunStepReplacesTheStep(t *testing.T) {
 	}
 }
 
+// Every step in domain.AllTemplateRunSteps must round-trip through the
+// step column: 0026's check constraint is a copy of that list, and this
+// keeps the two from drifting apart unnoticed.
+func TestRecordTemplateRunStepAcceptsEveryDomainStep(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool := openMigratedTestPool(t, ctx)
+	store := NewStore(pool)
+	seedTemplateRun(t, ctx, pool, templateRunAt("stack_template_123", "run_123", domain.TemplateRunRunning))
+
+	for _, step := range domain.AllTemplateRunSteps {
+		if err := store.RecordTemplateRunStep(ctx, domain.TemplateRunStepActivityInput{
+			TenantID: "tenant_123", RunID: "run_123", Step: step,
+		}); err != nil {
+			t.Fatalf("RecordTemplateRunStep(%q) returned error: %v", step, err)
+		}
+		run, err := store.GetTemplateRun(ctx, "tenant_123", "run_123")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.Step != step {
+			t.Fatalf("step = %q, want %q", run.Step, step)
+		}
+	}
+}
+
 // Only a running run has a step to start: a queued, waiting or finished one
 // is not found, and neither is another tenant's.
 func TestRecordTemplateRunStepNeedsARunningRunOfTheTenant(t *testing.T) {

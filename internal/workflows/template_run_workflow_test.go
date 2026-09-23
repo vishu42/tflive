@@ -143,6 +143,33 @@ func TestTemplatePlanWorkflowRoutesActivitiesByPlane(t *testing.T) {
 	}
 }
 
+// A plan run, as driven above, records no event: only a destroy does. A
+// destroy plan with nothing left to destroy records the destroyed event,
+// which must stay on the control queue like the run's other writes.
+func TestTemplatePlanWorkflowRoutesTheEventActivityByPlane(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	var eventQueues []string
+	env.SetOnActivityStartedListener(func(info *activity.Info, _ context.Context, _ converter.EncodedValues) {
+		if info.ActivityType.Name == domain.RecordTemplateRunEventActivityName {
+			eventQueues = append(eventQueues, info.TaskQueue)
+		}
+	})
+
+	env.ExecuteWorkflow(TemplatePlanWorkflow, templateRunWorkflowInput(domain.OperationDestroy))
+
+	assertWorkflowCompleted(t, env)
+	if len(eventQueues) == 0 {
+		t.Fatal("no event activity ran")
+	}
+	for _, queue := range eventQueues {
+		if queue != domain.ControlTaskQueue {
+			t.Fatalf("event activity queues = %#v, want all %q", eventQueues, domain.ControlTaskQueue)
+		}
+	}
+}
+
 // The executor has no database, so the log metadata it returns must be
 // recorded by the control plane: after the command, before the run completes.
 func TestTemplatePlanWorkflowRecordsCommandLogsOnControlQueue(t *testing.T) {
