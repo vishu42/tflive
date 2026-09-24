@@ -1584,3 +1584,33 @@ func TestTemplatePlanWorkflowDoesNotStartAStepItCouldNotRecord(t *testing.T) {
 		t.Fatalf("statuses = %#v, want %#v", statuses, want)
 	}
 }
+
+// A run whose failure cannot be recorded returns both errors: the one that
+// failed it, still matchable, and the one that kept its status from saying so.
+func TestTemplatePlanWorkflowKeepsItsErrorWhenItsFailureCannotBeRecorded(t *testing.T) {
+	t.Parallel()
+
+	env := newTemplateRunWorkflowTestEnvironment(t)
+	env.OnActivity(domain.RecordTemplateRunStatusActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, input domain.TemplateRunStatusActivityInput) error {
+			if input.Status == domain.TemplateRunFailed {
+				return errors.New("database unavailable")
+			}
+			return nil
+		})
+
+	env.ExecuteWorkflow(TemplatePlanWorkflow, templateRunWorkflowInput(domain.OperationType("migrate")))
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	err := env.GetWorkflowError()
+	if err == nil {
+		t.Fatal("workflow error is nil, want the validation error")
+	}
+	for _, want := range []string{"unsupported template run operation", "also failed to persist failure status", "database unavailable"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("workflow error = %q, want it to mention %q", err, want)
+		}
+	}
+}

@@ -11,8 +11,9 @@ import (
 )
 
 // A template run is two workflows, one per phase: TemplatePlanWorkflow and
-// TemplateApplyWorkflow. Each moves the run along its lifecycle (status) in
-// its own body, and does its phase in an executor session, as the run's steps.
+// TemplateApplyWorkflow. Each hands its work to lifecycle, which alone moves
+// the run along its status, and does that work in an executor session, as the
+// run's steps.
 //
 // Both are written as methods on run (below), which holds the control plane,
 // and hands the executor session to the methods that work in it.
@@ -81,6 +82,15 @@ func newRun(ctx workflow.Context, input domain.TemplateRunWorkflowInput) *run {
 	return &run{ctx: ctx, input: input}
 }
 
+// runKind is which of a run's two workflows is carrying it: the plan, or the
+// apply of a plan someone approved (or of an auto-approved run).
+type runKind int
+
+const (
+	runPlan runKind = iota
+	runApply
+)
+
 // TemplatePlanWorkflow plans a template run. A plan run ends with its plan.
 // An apply or destroy run saves a plan with changes, which then waits for
 // approval as a database row, not as a workflow: this workflow ends there,
@@ -91,25 +101,17 @@ func newRun(ctx workflow.Context, input domain.TemplateRunWorkflowInput) *run {
 // A plan with no changes completes the run. An auto-approved apply run never
 // comes here: it starts TemplateApplyWorkflow directly.
 //
-// Any error marks the run failed before the workflow returns it.
-func TemplatePlanWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowInput) (err error) {
+// Its status is lifecycle's.
+func TemplatePlanWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowInput) error {
 	r := newRun(ctx, input)
-	defer func() { err = r.fail(err) }()
-
-	if err := r.validateOperation(false); err != nil {
-		return err
-	}
-	if err := r.setStatus(domain.TemplateRunRunning, ""); err != nil {
-		return err
-	}
-	var planned domain.RunTerraformActivityOutput
-	if err := r.inSession(planSessionCreationTimeout, func(ctx workflow.Context) (err error) {
-		planned, err = r.plan(ctx)
-		return err
-	}); err != nil {
-		return err
-	}
-	return r.settlePlan(planned)
+	return r.lifecycle(runPlan, func() (domain.RunTerraformActivityOutput, error) {
+		var planned domain.RunTerraformActivityOutput
+		err := r.inSession(planSessionCreationTimeout, func(ctx workflow.Context) (err error) {
+			planned, err = r.plan(ctx)
+			return err
+		})
+		return planned, err
+	})
 }
 
 // TemplateApplyWorkflow applies the plan a run saved, once someone approved it.
@@ -121,27 +123,15 @@ func TemplatePlanWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflow
 //
 // An auto-approved apply run starts here with no plan at all, and applies the
 // way `tofu apply -auto-approve` does.
-func TemplateApplyWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowInput) (err error) {
+func TemplateApplyWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowInput) error {
 	r := newRun(ctx, input)
-	defer func() { err = r.fail(err) }()
-
-	if err := r.validateOperation(true); err != nil {
-		return err
-	}
-	claimed, err := r.claimApply()
-	if err != nil || !claimed {
-		return err
-	}
-	if err := r.inSession(applySessionCreationTimeout, func(ctx workflow.Context) error {
-		return r.apply(ctx)
-	}); err != nil {
-		return err
-	}
-	return r.setStatus(domain.TemplateRunCompleted, "")
+	return r.lifecycle(runApply, func() (domain.RunTerraformActivityOutput, error) {
+		return domain.RunTerraformActivityOutput{}, r.inSession(applySessionCreationTimeout, r.apply)
+	})
 }
 
 // validateOperation rejects an operation a workflow does not run before any
-// session or workspace exists. Returning the error lets fail record the single
+// session or workspace exists. Returning the error lets lifecycle record the single
 // Failed status, with the reason attached as the run's error summary.
 //
 // The plan workflow runs every operation's plan, but never an auto-approved
@@ -528,80 +518,100 @@ func (r *run) inSession(creationTimeout time.Duration, fn func(workflow.Context)
 	return fn(sessionCtx)
 }
 
-// setStatus moves the run along its lifecycle.
-func (r *run) setStatus(status domain.TemplateRunStatus, errorSummary string) error {
-	return workflow.ExecuteActivity(
-		r.ctx,
-		domain.RecordTemplateRunStatusActivityName,
-		domain.TemplateRunStatusActivityInput{
-			RunID:           r.input.RunID,
-			TenantID:        r.input.TenantID,
-			StackTemplateID: r.input.StackTemplateID,
-			Operation:       r.input.Operation,
-			Status:          status,
-			ErrorSummary:    errorSummary,
-		},
-	).Get(r.ctx, nil)
-}
-
-// fail marks the run failed with err, and does nothing without one. If
-// recording the failure also fails, the run's persisted status will not match
-// reality, so both errors are surfaced: the original wrapped with %w to stay
-// matchable by callers, the persistence error appended as context.
-func (r *run) fail(err error) error {
-	if err == nil {
-		return nil
+// lifecycle carries a run through its status, and is the only code that writes
+// it: every status write is here, and so is every activity that moves the
+// status as part of its own work, BeginApply and FinishPlan.
+//
+// A run whose operation its workflow does not run fails without ever running.
+// A plan starts running here. An apply claims its run instead, moving it from
+// approved (or, auto-approved, queued) to running; a lost claim ends quietly,
+// since the discard that won it already recorded the run's end.
+//
+// A finished plan is settled: a plan with nothing to change, or a plan run,
+// completes, and an apply or destroy run with changes waits for approval,
+// which FinishPlan records. A destroy with nothing left to destroy records that
+// it is destroyed before it completes, which is what moves its stack template.
+// A finished apply completes.
+//
+// Any error marks the run failed before lifecycle returns it. If recording the
+// failure also fails, the run's persisted status will not match reality, so
+// both errors are surfaced: the original wrapped with %w to stay matchable by
+// callers, the persistence error appended as context.
+func (r *run) lifecycle(kind runKind, work func() (domain.RunTerraformActivityOutput, error)) (err error) {
+	setStatus := func(status domain.TemplateRunStatus, errorSummary string) error {
+		return workflow.ExecuteActivity(
+			r.ctx,
+			domain.RecordTemplateRunStatusActivityName,
+			domain.TemplateRunStatusActivityInput{
+				RunID:           r.input.RunID,
+				TenantID:        r.input.TenantID,
+				StackTemplateID: r.input.StackTemplateID,
+				Operation:       r.input.Operation,
+				Status:          status,
+				ErrorSummary:    errorSummary,
+			},
+		).Get(r.ctx, nil)
 	}
-	if failureErr := r.setStatus(domain.TemplateRunFailed, fmt.Sprintf("template run activity failed: %v", err)); failureErr != nil {
-		return fmt.Errorf("%w (also failed to persist failure status: %w)", err, failureErr)
-	}
-	return err
-}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if failureErr := setStatus(domain.TemplateRunFailed, fmt.Sprintf("template run activity failed: %v", err)); failureErr != nil {
+			err = fmt.Errorf("%w (also failed to persist failure status: %w)", err, failureErr)
+		}
+	}()
 
-// claimApply begins the apply workflow's run: approved (or, auto-approved,
-// queued) becomes running, or nothing happens because the plan was discarded
-// first. A lost claim is not a failure, since the discard already recorded the
-// run's end.
-func (r *run) claimApply() (bool, error) {
-	var claim domain.BeginApplyActivityOutput
-	if err := workflow.ExecuteActivity(r.ctx, domain.BeginApplyActivityName, domain.BeginApplyActivityInput{
-		TenantID:    r.input.TenantID,
-		RunID:       r.input.RunID,
-		AutoApprove: r.input.AutoApprove,
-	}).Get(r.ctx, &claim); err != nil {
-		return false, err
+	if err := r.validateOperation(kind == runApply); err != nil {
+		return err
 	}
-	return claim.Claimed, nil
-}
+	switch kind {
+	case runPlan:
+		if err := setStatus(domain.TemplateRunRunning, ""); err != nil {
+			return err
+		}
+	case runApply:
+		var claim domain.BeginApplyActivityOutput
+		if err := workflow.ExecuteActivity(r.ctx, domain.BeginApplyActivityName, domain.BeginApplyActivityInput{
+			TenantID:    r.input.TenantID,
+			RunID:       r.input.RunID,
+			AutoApprove: r.input.AutoApprove,
+		}).Get(r.ctx, &claim); err != nil {
+			return err
+		}
+		if !claim.Claimed {
+			return nil
+		}
+	}
 
-// settlePlan records a finished plan and settles what happens next. An apply
-// or destroy run with changes waits for someone to approve its saved plan; a
-// plan run, or any plan with nothing to change, completes.
-func (r *run) settlePlan(planned domain.RunTerraformActivityOutput) error {
+	output, err := work()
+	if err != nil {
+		return err
+	}
+	if kind == runApply {
+		return setStatus(domain.TemplateRunCompleted, "")
+	}
+
 	var outcome domain.PlanOutcome
 	if err := workflow.ExecuteActivity(r.ctx, domain.FinishPlanActivityName, domain.FinishPlanActivityInput{
 		TenantID:        r.input.TenantID,
 		RunID:           r.input.RunID,
 		StackTemplateID: r.input.StackTemplateID,
 		Operation:       r.input.Operation,
-		HasChanges:      planned.HasChanges,
-		Summary:         planned.Summary,
+		HasChanges:      output.HasChanges,
+		Summary:         output.Summary,
 	}).Get(r.ctx, &outcome); err != nil {
 		return err
 	}
-
 	switch outcome {
 	case domain.PlanOutcomeNoChanges:
-		// Nothing left to destroy is a destroy that is done: recording it is
-		// what moves the stack template to destroyed.
 		if r.input.Operation == domain.OperationDestroy {
 			if err := r.event(domain.TemplateRunDestroyed, nil); err != nil {
 				return err
 			}
 		}
-		return r.setStatus(domain.TemplateRunCompleted, "")
+		return setStatus(domain.TemplateRunCompleted, "")
 	case domain.PlanOutcomePlanned:
-		return r.setStatus(domain.TemplateRunCompleted, "")
+		return setStatus(domain.TemplateRunCompleted, "")
 	case domain.PlanOutcomeWaiting:
 		return nil
 	default:
