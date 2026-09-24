@@ -10,24 +10,12 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// A template run is carried out at three levels, and each level is handed only
-// what it may use, so where a write belongs follows from the method set each
-// level works through:
+// A template run is two workflows, one per phase: TemplatePlanWorkflow and
+// TemplateApplyWorkflow. Each moves the run along its lifecycle (status) in
+// its own body, and does its phase in an executor session, as the run's steps.
 //
-//   - run is the workflow. It alone moves the run along its lifecycle
-//     (status), and it opens jobs.
-//   - runJob is one executor session, seen as the ordered steps it runs. It
-//     embeds the generic job (job.go), records steps, the run's events and
-//     command logs, and has no status write.
-//   - session is the executor work itself. It records nothing.
-//
-// Phase code receives a *runJob, never the run, so it has no status write, and
-// its path to executor work is step, which records the step first. Go's
-// privacy stops at the package, so the compiler does not forbid reaching past
-// that path from inside this package (the job's worker, or a recorder's
-// context): the method sets make the right path the only obvious one, and
-// reaching past it is visible in review. Enforcement by the compiler would
-// need each level in a package of its own.
+// Both are written as methods on run (below), which holds the control plane,
+// and hands the executor session to the methods that work in it.
 
 const (
 	// planSessionCreationTimeout fails a plan that finds no executor free in a
@@ -55,6 +43,44 @@ var defaultRunRetryPolicy = &temporal.RetryPolicy{
 	},
 }
 
+// terraformRetryPolicy is applied to long-running Terraform commands (plan,
+// apply). MaximumAttempts is temporarily pinned to 1 (no automatic retries) —
+// in Temporal, 0 means unlimited attempts, not zero retries, so 1 is the
+// value that disables retries.
+var terraformRetryPolicy = &temporal.RetryPolicy{
+	InitialInterval:    time.Minute,
+	BackoffCoefficient: 2.0,
+	MaximumInterval:    10 * time.Minute,
+	MaximumAttempts:    1,
+	NonRetryableErrorTypes: []string{
+		"InvalidConfig",
+		"UnsupportedCommand",
+	},
+}
+
+// run is a template run, as both workflows carry it out. It holds the
+// control-queue context and the run's input, and it is the run's Recorder.
+//
+// Every method schedules control-plane work, the run's writes and the secrets
+// sealed for its executor, on r.ctx. A method that also takes a ctx does
+// executor work on it: ctx is the phase's session.
+type run struct {
+	ctx   workflow.Context
+	input domain.TemplateRunWorkflowInput
+}
+
+// newRun sets the baseline options for every activity the run schedules
+// through it: control-plane work, on the control queue. Executor work goes
+// through the session inSession opens, on the execution queue.
+func newRun(ctx workflow.Context, input domain.TemplateRunWorkflowInput) *run {
+	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		TaskQueue:           domain.ControlTaskQueue,
+		StartToCloseTimeout: time.Minute,
+		RetryPolicy:         defaultRunRetryPolicy,
+	})
+	return &run{ctx: ctx, input: input}
+}
+
 // TemplatePlanWorkflow plans a template run. A plan run ends with its plan.
 // An apply or destroy run saves a plan with changes, which then waits for
 // approval as a database row, not as a workflow: this workflow ends there,
@@ -66,22 +92,24 @@ var defaultRunRetryPolicy = &temporal.RetryPolicy{
 // comes here: it starts TemplateApplyWorkflow directly.
 //
 // Any error marks the run failed before the workflow returns it.
-func TemplatePlanWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowInput) error {
+func TemplatePlanWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowInput) (err error) {
 	r := newRun(ctx, input)
-	return r.finish(func() error {
-		if err := r.start(); err != nil {
-			return err
-		}
-		var planned domain.RunTerraformActivityOutput
-		err := r.openJob(planSessionCreationTimeout, domain.RunPhasePlan, false, func(j *runJob) (err error) {
-			planned, err = plan(j)
-			return err
-		})
-		if err != nil {
-			return err
-		}
-		return r.settlePlan(planned)
-	}())
+	defer func() { err = r.fail(err) }()
+
+	if err := r.validateOperation(false); err != nil {
+		return err
+	}
+	if err := r.setStatus(domain.TemplateRunRunning, ""); err != nil {
+		return err
+	}
+	var planned domain.RunTerraformActivityOutput
+	if err := r.inSession(planSessionCreationTimeout, func(ctx workflow.Context) (err error) {
+		planned, err = r.plan(ctx)
+		return err
+	}); err != nil {
+		return err
+	}
+	return r.settlePlan(planned)
 }
 
 // TemplateApplyWorkflow applies the plan a run saved, once someone approved it.
@@ -93,58 +121,28 @@ func TemplatePlanWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflow
 //
 // An auto-approved apply run starts here with no plan at all, and applies the
 // way `tofu apply -auto-approve` does.
-func TemplateApplyWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowInput) error {
+func TemplateApplyWorkflow(ctx workflow.Context, input domain.TemplateRunWorkflowInput) (err error) {
 	r := newRun(ctx, input)
-	return r.finish(func() error {
-		claimed, err := r.claim()
-		if err != nil || !claimed {
-			return err
-		}
-		if err := r.openJob(applySessionCreationTimeout, domain.RunPhaseApply, true, apply); err != nil {
-			return err
-		}
-		return r.complete()
-	}())
-}
+	defer func() { err = r.fail(err) }()
 
-// run is a template run's workflow: the one place its status changes. It holds
-// the control-queue context, so everything it schedules itself is
-// control-plane work.
-type run struct {
-	ctx   workflow.Context
-	input domain.TemplateRunWorkflowInput
-}
-
-// newRun sets the baseline options for every activity scheduled on the
-// workflow context. Activities scheduled on it are control-plane work, so they
-// go to the control queue; execution work goes through a job's session on the
-// execution queue.
-func newRun(ctx workflow.Context, input domain.TemplateRunWorkflowInput) *run {
-	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		TaskQueue:           domain.ControlTaskQueue,
-		StartToCloseTimeout: time.Minute,
-		RetryPolicy:         defaultRunRetryPolicy,
-	})
-	return &run{ctx: ctx, input: input}
-}
-
-// finish owns terminal error handling for both workflows. If recording a
-// failure also fails, the run's persisted status will not match reality, so
-// both errors are surfaced: the original wrapped with %w to stay matchable by
-// callers, the persistence error appended as context.
-func (r *run) finish(err error) error {
-	if err == nil {
-		return nil
+	if err := r.validateOperation(true); err != nil {
+		return err
 	}
-	if failureErr := r.recordStatus(domain.TemplateRunFailed, fmt.Sprintf("template run activity failed: %v", err)); failureErr != nil {
-		return fmt.Errorf("%w (also failed to persist failure status: %v)", err, failureErr)
+	claimed, err := r.claimApply()
+	if err != nil || !claimed {
+		return err
 	}
-	return err
+	if err := r.inSession(applySessionCreationTimeout, func(ctx workflow.Context) error {
+		return r.apply(ctx)
+	}); err != nil {
+		return err
+	}
+	return r.setStatus(domain.TemplateRunCompleted, "")
 }
 
-// validateOperation rejects an operation this workflow does not run before any
-// session or workspace exists. Returning the error lets finish record the
-// single Failed status, with the reason attached as the run's error summary.
+// validateOperation rejects an operation a workflow does not run before any
+// session or workspace exists. Returning the error lets fail record the single
+// Failed status, with the reason attached as the run's error summary.
 //
 // The plan workflow runs every operation's plan, but never an auto-approved
 // one, which has no plan. The apply workflow applies apply and destroy runs,
@@ -170,22 +168,401 @@ func (r *run) validateOperation(applying bool) error {
 	return fmt.Errorf("unsupported template run operation %q", r.input.Operation)
 }
 
-// start begins the plan workflow's run: queued becomes running.
-func (r *run) start() error {
-	if err := r.validateOperation(false); err != nil {
-		return err
+// plan is the plan phase's work. An apply or destroy run keeps a plan that has
+// changes, for someone to approve; a plan run keeps nothing but its log.
+func (r *run) plan(ctx workflow.Context) (domain.RunTerraformActivityOutput, error) {
+	ws, err := r.openWorkspace(ctx, domain.RunPhasePlan)
+	defer r.closeWorkspace(ctx, ws, false)
+	if err != nil {
+		return domain.RunTerraformActivityOutput{}, err
 	}
-	return r.recordStatus(domain.TemplateRunRunning, "")
+	if ws, err = r.readyWorkspace(ctx, ws, false); err != nil {
+		return domain.RunTerraformActivityOutput{}, err
+	}
+
+	command := domain.TerraformCommandPlan
+	if r.input.Operation == domain.OperationDestroy {
+		command = domain.TerraformCommandPlanDestroy
+	}
+	output, err := r.terraform(ctx, ws, command)
+	if err != nil {
+		return domain.RunTerraformActivityOutput{}, err
+	}
+	if !output.HasChanges || r.input.Operation == domain.OperationPlan {
+		return output, nil
+	}
+	return output, r.savePlan(ctx, ws)
 }
 
-// claim begins the apply workflow's run: approved (or, auto-approved, queued)
-// becomes running, or nothing happens because the plan was discarded first. A
-// lost claim is not a failure, since the discard already recorded the run's
-// end.
-func (r *run) claim() (bool, error) {
-	if err := r.validateOperation(true); err != nil {
-		return false, err
+// apply is the apply phase's work: it applies an approved run's saved plan,
+// or, for an auto-approved apply run, applies without one. It records what the
+// command does to the stack template around it: a destroy marks the template
+// destroying before it starts and destroyed once it succeeds, and an apply
+// records what it applied as live, with the counts an auto-approved apply
+// reports, since it had no plan to count.
+func (r *run) apply(ctx workflow.Context) error {
+	ws, err := r.openWorkspace(ctx, domain.RunPhaseApply)
+	defer r.closeWorkspace(ctx, ws, true)
+	if err != nil {
+		return err
 	}
+	if ws, err = r.readyWorkspace(ctx, ws, !r.input.AutoApprove); err != nil {
+		return err
+	}
+
+	destroy := r.input.Operation == domain.OperationDestroy
+	command := domain.TerraformCommandApply
+	switch {
+	case r.input.AutoApprove:
+		command = domain.TerraformCommandApplyAutoApprove
+	case destroy:
+		command = domain.TerraformCommandDestroy
+	}
+
+	if destroy {
+		if err := r.event(domain.TemplateRunDestroying, nil); err != nil {
+			return err
+		}
+	}
+	output, err := r.terraform(ctx, ws, command)
+	if err != nil {
+		return err
+	}
+	if destroy {
+		return r.event(domain.TemplateRunDestroyed, nil)
+	}
+	var summary *domain.PlanSummary
+	if r.input.AutoApprove {
+		summary = &output.Summary
+	}
+	return r.event(domain.TemplateRunApplied, summary)
+}
+
+// workspace is one phase's working directory on its executor, and the key the
+// executor holds for the run. Each phase opens its own, since the apply
+// usually lands on a different executor from the plan.
+type workspace struct {
+	// phase is the half of the run the workspace serves, which names its
+	// commands' logs.
+	phase         domain.RunPhase
+	path          string
+	terraformPath string
+	// publicKey is the executor's sealing key for this run; everything secret
+	// the executor needs is sealed to it on the control plane.
+	publicKey []byte
+}
+
+// openWorkspace creates the phase's filesystem workspace on the executor, and
+// a sealing key for the run. Workflows cannot create directories directly
+// because Temporal workflows must stay deterministic, so the side effect lives
+// in PrepareWorkspace.
+func (r *run) openWorkspace(ctx workflow.Context, phase domain.RunPhase) (workspace, error) {
+	ws := workspace{phase: phase}
+	var output domain.PrepareWorkspaceActivityOutput
+	if err := ExecuteStep(
+		ctx, r, domain.TemplateRunStepPreparingWorkspace,
+		domain.PrepareWorkspaceActivityName,
+		domain.PrepareWorkspaceActivityInput{RunID: r.input.RunID, TenantID: r.input.TenantID},
+	).Get(ctx, &output); err != nil {
+		return ws, err
+	}
+	ws.path = output.WorkspacePath
+	ws.publicKey = output.PublicKey
+	return ws, nil
+}
+
+// readyWorkspace readies an open workspace for Terraform: the source at the
+// run's commit, then init and workspace selection. With restorePlan, the saved
+// plan and its lock file are put back once the source is in place, so init
+// installs the providers the plan was made with.
+func (r *run) readyWorkspace(ctx workflow.Context, ws workspace, restorePlan bool) (workspace, error) {
+	var err error
+	if ws.terraformPath, err = r.fetchSource(ctx, ws); err != nil {
+		return ws, err
+	}
+	if restorePlan {
+		if err := r.restoreSavedPlan(ctx, ws); err != nil {
+			return ws, err
+		}
+	}
+	if _, err := r.terraform(ctx, ws, domain.TerraformCommandInit); err != nil {
+		return ws, err
+	}
+	_, err = r.terraform(ctx, ws, domain.TerraformCommandSelectWorkspace)
+	return ws, err
+}
+
+// closeWorkspace releases the run's key and deletes the workspace, and with
+// deletePlan its saved plan too. It is best effort: a session that already
+// failed has no executor left to clean up, and what it leaves behind is a
+// directory and an unreadable plan file. The key ring evicts abandoned keys on
+// its own.
+func (r *run) closeWorkspace(ctx workflow.Context, ws workspace, deletePlan bool) {
+	if ws.publicKey != nil {
+		_ = workflow.ExecuteActivity(
+			ctx,
+			domain.ReleaseRunKeyActivityName,
+			domain.ReleaseRunKeyActivityInput{TenantID: r.input.TenantID, RunID: r.input.RunID},
+		).Get(ctx, nil)
+	}
+	if ws.path != "" {
+		_ = workflow.ExecuteActivity(
+			ctx,
+			domain.CleanupWorkspaceActivityName,
+			domain.CleanupWorkspaceActivityInput{
+				TenantID:      r.input.TenantID,
+				RunID:         r.input.RunID,
+				WorkspacePath: ws.path,
+				DeletePlan:    deletePlan,
+			},
+		).Get(ctx, nil)
+	}
+}
+
+// fetchSource checks the run's commit out into the workspace, with a
+// repository token sealed to the workspace's key, and returns the path of the
+// Terraform root within it.
+func (r *run) fetchSource(ctx workflow.Context, ws workspace) (string, error) {
+	var token domain.SealSourceTokenActivityOutput
+	if err := workflow.ExecuteActivity(r.ctx, domain.SealSourceTokenActivityName, domain.SealSourceTokenActivityInput{
+		RepoOwner: r.input.RepoOwner,
+		RepoName:  r.input.RepoName,
+		PublicKey: ws.publicKey,
+	}).Get(r.ctx, &token); err != nil {
+		return "", err
+	}
+
+	// A clone of a large repository can outlast the default one-minute budget,
+	// so FetchSource gets a longer one of its own rather than raising the
+	// default for every other activity in the run.
+	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 3 * time.Minute,
+		RetryPolicy:         defaultRunRetryPolicy,
+	})
+	var output domain.FetchSourceActivityOutput
+	if err := ExecuteStep(ctx, r, domain.TemplateRunStepFetchingSource, domain.FetchSourceActivityName, domain.FetchSourceActivityInput{
+		RunID:             r.input.RunID,
+		TenantID:          r.input.TenantID,
+		WorkspacePath:     ws.path,
+		RepoOwner:         r.input.RepoOwner,
+		RepoName:          r.input.RepoName,
+		SourceRef:         r.input.SelectedRef,
+		ResolvedCommitSHA: r.input.ResolvedCommitSHA,
+		RootPath:          r.input.RootPath,
+		SealedToken:       token.SealedToken,
+		FetchHint:         token.FetchHint,
+	}).Get(ctx, &output); err != nil {
+		return "", err
+	}
+	return output.TerraformPath, nil
+}
+
+// savePlan uploads the plan the workspace just made, under a plan key created
+// for it.
+func (r *run) savePlan(ctx workflow.Context, ws workspace) error {
+	return r.transferPlan(ctx, ws, domain.TemplateRunStepSavingPlan, domain.UploadPlanActivityName, true)
+}
+
+// restoreSavedPlan puts the saved plan back into the workspace, with the plan
+// key it was saved with.
+func (r *run) restoreSavedPlan(ctx workflow.Context, ws workspace) error {
+	return r.transferPlan(ctx, ws, domain.TemplateRunStepRestoringPlan, domain.DownloadPlanActivityName, false)
+}
+
+// transferPlan uploads or downloads the run's saved plan on the executor, as
+// step, with the run's plan key sealed to the workspace's key. The plan phase
+// creates the plan key; the apply phase reads the one the plan was saved with.
+func (r *run) transferPlan(ctx workflow.Context, ws workspace, step domain.TemplateRunStep, activityName string, createKey bool) error {
+	var planKey domain.SealPlanKeyActivityOutput
+	if err := workflow.ExecuteActivity(r.ctx, domain.SealPlanKeyActivityName, domain.SealPlanKeyActivityInput{
+		TenantID:  r.input.TenantID,
+		RunID:     r.input.RunID,
+		PublicKey: ws.publicKey,
+		Create:    createKey,
+	}).Get(r.ctx, &planKey); err != nil {
+		return err
+	}
+
+	// A saved plan can run to tens of megabytes, more than the default budget
+	// is sized for.
+	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 5 * time.Minute,
+		RetryPolicy:         defaultRunRetryPolicy,
+	})
+	return ExecuteStep(ctx, r, step, activityName, domain.PlanArtifactActivityInput{
+		TenantID:      r.input.TenantID,
+		RunID:         r.input.RunID,
+		TerraformPath: ws.terraformPath,
+		SealedPlanKey: planKey.SealedPlanKey,
+	}).Get(ctx, nil)
+}
+
+// terraform runs one Terraform command on the executor as the step it is,
+// with the run's credentials sealed to the workspace's key, then records the
+// log the executor uploaded for it. A failed command's log is what explains the
+// failure, so it is recorded before the error propagates.
+func (r *run) terraform(ctx workflow.Context, ws workspace, command domain.TerraformCommandType) (domain.RunTerraformActivityOutput, error) {
+	// Sealed for every command rather than once per run: credentials are read
+	// fresh each time, and an apply can start a day after its plan.
+	var credentials domain.SealRunCredentialsActivityOutput
+	if err := workflow.ExecuteActivity(r.ctx, domain.SealRunCredentialsActivityName, domain.SealRunCredentialsActivityInput{
+		TenantID:        r.input.TenantID,
+		StackTemplateID: r.input.StackTemplateID,
+		PublicKey:       ws.publicKey,
+	}).Get(r.ctx, &credentials); err != nil {
+		return domain.RunTerraformActivityOutput{}, err
+	}
+
+	// Every Terraform command gets the configured budget and the more generous
+	// retry policy, including init and workspace selection: init downloads
+	// providers and modules over the network, which is no more predictable
+	// than the plan that follows it.
+	//
+	// The heartbeat timeout is what distinguishes a command that is working
+	// from one whose executor is gone: without it, a dead executor is
+	// indistinguishable from a slow apply until the whole Terraform timeout
+	// expires.
+	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: r.terraformTimeout(),
+		HeartbeatTimeout:    domain.TerraformHeartbeatTimeout,
+		RetryPolicy:         terraformRetryPolicy,
+	})
+	var output domain.RunTerraformActivityOutput
+	if err := ExecuteStep(ctx, r, terraformCommandSteps[command], domain.RunTerraformActivityName, domain.RunTerraformActivityInput{
+		RunID:             r.input.RunID,
+		TenantID:          r.input.TenantID,
+		StackTemplateID:   r.input.StackTemplateID,
+		WorkspacePath:     ws.path,
+		TerraformPath:     ws.terraformPath,
+		WorkspaceName:     r.input.WorkspaceName,
+		Command:           command,
+		ConfigJSON:        r.input.ConfigJSON,
+		RunPhase:          ws.phase,
+		SealedEnvironment: credentials.SealedEnvironment,
+	}).Get(ctx, &output); err != nil {
+		if log, ok := failedCommandLog(err); ok {
+			if logErr := r.log(log); logErr != nil {
+				return domain.RunTerraformActivityOutput{}, fmt.Errorf("%w (also failed to record its log: %v)", err, logErr)
+			}
+		}
+		return domain.RunTerraformActivityOutput{}, err
+	}
+	if err := r.log(output.Log); err != nil {
+		return domain.RunTerraformActivityOutput{}, err
+	}
+	return output, nil
+}
+
+// terraformTimeout is how long one Terraform command may run before Temporal
+// fails it. It comes from the deployment's configuration, stamped onto the
+// input when the run was dispatched, so a run keeps the budget it started with
+// even if the control plane is reconfigured while it is in flight. Zero means
+// nothing configured it, which is the default.
+func (r *run) terraformTimeout() time.Duration {
+	if r.input.TerraformTimeout > 0 {
+		return r.input.TerraformTimeout
+	}
+	return domain.DefaultTerraformTimeout
+}
+
+// terraformCommandSteps is the step each Terraform command is. Planning a
+// destroy is planning, and applying one is applying: the run's operation
+// already says it is a destroy.
+var terraformCommandSteps = map[domain.TerraformCommandType]domain.TemplateRunStep{
+	domain.TerraformCommandInit:             domain.TemplateRunStepInitializing,
+	domain.TerraformCommandSelectWorkspace:  domain.TemplateRunStepSelectingWorkspace,
+	domain.TerraformCommandPlan:             domain.TemplateRunStepPlanning,
+	domain.TerraformCommandPlanDestroy:      domain.TemplateRunStepPlanning,
+	domain.TerraformCommandApply:            domain.TemplateRunStepApplying,
+	domain.TerraformCommandDestroy:          domain.TemplateRunStepApplying,
+	domain.TerraformCommandApplyAutoApprove: domain.TemplateRunStepApplying,
+}
+
+// failedCommandLog recovers the log metadata RunTerraform attaches to a command
+// failure whose log was already uploaded.
+func failedCommandLog(err error) (domain.TemplateRunLog, bool) {
+	var applicationErr *temporal.ApplicationError
+	if !errors.As(err, &applicationErr) || applicationErr.Type() != domain.TerraformCommandFailedErrorType || !applicationErr.HasDetails() {
+		return domain.TemplateRunLog{}, false
+	}
+	var log domain.TemplateRunLog
+	if err := applicationErr.Details(&log); err != nil {
+		return domain.TemplateRunLog{}, false
+	}
+	return log, true
+}
+
+// Record records the step the run is starting, for the people watching it.
+func (r *run) Record(step domain.TemplateRunStep) error {
+	return workflow.ExecuteActivity(
+		r.ctx,
+		domain.RecordTemplateRunStepActivityName,
+		domain.TemplateRunStepActivityInput{
+			RunID:    r.input.RunID,
+			TenantID: r.input.TenantID,
+			Step:     step,
+		},
+	).Get(r.ctx, nil)
+}
+
+// inSession runs fn in an executor session, on the session's context, and
+// completes the session after, whether fn succeeded or not. Waiting for the
+// executor is the run's first step: an approved apply can wait minutes for a
+// free one.
+//
+// CreateSession takes its base queue from the context's activity options, so
+// naming the execution queue here is what places the session, and every
+// activity fn schedules on its context, on an executor host.
+func (r *run) inSession(creationTimeout time.Duration, fn func(workflow.Context) error) error {
+	if err := r.Record(domain.TemplateRunStepWaitingForExecutor); err != nil {
+		return err
+	}
+	sessionCtx, err := workflow.CreateSession(workflow.WithTaskQueue(r.ctx, domain.ExecutionTaskQueue), &workflow.SessionOptions{
+		CreationTimeout:  creationTimeout,
+		ExecutionTimeout: 24 * time.Hour,
+	})
+	if err != nil {
+		return err
+	}
+	defer workflow.CompleteSession(sessionCtx)
+	return fn(sessionCtx)
+}
+
+// setStatus moves the run along its lifecycle.
+func (r *run) setStatus(status domain.TemplateRunStatus, errorSummary string) error {
+	return workflow.ExecuteActivity(
+		r.ctx,
+		domain.RecordTemplateRunStatusActivityName,
+		domain.TemplateRunStatusActivityInput{
+			RunID:           r.input.RunID,
+			TenantID:        r.input.TenantID,
+			StackTemplateID: r.input.StackTemplateID,
+			Operation:       r.input.Operation,
+			Status:          status,
+			ErrorSummary:    errorSummary,
+		},
+	).Get(r.ctx, nil)
+}
+
+// fail marks the run failed with err, and does nothing without one. If
+// recording the failure also fails, the run's persisted status will not match
+// reality, so both errors are surfaced: the original wrapped with %w to stay
+// matchable by callers, the persistence error appended as context.
+func (r *run) fail(err error) error {
+	if err == nil {
+		return nil
+	}
+	if failureErr := r.setStatus(domain.TemplateRunFailed, fmt.Sprintf("template run activity failed: %v", err)); failureErr != nil {
+		return fmt.Errorf("%w (also failed to persist failure status: %v)", err, failureErr)
+	}
+	return err
+}
+
+// claimApply begins the apply workflow's run: approved (or, auto-approved,
+// queued) becomes running, or nothing happens because the plan was discarded
+// first. A lost claim is not a failure, since the discard already recorded the
+// run's end.
+func (r *run) claimApply() (bool, error) {
 	var claim domain.BeginApplyActivityOutput
 	if err := workflow.ExecuteActivity(r.ctx, domain.BeginApplyActivityName, domain.BeginApplyActivityInput{
 		TenantID:    r.input.TenantID,
@@ -218,13 +595,13 @@ func (r *run) settlePlan(planned domain.RunTerraformActivityOutput) error {
 		// Nothing left to destroy is a destroy that is done: recording it is
 		// what moves the stack template to destroyed.
 		if r.input.Operation == domain.OperationDestroy {
-			if err := r.recorder().event(domain.TemplateRunDestroyed, nil); err != nil {
+			if err := r.event(domain.TemplateRunDestroyed, nil); err != nil {
 				return err
 			}
 		}
-		return r.complete()
+		return r.setStatus(domain.TemplateRunCompleted, "")
 	case domain.PlanOutcomePlanned:
-		return r.complete()
+		return r.setStatus(domain.TemplateRunCompleted, "")
 	case domain.PlanOutcomeWaiting:
 		return nil
 	default:
@@ -232,229 +609,21 @@ func (r *run) settlePlan(planned domain.RunTerraformActivityOutput) error {
 	}
 }
 
-func (r *run) complete() error {
-	return r.recordStatus(domain.TemplateRunCompleted, "")
-}
-
-// recordStatus moves the run along its lifecycle. Only run has it.
-func (r *run) recordStatus(status domain.TemplateRunStatus, errorSummary string) error {
+// event records something the run did to its stack template, with the counts
+// it carries, if any.
+func (r *run) event(event domain.TemplateRunEvent, summary *domain.PlanSummary) error {
 	return workflow.ExecuteActivity(
 		r.ctx,
-		domain.RecordTemplateRunStatusActivityName,
-		domain.TemplateRunStatusActivityInput{
+		domain.RecordTemplateRunEventActivityName,
+		domain.TemplateRunEventActivityInput{
 			RunID:           r.input.RunID,
 			TenantID:        r.input.TenantID,
 			StackTemplateID: r.input.StackTemplateID,
 			Operation:       r.input.Operation,
-			Status:          status,
-			ErrorSummary:    errorSummary,
-		},
-	).Get(r.ctx, nil)
-}
-
-func (r *run) recorder() recorder {
-	return recorder{ctx: r.ctx, input: r.input}
-}
-
-// openJob runs fn as one job on an executor and always gives the executor back
-// afterwards, whether fn succeeded or not. Waiting for the executor is the
-// job's first step: an approved apply can wait minutes for a free one.
-//
-// fn receives the job, never the run: a job records steps and events, and has
-// no way to change the run's status.
-func (r *run) openJob(creationTimeout time.Duration, phase domain.RunPhase, deletePlan bool, fn func(*runJob) error) error {
-	record := r.recorder()
-	if err := record.step(domain.TemplateRunStepWaitingForExecutor); err != nil {
-		return err
-	}
-	s, err := openSession(r.ctx, r.input, phase, creationTimeout)
-	if err != nil {
-		return err
-	}
-	err = fn(newRunJob(r.input, record, s))
-	s.close(deletePlan)
-	return err
-}
-
-// runJob is a template run's job: one executor session, seen as the ordered
-// steps it runs. It records the run's steps, events and command logs. It has
-// no status write: only run moves the run along its lifecycle.
-type runJob struct {
-	job[domain.TemplateRunStep, *session]
-	input  domain.TemplateRunWorkflowInput
-	record recorder
-}
-
-// newRunJob opens a job over s whose steps are recorded as the run's.
-func newRunJob(input domain.TemplateRunWorkflowInput, record recorder, s *session) *runJob {
-	return &runJob{
-		job:    job[domain.TemplateRunStep, *session]{recordStep: record.step, worker: s},
-		input:  input,
-		record: record,
-	}
-}
-
-// terraform runs one Terraform command as the step it is, then records the log
-// the executor uploaded for it. A failed command's log is what explains the
-// failure, so it is recorded before the error propagates.
-func (j *runJob) terraform(command domain.TerraformCommandType) (domain.RunTerraformActivityOutput, error) {
-	var output domain.RunTerraformActivityOutput
-	err := j.step(terraformCommandSteps[command], func(s *session) (err error) {
-		output, err = s.terraform(command)
-		return err
-	})
-	if err != nil {
-		if log, ok := failedCommandLog(err); ok {
-			if logErr := j.record.log(log); logErr != nil {
-				return domain.RunTerraformActivityOutput{}, fmt.Errorf("%w (also failed to record its log: %v)", err, logErr)
-			}
-		}
-		return domain.RunTerraformActivityOutput{}, err
-	}
-	if err := j.record.log(output.Log); err != nil {
-		return domain.RunTerraformActivityOutput{}, err
-	}
-	return output, nil
-}
-
-// event records something the job did to the run's stack template.
-func (j *runJob) event(event domain.TemplateRunEvent, summary *domain.PlanSummary) error {
-	return j.record.event(event, summary)
-}
-
-// plan is the plan phase's job. An apply or destroy run keeps a plan that has
-// changes, for someone to approve; a plan run keeps nothing but its log.
-func plan(j *runJob) (domain.RunTerraformActivityOutput, error) {
-	if err := prepareWorkspace(j, false); err != nil {
-		return domain.RunTerraformActivityOutput{}, err
-	}
-	command := domain.TerraformCommandPlan
-	if j.input.Operation == domain.OperationDestroy {
-		command = domain.TerraformCommandPlanDestroy
-	}
-	output, err := j.terraform(command)
-	if err != nil {
-		return domain.RunTerraformActivityOutput{}, err
-	}
-	if !output.HasChanges || j.input.Operation == domain.OperationPlan {
-		return output, nil
-	}
-	return output, j.step(domain.TemplateRunStepSavingPlan, (*session).savePlan)
-}
-
-// apply is the apply phase's job: it applies an approved run's saved plan, or,
-// for an auto-approved apply run, applies without one. It records what the
-// command does to the stack template around it: a destroy marks the template
-// destroying before it starts and destroyed once it succeeds, and an apply
-// records what it applied as live, with the counts an auto-approved apply
-// reports, since it had no plan to count.
-func apply(j *runJob) error {
-	if err := prepareWorkspace(j, !j.input.AutoApprove); err != nil {
-		return err
-	}
-	destroy := j.input.Operation == domain.OperationDestroy
-	command := domain.TerraformCommandApply
-	switch {
-	case j.input.AutoApprove:
-		command = domain.TerraformCommandApplyAutoApprove
-	case destroy:
-		command = domain.TerraformCommandDestroy
-	}
-
-	if destroy {
-		if err := j.event(domain.TemplateRunDestroying, nil); err != nil {
-			return err
-		}
-	}
-	output, err := j.terraform(command)
-	if err != nil {
-		return err
-	}
-	if destroy {
-		return j.event(domain.TemplateRunDestroyed, nil)
-	}
-	var summary *domain.PlanSummary
-	if j.input.AutoApprove {
-		summary = &output.Summary
-	}
-	return j.event(domain.TemplateRunApplied, summary)
-}
-
-// prepareWorkspace readies a workspace for Terraform: a directory and a key on
-// the executor, the source at the run's commit, then init and workspace
-// selection. With restorePlan, the saved plan and its lock file are put back
-// once the source is in place, so init installs the providers the plan was
-// made with.
-func prepareWorkspace(j *runJob, restorePlan bool) error {
-	if err := j.step(domain.TemplateRunStepPreparingWorkspace, (*session).prepare); err != nil {
-		return err
-	}
-	if err := j.step(domain.TemplateRunStepFetchingSource, (*session).fetchSource); err != nil {
-		return err
-	}
-	if restorePlan {
-		if err := j.step(domain.TemplateRunStepRestoringPlan, (*session).restorePlan); err != nil {
-			return err
-		}
-	}
-	if _, err := j.terraform(domain.TerraformCommandInit); err != nil {
-		return err
-	}
-	_, err := j.terraform(domain.TerraformCommandSelectWorkspace)
-	return err
-}
-
-// terraformCommandSteps is the step each Terraform command is. Planning a
-// destroy is planning, and applying one is applying: the run's operation
-// already says it is a destroy.
-var terraformCommandSteps = map[domain.TerraformCommandType]domain.TemplateRunStep{
-	domain.TerraformCommandInit:             domain.TemplateRunStepInitializing,
-	domain.TerraformCommandSelectWorkspace:  domain.TemplateRunStepSelectingWorkspace,
-	domain.TerraformCommandPlan:             domain.TemplateRunStepPlanning,
-	domain.TerraformCommandPlanDestroy:      domain.TemplateRunStepPlanning,
-	domain.TerraformCommandApply:            domain.TemplateRunStepApplying,
-	domain.TerraformCommandDestroy:          domain.TemplateRunStepApplying,
-	domain.TerraformCommandApplyAutoApprove: domain.TemplateRunStepApplying,
-}
-
-// recorder writes what a run reports while it works: the step it is on, the
-// events it causes, and its command logs. It holds the control-queue context,
-// so every write lands on the control plane. It has no status write.
-type recorder struct {
-	ctx   workflow.Context
-	input domain.TemplateRunWorkflowInput
-}
-
-// step records the step the run is starting, for the people watching it. It
-// is written before the work, never after, so a slow step shows as itself
-// rather than as the step before it.
-func (rec recorder) step(step domain.TemplateRunStep) error {
-	return workflow.ExecuteActivity(
-		rec.ctx,
-		domain.RecordTemplateRunStepActivityName,
-		domain.TemplateRunStepActivityInput{
-			RunID:    rec.input.RunID,
-			TenantID: rec.input.TenantID,
-			Step:     step,
-		},
-	).Get(rec.ctx, nil)
-}
-
-// event records something the run did to its stack template, with the counts
-// it carries, if any.
-func (rec recorder) event(event domain.TemplateRunEvent, summary *domain.PlanSummary) error {
-	return workflow.ExecuteActivity(
-		rec.ctx,
-		domain.RecordTemplateRunEventActivityName,
-		domain.TemplateRunEventActivityInput{
-			RunID:           rec.input.RunID,
-			TenantID:        rec.input.TenantID,
-			StackTemplateID: rec.input.StackTemplateID,
-			Operation:       rec.input.Operation,
 			Event:           event,
 			Summary:         summary,
 		},
-	).Get(rec.ctx, nil)
+	).Get(r.ctx, nil)
 }
 
 // log hands the metadata of a log the executor uploaded to the control plane,
@@ -469,29 +638,15 @@ func (rec recorder) event(event domain.TemplateRunEvent, summary *domain.PlanSum
 //
 // On the honest path this overwrites nothing: PutTemplateRunLog derives both
 // fields from the activity input the workflow supplied.
-func (rec recorder) log(log domain.TemplateRunLog) error {
+func (r *run) log(log domain.TemplateRunLog) error {
 	if log.ObjectKey == "" {
 		return nil
 	}
-	log.TenantID = rec.input.TenantID
-	log.RunID = rec.input.RunID
+	log.TenantID = r.input.TenantID
+	log.RunID = r.input.RunID
 	return workflow.ExecuteActivity(
-		rec.ctx,
+		r.ctx,
 		domain.RecordTemplateRunLogActivityName,
 		log,
-	).Get(rec.ctx, nil)
-}
-
-// failedCommandLog recovers the log metadata RunTerraform attaches to a command
-// failure whose log was already uploaded.
-func failedCommandLog(err error) (domain.TemplateRunLog, bool) {
-	var applicationErr *temporal.ApplicationError
-	if !errors.As(err, &applicationErr) || applicationErr.Type() != domain.TerraformCommandFailedErrorType || !applicationErr.HasDetails() {
-		return domain.TemplateRunLog{}, false
-	}
-	var log domain.TemplateRunLog
-	if err := applicationErr.Details(&log); err != nil {
-		return domain.TemplateRunLog{}, false
-	}
-	return log, true
+	).Get(r.ctx, nil)
 }
