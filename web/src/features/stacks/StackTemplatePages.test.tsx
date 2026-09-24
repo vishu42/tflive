@@ -145,6 +145,7 @@ function runFor(stackTemplateID: string, overrides: Partial<TemplateRun> = {}): 
     backend_type: "s3",
     backend_config_hash: "hash",
     status: "completed",
+    step: "",
     trigger_actor: "user_123",
     started_at: "2026-07-20T00:00:00Z",
     error_summary: "",

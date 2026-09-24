@@ -481,7 +481,7 @@ func safeObjectKey(key string) bool {
 	if cleaned != key || cleaned == "." || strings.HasPrefix(cleaned, "../") {
 		return false
 	}
-	for _, segment := range strings.Split(key, "/") {
+	for segment := range strings.SplitSeq(key, "/") {
 		if !safePathComponent(segment) {
 			return false
 		}

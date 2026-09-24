@@ -11,7 +11,7 @@ import (
 )
 
 type workflowClient interface {
-	ExecuteWorkflow(context.Context, client.StartWorkflowOptions, interface{}, ...interface{}) (client.WorkflowRun, error)
+	ExecuteWorkflow(context.Context, client.StartWorkflowOptions, any, ...any) (client.WorkflowRun, error)
 }
 
 type Dispatcher struct {

@@ -24,9 +24,14 @@ TEST_DSN ?= postgres://tflive:tflive@localhost:55432/tflive_test?sslmode=disable
 REDOCLY_PREVIEW := @redocly/cli@1.34.20
 REDOCLY_LINT    := @redocly/cli@2.53.0
 
+# Pinned and run through `go run`, like Redocly through npx: no global install,
+# and everyone lints with the same version. The first run builds it (~30s);
+# later runs hit the build cache. Linters are configured in .golangci.yml.
+GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+
 .DEFAULT_GOAL := help
 
-.PHONY: help api-docs-preview api-docs-lint differential-test
+.PHONY: help api-docs-preview api-docs-lint lint differential-test
 
 help: ## List the available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -37,6 +42,9 @@ api-docs-preview: ## Serve the API reference (docs/openapi.yaml) with live reloa
 
 api-docs-lint: ## Validate docs/openapi.yaml against the OpenAPI spec
 	npx $(REDOCLY_LINT) lint $(SPEC)
+
+lint: ## Lint the Go code with golangci-lint
+	$(GOLANGCI_LINT) run ./...
 
 # internal/authorization/write.go is a transcription of OpenFGA's own write path
 # with its BeginTx/Commit removed, so a tuple write can join our transaction.

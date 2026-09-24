@@ -26,7 +26,7 @@ type osExecCommandExecutor struct{}
 // expiry can terminate the process. The command name and args are
 // intentionally supplied by the caller so this adapter stays generic.
 func (osExecCommandExecutor) Run(ctx context.Context, dir string, env []string, stdout io.Writer, stderr io.Writer, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // generic by design; see above
 	cmd.Dir = dir
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr

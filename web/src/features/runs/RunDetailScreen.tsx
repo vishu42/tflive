@@ -15,7 +15,7 @@ import { useQueryErrorBoundary } from "../../shared/queryErrorBoundary";
 import { statusGlyph, statusTone } from "../../shared/statusTone";
 import { planSummaryLabel } from "../stacks/stackWorkflow";
 import RunLogsPanel from "./RunLogsPanel";
-import { runStatusLabel } from "./runStatusLabel";
+import { runProgressTag, runStatusLabel } from "./runStatusLabel";
 import { WaitingRunActions } from "./TemplateRunHistory";
 
 // /stacks/:stackId/templates/:stackTemplateId/runs/:runNumber — plan/apply
@@ -43,10 +43,11 @@ export default function RunDetailScreen() {
   const boundary = useQueryErrorBoundary(runsQuery.error ?? runQuery.error);
   const run = runQuery.data ?? null;
 
-  const logsQuery = useTemplateRunLogsQuery(tenantID, runId, run?.status ?? "");
+  const progressTag = run ? runProgressTag(run) : "";
+  const logsQuery = useTemplateRunLogsQuery(tenantID, runId, progressTag);
   const logs = logsQuery.data ?? [];
   const selectedPhase = logs.find((log) => log.phase === chosenPhase)?.phase ?? logs[logs.length - 1]?.phase ?? "";
-  const logQuery = useTemplateRunLogQuery(tenantID, runId, selectedPhase, run?.status ?? "");
+  const logQuery = useTemplateRunLogQuery(tenantID, runId, selectedPhase, progressTag);
   const logBody = logQuery.data ?? "";
 
   const approveRunMutation = useApproveRunMutation(tenantID);

@@ -45,7 +45,7 @@ func TestTokenSourceCachesUntilNearExpiry(t *testing.T) {
 		WithTokenSourceClock(func() time.Time { return clock }),
 	)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		token, err := source.Token(context.Background(), "acme", "private-infra")
 		if err != nil {
 			t.Fatalf("Token returned error: %v", err)

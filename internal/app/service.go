@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -618,7 +619,7 @@ func (service *Service) CreateStack(ctx context.Context, command CreateStackComm
 		TargetUser:    string(actor),
 		TenantID:      command.TenantID,
 		StackID:       stack.ID,
-		NewRole:       "owner",
+		NewRole:       authorization.RelationOwner.String(),
 		Outcome:       domain.AuditOutcomeSuccess,
 		CorrelationID: "",
 	}
@@ -904,15 +905,16 @@ func (service *Service) DeleteCredential(ctx context.Context, command DeleteCred
 		return fmt.Errorf("%w: tenant and credential IDs are required", ErrInvalidCommand)
 	}
 	var stackID domain.StackID
-	if command.StackID != "" {
+	switch {
+	case command.StackID != "":
 		stackID = command.StackID
-	} else if service.StackTemplates != nil && command.StackTemplateID != "" {
+	case service.StackTemplates != nil && command.StackTemplateID != "":
 		stackTemplate, err := service.StackTemplates.GetStackTemplate(ctx, command.TenantID, command.StackTemplateID)
 		if err != nil {
 			return err
 		}
 		stackID = stackTemplate.StackID
-	} else {
+	default:
 		return fmt.Errorf("%w: credential scope is required", ErrInvalidCommand)
 	}
 	if err := authorizeStack(ctx, service.Authorization, stackID, authorization.RelationCanManageAccess, ErrForbidden); err != nil {
@@ -1292,6 +1294,7 @@ func (service *Service) listGrantsForStack(ctx context.Context, object authoriza
 	return service.Authorization.ListGrants(ctx, object)
 }
 
+//nolint:gocognit // Authorization logic; split it only as a reviewed refactor.
 func (service *Service) AssignStackRole(ctx context.Context, command AssignStackRoleCommand) (GrantView, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -1304,7 +1307,7 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 	// Reject an unknown role here rather than letting the handler retry it
 	// forever against a payload it can never parse.
 	if _, err := authorization.GrantRelation(command.Role); err != nil {
-		return GrantView{}, fmt.Errorf("%w: %v", ErrInvalidCommand, err)
+		return GrantView{}, fmt.Errorf("%w: %w", ErrInvalidCommand, err)
 	}
 
 	if service.Work == nil {
@@ -1369,7 +1372,7 @@ func (service *Service) AssignStackRole(ctx context.Context, command AssignStack
 			}
 		}
 
-		if currentRole == "owner" && command.Role != "owner" && ownerCount == 1 {
+		if currentRole == authorization.RelationOwner.String() && command.Role != authorization.RelationOwner.String() && ownerCount == 1 {
 			return fmt.Errorf("%w: assign another owner before changing this role", ErrLastOwner)
 		}
 
@@ -1470,7 +1473,7 @@ func (service *Service) RevokeStackRole(ctx context.Context, command RevokeStack
 			}
 		}
 
-		if targetRole == "owner" && ownerCount == 1 {
+		if targetRole == authorization.RelationOwner.String() && ownerCount == 1 {
 			return fmt.Errorf("%w: cannot remove the last owner; assign another owner first", ErrLastOwner)
 		}
 
@@ -1714,10 +1717,7 @@ func (service *Service) GetTemplateRunLog(ctx context.Context, command GetTempla
 
 // ListTemplateRunLogs returns persisted log metadata after checking that the run belongs to the tenant.
 func (service *Service) ListTemplateRunLogs(ctx context.Context, command ListTemplateRunLogsCommand) ([]domain.TemplateRunLog, error) {
-	if err := validateGetTemplateRunCommand(GetTemplateRunCommand{
-		TenantID: command.TenantID,
-		RunID:    command.RunID,
-	}); err != nil {
+	if err := validateGetTemplateRunCommand(GetTemplateRunCommand(command)); err != nil {
 		return nil, err
 	}
 
@@ -2083,10 +2083,7 @@ func workspaceName(stackSlug string, stackTemplateID domain.StackTemplateID) str
 	const prefix = "meg_"
 	const separator = "_"
 	const maxLength = 90
-	maxSlugLength := maxLength - len(prefix) - len(separator) - len(shortID)
-	if maxSlugLength < 1 {
-		maxSlugLength = 1
-	}
+	maxSlugLength := max(maxLength-len(prefix)-len(separator)-len(shortID), 1)
 	if len(normalizedSlug) > maxSlugLength {
 		normalizedSlug = strings.Trim(normalizedSlug[:maxSlugLength], "_")
 	}
@@ -2154,9 +2151,7 @@ func cloneStringMap(input map[string]string) map[string]string {
 		return map[string]string{}
 	}
 	cloned := make(map[string]string, len(input))
-	for key, value := range input {
-		cloned[key] = value
-	}
+	maps.Copy(cloned, input)
 	return cloned
 }
 

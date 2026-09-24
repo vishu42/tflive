@@ -31,9 +31,10 @@ type PlanKeyStore interface {
 type PlanRecorder interface {
 	// FinishTemplatePlan records a finished plan and decides what follows it.
 	FinishTemplatePlan(ctx context.Context, input domain.FinishPlanActivityInput) (domain.PlanOutcome, error)
-	// BeginTemplateApply claims a run for its apply phase: an approved run, or
-	// with autoApprove a queued one. It reports false when the run is no longer
-	// in that state.
+	// BeginTemplateApply claims a run for its apply phase by moving it to
+	// running: an approved run, or with autoApprove a queued one. It reports
+	// true for a run it already claimed, so a retried claim is idempotent, and
+	// false when the run is no longer in a state this claim can take.
 	BeginTemplateApply(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, autoApprove bool) (bool, error)
 }
 
@@ -63,6 +64,23 @@ func NewControlActivities(store ControlStore, tokens GitHubTokenSource) *Control
 func (activities *ControlActivities) RecordTemplateRunStatus(ctx context.Context, input domain.TemplateRunStatusActivityInput) error {
 	if err := activities.store.RecordTemplateRunStatus(ctx, input); err != nil {
 		return fmt.Errorf("record template run status: %w", err)
+	}
+	return nil
+}
+
+// RecordTemplateRunStep records the step a running run has started.
+func (activities *ControlActivities) RecordTemplateRunStep(ctx context.Context, input domain.TemplateRunStepActivityInput) error {
+	if err := activities.store.RecordTemplateRunStep(ctx, input); err != nil {
+		return fmt.Errorf("record template run step: %w", err)
+	}
+	return nil
+}
+
+// RecordTemplateRunEvent records something a running run did to its stack
+// template: an apply that is now live, or a destroy starting or done.
+func (activities *ControlActivities) RecordTemplateRunEvent(ctx context.Context, input domain.TemplateRunEventActivityInput) error {
+	if err := activities.store.RecordTemplateRunEvent(ctx, input); err != nil {
+		return fmt.Errorf("record template run event: %w", err)
 	}
 	return nil
 }

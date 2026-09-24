@@ -30,18 +30,18 @@ const (
 	TerraformCommandSelectWorkspace TerraformCommandType = "select_workspace"
 	TerraformCommandPlan            TerraformCommandType = "plan"
 	// TerraformCommandPlanDestroy is a destroy run's plan: a plan to destroy
-	// everything the template manages. It records the same statuses and log as
-	// TerraformCommandPlan.
+	// everything the template manages. It is the same step and records the
+	// same log as TerraformCommandPlan.
 	TerraformCommandPlanDestroy TerraformCommandType = "plan_destroy"
 	// TerraformCommandApply and TerraformCommandDestroy both apply the run's
-	// saved plan. They stay two commands so each records its own statuses:
-	// destroy_started and destroy_finished drive the stack template lifecycle.
+	// saved plan. They stay two commands because a destroy records the
+	// destroying and destroyed events around it.
 	TerraformCommandApply   TerraformCommandType = "apply"
 	TerraformCommandDestroy TerraformCommandType = "destroy"
 	// TerraformCommandApplyAutoApprove is an auto-approved apply run's only
 	// Terraform step besides setup: it plans and applies in one go, with no
 	// saved plan, so it is the one apply that takes the run's variables. It
-	// records the same statuses and log as TerraformCommandApply.
+	// is the same step and records the same log as TerraformCommandApply.
 	TerraformCommandApplyAutoApprove TerraformCommandType = "apply_auto_approve"
 )
 
@@ -64,37 +64,22 @@ func (operation OperationType) Valid() bool {
 	}
 }
 
-// TemplateRunStatus identifies the lifecycle phase of a TemplateRun.
+// TemplateRunStatus is a run's lifecycle state: the one fact about a run that
+// decides what may happen to it next. It is not progress. What a running run
+// is doing is its Step.
 type TemplateRunStatus string
 
 const (
-	TemplateRunQueued            TemplateRunStatus = "queued"
-	TemplateRunLocked            TemplateRunStatus = "locked"
-	TemplateRunWorkspacePrepared TemplateRunStatus = "workspace_prepared"
-	TemplateRunSourceFetched     TemplateRunStatus = "source_fetched"
-	TemplateRunWorkspaceSelected TemplateRunStatus = "workspace_selected"
-	TemplateRunWaitingApproval   TemplateRunStatus = "waiting_approval"
-	TemplateRunApproved          TemplateRunStatus = "approved"
-	TemplateRunCanceled          TemplateRunStatus = "canceled"
-	TemplateRunLockReleased      TemplateRunStatus = "lock_released"
-	TemplateRunCompleted         TemplateRunStatus = "completed"
-	TemplateRunFailed            TemplateRunStatus = "failed"
-
-	// init statues
-	TemplateRunInitStarted  TemplateRunStatus = "init_started"
-	TemplateRunInitFinished TemplateRunStatus = "init_finished"
-
-	// plan statues
-	TemplateRunPlanStarted  TemplateRunStatus = "plan_started"
-	TemplateRunPlanFinished TemplateRunStatus = "plan_finished"
-
-	// apply statues
-	TemplateRunApplyStarted  TemplateRunStatus = "apply_started"
-	TemplateRunApplyFinished TemplateRunStatus = "apply_finished"
-
-	// destroy statues
-	TemplateRunDestroyStarted  TemplateRunStatus = "destroy_started"
-	TemplateRunDestroyFinished TemplateRunStatus = "destroy_finished"
+	TemplateRunQueued TemplateRunStatus = "queued"
+	// TemplateRunRunning is a run a workflow is working on: planning, or,
+	// once claimed for its apply, applying. What it is doing right now is its
+	// Step.
+	TemplateRunRunning         TemplateRunStatus = "running"
+	TemplateRunWaitingApproval TemplateRunStatus = "waiting_approval"
+	TemplateRunApproved        TemplateRunStatus = "approved"
+	TemplateRunCompleted       TemplateRunStatus = "completed"
+	TemplateRunFailed          TemplateRunStatus = "failed"
+	TemplateRunCanceled        TemplateRunStatus = "canceled"
 )
 
 // AllTemplateRunStatuses is every status a run may hold, in lifecycle order.
@@ -109,24 +94,12 @@ const (
 // the constants back out of this file and fails if the two disagree.
 var AllTemplateRunStatuses = []TemplateRunStatus{
 	TemplateRunQueued,
-	TemplateRunLocked,
-	TemplateRunWorkspacePrepared,
-	TemplateRunSourceFetched,
-	TemplateRunWorkspaceSelected,
+	TemplateRunRunning,
 	TemplateRunWaitingApproval,
 	TemplateRunApproved,
-	TemplateRunCanceled,
-	TemplateRunLockReleased,
 	TemplateRunCompleted,
 	TemplateRunFailed,
-	TemplateRunInitStarted,
-	TemplateRunInitFinished,
-	TemplateRunPlanStarted,
-	TemplateRunPlanFinished,
-	TemplateRunApplyStarted,
-	TemplateRunApplyFinished,
-	TemplateRunDestroyStarted,
-	TemplateRunDestroyFinished,
+	TemplateRunCanceled,
 }
 
 // Valid reports whether the status is one of the supported run states.
@@ -139,10 +112,68 @@ func (status TemplateRunStatus) Terminal() bool {
 	switch status {
 	case TemplateRunCompleted, TemplateRunFailed, TemplateRunCanceled:
 		return true
+	case TemplateRunQueued, TemplateRunRunning, TemplateRunWaitingApproval, TemplateRunApproved:
+		return false
 	default:
 		return false
 	}
 }
+
+// TemplateRunStep is what a running run is doing right now, for the people
+// watching it. It is not a status: nothing branches on it. It is recorded when
+// a step starts, never when one finishes, and kept when the run ends, so a
+// failed run still says where it failed. The zero value is a run that has not
+// started a step.
+type TemplateRunStep string
+
+const (
+	TemplateRunStepWaitingForExecutor TemplateRunStep = "waiting_for_executor"
+	TemplateRunStepPreparingWorkspace TemplateRunStep = "preparing_workspace"
+	TemplateRunStepFetchingSource     TemplateRunStep = "fetching_source"
+	TemplateRunStepRestoringPlan      TemplateRunStep = "restoring_plan"
+	TemplateRunStepInitializing       TemplateRunStep = "initializing"
+	TemplateRunStepSelectingWorkspace TemplateRunStep = "selecting_workspace"
+	TemplateRunStepPlanning           TemplateRunStep = "planning"
+	TemplateRunStepSavingPlan         TemplateRunStep = "saving_plan"
+	TemplateRunStepApplying           TemplateRunStep = "applying"
+)
+
+// AllTemplateRunSteps is every step a run may record, in the order a run
+// takes them. The step check constraint in the migrations lists the same
+// values.
+var AllTemplateRunSteps = []TemplateRunStep{
+	TemplateRunStepWaitingForExecutor,
+	TemplateRunStepPreparingWorkspace,
+	TemplateRunStepFetchingSource,
+	TemplateRunStepRestoringPlan,
+	TemplateRunStepInitializing,
+	TemplateRunStepSelectingWorkspace,
+	TemplateRunStepPlanning,
+	TemplateRunStepSavingPlan,
+	TemplateRunStepApplying,
+}
+
+// Valid reports whether the step is one a run may record. The zero value is
+// not: it is what a run has before it records one.
+func (step TemplateRunStep) Valid() bool {
+	return slices.Contains(AllTemplateRunSteps, step)
+}
+
+// TemplateRunEvent is something a run did to its stack template. The workflow
+// records it as it happens, rather than the store inferring it from a status.
+type TemplateRunEvent string
+
+const (
+	// TemplateRunApplied is an apply run's apply succeeding: what it applied
+	// is now what is live.
+	TemplateRunApplied TemplateRunEvent = "applied"
+	// TemplateRunDestroying is a destroy run about to destroy. From here, a
+	// failure leaves its stack template failed.
+	TemplateRunDestroying TemplateRunEvent = "destroying"
+	// TemplateRunDestroyed is a destroy run's destroy succeeding, or its plan
+	// finding nothing left to destroy.
+	TemplateRunDestroyed TemplateRunEvent = "destroyed"
+)
 
 // TemplateRun is one Terraform operation against a StackTemplate.
 type TemplateRun struct {
@@ -159,10 +190,13 @@ type TemplateRun struct {
 	BackendType        string             `json:"backend_type"`
 	BackendConfigHash  string             `json:"backend_config_hash"`
 	Status             TemplateRunStatus  `json:"status"`
-	TriggerActor       UserID             `json:"trigger_actor"`
-	StartedAt          time.Time          `json:"started_at"`
-	CompletedAt        time.Time          `json:"completed_at,omitempty"`
-	ErrorSummary       string             `json:"error_summary"`
+	// Step is what the run is doing, or, once it ended, what it was doing
+	// last. Empty until the run starts its first step.
+	Step         TemplateRunStep `json:"step"`
+	TriggerActor UserID          `json:"trigger_actor"`
+	StartedAt    time.Time       `json:"started_at"`
+	CompletedAt  time.Time       `json:"completed_at"`
+	ErrorSummary string          `json:"error_summary"`
 	// RunNumber counts runs within one stack template, from 1. It is what
 	// people see and what URLs carry; ID stays the identity everywhere else.
 	RunNumber int `json:"run_number"`

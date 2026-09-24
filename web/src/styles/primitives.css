@@ -559,13 +559,6 @@ textarea {
   background: var(--color-muted);
 }
 
-/* Destruction is settled, not failed, but consequential enough to deserve a
-   heavier rule than an ordinary finished phase. */
-.status-row[data-status="destroy_finished"] {
-  border-top-width: 2px;
-  border-top-color: var(--color-fg);
-}
-
 /* ---- Role badges ---- */
 .role-badge {
   display: inline-flex;

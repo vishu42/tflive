@@ -50,7 +50,7 @@ func desiredModel() (*openfgav1.AuthorizationModel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("authorization: load model: %w", err)
 	}
-	return proto.Clone(model).(*openfgav1.AuthorizationModel), nil
+	return proto.Clone(model).(*openfgav1.AuthorizationModel), nil //nolint:forcetypeassert // proto.Clone returns its argument's type
 }
 
 // AuthorizationModelJSON returns the canonical model in OpenFGA's API wire

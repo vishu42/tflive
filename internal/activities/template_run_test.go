@@ -29,7 +29,7 @@ func TestRecordTemplateRunStatusDelegatesToRecorder(t *testing.T) {
 		TenantID:        domain.TenantID("tenant_123"),
 		StackTemplateID: domain.StackTemplateID("stack_template_123"),
 		Operation:       domain.OperationPlan,
-		Status:          domain.TemplateRunPlanFinished,
+		Status:          domain.TemplateRunRunning,
 	}
 
 	if err := activities.RecordTemplateRunStatus(context.Background(), input); err != nil {
@@ -975,6 +975,9 @@ type controlStoreStub struct {
 	finished    domain.FinishPlanActivityInput
 	outcome     domain.PlanOutcome
 	claimed     bool
+	step        domain.TemplateRunStepActivityInput
+	event       domain.TemplateRunEventActivityInput
+	eventErr    error
 }
 
 func (store *controlStoreStub) RecordTemplateRunStatus(ctx context.Context, input domain.TemplateRunStatusActivityInput) error {
@@ -1017,4 +1020,47 @@ func (store *controlStoreStub) FinishTemplatePlan(_ context.Context, input domai
 
 func (store *controlStoreStub) BeginTemplateApply(context.Context, domain.TenantID, domain.TemplateRunID, bool) (bool, error) {
 	return store.claimed, nil
+}
+
+func (store *controlStoreStub) RecordTemplateRunStep(ctx context.Context, input domain.TemplateRunStepActivityInput) error {
+	store.step = input
+	return nil
+}
+
+func (store *controlStoreStub) RecordTemplateRunEvent(ctx context.Context, input domain.TemplateRunEventActivityInput) error {
+	store.event = input
+	return store.eventErr
+}
+
+func TestRecordTemplateRunStepDelegatesToTheStore(t *testing.T) {
+	t.Parallel()
+
+	store := &controlStoreStub{}
+	input := domain.TemplateRunStepActivityInput{TenantID: "tenant_123", RunID: "run_123", Step: domain.TemplateRunStepFetchingSource}
+
+	if err := NewControlActivities(store, nil).RecordTemplateRunStep(context.Background(), input); err != nil {
+		t.Fatalf("RecordTemplateRunStep returned error: %v", err)
+	}
+	if store.step != input {
+		t.Fatalf("recorded step = %#v, want %#v", store.step, input)
+	}
+}
+
+func TestRecordTemplateRunEventDelegatesToTheStore(t *testing.T) {
+	t.Parallel()
+
+	storeErr := errors.New("database unavailable")
+	store := &controlStoreStub{eventErr: storeErr}
+	input := domain.TemplateRunEventActivityInput{
+		TenantID: "tenant_123", RunID: "run_123", StackTemplateID: "stack_template_123",
+		Operation: domain.OperationApply, Event: domain.TemplateRunApplied,
+	}
+
+	err := NewControlActivities(store, nil).RecordTemplateRunEvent(context.Background(), input)
+	if !errors.Is(err, storeErr) || !strings.Contains(err.Error(), "record template run event") {
+		t.Fatalf("error = %v, want the store's error with event context", err)
+	}
+	if !reflect.DeepEqual(store.event, input) {
+		t.Fatalf("recorded event = %#v, want %#v", store.event, input)
+	}
 }

@@ -24,6 +24,11 @@ import (
 type StatusRecorder interface {
 	// RecordTemplateRunStatus persists one workflow status transition for a run.
 	RecordTemplateRunStatus(context.Context, domain.TemplateRunStatusActivityInput) error
+	// RecordTemplateRunStep persists the step a running run has started.
+	RecordTemplateRunStep(context.Context, domain.TemplateRunStepActivityInput) error
+	// RecordTemplateRunEvent persists something a running run did to its
+	// stack template.
+	RecordTemplateRunEvent(context.Context, domain.TemplateRunEventActivityInput) error
 }
 
 // TerraformRunner is the activity-local boundary for running Terraform.
@@ -336,7 +341,7 @@ func (activities *TemplateRunActivities) RunTerraform(ctx context.Context, input
 		}
 		return domain.RunTerraformActivityOutput{}, temporal.NewApplicationErrorWithOptions("run terraform", domain.TerraformCommandFailedErrorType, temporal.ApplicationErrorOptions{
 			Cause:   err,
-			Details: []interface{}{output.Log},
+			Details: []any{output.Log},
 		})
 	}
 	return output, nil

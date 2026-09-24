@@ -120,7 +120,6 @@ func TestLoadConfigRequiresPublicURLAndClientSecret(t *testing.T) {
 	t.Parallel()
 
 	for _, name := range []string{"TFLIVE_PUBLIC_URL", "OIDC_CLIENT_SECRET"} {
-		name := name
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			env := validConfigEnv()
@@ -148,7 +147,6 @@ func TestLoadConfigRequiresRuntimeSecretsAndEndpoints(t *testing.T) {
 		"KEYCLOAK_PLATFORM_ADMIN_LAST_NAME",
 	}
 	for _, name := range required {
-		name := name
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			env := validConfigEnv()
@@ -181,7 +179,6 @@ func TestLoadConfigRejectsInvalidSecuritySettings(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			env := validConfigEnv()

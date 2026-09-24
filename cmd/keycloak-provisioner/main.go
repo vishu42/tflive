@@ -16,10 +16,10 @@ type logFunc func(string, ...any)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	logger := log.New(os.Stdout, "", 0)
-	if err := run(ctx, os.Getenv, keycloak.Provision, logger.Printf); err != nil {
+	err := run(ctx, os.Getenv, keycloak.Provision, logger.Printf)
+	stop()
+	if err != nil {
 		log.New(os.Stderr, "", 0).Printf("Keycloak provisioner failed: %v", err)
 		os.Exit(1)
 	}

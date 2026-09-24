@@ -33,6 +33,24 @@ func TestRecordTemplateRegistrationStatusDelegatesToRecorder(t *testing.T) {
 	}
 }
 
+func TestRecordTemplateRegistrationStepDelegatesToTheStore(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingTemplateSyncStore{}
+	input := domain.TemplateRegistrationStepActivityInput{
+		RegistrationID: domain.TemplateRegistrationID("template_registration_123"),
+		TenantID:       domain.TenantID("tenant_123"),
+		Step:           domain.TemplateRegistrationStepSyncing,
+	}
+
+	if err := NewTemplateSyncActivities(store).RecordTemplateRegistrationStep(context.Background(), input); err != nil {
+		t.Fatalf("RecordTemplateRegistrationStep returned error: %v", err)
+	}
+	if store.stepInput != input {
+		t.Fatalf("step input = %#v, want %#v", store.stepInput, input)
+	}
+}
+
 func TestSyncTemplateClonesPublicRepoAndPersistsMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -272,6 +290,7 @@ func TestSyncTemplateReturnsExistingImmutableTemplate(t *testing.T) {
 type recordingTemplateSyncStore struct {
 	statusInput    domain.TemplateRegistrationStatusActivityInput
 	statusErr      error
+	stepInput      domain.TemplateRegistrationStepActivityInput
 	template       domain.TemplateRevision
 	variables      []domain.TemplateVariable
 	upsertTemplate domain.TemplateRevision
@@ -283,6 +302,11 @@ func (store *recordingTemplateSyncStore) RecordTemplateRegistrationStatus(_ cont
 		return store.statusErr
 	}
 	store.statusInput = input
+	return nil
+}
+
+func (store *recordingTemplateSyncStore) RecordTemplateRegistrationStep(_ context.Context, input domain.TemplateRegistrationStepActivityInput) error {
+	store.stepInput = input
 	return nil
 }
 

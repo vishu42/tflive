@@ -3,6 +3,7 @@ package keycloak
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -256,9 +257,7 @@ func applyClientSpec(resource map[string]any, spec ClientSpec) map[string]any {
 func setOwnedAttributes(resource map[string]any, owned map[string]string) {
 	attributes := map[string]any{}
 	if existing, ok := resource["attributes"].(map[string]any); ok {
-		for key, value := range existing {
-			attributes[key] = value
-		}
+		maps.Copy(attributes, existing)
 	}
 	for key, value := range owned {
 		attributes[key] = value
@@ -279,7 +278,7 @@ func filterResources(resources []map[string]any, field, value string) []map[stri
 func refFromResource(resource map[string]any, fallbackName string) (ResourceRef, error) {
 	id, _ := resource["id"].(string)
 	if strings.TrimSpace(id) == "" {
-		return ResourceRef{}, fmt.Errorf("Keycloak resource %s is missing id", fallbackName)
+		return ResourceRef{}, fmt.Errorf("read Keycloak resource %s: missing id", fallbackName)
 	}
 	name := fallbackName
 	if value, _ := resource["name"].(string); value != "" {

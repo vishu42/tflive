@@ -23,7 +23,7 @@ func (v *OIDCVerifier) Verify(ctx context.Context, raw string) (VerifiedToken, e
 // back-channel logout tokens require different ones, and both need exactly this
 // signature check first.
 func (v *OIDCVerifier) verifiedPayload(ctx context.Context, raw string) ([]byte, error) {
-	if len(raw) == 0 || len(raw) > maxTokenBytes || strings.Count(raw, ".") != 2 {
+	if raw == "" || len(raw) > maxTokenBytes || strings.Count(raw, ".") != 2 {
 		return nil, ErrInvalidToken
 	}
 	header, err := protectedHeader(raw)

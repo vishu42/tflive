@@ -61,10 +61,7 @@ type Options struct {
 // safeItemTimeout is the longest a single delivery may take without the batch
 // outliving its lease.
 func safeItemTimeout(lease time.Duration, batchSize, workers int) time.Duration {
-	rounds := (batchSize + workers - 1) / workers
-	if rounds < 1 {
-		rounds = 1
-	}
+	rounds := max((batchSize+workers-1)/workers, 1)
 	return (lease - lease/leaseSafetyDivisor) / time.Duration(rounds)
 }
 
@@ -140,14 +137,12 @@ func (controller *Controller) DispatchOnce(ctx context.Context) (int, error) {
 
 	work := make(chan Item)
 	var group sync.WaitGroup
-	for worker := 0; worker < controller.options.Workers; worker++ {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+	for range controller.options.Workers {
+		group.Go(func() {
 			for item := range work {
 				controller.process(ctx, item)
 			}
-		}()
+		})
 	}
 	for _, item := range items {
 		work <- item
@@ -268,7 +263,7 @@ func (controller *Controller) backoff(attempts int, maxBackoff time.Duration) ti
 	if delay <= 0 || delay > maxBackoff {
 		delay = maxBackoff
 	}
-	jitter := time.Duration(rand.Int63n(int64(delay)/4 + 1))
+	jitter := time.Duration(rand.Int63n(int64(delay)/4 + 1)) //nolint:gosec // jitter, not security
 	if delay+jitter > maxBackoff {
 		return maxBackoff
 	}
@@ -324,9 +319,6 @@ func (controller *Controller) Run(ctx context.Context) {
 // rounds would have every worker contend for the same advisory lock at the same
 // instant — with the same worker winning it every time.
 func jittered(interval time.Duration) time.Duration {
-	spread := interval / 10
-	if spread < time.Millisecond {
-		spread = time.Millisecond
-	}
-	return interval + time.Duration(rand.Int63n(int64(spread)))
+	spread := max(interval/10, time.Millisecond)
+	return interval + time.Duration(rand.Int63n(int64(spread))) //nolint:gosec // jitter, not security
 }

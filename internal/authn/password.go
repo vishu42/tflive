@@ -85,7 +85,7 @@ func VerifyPassword(encoded, password string) bool {
 		return false
 	}
 
-	computed := argon2.IDKey([]byte(password), salt, time, memoryKiB, threads, uint32(len(digest)))
+	computed := argon2.IDKey([]byte(password), salt, time, memoryKiB, threads, uint32(len(digest))) //nolint:gosec // a digest is far below 4 GiB
 	return subtle.ConstantTimeCompare(computed, digest) == 1
 }
 
@@ -96,4 +96,4 @@ func VerifyPassword(encoded, password string) bool {
 //
 // It is a real hash of a discarded 32 bytes of randomness, not a placeholder:
 // nothing verifies against it, and the preimage was never written down.
-const DummyPasswordHash = "$argon2id$v=19$m=65536,t=3,p=2$QKYbclYn15wfy7StA8l0Tg$HH1aiLbtTZyQtkafPHgmXHjku8R3oCSHxiacqAz6zag"
+const DummyPasswordHash = "$argon2id$v=19$m=65536,t=3,p=2$QKYbclYn15wfy7StA8l0Tg$HH1aiLbtTZyQtkafPHgmXHjku8R3oCSHxiacqAz6zag" //nolint:gosec // a deliberate dummy; see above

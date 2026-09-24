@@ -365,7 +365,7 @@ func grantFromTuple(key *openfgav1.TupleKey, requestedObject Object) (Grant, err
 	}
 	grant, err := NewGrant(subject, requestedObject, relation)
 	if err != nil {
-		return Grant{}, fmt.Errorf("%w: %v", errMalformedTuple, err)
+		return Grant{}, fmt.Errorf("%w: %w", errMalformedTuple, err)
 	}
 	return grant, nil
 }

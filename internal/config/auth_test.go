@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,6 @@ func TestLoadSecurityConfigDevelopmentModes(t *testing.T) {
 	t.Parallel()
 
 	for _, mode := range []string{"", "development"} {
-		mode := mode
 		t.Run(fmt.Sprintf("mode_%q", mode), func(t *testing.T) {
 			t.Parallel()
 
@@ -79,7 +79,7 @@ func TestSecretIsRedactedInEveryFormatVerb(t *testing.T) {
 	if got := secret.String(); got != "[REDACTED]" {
 		t.Fatalf("Secret.String() = %q, want [REDACTED]", got)
 	}
-	if got := fmt.Sprintf("%v", secret); got != "[REDACTED]" {
+	if got := secret.String(); got != "[REDACTED]" {
 		t.Fatalf("Secret via %%v = %q, want [REDACTED]", got)
 	}
 	if got := fmt.Sprintf("%+v", secret); got != "[REDACTED]" {
@@ -116,7 +116,6 @@ func TestLoadSecurityConfigRejectsMissingAndMalformedValues(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			values := validSecurityValues()
@@ -150,14 +149,13 @@ func TestLoadSecurityConfigRejectsInsecureProductionValues(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			values := validSecurityValues()
 			values["TFLIVE_ENVIRONMENT"] = "production"
 			values["TFLIVE_PUBLIC_URL"] = "https://app.example.com"
 			values["OIDC_ISSUER_URL"] = "https://id.example.com/realms/tflive"
-							test.mutate(values)
+			test.mutate(values)
 			_, err := loadSecurityConfig(mapConfigEnv(values))
 			if !errors.Is(err, ErrInvalidConfig) || err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want ErrInvalidConfig containing %q", err, test.want)
@@ -284,9 +282,7 @@ func loadValidSecurityConfig(t *testing.T, overrides map[string]string) Security
 func loadSecurityConfigWith(t *testing.T, overrides map[string]string) (SecurityConfig, error) {
 	t.Helper()
 	values := validSecurityValues()
-	for key, value := range overrides {
-		values[key] = value
-	}
+	maps.Copy(values, overrides)
 	return loadSecurityConfig(mapConfigEnv(values))
 }
 

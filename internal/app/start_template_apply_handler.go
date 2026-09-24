@@ -1,3 +1,4 @@
+//nolint:dupl // One small handler per queue kind; the siblings differ only in types.
 package app
 
 import (

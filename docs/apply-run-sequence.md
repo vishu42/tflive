@@ -98,7 +98,7 @@ sequenceDiagram
     Note over API: queue loop claims the row
     API->>T: StartWorkflow TemplateApplyWorkflow ("…/apply")
     T-->>CW: workflow task
-    CW->>PG: BeginApply: approved to locked, or stop if discarded meanwhile
+    CW->>PG: BeginApply: approved to running, or stop if discarded meanwhile
     CW->>T: create session on "execution"
     T-->>EX2: session created, usually another executor
 
@@ -124,10 +124,10 @@ approval.
 An auto-approved apply run (`{operation: apply, auto_approve: true}`) has no
 plan phase. `StartTemplateRun` records the approval's audit event and queues
 `TemplateApplyWorkflow` directly. `BeginApply` claims the run from `queued`,
-the apply phase records its setup statuses the way a plan phase would, skips
+the apply phase records its setup steps the way a plan phase would, skips
 `DownloadPlan`, and runs `tofu apply -auto-approve` with the run's variables.
 The counts come from the apply's "Apply complete!" line and are recorded with
-`apply_finished`. A destroy is never auto-approved.
+the `applied` event. A destroy is never auto-approved.
 
 A plan with no changes stops at `FinishPlan`, which records the run's snapshot
 as live, and the run completes. That includes a plan run.
@@ -162,9 +162,9 @@ sequenceDiagram
     CW->>T: activity completed
 
     T-->>CW: workflow task
-    CW->>T: schedule RecordTemplateRunStatus(apply_finished)
+    CW->>T: schedule RecordTemplateRunEvent(applied)
     T-->>CW: activity task
-    CW->>PG: status apply_finished + stack template last applied, one transaction
+    CW->>PG: stack template last applied, with the run row locked
     CW->>T: activity completed
 
     T-->>CW: workflow task
@@ -184,13 +184,11 @@ sequenceDiagram
     T-->>EX: session completion task
     EX->>T: done, session slot freed
 
-    loop lock_released, then completed
-        T-->>CW: workflow task
-        CW->>T: schedule RecordTemplateRunStatus
-        T-->>CW: activity task
-        CW->>PG: UPDATE template_runs status (completed also drops the plan key)
-        CW->>T: activity completed
-    end
+    T-->>CW: workflow task
+    CW->>T: schedule RecordTemplateRunStatus(completed)
+    T-->>CW: activity task
+    CW->>PG: UPDATE template_runs status (completed also drops the plan key)
+    CW->>T: activity completed
 
     T-->>CW: workflow task
     CW->>T: CompleteWorkflowExecution
@@ -203,18 +201,17 @@ sequenceDiagram
 ```
 
 The executor's part ends at step 1, apart from releasing its key, cleaning up
-and closing the session, which now happen before the final statuses so the
+and closing the session, which now happen before the final status so the
 session is never held a moment longer than the Terraform work needs. Every write after that is a workflow step on the control worker,
 which is what keeps them ordered: the log row cannot land after `completed`.
-Writing `apply_finished` also records the stack template's
-last applied revision in the same transaction
-(`recordsStackTemplateLastApplied`, `internal/postgres/repositories.go`).
+Recording the `applied` event is what records the stack template's last
+applied revision (`RecordTemplateRunEvent`, `internal/postgres/run_progress.go`).
 
 ## When the control worker is down
 
 The executor does not depend on the control worker to finish an apply. If no
 control worker is polling when step 1 happens, the result waits in Temporal's
-history and Postgres still says `apply_started`. Nothing is lost: the workflow
+history and Postgres still says `running` (step `applying`). Nothing is lost: the workflow
 resumes at step 2 as soon as a control worker polls again. The UI lags reality
 for that long, because it only ever reads Postgres.
 
@@ -232,7 +229,7 @@ sequenceDiagram
     Note over T: append ActivityTaskCompleted, queue workflow task on "control". No poller, so it waits.
 
     UI->>PG: GET run (through the API)
-    PG-->>UI: apply_started, stale but not wrong
+    PG-->>UI: running (step applying), stale but not wrong
 
     Note over CW: control worker restarts
     CW->>T: poll "control"
@@ -240,7 +237,7 @@ sequenceDiagram
     Note over CW: replay history, resume after RunTerraform
     CW->>T: schedule RecordTemplateRunLog
     Note over CW,PG: continues exactly as Part 2, from step 3
-    CW->>PG: log row, apply_finished, lock_released, completed
+    CW->>PG: log row, applied, completed
 
     UI->>PG: GET run (through the API)
     PG-->>UI: completed
@@ -248,8 +245,8 @@ sequenceDiagram
 
 The executor finished at step 1, which is why the worker that picks the run
 back up needs nothing from it except the log metadata already in history. The
-session stays open on that executor until the teardown after `apply_finished`
-completes it.
+session stays open on that executor until the teardown after the `applied`
+event completes it.
 
 ## Where this lives in code
 

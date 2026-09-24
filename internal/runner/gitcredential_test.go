@@ -15,7 +15,7 @@ func TestGitCredentialRedactsItself(t *testing.T) {
 
 	credential := NewGitCredential("ghs_supersecrettoken")
 
-	if got := fmt.Sprintf("%v", credential); got != "[REDACTED]" {
+	if got := credential.String(); got != "[REDACTED]" {
 		t.Fatalf("%%v = %q, want [REDACTED]", got)
 	}
 	if got := fmt.Sprintf("%#v", credential); got != "[REDACTED]" {
@@ -57,7 +57,7 @@ func TestGitEnvironmentCarriesScopedAuthorizationHeader(t *testing.T) {
 		"GIT_CONFIG_KEY_0=http.extraheader",
 		"GIT_CONFIG_VALUE_0=",
 		"GIT_CONFIG_KEY_1=http.https://github.com/.extraheader",
-		// base64("x-access-token:ghs_token")
+		// The value is x-access-token:ghs_token, base64-encoded.
 		"GIT_CONFIG_VALUE_1=Authorization: Basic eC1hY2Nlc3MtdG9rZW46Z2hzX3Rva2Vu",
 	}
 	if !reflect.DeepEqual(got, want) {

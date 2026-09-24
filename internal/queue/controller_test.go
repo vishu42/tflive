@@ -535,7 +535,7 @@ func TestJitteredStaysWithinItsSpread(t *testing.T) {
 			t.Parallel()
 
 			seen := map[time.Duration]struct{}{}
-			for sample := 0; sample < 200; sample++ {
+			for range 200 {
 				got := jittered(test.interval)
 				// Never early: an interval must still mean at least itself.
 				if got < test.interval {

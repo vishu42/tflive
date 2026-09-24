@@ -109,6 +109,7 @@ func authorizeStack(ctx context.Context, auth *authorization.Authorization, stac
 	return nil
 }
 
+//nolint:gocognit // Authorization logic; split it only as a reviewed refactor.
 func listAccessibleStacks(ctx context.Context, auth *authorization.Authorization, repository StackRepository, tenantID domain.TenantID) ([]domain.Stack, error) {
 	principal, err := requirePrincipalAndAuthorizer(ctx, auth)
 	if err != nil {

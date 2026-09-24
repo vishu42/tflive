@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"maps"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -214,9 +215,7 @@ func (s *oidcTestServer) serveJWKS(writer http.ResponseWriter) {
 	jwksBody := s.jwksBody
 	published := append([]string(nil), s.published...)
 	keys := make(map[string]*rsa.PrivateKey, len(s.keys))
-	for keyID, key := range s.keys {
-		keys[keyID] = key
-	}
+	maps.Copy(keys, s.keys)
 	s.mu.Unlock()
 
 	if unavailableBody != "" {
@@ -679,13 +678,11 @@ func TestOIDCVerifierCoordinatesConcurrentUnknownKIDRefresh(t *testing.T) {
 	start, errs := make(chan struct{}), make(chan error, 16)
 	var wg sync.WaitGroup
 	for range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			_, err := v.Verify(context.Background(), raw)
 			errs <- err
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()
@@ -751,7 +748,7 @@ func TestOIDCVerifierFailsClosedAfterJWKSFreshnessExpiresDuringProviderOutage(t 
 	}
 	s.setUnavailable("keycloak-down")
 	_, err = v.Verify(context.Background(), s.sign(t, "key-a", nil))
-	if err != ErrVerifierUnavailable {
+	if !errors.Is(err, ErrVerifierUnavailable) {
 		t.Fatalf("Verify() error = %v, want ErrVerifierUnavailable", err)
 	}
 	_, jwks = s.requestCounts()
@@ -780,7 +777,7 @@ func TestOIDCVerifierRejectsExpiredCachedKeyDuringProviderOutage(t *testing.T) {
 	now = now.Add(11 * time.Second)
 	s.setUnavailable("keycloak-down")
 	_, err = v.Verify(context.Background(), s.sign(t, "key-a", nil))
-	if err != ErrVerifierUnavailable {
+	if !errors.Is(err, ErrVerifierUnavailable) {
 		t.Fatalf("Verify() error = %v, want ErrVerifierUnavailable", err)
 	}
 	_, jwks := s.requestCounts()
@@ -1030,7 +1027,7 @@ func TestOIDCVerifierRedactsTokenAndProviderDetails(t *testing.T) {
 	}
 	s.addRSAKey(t, "key-b")
 	_, err = v.Verify(context.Background(), s.sign(t, "key-b", nil))
-	if err != ErrVerifierUnavailable {
+	if !errors.Is(err, ErrVerifierUnavailable) {
 		t.Fatalf("Verify() error = %v, want ErrVerifierUnavailable", err)
 	}
 	if strings.Contains(err.Error(), fixtureResponse) {
@@ -1185,7 +1182,7 @@ func tamperSignature(t *testing.T, raw string) string {
 	t.Helper()
 
 	segments := strings.Split(raw, ".")
-	if len(segments) != 3 || len(segments[2]) == 0 {
+	if len(segments) != 3 || segments[2] == "" {
 		t.Fatalf("unexpected compact JWS %q", raw)
 	}
 	if segments[2][0] == 'A' {

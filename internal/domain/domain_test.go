@@ -24,7 +24,6 @@ func TestOperationTypeValid(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -48,7 +47,6 @@ func TestIDValid(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -70,7 +68,6 @@ func TestTemplateRevisionStatusValid(t *testing.T) {
 	}
 
 	for _, status := range validStatuses {
-		status := status
 		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 
@@ -97,7 +94,6 @@ func TestTemplateRegistrationStatusValid(t *testing.T) {
 	}
 
 	for _, status := range validStatuses {
-		status := status
 		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 
@@ -136,7 +132,6 @@ func TestTemplateRunStatusValid(t *testing.T) {
 	}
 
 	for _, status := range AllTemplateRunStatuses {
-		status := status
 		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 
@@ -212,7 +207,6 @@ func TestTemplateRunStatusTerminal(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -325,4 +319,34 @@ func TestTemplateSyncWorkflowInputUsesRegistrationSource(t *testing.T) {
 
 func templateRegistrationID(id string) TemplateRegistrationID {
 	return TemplateRegistrationID(id)
+}
+
+func TestTemplateRunStepValid(t *testing.T) {
+	t.Parallel()
+
+	for _, step := range AllTemplateRunSteps {
+		if !step.Valid() {
+			t.Errorf("%q is listed but not valid", step)
+		}
+	}
+	for _, step := range []TemplateRunStep{"", "cloning", "plan_started"} {
+		if step.Valid() {
+			t.Errorf("%q is valid, want invalid", step)
+		}
+	}
+}
+
+func TestTemplateRegistrationStepValid(t *testing.T) {
+	t.Parallel()
+
+	for _, step := range AllTemplateRegistrationSteps {
+		if !step.Valid() {
+			t.Errorf("%q is listed but not valid", step)
+		}
+	}
+	for _, step := range []TemplateRegistrationStep{"", "cloning", "running"} {
+		if step.Valid() {
+			t.Errorf("%q is valid, want invalid", step)
+		}
+	}
 }

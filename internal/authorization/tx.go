@@ -38,7 +38,7 @@ func TxFrom(ctx context.Context) (pgx.Tx, bool) {
 type txConnector struct{ tx pgx.Tx }
 
 func (c txConnector) Connect(context.Context) (sqlcommon.Connection, error) {
-	return txConnection{tx: c.tx}, nil
+	return txConnection(c), nil
 }
 
 type txConnection struct{ tx pgx.Tx }
@@ -62,7 +62,7 @@ type pgxRows struct{ pgx.Rows }
 
 func (r pgxRows) Close() error {
 	r.Rows.Close()
-	return r.Rows.Err()
+	return r.Err()
 }
 
 var (

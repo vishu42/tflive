@@ -14,11 +14,6 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
-const (
-	requesterSubject = domain.UserID("6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91")
-	approverSubject  = domain.UserID("cb4afba6-d18d-496f-80ce-8a50b94f09be")
-)
-
 var _ app.WorkflowDispatcher = (*Dispatcher)(nil)
 
 func TestStartTemplateRunExecutesWorkflow(t *testing.T) {
@@ -237,16 +232,16 @@ func TestTemplateSyncWorkflowID(t *testing.T) {
 
 type recordingWorkflowClient struct {
 	executeOptions  client.StartWorkflowOptions
-	executeWorkflow interface{}
-	executeArgs     []interface{}
+	executeWorkflow any
+	executeArgs     []any
 	executeErr      error
 }
 
 func (workflowClient *recordingWorkflowClient) ExecuteWorkflow(
 	_ context.Context,
 	options client.StartWorkflowOptions,
-	workflow interface{},
-	args ...interface{},
+	workflow any,
+	args ...any,
 ) (client.WorkflowRun, error) {
 	workflowClient.executeOptions = options
 	workflowClient.executeWorkflow = workflow

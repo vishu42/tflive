@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -119,7 +120,7 @@ func (c *Client) doJSONStatus(
 	out any,
 ) (int, error) {
 	if c.accessToken == "" {
-		return 0, fmt.Errorf("Keycloak Admin API request requires authentication")
+		return 0, fmt.Errorf("call Keycloak Admin API: not authenticated")
 	}
 	endpoint, err := c.endpoint(segments, query)
 	if err != nil {
@@ -146,13 +147,13 @@ func (c *Client) doJSONStatus(
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("Keycloak Admin API %s %s: %w", method, endpoint.EscapedPath(), err)
+		return 0, fmt.Errorf("call Keycloak Admin API %s %s: %w", method, endpoint.EscapedPath(), err)
 	}
 	defer resp.Body.Close()
 	if !containsStatus(expectedStatuses, resp.StatusCode) {
 		responseBody, _ := readBounded(resp.Body, maxErrorBody)
 		return resp.StatusCode, fmt.Errorf(
-			"Keycloak Admin API %s %s: unexpected HTTP %d: %s",
+			"call Keycloak Admin API %s %s: unexpected HTTP %d: %s",
 			method,
 			endpoint.EscapedPath(),
 			resp.StatusCode,
@@ -201,12 +202,7 @@ func buildAdminURL(baseURL *url.URL, segments []string, query url.Values) (*url.
 }
 
 func containsStatus(expected []int, actual int) bool {
-	for _, status := range expected {
-		if status == actual {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(expected, actual)
 }
 
 func readBounded(reader io.Reader, limit int64) ([]byte, error) {

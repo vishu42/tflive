@@ -349,7 +349,7 @@ func parseAbsoluteURL(name, raw string) (*url.URL, error) {
 }
 
 func validTenantID(value string) bool {
-	if len(value) == 0 || len(value) > 128 || !asciiAlphanumeric(value[0]) {
+	if value == "" || len(value) > 128 || !asciiAlphanumeric(value[0]) {
 		return false
 	}
 	for index := 1; index < len(value); index++ {

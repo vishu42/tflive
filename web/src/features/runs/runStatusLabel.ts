@@ -1,7 +1,7 @@
-import type { TemplateRun } from "../../api/types";
+import type { TemplateRun, TemplateRunStep } from "../../api/types";
 
-// runStatusLabel says where a run is, in words, with the operation folded in
-// so no separate Type is needed: "Destroy planned" rather than destroy +
+// runHeadline says where a run is, in words, with the operation folded in so
+// no separate Type is needed: "Destroy planned" rather than destroy +
 // waiting_approval. Every destroy label says destroy, since the label is the
 // only place either screen names the operation. The raw status is still what
 // the tone and glyph come from.
@@ -14,7 +14,7 @@ import type { TemplateRun } from "../../api/types";
 // throughout. Any other run has plan counts only once a plan with changes has
 // finished, so one that has them and is still working is applying, and one
 // that failed with them failed applying.
-export function runStatusLabel(run: Pick<TemplateRun, "operation" | "status" | "plan_summary" | "auto_approve">): string {
+function runHeadline(run: Pick<TemplateRun, "operation" | "status" | "plan_summary" | "auto_approve">): string {
   if (run.operation === "plan") {
     return planRunStatusLabel(run);
   }
@@ -74,4 +74,53 @@ function autoApprovedRunStatusLabel(run: Pick<TemplateRun, "status">): string {
     default:
       return "Applying";
   }
+}
+
+const STEP_LABELS: Record<TemplateRunStep, string> = {
+  waiting_for_executor: "Waiting for an executor",
+  preparing_workspace: "Preparing workspace",
+  fetching_source: "Fetching source",
+  restoring_plan: "Restoring saved plan",
+  initializing: "Initializing",
+  selecting_workspace: "Selecting workspace",
+  planning: "Planning",
+  saving_plan: "Saving plan",
+  applying: "Applying"
+};
+
+// Steps the headline already names: "Planning · Planning" says nothing.
+const HEADLINE_STEPS = new Set<TemplateRunStep>(["planning", "applying"]);
+
+// runStatusLabel says where a run is, in words. The headline comes from the
+// status with the operation folded in, so no separate Type is needed:
+// "Destroy planned" rather than destroy + waiting_approval. A running run
+// adds the step it is on, and a failed one the step it failed on, so a slow
+// clone reads as a clone and a failed one says so.
+export function runStatusLabel(
+  run: Pick<TemplateRun, "operation" | "status" | "step" | "plan_summary" | "auto_approve">
+): string {
+  const headline = runHeadline(run);
+  if (run.step === "" || HEADLINE_STEPS.has(run.step)) {
+    return headline;
+  }
+  // A backend newer than this client can send a step outside the union; read
+  // it as if there were none rather than rendering "undefined" or throwing.
+  const step = STEP_LABELS[run.step];
+  if (!step) {
+    return headline;
+  }
+  if (run.status === "running") {
+    return `${headline} · ${step}`;
+  }
+  if (run.status === "failed") {
+    return `${headline} while ${step.charAt(0).toLowerCase()}${step.slice(1)}`;
+  }
+  return headline;
+}
+
+// runProgressTag changes whenever a run moves: a new status, or a new step
+// within one. Queries that must refresh as a run progresses, such as its
+// logs, key on it.
+export function runProgressTag(run: Pick<TemplateRun, "status" | "step">): string {
+  return `${run.status}:${run.step}`;
 }

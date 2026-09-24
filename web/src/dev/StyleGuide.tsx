@@ -336,16 +336,16 @@ export default function StyleGuide() {
         <Section
           id="status"
           title="Status tones"
-          note="Thirty status values across three API unions map onto five tones via statusTone(). Each pill pairs a glyph with the literal status text, so colour is never the only carrier of meaning."
+          note="Sixteen status values across three API unions map onto five tones via statusTone(). Each pill pairs a glyph with the literal status text, so colour is never the only carrier of meaning."
         >
           <Specimen label="StatusRow" hint="real component" stack>
             <div style={{ maxWidth: "480px" }}>
               <StatusRow label="Template" value="completed" />
-              <StatusRow label="Plan" value="plan_started" />
+              <StatusRow label="Plan" value="running" />
               <StatusRow label="Approval" value="waiting_approval" />
               <StatusRow label="Apply" value="failed" />
               <StatusRow label="Cancelled" value="canceled" />
-              <StatusRow label="Destroy" value="destroy_finished" />
+              <StatusRow label="Approved" value="approved" />
             </div>
           </Specimen>
         </Section>

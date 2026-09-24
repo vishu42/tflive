@@ -256,7 +256,10 @@ func TestRegisterControlRegistersWorkflowsAndControlActivities(t *testing.T) {
 		domain.SealPlanKeyActivityName:                      true,
 		domain.FinishPlanActivityName:                       true,
 		domain.BeginApplyActivityName:                       true,
+		domain.RecordTemplateRunStepActivityName:            true,
+		domain.RecordTemplateRunEventActivityName:           true,
 		domain.RecordTemplateRegistrationStatusActivityName: true,
+		domain.RecordTemplateRegistrationStepActivityName:   true,
 		domain.SyncTemplateActivityName:                     true,
 	}
 	if !reflect.DeepEqual(worker.activities, wantActivities) {
@@ -445,8 +448,8 @@ func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
 	// neither of which it asserts anything about. Everything it does assert,
 	// migrations and wiring, still runs against the real Postgres.
 	deps := defaultAPIDependencies()
-	deps.newAuthorization = func(_ context.Context, _ postgresPool, storeName string) (*authorization.Authorization, error) {
-		return authorization.NewWithDatastore(context.Background(), memory.New(), storeName)
+	deps.newAuthorization = func(ctx context.Context, _ postgresPool, storeName string) (*authorization.Authorization, error) {
+		return authorization.NewWithDatastore(ctx, memory.New(), storeName)
 	}
 	// Nor does it assert anything about Temporal, which it would otherwise need
 	// running. The queue loop still runs for real against Postgres.
@@ -855,6 +858,18 @@ func (recordingStore) RecordTemplateRegistrationStatus(context.Context, domain.T
 	return nil
 }
 
+func (recordingStore) RecordTemplateRegistrationStep(context.Context, domain.TemplateRegistrationStepActivityInput) error {
+	return nil
+}
+
+func (recordingStore) RecordTemplateRunStep(context.Context, domain.TemplateRunStepActivityInput) error {
+	return nil
+}
+
+func (recordingStore) RecordTemplateRunEvent(context.Context, domain.TemplateRunEventActivityInput) error {
+	return nil
+}
+
 func (recordingStore) UpsertTemplateRevisionWithVariables(context.Context, domain.TemplateRevision, []domain.TemplateVariable) (domain.TemplateRevision, error) {
 	return domain.TemplateRevision{}, nil
 }
@@ -1027,14 +1042,14 @@ type recordingControlWorker struct {
 	stopped    bool
 }
 
-func (worker *recordingControlWorker) RegisterWorkflowWithOptions(_ interface{}, options workflow.RegisterOptions) {
+func (worker *recordingControlWorker) RegisterWorkflowWithOptions(_ any, options workflow.RegisterOptions) {
 	if worker.workflows == nil {
 		worker.workflows = map[string]bool{}
 	}
 	worker.workflows[options.Name] = true
 }
 
-func (worker *recordingControlWorker) RegisterActivityWithOptions(_ interface{}, options activity.RegisterOptions) {
+func (worker *recordingControlWorker) RegisterActivityWithOptions(_ any, options activity.RegisterOptions) {
 	if worker.activities == nil {
 		worker.activities = map[string]bool{}
 	}
@@ -1110,7 +1125,7 @@ func TestRunStopsControlPlaneWhenContextIsCanceled(t *testing.T) {
 	// account through OpenFGA first, and a context cancelled mid-seed fails the
 	// run rather than shutting it down.
 	serving := make(chan struct{})
-	deps.apiDependencies.listenAndServe = func(ctx context.Context, address string, handler http.Handler) error {
+	deps.listenAndServe = func(ctx context.Context, address string, handler http.Handler) error {
 		close(serving)
 		return listenAndServe(ctx, address, handler)
 	}

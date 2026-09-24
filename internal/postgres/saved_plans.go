@@ -87,7 +87,7 @@ func (store *Store) PlanKey(ctx context.Context, tenantID domain.TenantID, runID
 //     the stack template's last applied state, and the run completes. That
 //     holds for a plan run too: nothing was applied, but nothing needed to
 //     be. (A destroy with nothing left to destroy completes the same way; the
-//     workflow records destroy_finished for it, which is what moves the
+//     workflow records the `destroyed` event for it, which is what moves the
 //     template's lifecycle.)
 //   - Changes on a plan run: the counts are stored and the run completes. A
 //     plan run saved no plan, so there is nothing to approve.
@@ -176,11 +176,16 @@ func (store *Store) FinishTemplatePlan(ctx context.Context, input domain.FinishP
 	return outcome, nil
 }
 
-// BeginTemplateApply claims a run for its apply phase by moving it to locked:
+// BeginTemplateApply claims a run for its apply phase by moving it to running:
 // from approved, or, for an auto-approved apply run that never had a plan to
 // approve, from queued. Losing the claim means the plan was discarded first;
 // the conditional update is what makes that race safe, because
 // discardTemplateRun makes the same kind of update from the other side.
+//
+// A run already running is this claim retried after its acknowledgement was
+// lost. Nothing else moves an approved or auto-approved run to running, and
+// the plan workflow of an approved run has already ended, so it reports the
+// claim rather than a lost race.
 func (store *Store) BeginTemplateApply(ctx context.Context, tenantID domain.TenantID, runID domain.TemplateRunID, autoApprove bool) (bool, error) {
 	from := domain.TemplateRunApproved
 	if autoApprove {
@@ -189,8 +194,8 @@ func (store *Store) BeginTemplateApply(ctx context.Context, tenantID domain.Tena
 	commandTag, err := store.pool.Exec(ctx, `
 		update template_runs
 		set status = $1
-		where tenant_id = $2 and id = $3 and status = $4 and auto_approve = $5
-	`, domain.TemplateRunLocked, tenantID, runID, from, autoApprove)
+		where tenant_id = $2 and id = $3 and status in ($4, $1) and auto_approve = $5
+	`, domain.TemplateRunRunning, tenantID, runID, from, autoApprove)
 	if err != nil {
 		return false, fmt.Errorf("claim run for apply: %w", err)
 	}
