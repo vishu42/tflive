@@ -40,7 +40,7 @@ var (
 	} = (*Store)(nil)
 )
 
-var testSchemaCounter uint64
+var testSchemaCounter atomic.Uint64
 
 func TestMigrateAppliesSchema(t *testing.T) {
 	t.Parallel()
@@ -67,7 +67,6 @@ func TestMigrateAppliesSchema(t *testing.T) {
 		"security_audit_log",
 		"users",
 	} {
-		table := table
 		t.Run(table, func(t *testing.T) {
 			t.Parallel()
 
@@ -1652,7 +1651,6 @@ func TestCreateTemplateRunAllowsOneNonTerminalRunPerStackTemplate(t *testing.T) 
 	store := NewStore(pool)
 
 	for _, status := range domain.AllTemplateRunStatuses {
-		status := status
 		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 
@@ -2938,13 +2936,13 @@ func openTestPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	}
 	t.Cleanup(admin.Close)
 
-	schema := fmt.Sprintf("tflive_test_%d_%d", time.Now().UnixNano(), atomic.AddUint64(&testSchemaCounter, 1))
+	schema := fmt.Sprintf("tflive_test_%d_%d", time.Now().UnixNano(), testSchemaCounter.Add(1))
 	quotedSchema := pgx.Identifier{schema}.Sanitize()
 	if _, err := admin.Exec(ctx, "create schema "+quotedSchema); err != nil {
 		t.Fatalf("create test schema: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = admin.Exec(context.Background(), "drop schema "+quotedSchema+" cascade")
+		_, _ = admin.Exec(context.WithoutCancel(ctx), "drop schema "+quotedSchema+" cascade")
 	})
 
 	config, err := pgxpool.ParseConfig(dsn)
@@ -3091,7 +3089,6 @@ func TestRecordTemplateRunStatusReconcilesInterruptedDestroyLifecycle(t *testing
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

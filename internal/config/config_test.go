@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -123,7 +122,6 @@ func TestLoadAPIConfigReadsTerraformTimeout(t *testing.T) {
 		{name: "minutes", value: " 90m ", want: 90 * time.Minute},
 		{name: "hours and minutes", value: "1h30m", want: 90 * time.Minute},
 	} {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -157,7 +155,6 @@ func TestLoadAPIConfigRejectsUnusableTerraformTimeout(t *testing.T) {
 	t.Parallel()
 
 	for _, value := range []string{"45", "forever", "0", "-10m"} {
-		value := value
 		t.Run(value, func(t *testing.T) {
 			t.Parallel()
 
@@ -409,7 +406,7 @@ func TestGitHubAppConfigRedactsPrivateKey(t *testing.T) {
 	encoded, _ := testRSAPrivateKeyPEM(t)
 	cfg := GitHubAppConfig{AppID: "12345", PrivateKey: newSecret(encoded)}
 
-	if rendered := fmt.Sprintf("%v", cfg.PrivateKey); rendered != "[REDACTED]" {
+	if rendered := cfg.PrivateKey.String(); rendered != "[REDACTED]" {
 		t.Fatalf("PrivateKey = %q, want [REDACTED]", rendered)
 	}
 }
@@ -505,8 +502,8 @@ func TestExecutorConfigHoldsNoControlPlaneSettings(t *testing.T) {
 	t.Parallel()
 
 	var got []string
-	configType := reflect.TypeOf(ExecutorConfig{})
-	for i := 0; i < configType.NumField(); i++ {
+	configType := reflect.TypeFor[ExecutorConfig]()
+	for i := range configType.NumField() {
 		got = append(got, configType.Field(i).Name)
 	}
 	want := []string{"TemporalAddress", "TemporalNamespace", "RunRoot", "ArtifactStore"}

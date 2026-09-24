@@ -67,8 +67,8 @@ type controlStore interface {
 }
 
 type temporalWorker interface {
-	RegisterWorkflowWithOptions(interface{}, workflow.RegisterOptions)
-	RegisterActivityWithOptions(interface{}, activity.RegisterOptions)
+	RegisterWorkflowWithOptions(any, workflow.RegisterOptions)
+	RegisterActivityWithOptions(any, activity.RegisterOptions)
 	Start() error
 	Stop()
 }
@@ -160,9 +160,9 @@ func sessionStore(store appRepositories) (authn.SessionStore, error) {
 
 func main() {
 	ctx, stop := shutdownContext()
-	defer stop()
-
-	if err := run(ctx, os.Getenv); err != nil {
+	err := run(ctx, os.Getenv)
+	stop()
+	if err != nil {
 		writeStartupError(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -338,7 +338,7 @@ func runWithDependencies(ctx context.Context, getenv func(string) string, deps a
 		if err != nil {
 			return fmt.Errorf("create token verifier: %w", err)
 		}
-		defer oidcVerifier.Close(context.Background())
+		defer oidcVerifier.Close(context.WithoutCancel(ctx))
 		verifier, logoutTokenVerifier = oidcVerifier, oidcVerifier
 
 		oidcFlow, err := authn.NewFlow(authn.FlowConfig{
@@ -561,7 +561,8 @@ func startControlPlane(ctx context.Context, cfg config.APIConfig, deps apiDepend
 }
 
 func listenAndServe(ctx context.Context, address string, handler http.Handler) error {
-	listener, err := net.Listen("tcp", address)
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(ctx, "tcp", address)
 	if err != nil {
 		return err
 	}
@@ -569,11 +570,15 @@ func listenAndServe(ctx context.Context, address string, handler http.Handler) e
 
 	server := &http.Server{
 		Handler: handler,
+		// Bounds how long a client may take to send its headers, so slow
+		// clients cannot hold connections open indefinitely.
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// ctx is already done here; shutdown needs a live context of its own.
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 	}()

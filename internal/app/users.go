@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
 )
 
 // ErrUserNotProvisioned means the target subject has never signed in, so there
@@ -39,7 +38,7 @@ type UserRepository interface {
 	// sign-in, so it refreshes a changed name or email naturally.
 	UpsertUser(ctx context.Context, profile UserProfile, seenAt time.Time) error
 	// SearchUsers matches display name or email, case-insensitively.
-	SearchUsers(ctx context.Context, query string, first, max int) ([]UserProfile, error)
+	SearchUsers(ctx context.Context, query string, first, limit int) ([]UserProfile, error)
 	// UsersBySubs resolves many subjects in one round trip, keyed by sub.
 	// Subjects with no projected row are absent from the map rather than
 	// present and empty, so the caller can tell the difference.

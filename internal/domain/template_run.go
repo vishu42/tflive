@@ -112,6 +112,8 @@ func (status TemplateRunStatus) Terminal() bool {
 	switch status {
 	case TemplateRunCompleted, TemplateRunFailed, TemplateRunCanceled:
 		return true
+	case TemplateRunQueued, TemplateRunRunning, TemplateRunWaitingApproval, TemplateRunApproved:
+		return false
 	default:
 		return false
 	}
@@ -193,7 +195,7 @@ type TemplateRun struct {
 	Step         TemplateRunStep `json:"step"`
 	TriggerActor UserID          `json:"trigger_actor"`
 	StartedAt    time.Time       `json:"started_at"`
-	CompletedAt  time.Time       `json:"completed_at,omitempty"`
+	CompletedAt  time.Time       `json:"completed_at"`
 	ErrorSummary string          `json:"error_summary"`
 	// RunNumber counts runs within one stack template, from 1. It is what
 	// people see and what URLs carry; ID stays the identity everywhere else.

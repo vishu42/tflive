@@ -105,7 +105,7 @@ func (r *registration) fail(err error) error {
 		Status:       domain.TemplateRegistrationFailed,
 		ErrorSummary: err.Error(),
 	}); recordErr != nil {
-		return fmt.Errorf("%w (also failed to persist failure status: %v)", err, recordErr)
+		return fmt.Errorf("%w (also failed to persist failure status: %w)", err, recordErr)
 	}
 	return err
 }

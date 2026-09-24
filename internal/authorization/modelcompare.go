@@ -31,7 +31,7 @@ func modelsEqual(left, right *openfgav1.AuthorizationModel) bool {
 // practice on any round trip we have measured; sorting is insurance against a
 // version that changes it, not a bug being worked around.
 func canonicalModel(model *openfgav1.AuthorizationModel) *openfgav1.AuthorizationModel {
-	canonical := proto.Clone(model).(*openfgav1.AuthorizationModel)
+	canonical := proto.Clone(model).(*openfgav1.AuthorizationModel) //nolint:forcetypeassert // proto.Clone returns its argument's type
 
 	// Ids are the server's to mint, so one side having it is not a difference.
 	canonical.Id = ""

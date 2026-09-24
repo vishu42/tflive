@@ -62,7 +62,6 @@ var linkedTestStacks = []string{"stack_123", "stack_abc", "stack_a", "stack_b"}
 
 // testPlatformAuthorizer covers the subjects the app tests authenticate as, so
 // a test whose subject is incidental to what it asserts can drop it in.
-//
 func testPlatformAuthorizer(t *testing.T) *authorization.Authorization {
 	t.Helper()
 	return newPlatformAuthorizer(t,
@@ -86,7 +85,7 @@ func TestPlatformCapabilitiesComeFromOpenFGANotRealmRoles(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Users:      &fakeUserRepository{users: []UserProfile{}},
+		Users:         &fakeUserRepository{users: []UserProfile{}},
 		Authorization: newPlatformAuthorizer(t, platformAdmin("granted-subject")),
 	})
 	command := SearchUsersCommand{TenantID: domain.TenantID("tenant_1"), Query: "a", Max: 20}
@@ -112,7 +111,7 @@ func TestPlatformViewerReadsTheCatalogButCannotPublishToIt(t *testing.T) {
 	service := NewService(Service{
 		TemplateRevisions:     &recordingTemplateRepository{},
 		TemplateRegistrations: &recordingTemplateRegistrationRepository{},
-		Authorization:            newPlatformAuthorizer(t, platformViewer("viewer-subject")),
+		Authorization:         newPlatformAuthorizer(t, platformViewer("viewer-subject")),
 	})
 	ctx := platformContext("viewer-subject")
 

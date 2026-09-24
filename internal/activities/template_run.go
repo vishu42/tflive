@@ -341,7 +341,7 @@ func (activities *TemplateRunActivities) RunTerraform(ctx context.Context, input
 		}
 		return domain.RunTerraformActivityOutput{}, temporal.NewApplicationErrorWithOptions("run terraform", domain.TerraformCommandFailedErrorType, temporal.ApplicationErrorOptions{
 			Cause:   err,
-			Details: []interface{}{output.Log},
+			Details: []any{output.Log},
 		})
 	}
 	return output, nil

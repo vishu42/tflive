@@ -91,7 +91,7 @@ func readPageOnTx(ctx context.Context, tx pgx.Tx, store string, filter storage.R
 		sb = sb.Where(sq.GtOrEq{"ulid": options.Pagination.From})
 	}
 	if options.Pagination.PageSize != 0 {
-		sb = sb.Limit(uint64(options.Pagination.PageSize + 1)) // + 1 is used to determine whether to return a continuation token.
+		sb = sb.Limit(uint64(options.Pagination.PageSize + 1)) //nolint:gosec // transcribed from OpenFGA; + 1 is used to determine whether to return a continuation token.
 	}
 
 	getRows, err := sqlcommon.NewRowGetter(txConnector{tx: tx}, sb)

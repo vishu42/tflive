@@ -302,7 +302,7 @@ func (server *Server) now() time.Time {
 
 func (server *Server) debugf(format string, args ...any) {
 	if server.debug {
-		log.Printf("[DEBUG] "+format, args...)
+		log.Printf("[DEBUG] "+format, args...) //nolint:gosec // callers pass constant formats
 	}
 }
 
@@ -355,21 +355,21 @@ func (server *Server) handleSearchUsers(response http.ResponseWriter, request *h
 		first = v
 	}
 
-	max := 20
+	limit := 20
 	if raw := request.URL.Query().Get("max"); raw != "" {
 		v, err := strconv.Atoi(raw)
 		if err != nil || v < 1 || v > 50 {
 			writeError(response, http.StatusBadRequest, "invalid_request", "max must be an integer between 1 and 50")
 			return
 		}
-		max = v
+		limit = v
 	}
 
 	users, err := server.service.SearchUsers(request.Context(), app.SearchUsersCommand{
 		TenantID: domain.TenantID(request.PathValue("tenant_id")),
 		Query:    q,
 		First:    first,
-		Max:      max,
+		Max:      limit,
 	})
 	if err != nil {
 		server.debugf("handleSearchUsers error: %v", err)
@@ -380,7 +380,7 @@ func (server *Server) handleSearchUsers(response http.ResponseWriter, request *h
 	writeJSON(response, http.StatusOK, searchUsersResponse{
 		Users: users,
 		First: first,
-		Max:   max,
+		Max:   limit,
 	})
 }
 
@@ -472,7 +472,7 @@ func (server *Server) handleCreateStack(response http.ResponseWriter, request *h
 		return
 	}
 
-	caps, err := app.ResolveStackCapabilities(request.Context(), server.service.Authorization, domain.StackID(stack.ID))
+	caps, err := app.ResolveStackCapabilities(request.Context(), server.service.Authorization, stack.ID)
 	if err != nil {
 		writeAppError(response, err)
 		return
@@ -553,6 +553,8 @@ func (server *Server) handleListStackCredentials(response http.ResponseWriter, r
 }
 
 // handleDeleteStackCredential deletes one Stack-scoped credential after authorization.
+//
+//nolint:dupl // Stack and stack-template scopes stay separate handlers, like their routes.
 func (server *Server) handleDeleteStackCredential(response http.ResponseWriter, request *http.Request) {
 	server.debugf("credential delete request scope=stack tenant_id=%s stack_id=%s credential_id=%s", request.PathValue("tenant_id"), request.PathValue("stack_id"), request.PathValue("credential_id"))
 	err := server.service.DeleteCredential(request.Context(), app.DeleteCredentialCommand{
@@ -605,6 +607,8 @@ func (server *Server) handleListStackTemplateCredentials(response http.ResponseW
 }
 
 // handleDeleteStackTemplateCredential deletes one StackTemplate-scoped credential after authorization.
+//
+//nolint:dupl // Stack and stack-template scopes stay separate handlers, like their routes.
 func (server *Server) handleDeleteStackTemplateCredential(response http.ResponseWriter, request *http.Request) {
 	server.debugf("credential delete request scope=stack_template tenant_id=%s stack_template_id=%s credential_id=%s", request.PathValue("tenant_id"), request.PathValue("stack_template_id"), request.PathValue("credential_id"))
 	err := server.service.DeleteCredential(request.Context(), app.DeleteCredentialCommand{
@@ -1123,7 +1127,8 @@ func writeAppError(response http.ResponseWriter, err error) {
 func writeJSON(response http.ResponseWriter, status int, body any) {
 	response.Header().Set("Content-Type", "application/json")
 	response.WriteHeader(status)
-	_ = json.NewEncoder(response).Encode(body)
+	// The status is already sent, so a failed encode has no one left to tell.
+	_ = json.NewEncoder(response).Encode(body) //nolint:errchkjson // see above
 }
 
 func writeError(response http.ResponseWriter, status int, code string, message string) {

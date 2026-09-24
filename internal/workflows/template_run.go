@@ -442,7 +442,7 @@ func (r *run) terraform(ctx workflow.Context, ws workspace, command domain.Terra
 	}).Get(ctx, &output); err != nil {
 		if log, ok := failedCommandLog(err); ok {
 			if logErr := r.log(log); logErr != nil {
-				return domain.RunTerraformActivityOutput{}, fmt.Errorf("%w (also failed to record its log: %v)", err, logErr)
+				return domain.RunTerraformActivityOutput{}, fmt.Errorf("%w (also failed to record its log: %w)", err, logErr)
 			}
 		}
 		return domain.RunTerraformActivityOutput{}, err
@@ -553,7 +553,7 @@ func (r *run) fail(err error) error {
 		return nil
 	}
 	if failureErr := r.setStatus(domain.TemplateRunFailed, fmt.Sprintf("template run activity failed: %v", err)); failureErr != nil {
-		return fmt.Errorf("%w (also failed to persist failure status: %v)", err, failureErr)
+		return fmt.Errorf("%w (also failed to persist failure status: %w)", err, failureErr)
 	}
 	return err
 }

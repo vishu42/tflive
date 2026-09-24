@@ -172,7 +172,6 @@ func TestProvisionWithBackendRequiresKeycloakBuiltins(t *testing.T) {
 		{name: "realm management client", mutate: func(b *fakeProvisionBackend) { delete(b.clients, "realm-management") }, wantErr: "required client realm-management"},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := configForServer(t, "http://keycloak.example.test")

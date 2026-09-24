@@ -220,7 +220,6 @@ func safeTupleToken(token string) bool {
 	return true
 }
 
-
 // Grant is a direct, grantable role assignment for a subject on an object.
 type Grant struct {
 	subject  Subject

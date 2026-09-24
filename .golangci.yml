@@ -1,0 +1,109 @@
+version: "2"
+
+run:
+  tests: true
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    # Bugs
+    - bodyclose
+    - errorlint
+    - errchkjson
+    - exhaustive
+    - forcetypeassert
+    - nilerr
+    - noctx
+    - contextcheck
+    - gosec
+    # Smells and complexity
+    - gocognit
+    - nestif
+    - dupl
+    - goconst
+    - unparam
+    # Style and idiom
+    - revive
+    - gocritic
+    - misspell
+    - predeclared
+    - unconvert
+    # Modernization
+    - copyloopvar
+    - intrange
+    - modernize
+    - usestdlibvars
+  settings:
+    errcheck:
+      exclude-functions:
+        # `defer tx.Rollback(ctx)` after Commit returns ErrTxDone by design.
+        - (github.com/jackc/pgx/v5.Tx).Rollback
+    goconst:
+      # URL schemes read better as literals.
+      ignore-string-values:
+        - ^https?$
+    gocognit:
+      min-complexity: 30
+    nestif:
+      min-complexity: 5
+    dupl:
+      threshold: 150
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        # Micro-optimizations and taste; hundreds of hits, no bugs.
+        - hugeParam
+        - rangeValCopy
+        - paramTypeCombine
+        - unnamedResult
+        - httpNoBody
+        - importShadow
+    gosec:
+      excludes:
+        # File paths from variables: every one here is built under a
+        # directory we own (workspace, logs, artifacts), never from input.
+        - G304
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+  exclusions:
+    generated: lax
+    presets:
+      - std-error-handling
+    rules:
+      # Tests repeat literals and fixtures on purpose.
+      - path: _test\.go
+        linters:
+          - dupl
+          - goconst
+          - gosec
+          - noctx
+          # A failed assertion in a test panics, which fails the test anyway.
+          - forcetypeassert
+          # Helpers name what varies even when today's callers agree.
+          - unparam
+          # Long scenario tests read top to bottom; splitting them hides the story.
+          - gocognit
+      # Transcribed from OpenFGA's SQL datastore; it stays close to upstream.
+      - path: internal/authorization/(read|write)\.go
+        linters:
+          - goconst
+      # REST path segments and JSON keys of the Keycloak Admin API.
+      - path: internal/keycloak/
+        linters:
+          - goconst
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt

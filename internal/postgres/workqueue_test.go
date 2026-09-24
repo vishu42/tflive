@@ -90,7 +90,7 @@ func TestEnqueueJobIgnoresDuplicateKey(t *testing.T) {
 	store, pool := newQueueStore(t, ctx)
 
 	payload := json.RawMessage(`{"key":"run:7f3a"}`)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := store.Enqueue(ctx, queue.Request{Kind: "job", Payload: payload, TenantID: "t1"}); err != nil {
 			t.Fatalf("Enqueue attempt %d returned error: %v", i, err)
 		}

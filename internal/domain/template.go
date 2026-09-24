@@ -122,7 +122,7 @@ type TemplateRegistration struct {
 	ResolvedCommitSHA  string                     `json:"resolved_commit_sha"`
 	RequestedBy        UserID                     `json:"requested_by"`
 	RequestedAt        time.Time                  `json:"requested_at"`
-	CompletedAt        time.Time                  `json:"completed_at,omitempty"`
+	CompletedAt        time.Time                  `json:"completed_at"`
 	ErrorSummary       string                     `json:"error_summary"`
 }
 

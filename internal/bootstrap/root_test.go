@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vishu42/tflive/internal/authn"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/storage"
 	"github.com/openfga/openfga/pkg/storage/memory"
+	"github.com/vishu42/tflive/internal/authn"
 
 	"github.com/vishu42/tflive/internal/authorization"
 )

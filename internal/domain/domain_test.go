@@ -24,7 +24,6 @@ func TestOperationTypeValid(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -48,7 +47,6 @@ func TestIDValid(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -70,7 +68,6 @@ func TestTemplateRevisionStatusValid(t *testing.T) {
 	}
 
 	for _, status := range validStatuses {
-		status := status
 		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 
@@ -97,7 +94,6 @@ func TestTemplateRegistrationStatusValid(t *testing.T) {
 	}
 
 	for _, status := range validStatuses {
-		status := status
 		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 
@@ -136,7 +132,6 @@ func TestTemplateRunStatusValid(t *testing.T) {
 	}
 
 	for _, status := range AllTemplateRunStatuses {
-		status := status
 		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 
@@ -212,7 +207,6 @@ func TestTemplateRunStatusTerminal(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

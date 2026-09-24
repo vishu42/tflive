@@ -216,4 +216,3 @@ func TestGrantIsAllOrNothing(t *testing.T) {
 	require.Len(t, grants, 1, "the fresh grant must not survive a rejected mutation")
 	require.Equal(t, "user:alice", grants[0].Subject().String())
 }
-

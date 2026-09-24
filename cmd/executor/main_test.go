@@ -197,8 +197,8 @@ func newRecordingExecutorDependencies(t *testing.T) *recordingExecutorDependenci
 			deps.artifactStoreConfig = cfg
 			return artifactStores{logs: deps.logStore, plans: deps.planStore}, nil
 		},
-		interruptCh: func() <-chan interface{} {
-			ch := make(chan interface{})
+		interruptCh: func() <-chan any {
+			ch := make(chan any)
 			close(ch)
 			return ch
 		},
@@ -241,14 +241,14 @@ type recordingTemporalWorker struct {
 	runErr               error
 }
 
-func (worker *recordingTemporalWorker) RegisterActivityWithOptions(_ interface{}, options activity.RegisterOptions) {
+func (worker *recordingTemporalWorker) RegisterActivityWithOptions(_ any, options activity.RegisterOptions) {
 	if worker.registeredActivities == nil {
 		worker.registeredActivities = make(map[string]bool)
 	}
 	worker.registeredActivities[options.Name] = true
 }
 
-func (worker *recordingTemporalWorker) Run(<-chan interface{}) error {
+func (worker *recordingTemporalWorker) Run(<-chan any) error {
 	worker.ran = true
 	return worker.runErr
 }

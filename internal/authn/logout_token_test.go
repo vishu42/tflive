@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
+	"maps"
 	"strings"
 	"sync"
 	"testing"
@@ -228,9 +229,7 @@ func mergeLogoutClaims(s *oidcTestServer, overrides map[string]any) map[string]a
 		"aud": []string{"test-audience"},
 		"iat": time.Now().Unix(),
 	}
-	for name, value := range overrides {
-		claims[name] = value
-	}
+	maps.Copy(claims, overrides)
 	return claims
 }
 

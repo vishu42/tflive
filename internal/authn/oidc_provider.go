@@ -146,7 +146,7 @@ func newKeyCache(ctx context.Context, cfg OIDCVerifierConfig, jwksURI string, cl
 	keepCache := false
 	defer func() {
 		if !keepCache {
-			_ = cache.Shutdown(context.Background())
+			_ = cache.Shutdown(context.WithoutCancel(ctx))
 		}
 	}()
 
@@ -168,12 +168,12 @@ func newKeyCache(ctx context.Context, cfg OIDCVerifierConfig, jwksURI string, cl
 		return nil, errDuplicateJWKSKeyIDs
 	}
 	freshUntil, err := jwksFreshUntil(
-		cfg.Clock(), cache, jwksURI, cfg.JWKSMinRefreshInterval, cfg.JWKSMaxRefreshInterval,
+		ctx, cfg.Clock(), cache, jwksURI, cfg.JWKSMinRefreshInterval, cfg.JWKSMaxRefreshInterval,
 	)
 	if err != nil {
 		return nil, err
 	}
-	if err := deferAutomaticJWKSRefresh(cache, jwksURI); err != nil {
+	if err := deferAutomaticJWKSRefresh(ctx, cache, jwksURI); err != nil {
 		return nil, err
 	}
 
@@ -245,7 +245,7 @@ func (v *OIDCVerifier) cachedKeyFor(kid string, algorithm jwa.SignatureAlgorithm
 	}
 	keyIDs := make(map[string]struct{}, setLength)
 	var selected jwk.Key
-	for index := 0; index < setLength; index++ {
+	for index := range setLength {
 		key, ok := keys.set.Key(index)
 		if !ok {
 			return nil, false, ErrVerifierUnavailable
@@ -310,12 +310,12 @@ func (v *OIDCVerifier) refreshKeys(ctx context.Context, force bool) error {
 		return errors.New("OIDC JWKS contains duplicate key IDs")
 	}
 	freshUntil, err := jwksFreshUntil(
-		v.cfg.Clock(), keys.cache, keys.url, v.cfg.JWKSMinRefreshInterval, v.cfg.JWKSMaxRefreshInterval,
+		ctx, v.cfg.Clock(), keys.cache, keys.url, v.cfg.JWKSMinRefreshInterval, v.cfg.JWKSMaxRefreshInterval,
 	)
 	if err != nil {
 		return err
 	}
-	if err := deferAutomaticJWKSRefresh(keys.cache, keys.url); err != nil {
+	if err := deferAutomaticJWKSRefresh(ctx, keys.cache, keys.url); err != nil {
 		return err
 	}
 	v.mu.Lock()
@@ -381,28 +381,22 @@ func (v *OIDCVerifier) replaceKeyCache(ctx context.Context, jwksURI string) erro
 	v.mu.Unlock()
 
 	if oldKeys != nil && oldKeys.cache != nil {
-		return oldKeys.cache.Shutdown(context.Background())
+		return oldKeys.cache.Shutdown(context.WithoutCancel(ctx))
 	}
 	return nil
 }
 
-func jwksFreshUntil(now time.Time, cache *jwk.Cache, jwksURI string, minimum, maximum time.Duration) (time.Time, error) {
-	resource, err := cache.LookupResource(context.Background(), jwksURI)
+func jwksFreshUntil(ctx context.Context, now time.Time, cache *jwk.Cache, jwksURI string, minimum, maximum time.Duration) (time.Time, error) {
+	resource, err := cache.LookupResource(ctx, jwksURI)
 	if err != nil {
 		return time.Time{}, err
 	}
-	lifetime := resource.Next().Sub(time.Now())
-	if lifetime < minimum {
-		lifetime = minimum
-	}
-	if lifetime > maximum {
-		lifetime = maximum
-	}
+	lifetime := min(max(time.Until(resource.Next()), minimum), maximum)
 	return now.Add(lifetime), nil
 }
 
-func deferAutomaticJWKSRefresh(cache *jwk.Cache, jwksURI string) error {
-	resource, err := cache.LookupResource(context.Background(), jwksURI)
+func deferAutomaticJWKSRefresh(ctx context.Context, cache *jwk.Cache, jwksURI string) error {
+	resource, err := cache.LookupResource(ctx, jwksURI)
 	if err != nil {
 		return err
 	}
@@ -465,7 +459,7 @@ func validProviderURL(value *url.URL) bool {
 
 func hasDuplicateKeyIDs(set jwk.Set) bool {
 	keyIDs := make(map[string]struct{}, set.Len())
-	for index := 0; index < set.Len(); index++ {
+	for index := range set.Len() {
 		key, ok := set.Key(index)
 		if !ok {
 			return true

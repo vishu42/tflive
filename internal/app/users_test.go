@@ -66,7 +66,7 @@ func TestSearchUsersReturnsResults(t *testing.T) {
 		{Sub: "u2", DisplayName: "Bob Jones", Email: "bob@example.com"},
 	}
 	service := NewService(Service{
-		Users:      &fakeUserRepository{users: expected},
+		Users:         &fakeUserRepository{users: expected},
 		Authorization: testPlatformAuthorizer(t),
 	})
 
@@ -91,7 +91,7 @@ func TestSearchUsersRequiresPlatformAdmin(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Users:      &fakeUserRepository{users: []UserProfile{}},
+		Users:         &fakeUserRepository{users: []UserProfile{}},
 		Authorization: testPlatformAuthorizer(t),
 	})
 
@@ -110,7 +110,7 @@ func TestSearchUsersRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Users:      &fakeUserRepository{users: []UserProfile{}},
+		Users:         &fakeUserRepository{users: []UserProfile{}},
 		Authorization: testPlatformAuthorizer(t),
 	})
 
@@ -129,7 +129,7 @@ func TestSearchUsersRejectsEmptyQuery(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Users:      &fakeUserRepository{users: []UserProfile{}},
+		Users:         &fakeUserRepository{users: []UserProfile{}},
 		Authorization: testPlatformAuthorizer(t),
 	})
 
@@ -162,7 +162,7 @@ func TestSearchUsersRejectsInvalidPagination(t *testing.T) {
 			t.Parallel()
 
 			service := NewService(Service{
-				Users:      &fakeUserRepository{users: []UserProfile{}},
+				Users:         &fakeUserRepository{users: []UserProfile{}},
 				Authorization: testPlatformAuthorizer(t),
 			})
 
@@ -184,7 +184,7 @@ func TestSearchUsersRepositoryError(t *testing.T) {
 
 	searchErr := errors.New("connection refused")
 	service := NewService(Service{
-		Users:      &fakeUserRepository{searchErr: searchErr},
+		Users:         &fakeUserRepository{searchErr: searchErr},
 		Authorization: testPlatformAuthorizer(t),
 	})
 
@@ -203,7 +203,7 @@ func TestSearchUsersEmptyResults(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Users:      &fakeUserRepository{users: nil},
+		Users:         &fakeUserRepository{users: nil},
 		Authorization: testPlatformAuthorizer(t),
 	})
 
@@ -255,10 +255,10 @@ func TestAssignStackRoleRejectsUserThatNeverSignedIn(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Work:       newRecordingWork(nil),
+		Work:          newRecordingWork(nil),
 		Authorization: testPlatformAuthorizer(t),
-		Users:      &fakeUserRepository{},
-		Clock:      fixedClock{now: time.Now()},
+		Users:         &fakeUserRepository{},
+		Clock:         fixedClock{now: time.Now()},
 	})
 
 	_, err := service.AssignStackRole(adminContext(), AssignStackRoleCommand{
@@ -279,7 +279,7 @@ func TestAssignStackRoleReturnsProjectedDisplayFields(t *testing.T) {
 	t.Parallel()
 
 	service := NewService(Service{
-		Work:       newRecordingWork(nil),
+		Work:          newRecordingWork(nil),
 		Authorization: testPlatformAuthorizer(t),
 		Users: &fakeUserRepository{users: []UserProfile{
 			{Sub: "user_456", DisplayName: "Casey Jones", Email: "casey@example.com"},
@@ -309,9 +309,9 @@ func TestUserProjectionEntryPointsRequireARepository(t *testing.T) {
 
 	newUnwiredService := func() *Service {
 		return NewService(Service{
-			Work:       newRecordingWork(nil),
+			Work:          newRecordingWork(nil),
 			Authorization: testPlatformAuthorizer(t),
-			Clock:      fixedClock{now: time.Now()},
+			Clock:         fixedClock{now: time.Now()},
 		})
 	}
 

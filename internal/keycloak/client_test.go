@@ -131,7 +131,6 @@ func TestClientRejectsMissingTokenAndMalformedJSON(t *testing.T) {
 		{name: "malformed JSON", body: `{`, want: "decode authentication response"},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

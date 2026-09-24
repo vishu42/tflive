@@ -18,8 +18,8 @@ import (
 )
 
 type temporalWorker interface {
-	RegisterActivityWithOptions(interface{}, activity.RegisterOptions)
-	Run(<-chan interface{}) error
+	RegisterActivityWithOptions(any, activity.RegisterOptions)
+	Run(<-chan any) error
 }
 
 type executorDependencies struct {
@@ -33,7 +33,7 @@ type executorDependencies struct {
 	// saved plans.
 	newArtifactStores func(config.ArtifactStoreConfig) (artifactStores, error)
 	// interruptCh provides the shutdown signal consumed by the Temporal worker run loop.
-	interruptCh func() <-chan interface{}
+	interruptCh func() <-chan any
 }
 
 // artifactStores are the executor's two uses of the artifact store: the log of

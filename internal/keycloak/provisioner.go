@@ -80,7 +80,7 @@ type provisionBackend interface {
 
 func provisionWithBackend(ctx context.Context, cfg Config, backend provisionBackend) (Result, error) {
 	sslRequired := "external"
-	if cfg.Environment == "development" {
+	if cfg.Environment == environmentDevelopment {
 		sslRequired = "none"
 	}
 	realmSpec := RealmSpec{

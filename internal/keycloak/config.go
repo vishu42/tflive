@@ -12,6 +12,9 @@ const (
 	defaultRealm       = "tflive"
 	defaultAPIClient   = "tflive-api"
 	defaultHTTPTimeout = 10 * time.Second
+
+	environmentDevelopment = "development"
+	environmentProduction  = "production"
 )
 
 // Config contains the complete desired state and credentials needed for one
@@ -123,9 +126,9 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 
 	environment := strings.TrimSpace(getenv("TFLIVE_ENVIRONMENT"))
 	if environment == "" {
-		environment = "development"
+		environment = environmentDevelopment
 	}
-	if environment != "development" && environment != "production" {
+	if environment != environmentDevelopment && environment != environmentProduction {
 		return Config{}, fmt.Errorf("invalid Keycloak config: TFLIVE_ENVIRONMENT must be development or production")
 	}
 

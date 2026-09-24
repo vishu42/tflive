@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/vishu42/tflive/internal/runner"
 )
@@ -108,7 +109,8 @@ func Unpack(bundle []byte, dir string) error {
 		if err != nil {
 			return fmt.Errorf("read %s from plan bundle: %w", header.Name, err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, header.Name), content, 0o600); err != nil {
+		// isBundled admitted header.Name above, so it cannot traverse out of dir.
+		if err := os.WriteFile(filepath.Join(dir, header.Name), content, 0o600); err != nil { //nolint:gosec // see above
 			return fmt.Errorf("write %s: %w", header.Name, err)
 		}
 		sawPlan = sawPlan || header.Name == runner.PlanFileName
@@ -120,12 +122,7 @@ func Unpack(bundle []byte, dir string) error {
 }
 
 func isBundled(name string) bool {
-	for _, candidate := range bundled {
-		if name == candidate {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(bundled, name)
 }
 
 // Seal encrypts a bundle with key. context is bound in as additional data, so

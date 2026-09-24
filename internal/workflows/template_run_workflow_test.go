@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,11 +20,6 @@ import (
 	"go.temporal.io/sdk/worker"
 )
 
-const (
-	requesterSubject = domain.UserID("6fdb4b4c-2a8f-4cf7-945f-38f67f6a0e91")
-	approverSubject  = domain.UserID("cb4afba6-d18d-496f-80ce-8a50b94f09be")
-)
-
 // TestTemplateWorkflowsUseSessionForWorkspaceActivities protects the executor
 // affinity contract for the filesystem-backed workspace. If a future change
 // schedules any workspace activity on the normal queue, it could run on a
@@ -32,7 +28,7 @@ const (
 func TestTemplateWorkflowsUseSessionForWorkspaceActivities(t *testing.T) {
 	for _, testCase := range []struct {
 		name                   string
-		workflow               interface{}
+		workflow               any
 		operation              domain.OperationType
 		workspaceActivityCount int
 	}{
@@ -246,7 +242,7 @@ func TestTemplatePlanWorkflowRecordsLogOfFailedCommand(t *testing.T) {
 			}
 			return domain.RunTerraformActivityOutput{}, temporal.NewApplicationErrorWithOptions("run terraform", domain.TerraformCommandFailedErrorType, temporal.ApplicationErrorOptions{
 				Cause:   errors.New("plan: exit status 1"),
-				Details: []interface{}{failedLog},
+				Details: []any{failedLog},
 			})
 		})
 	env.OnActivity(domain.RecordTemplateRunLogActivityName, mock.Anything, mock.Anything).
@@ -295,7 +291,7 @@ func TestTemplatePlanWorkflowSealsSecretsToTheExecutorKey(t *testing.T) {
 		Return(domain.PrepareWorkspaceActivityOutput{WorkspacePath: "run/workspace", PublicKey: publicKey}, nil)
 	env.OnActivity(domain.SealSourceTokenActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, input domain.SealSourceTokenActivityInput) (domain.SealSourceTokenActivityOutput, error) {
-			if string(input.PublicKey) != string(publicKey) || input.RepoOwner != "acme" {
+			if !bytes.Equal(input.PublicKey, publicKey) || input.RepoOwner != "acme" {
 				t.Fatalf("seal source token input = %#v", input)
 			}
 			return domain.SealSourceTokenActivityOutput{SealedToken: []byte("sealed-token"), FetchHint: "; hint"}, nil
@@ -307,7 +303,7 @@ func TestTemplatePlanWorkflowSealsSecretsToTheExecutorKey(t *testing.T) {
 		})
 	env.OnActivity(domain.SealRunCredentialsActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, input domain.SealRunCredentialsActivityInput) (domain.SealRunCredentialsActivityOutput, error) {
-			if string(input.PublicKey) != string(publicKey) || input.StackTemplateID != "stack_template_123" {
+			if !bytes.Equal(input.PublicKey, publicKey) || input.StackTemplateID != "stack_template_123" {
 				t.Fatalf("seal credentials input = %#v", input)
 			}
 			sealRequests++
@@ -828,7 +824,7 @@ func TestTemplateWorkflowsRejectRunsTheyDoNotRun(t *testing.T) {
 
 	for _, testCase := range []struct {
 		name        string
-		workflow    interface{}
+		workflow    any
 		operation   domain.OperationType
 		autoApprove bool
 	}{

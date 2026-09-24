@@ -90,7 +90,7 @@ func SafeReturnTo(raw string) string {
 	if strings.HasPrefix(raw, "//") || strings.HasPrefix(raw, `/\`) {
 		return "/"
 	}
-	if strings.ContainsFunc(raw, func(r rune) bool { return unicode.IsControl(r) }) {
+	if strings.ContainsFunc(raw, unicode.IsControl) {
 		return "/"
 	}
 	parsed, err := url.Parse(raw)
@@ -114,7 +114,7 @@ func SafeReturnTo(raw string) string {
 // SessionCookie carries the opaque session reference for the life of the
 // browser session.
 func SessionCookie(value string, secure bool) *http.Cookie {
-	return &http.Cookie{
+	return &http.Cookie{ //nolint:gosec // Secure is config-driven; HttpOnly and SameSite are set
 		Name:     SessionCookieName,
 		Value:    value,
 		Path:     "/",
@@ -128,7 +128,7 @@ func SessionCookie(value string, secure bool) *http.Cookie {
 
 // TransactionCookie carries one in-flight login.
 func TransactionCookie(value string, secure bool) *http.Cookie {
-	return &http.Cookie{
+	return &http.Cookie{ //nolint:gosec // Secure is config-driven; HttpOnly and SameSite are set
 		Name:     TransactionCookieName,
 		Value:    value,
 		Path:     transactionCookiePath,
@@ -141,14 +141,14 @@ func TransactionCookie(value string, secure bool) *http.Cookie {
 
 // ClearedSessionCookie expires the session cookie.
 func ClearedSessionCookie(secure bool) *http.Cookie {
-	cookie := SessionCookie("", secure)
+	cookie := SessionCookie("", secure) //nolint:gosec // Secure is config-driven; HttpOnly and SameSite are set
 	cookie.MaxAge = -1
 	return cookie
 }
 
 // ClearedTransactionCookie expires the transaction cookie.
 func ClearedTransactionCookie(secure bool) *http.Cookie {
-	cookie := TransactionCookie("", secure)
+	cookie := TransactionCookie("", secure) //nolint:gosec // Secure is config-driven; HttpOnly and SameSite are set
 	cookie.MaxAge = -1
 	return cookie
 }

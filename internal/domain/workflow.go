@@ -38,7 +38,7 @@ const (
 	RunTerraformActivityName                     = "RunTerraform"
 	SyncTemplateActivityName                     = "SyncTemplate"
 	SealSourceTokenActivityName                  = "SealSourceToken"
-	SealRunCredentialsActivityName               = "SealRunCredentials"
+	SealRunCredentialsActivityName               = "SealRunCredentials" //nolint:gosec // an activity name, not a credential
 	ReleaseRunKeyActivityName                    = "ReleaseRunKey"
 	CleanupWorkspaceActivityName                 = "CleanupWorkspace"
 	SealPlanKeyActivityName                      = "SealPlanKey"

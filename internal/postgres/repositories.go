@@ -1912,6 +1912,8 @@ func terminalTemplateRegistrationStatus(status domain.TemplateRegistrationStatus
 	switch status {
 	case domain.TemplateRegistrationCompleted, domain.TemplateRegistrationInvalid, domain.TemplateRegistrationFailed:
 		return true
+	case domain.TemplateRegistrationPending, domain.TemplateRegistrationRunning:
+		return false
 	default:
 		return false
 	}

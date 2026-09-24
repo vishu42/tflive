@@ -448,8 +448,8 @@ func TestRunMigratesRealPostgresWhenDSNIsSet(t *testing.T) {
 	// neither of which it asserts anything about. Everything it does assert,
 	// migrations and wiring, still runs against the real Postgres.
 	deps := defaultAPIDependencies()
-	deps.newAuthorization = func(_ context.Context, _ postgresPool, storeName string) (*authorization.Authorization, error) {
-		return authorization.NewWithDatastore(context.Background(), memory.New(), storeName)
+	deps.newAuthorization = func(ctx context.Context, _ postgresPool, storeName string) (*authorization.Authorization, error) {
+		return authorization.NewWithDatastore(ctx, memory.New(), storeName)
 	}
 	// Nor does it assert anything about Temporal, which it would otherwise need
 	// running. The queue loop still runs for real against Postgres.
@@ -1042,14 +1042,14 @@ type recordingControlWorker struct {
 	stopped    bool
 }
 
-func (worker *recordingControlWorker) RegisterWorkflowWithOptions(_ interface{}, options workflow.RegisterOptions) {
+func (worker *recordingControlWorker) RegisterWorkflowWithOptions(_ any, options workflow.RegisterOptions) {
 	if worker.workflows == nil {
 		worker.workflows = map[string]bool{}
 	}
 	worker.workflows[options.Name] = true
 }
 
-func (worker *recordingControlWorker) RegisterActivityWithOptions(_ interface{}, options activity.RegisterOptions) {
+func (worker *recordingControlWorker) RegisterActivityWithOptions(_ any, options activity.RegisterOptions) {
 	if worker.activities == nil {
 		worker.activities = map[string]bool{}
 	}
@@ -1125,7 +1125,7 @@ func TestRunStopsControlPlaneWhenContextIsCanceled(t *testing.T) {
 	// account through OpenFGA first, and a context cancelled mid-seed fails the
 	// run rather than shutting it down.
 	serving := make(chan struct{})
-	deps.apiDependencies.listenAndServe = func(ctx context.Context, address string, handler http.Handler) error {
+	deps.listenAndServe = func(ctx context.Context, address string, handler http.Handler) error {
 		close(serving)
 		return listenAndServe(ctx, address, handler)
 	}

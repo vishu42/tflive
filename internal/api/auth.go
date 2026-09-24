@@ -63,7 +63,7 @@ func (server *Server) handleAuthCallback(response http.ResponseWriter, request *
 
 	query := request.URL.Query()
 	if query.Get("error") != "" {
-		log.Printf("auth callback: idp returned error=%q error_description=%q", query.Get("error"), query.Get("error_description"))
+		log.Printf("auth callback: idp returned error=%q error_description=%q", query.Get("error"), query.Get("error_description")) //nolint:gosec // %q escapes control characters
 		server.writeAuthFailure(response)
 		return
 	}

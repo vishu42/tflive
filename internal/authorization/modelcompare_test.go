@@ -1,6 +1,7 @@
 package authorization
 
 import (
+	"bytes"
 	"testing"
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -148,7 +149,7 @@ func TestCanonicalModelIsNotMutatedByComparison(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(before) != string(after) {
+	if !bytes.Equal(before, after) {
 		t.Fatal("comparing models mutated one of them")
 	}
 }
